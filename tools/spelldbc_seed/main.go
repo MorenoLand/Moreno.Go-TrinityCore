@@ -15073,7 +15073,7 @@ var spells = []spell{
 	}},
 	// 25640 "Thorns" (Wowhead SpellName MATCH; C++
 	// boss_buru.cpp:36 enum, :91 DoCast(me) on engage; Lua
-	// boss_buru.lua:87 const, :21 self-cast THORNS) —
+	// boss_buru.lua:87 const, :202 self-cast THORNS) —
 	// Wowhead WotLK (verdict file
 	// wago_spells_5255_19593_24721_25640.txt; wago NOT
 	// attempted — single effect with a Value, no trigger):
@@ -15094,7 +15094,7 @@ var spells = []spell{
 	}},
 	// 24721 "Buru Transform" (Wowhead SpellName MATCH; C++
 	// boss_buru.cpp:37 enum, :178 DoCast(me) at <20% HP,
-	// enrage; Lua boss_buru.lua:88 const, :29 self-cast
+	// enrage; Lua boss_buru.lua:88 const, :180 self-cast
 	// BURU_TRANSFORM) — Wowhead WotLK (same verdict file;
 	// wago NOT attempted — contiguous rows, both Values
 	// present, no trigger): eff0 6 APPLY_AURA Change Model
@@ -15156,6 +15156,89 @@ var spells = []spell{
 	// field).
 	{id: 5255, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 25749 "Stinger Spray" (Wowhead SpellName MATCH; C++
+	// boss_ayamiss.cpp:28 enum, :194 DoCast(me); Lua
+	// boss_ayamiss.lua:87 const, :148 CastSpell(creature))
+	// — Wowhead WotLK (verdict file
+	// wago_spells_25725_25748_25749_25852.txt; wago NOT
+	// attempted — single effect with a Value, no trigger):
+	// single effect 2 SCHOOL_DAMAGE Nature Value 875, NO
+	// upper value shown — bp 874/die 1 (the 31436 flat
+	// convention); targetA SRC_CASTER 22 / targetB
+	// SRC_AREA_ENEMY 15 (DoCast(me) self-cast); radius
+	// 100yd — radiusIdx 12 (real row); cast1 instant;
+	// dur0; range13 Anywhere 50000yd (real row); school
+	// Nature. The tooltip has no description line at all —
+	// the 875 and the radius come only from the effect row.
+	{id: 25749, castTimeIdx: 1, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 874, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 25748 "Poison Stinger" (Wowhead SpellName MATCH; C++
+	// boss_ayamiss.cpp:29 enum, :198 DoCastVictim; Lua
+	// boss_ayamiss.lua:88 const, :156 CastSpell(victim)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted
+	// — contiguous rows, both Values present, no trigger):
+	// eff0 2 SCHOOL_DAMAGE Nature Value 875, tooltip
+	// 875-1125 — bp 874/die 251 (the 30633 range
+	// convention: the tooltip range IS the die source, the
+	// browser's "not derivable" note notwithstanding);
+	// eff1 6 APPLY_AURA PERIODIC DAMAGE Value 25 every 1s
+	// — bp 24/die 1, period 1000; both targetA
+	// TARGET_UNIT_TARGET_ENEMY (DoCastVictim); NO radius
+	// shown on either row — radiusIdx 0; cast5 2000ms;
+	// dur1 10000ms; range13 Anywhere 50000yd (real row);
+	// school Nature.
+	{id: 25748, castTimeIdx: 5, durIdx: 1, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 874, dieSides: 251, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 24, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 25725 "Paralyze" (Wowhead SpellName MATCH; C++
+	// boss_ayamiss.cpp:30 enum, :204 DoCast on a random
+	// target; Lua boss_ayamiss.lua:89 const, :167
+	// CastSpell(target)) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted — contiguous rows, both
+	// Values present, no trigger): eff0 5 TELEPORT_UNITS
+	// Value 1 — bp 0/die 1, targetA TARGET_UNIT_TARGET_ENEMY
+	// (the random cast target; the destination is unknown
+	// — no destination on the page and no (25725,0)
+	// spell_target_position row in sql/*/world.sql, so the
+	// landing resolves only if the DB row exists — flag
+	// for a wago/future check, the 9268 teleport
+	// precedent); eff1 6 APPLY_AURA Stun Value 1 — aura 12
+	// STUN bp 0/die 1, targetA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant; dur1 10000ms (from Spell Details /
+	// the Buff, not from an effect row); range13 Anywhere
+	// 50000yd (real row); school Physical. NOT carried:
+	// "Can only target the player" / "Ignore Line of
+	// Sight" / "Unaffected by invulnerability" (no
+	// attributes field).
+	{id: 25725, castTimeIdx: 1, durIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 25852 "Lash" (Wowhead SpellName MATCH; C++
+	// boss_ayamiss.cpp:33 enum, :232 DoCastVictim; Lua
+	// boss_ayamiss.lua:92 const, :192 CastSpell(victim)) —
+	// Wowhead WotLK (same verdict file; wago attempted for
+	// eff1's missing Value — bot-walled, "Your request was
+	// blocked", no rows): eff0 6 APPLY_AURA Stun Value 1 —
+	// aura 12 STUN bp 0/die 1, mechanic 12 Stunned (spell
+	// + effect, the 30633 / 31480 pattern); eff1 64
+	// TRIGGER_SPELL "Dropped Weapon", NO Value shown — bp
+	// 0/die 1 (the 40321 trigger precedent), trigger 6608
+	// (Wowhead link target, ID confirmed); both targetA
+	// TARGET_UNIT_TARGET_ENEMY (DoCastVictim); cast1
+	// instant; dur39 2000ms (real row); range2 Combat 5yd
+	// ("Melee Range" in the tooltip, same thing); school
+	// Physical; mechanic 12. 6608 itself is NOT seeded here
+	// (trigger-only reference, per the 30598/40321
+	// practice). NOT carried: the disarm "chance" (no
+	// numeric chance on the page) and "Wearer Casts Proc
+	// Trigger" (no attributes field).
+	{id: 25852, castTimeIdx: 1, durIdx: 39, rangeIdx: 2, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, mechanic: 12, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 6608, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
