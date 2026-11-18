@@ -16305,6 +16305,86 @@ var spells = []spell{
 	{id: 11672, dispel: 1, manaCostPct: 14, castTimeIdx: 1, durIdx: 85, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 110, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 52372 "Icy Touch" (Wowhead SpellName MATCH; C++
+	// chapter1.cpp:50 enum, :262 DoCastVictim; Lua
+	// npc_unworthy_initiate.lua:121 const, :155 CastSpell(victim)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_52372_52373_52374_52375.txt; wago NOT attempted —
+	// both effects have Values, no trigger): eff0 2 SCHOOL_DAMAGE
+	// Frost, effect-row Value 217, tooltip range 217-235 — bp 216 /
+	// die 19 (the 30633 range convention: bp = low-1, die =
+	// high-low+1, so the engine rolls 217..235); eff1 6 APPLY_AURA
+	// MOD_MELEE_RANGED_HASTE (aura 192) Value -15% — bp -16/die 1
+	// (the 47442 negative-value convention); both targetA
+	// TARGET_ENEMY (DoCastVictim); cast1 instant; dur18 20000ms 20s
+	// (real row); range3 Short 20yd (real row); school Frost;
+	// dispel 1 Magic. NOT carried: 1 Frost Rune / -10 Runic Power
+	// cost and 6s cooldown (no rune/cooldown fields); "Discount
+	// Power On Miss" / "The aura can only affect one target" /
+	// "Allow While Riding Vehicle" (no attributes field); the
+	// "Affected Spells:" list is not a triggered-spell link.
+	{id: 52372, dispel: 1, castTimeIdx: 1, durIdx: 18, rangeIdx: 3, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 216, dieSides: 19, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeRangedHaste, basePoints: -16, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 52373 "Plague Strike" (Wowhead SpellName MATCH; C++
+	// chapter1.cpp:51 enum, :267 DoCastVictim; Lua
+	// npc_unworthy_initiate.lua:122 const, :163 CastSpell(victim)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// both effects have Values, no trigger): eff0 121
+	// NORMALIZED_WEAPON_DMG Value 37 — bp 36/die 1 (the flat
+	// convention); eff1 6 APPLY_AURA PERIODIC_DAMAGE (aura 3)
+	// Value 73 every 3s — bp 72/die 1 (tooltip total 292 = 4
+	// ticks x 73); auraPeriod 3000; misc 127 (the "(127)"
+	// parenthetical on the effect name IS the MiscValue, the
+	// same rendering as the knockback "(N)" rule); both targetA
+	// TARGET_ENEMY (DoCastVictim); cast1 instant; dur29 12000ms
+	// 12s (real row); range2 Combat 5yd (real row); school Shadow;
+	// dispel 3 Disease. NOT carried: 1 Blood + 1 Unholy Rune /
+	// -10 Runic Power cost (no rune field); "Is Ability" / "Do
+	// Not Sheath" / "Initiates Combat" / "Discount Power On Miss"
+	// / "Requires main hand weapon" / "Allow While Riding Vehicle"
+	// (no attributes field).
+	{id: 52373, dispel: 3, castTimeIdx: 1, durIdx: 29, rangeIdx: 2, school: schoolShadow, effects: [3]effect{
+		{effect: effNormalizedWeaponDmg, basePoints: 36, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 72, dieSides: 1, auraPeriod: 3000, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 52374 "Blood Strike" (Wowhead SpellName MATCH; C++
+	// chapter1.cpp:52 enum, :272 DoCastVictim; Lua
+	// npc_unworthy_initiate.lua:123 const, :171 CastSpell(victim)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// both effects have Values, no trigger): eff0 121
+	// NORMALIZED_WEAPON_DMG Value 92 — bp 91/die 1; eff1 31
+	// WEAPON_PERCENT_DAMAGE Value 60 — bp 59/die 1 (60% weapon
+	// damage); both targetA TARGET_ENEMY (DoCastVictim); cast1
+	// instant; dur0; range2 Combat 5yd (real row); school
+	// Physical. NOT carried: 1 Blood Rune / -10 Runic Power cost
+	// (no rune field); the tooltip's "plus 55 for each disease"
+	// (C++ SpellScript-side, no DBC effect row); "Is Ability" /
+	// "Do Not Sheath" / "Initiates Combat" / "Discount Power On
+	// Miss" / "Requires main hand weapon" / "Allow While Riding
+	// Vehicle" (no attributes field).
+	{id: 52374, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effNormalizedWeaponDmg, basePoints: 91, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effWeaponPercentDamage, basePoints: 59, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 52375 "Death Coil" (Wowhead SpellName MATCH; C++
+	// chapter1.cpp:53 enum, :277 DoCastVictim; Lua
+	// npc_unworthy_initiate.lua:124 const, :179 CastSpell(victim)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, not a trigger): single effect 3
+	// DUMMY Value 460 — bp 459/die 1 ("Server-side script");
+	// targetA TARGET_ENEMY (DoCastVictim; the enemy-damage /
+	// friendly-Undead-heal split is script-side); cast1 instant;
+	// dur0; range4 Medium 30yd (real row); school Shadow. NOT
+	// carried: 40 Runic Power cost (no rune field); the tooltip's
+	// 184 damage / 276 heal figures (scripted, level-scaled —
+	// the DBC value is the 460 cap, per the Buff's "up to 460");
+	// "Do Not Sheath" / "Allow While Riding Vehicle" (no
+	// attributes field).
+	{id: 52375, castTimeIdx: 1, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effDummy, basePoints: 459, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
