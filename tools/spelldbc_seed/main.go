@@ -146,11 +146,12 @@ const (
 	auraModDmgDone             = 79
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
-	auraPeriodicDmgPct         = 89 // SPELL_AURA_PERIODIC_DAMAGE_PERCENT (SpellAuraDefines.h:169)
-	auraModHitChance           = 54 // SPELL_AURA_MOD_HIT_CHANCE (SpellAuraDefines.h:134)
-	auraPeriodicLeech          = 53 // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
-	auraPeriodicManaLeech      = 64 // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
-	auraPeriodicHealthFunnel   = 62 // SPELL_AURA_PERIODIC_HEALTH_FUNNEL (SpellAuraDefines.h:142)
+	auraPeriodicDmgPct         = 89  // SPELL_AURA_PERIODIC_DAMAGE_PERCENT (SpellAuraDefines.h:169)
+	auraModHitChance           = 54  // SPELL_AURA_MOD_HIT_CHANCE (SpellAuraDefines.h:134)
+	auraPeriodicLeech          = 53  // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
+	auraPeriodicManaLeech      = 64  // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
+	auraPowerBurn              = 162 // SPELL_AURA_POWER_BURN (SpellAuraDefines.h:242)
+	auraPeriodicHealthFunnel   = 62  // SPELL_AURA_PERIODIC_HEALTH_FUNNEL (SpellAuraDefines.h:142)
 	auraModResistPct           = 101
 	auraModAttackPower         = 99  // SPELL_AURA_MOD_ATTACK_POWER (SpellAuraDefines.h:179)
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
@@ -18641,6 +18642,81 @@ var spells = []spell{
 	// authority, 41634 precedent).
 	{id: 23478, castTimeIdx: 1, rangeIdx: 13, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 2187, dieSides: 1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 20478 "Armageddon" (Wowhead name MATCH; C++
+	// SPELL_ARMAGEDDON) — moltencore/boss_baron_geddon;
+	// eff0 Periodically trigger spell Value 1 -> bp 0,
+	// period 8000, trigger 20479 (NOT seeded); eff1
+	// Pacify Value 1 -> bp 0; eff2 Root Value 1 -> bp 0;
+	// all targetA CASTER (DoCast self); cast Instant idx
+	// 1, dur 8s idx 31 (real row), range Self idx 1,
+	// school Physical. Flags NOT carried (no attributes
+	// field).
+	{id: 20478, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 8000, trigger: 20479, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPacify, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 19695 "Inferno" (Wowhead name MATCH; C++
+	// SPELL_INFERNO) — eff0 Periodically trigger spell
+	// Value 1000 -> bp 999, period 1000, trigger 18947
+	// (NOT seeded — Wowhead shows 18947, NOT 19698; the
+	// C++ OnPeriodic PreventDefaultAction means the DBC
+	// trigger never fires in C++ either, 19698 is cast by
+	// the script instead); eff1 Root Value 1 -> bp 0;
+	// eff2 Pacify Value 1 -> bp 0; all targetA CASTER
+	// (DoCast self); cast Instant idx 1, dur 8s idx 31
+	// (real row), range Self idx 1, school Physical.
+	// FLAG: 18947 identity (shown unnamed as "Spell
+	// #18947").
+	{id: 19695, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 999, dieSides: 1, auraPeriod: 1000, trigger: 18947, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPacify, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 19659 "Ignite Mana" (Wowhead name MATCH; C++
+	// SPELL_IGNITE_MANA) — eff0 Power Burn (Mana) Value
+	// 400 -> bp 399, period 3000, misc 0 (Mana — the
+	// "(Mana)" parenthetical is the power type), radiusIdx
+	// 11 (real 45yd row), targetA ENEMY (DoCast random
+	// target); cast Instant idx 1, dur 5 min idx 5 (real
+	// 300000ms row), range Self idx 1, school Fire,
+	// dispel 1 (Magic). Aura is 162 POWER_BURN, NOT 64
+	// PERIODIC_MANA_LEECH (sibling correction, verified:
+	// 162's engine leg burns power + damages the target
+	// by the drained amount, spells.go:43418/45656 —
+	// the tooltip semantics; 64 would give the mana to
+	// the caster). FLAG: targetA 6 vs 15 (Wowhead shows
+	// no target; "nearby enemies" is tooltip-only).
+	{id: 19659, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolFire, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPowerBurn, basePoints: 399, dieSides: 1, auraPeriod: 3000, radiusIdx: 11, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 20475 "Living Bomb" (Wowhead name MATCH; C++
+	// SPELL_LIVING_BOMB) — eff0 Periodically trigger
+	// spell Value 1 -> bp 0, period 8000, trigger 20476
+	// (already seeded 2026-11-16, verdict
+	// wago_spells_11027_20476_31012.txt), targetA ENEMY
+	// (DoCast target); cast Instant idx 1, dur 8s idx 31 (real row), range
+	// 45yd idx 36 (real row), school Fire. Flags
+	// ("Wearer Casts Proc Trigger", "Aura is Debuff") NOT
+	// carried.
+	{id: 20475, castTimeIdx: 1, durIdx: 31, rangeIdx: 36, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 8000, trigger: 20476, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 19698 "Inferno" (PARTIAL match vs C++
+	// SPELL_INFERNO_DMG — base name only) — eff0 School
+	// Damage (Fire), Value 1 -> bp 0/die 1, radiusIdx 9
+	// (real 20yd row), targetA targetSrcAreaEnemy (62659
+	// precedent; C++ CastSpell(nullptr, ...) + tooltip
+	// "all nearby enemies"); cast Instant idx 1, dur n/a
+	// idx 0, range Self idx 1, school Fire. NOTE: DBC
+	// base is vestigial — real damage comes from the C++
+	// damageForTick table via SPELLVALUE_BASE_POINT0 (Lua
+	// header already documents this). FLAG: targetA 15
+	// inferred (Wowhead shows no target; no "Used by
+	// NPC" tab — C++ cast is the authority).
+	{id: 19698, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 0, dieSides: 1, targetA: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
 	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
