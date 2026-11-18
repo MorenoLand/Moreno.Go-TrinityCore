@@ -13651,6 +13651,86 @@ var spells = []spell{
 	{id: 36175, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effWeaponDamage, basePoints: 1750, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
 	}},
+	// 39835 "Needle Spine" (Wowhead SpellName MATCH;
+	// C++ SPELL_NEEDLE_SPINE, boss_warlord_najentus.cpp:42;
+	// cast triggered on the 39992 targeting pick —
+	// C++ spell_najentus_needle_spine::HandleScript :219
+	// GetCaster()->CastSpell(GetHitUnit(), 39835, true);
+	// Lua blacktemple/boss_warlord_najentus.lua:171
+	// creature:CastSpell(pick, 39835, true)) — Wowhead
+	// WotLK (verdict file wago_spells_39835_39837_39872_
+	// 39878.txt; wago NOT attempted — effect rows
+	// complete): eff0 SCHOOL_DAMAGE Physical tooltip
+	// 2890-3910 — bp 2889, die 1021; eff1 SCRIPT_EFFECT
+	// (eff 77) Value 1 — marker row, bp 0/die 0 per
+	// 66545/52267 precedent (the tooltip's second
+	// component, 2280-2520 to nearby enemies, has NO
+	// DBC representation and no C++ script handler for
+	// 39835 itself — only the 39992 spellscript is
+	// registered — so no damage leg is fabricated for
+	// it); tgtA ENEMY (flag "Can only target the
+	// player"); cast1 instant, dur0, range13 Anywhere
+	// 0-50000yd (real row, 29967 precedent), school
+	// Physical.
+	{id: 39835, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2889, dieSides: 1021, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effScriptEffect, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 39837 "Impaling Spine" (Wowhead SpellName MATCH;
+	// C++ SPELL_IMPALING_SPINE, boss_warlord_najentus.cpp:45;
+	// DoCast(target, ..., true) :155 on a random raid
+	// member; Lua boss_warlord_najentus.lua:77) — Wowhead
+	// WotLK (same verdict file; wago NOT attempted):
+	// eff0 SCHOOL_DAMAGE Physical Value 4513, single
+	// value, no range shown — bp 4513, die 0 (flat per
+	// 35108); eff1 PERIODIC_DAMAGE (aura 3) 2750 every
+	// 3s — bp 2749, die 1, auraPeriod 3000 (34168
+	// precedent); eff2 STUN (aura 12) Value 1 — bp 1,
+	// die 0 (22911/24686 precedent); tgtA ENEMY all
+	// three (flag "Can only target the player"); dur9
+	// 30000ms (real row, 49519 precedent), range134
+	// Tower 80yd (real row, 30967 precedent), cast1
+	// instant, school Physical.
+	{id: 39837, castTimeIdx: 1, durIdx: 9, rangeIdx: 134, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 4513, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 2749, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 39872 "Tidal Shield" (Wowhead SpellName MATCH;
+	// C++ SPELL_TIDAL_SHIELD, boss_warlord_najentus.cpp:44;
+	// DoCastSelf :144, triggered; Lua
+	// boss_warlord_najentus.lua:79) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted): eff0 SCHOOL
+	// IMMUNITY (aura 39) all 7 schools — bp 0, die 1,
+	// misc 127 (9634 precedent); eff1 "Mod Total Health
+	// Regen %" = OBS_MOD_HEALTH (aura 20,
+	// SpellAuraDefines.h:100) 1% every 2s — bp 0, die 1,
+	// auraPeriod 2000 (49263/7800 precedent); tgtA
+	// CASTER both (DoCastSelf); dur22 45000ms (real row,
+	// 15786 precedent), range1 Self, cast1 instant,
+	// school Frost. "Aura is Debuff" flag is NOT
+	// encodable (seed has no attributes field).
+	{id: 39872, castTimeIdx: 1, durIdx: 22, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolImmunity, basePoints: 0, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraObsModHealth, basePoints: 0, dieSides: 1, auraPeriod: 2000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39878 "Tidal Burst" (Wowhead SpellName MATCH;
+	// C++ SPELL_TIDAL_BURST, boss_warlord_najentus.cpp:43;
+	// DoCastSelf :99, triggered when Hurl Spine hits
+	// while shielded; Lua boss_warlord_najentus.lua:78) —
+	// Wowhead WotLK (same verdict file; wago NOT
+	// attempted): eff0 SCHOOL_DAMAGE Frost Value 8500,
+	// single value — bp 8500, die 0 (flat per 35108);
+	// self-centred AoE: tgtA SRC_CASTER tgtB
+	// SRC_AREA_ENEMY + radius28 50000yd (real row,
+	// 66545 precedent; Wowhead "Radius: 50000 yards"
+	// is the effect radius here, not a range echo —
+	// cf. 8732/15578); cast1 instant, dur0, range1
+	// Self, school Frost. 8s cooldown is NOT
+	// encodable (seed has no cooldown field).
+	{id: 39878, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 8500, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 28, chainAmplitude: 1},
+	}},
 	// 39016 "Shadow Wave" HELD — NOT seeded: Wowhead name
 	// MATCH but Effect #2 has NO row on the page (jumps
 	// #1 -> #3) and the single wago attempt was
