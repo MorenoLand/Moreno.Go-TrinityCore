@@ -2080,6 +2080,71 @@ var spells = []spell{
 	// build's SpellMisc, so dispel stays 0. Removes the last
 	// unseeded-spell blocker for boss_bloodmage_thalnos.lua
 	// (all four timer casts 1106/8053/8814/16079 now seeded).
+	// 16167 "Rend Blackhand Mounts" (Wowhead name MATCH;
+	// C++ boss_gyth.cpp:127 AddAura(me), :27 enum) —
+	// wago row 694109: eff0 ApplyAura Transform (56)
+	// bp0/die1 misc10459 tgtCaster. Cast Instant idx 1,
+	// dur21 indefinite (real row), range1 Self, school
+	// Physical. NOT carried: BonusCoefficient 1 (no field).
+	{id: 16167, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraTransform, basePoints: 0, dieSides: 1, misc: 10459, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 16328 "Summon Rend Blackhand" (Wowhead name MATCH;
+	// C++ boss_gyth.cpp:113 DoCast(me), :32 enum) — wago
+	// rows 694027/694028/694029: eff0 Summon (28) bp0/
+	// die1 misc10429 miscB64 radius15 (3yd real row)
+	// tgtA DEST_CASTER_FRONT (47); eff1 Dummy (3) bp0/
+	// die0 tgtCaster; eff2 Send Event (61) bp0/die0
+	// misc8593 (event ID, NOT a trigger). Cast Instant
+	// idx 1, dur21 indefinite (real row), range1 Self,
+	// school Physical. NOT carried: BonusCoefficient 1.
+	{id: 16328, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 10429, miscB: 64, targetA: targetDestCasterFront, radiusIdx: 15, chainAmplitude: 1},
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effSendEvent, basePoints: 0, dieSides: 0, misc: 8593, chainAmplitude: 1},
+	}},
+	// 16350 "Freeze" (Wowhead name MATCH; C++
+	// boss_gyth.cpp:158 DoCast(me), :30 enum) — wago
+	// rows 693856/693857/693858: eff0 ApplyAura Periodic
+	// Damage (3) bp138/die23 period3000 radius9 (20yd
+	// real row) tgtA CONE_ENEMY_24; eff1 ApplyAura Stun
+	// (12) bp0/die0 radius9 tgtA24; eff2 School Damage
+	// (Frost) bp739/die121 radius9 tgtA24. Mechanic 12
+	// Stunned + dispel 1 Magic at spell level (13005
+	// precedent carries Wowhead Mechanic at spell level).
+	// Cast Instant idx 1, dur1 10000ms (real row),
+	// range4 Medium 30yd (real row), school Frost.
+	{id: 16350, mechanic: 12, dispel: 1, castTimeIdx: 1, durIdx: 1, rangeIdx: 4, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 138, dieSides: 23, auraPeriod: 3000, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 739, dieSides: 121, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 16359 "Corrosive Acid Breath" (Wowhead name MATCH;
+	// C++ boss_gyth.cpp:154 DoCast(me), :28 enum) — wago
+	// rows 693681/693682/693683: eff0 ApplyAura Periodic
+	// Damage (3) bp14/die1 period5000 radius9 tgtA24;
+	// eff1 School Damage (Nature) bp119/die1 radius9
+	// tgtA24; eff2 ApplyAura Mod Resistance (22) bp-161/
+	// die1 misc1 (Physical) radius9 tgtA24. Cast Instant
+	// idx 1, dur9 30000ms (real row), range2 Combat 5yd
+	// (real row), school Nature. NOT carried: SP mod 0.1
+	// (no coefficient field); BonusCoefficient 1.
+	{id: 16359, castTimeIdx: 1, durIdx: 9, rangeIdx: 2, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 14, dieSides: 1, auraPeriod: 5000, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 119, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModResistance, basePoints: -161, dieSides: 1, misc: 1, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 16390 "Flame Breath" (Wowhead name MATCH; C++
+	// boss_gyth.cpp:162 DoCast(me), :29 enum) — wago row
+	// 694226: eff0 School Damage (Fire) bp19/die1
+	// radius9 (20yd real row) tgtA CONE_ENEMY_24
+	// (Wowhead 20). Cast 2s idx 5 (real row), dur0,
+	// range2 Combat 5yd (real row), school Fire. NOT
+	// carried: RealPointsPerLevel 20 (no field);
+	// BonusCoefficient 1 (no field).
+	{id: 16390, castTimeIdx: 5, rangeIdx: 2, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 19, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
