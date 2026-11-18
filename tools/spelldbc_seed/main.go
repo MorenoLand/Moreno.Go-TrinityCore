@@ -2224,6 +2224,83 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 49, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effTriggerSpell, basePoints: 0, dieSides: 0, trigger: 19229, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 14032 "Shadow Word: Pain" (Wowhead name MATCH;
+	// C++ boss_priestess_delrissa.cpp:64 enum) — wago
+	// row 691994 + SpellMisc 325270 + SpellCategories
+	// 74507 (2.5.6.70577): eff0 Apply Aura Periodic
+	// Damage (3) bp35/die1 period3000 tgtA ENEMY (6).
+	// Cast Instant idx 1, dur85 18000ms (real row),
+	// range4 Medium 30yd (real row), school Shadow,
+	// mana 95, dispel 1 Magic. NOT carried:
+	// Attributes_0 0xD0000 (no field); BonusCoefficient
+	// 0.17 (no field).
+	{id: 14032, dispel: 1, castTimeIdx: 1, durIdx: 85, rangeIdx: 4, school: schoolShadow, manaCost: 95, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 35, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 17843 "Flash Heal" (Wowhead name MATCH; C++
+	// boss_priestess_delrissa.cpp:63 enum) — wago
+	// row 694776 + SpellMisc 327513 (2.5.6.70577):
+	// eff0 Heal (10) bp397/die65 tgtA TARGET_ALLY
+	// (21) = 398-462. Cast 1.5s idx 16 (real row),
+	// dur0, range5 Long 40yd (real row), school Holy,
+	// mana 125. NOT carried: Attributes_0 0x90000 (no
+	// field); BonusCoefficient 0.429 (no field);
+	// EffectAmplitude 1 (no field); no SpellCooldowns
+	// row, so GCD is unknown from wago (Wowhead TBC
+	// says GCD 0) — the seed carries no GCD field.
+	{id: 17843, castTimeIdx: 16, rangeIdx: 5, school: schoolHoly, manaCost: 125, effects: [3]effect{
+		{effect: effHeal, basePoints: 397, dieSides: 65, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 27609 "Dispel Magic" Rank 2 (Wowhead name MATCH;
+	// C++ boss_priestess_delrissa.cpp:62 enum) —
+	// wago row 703608 + SpellMisc 334557 + SpellPower
+	// 189612 (2.5.6.70577): eff0 Dispel (38) bp1/die1
+	// misc1 (Magic) tgtA TARGET_ANY (25). Cast Instant
+	// idx 1, dur0, range4 Medium 30yd (real row),
+	// school Holy, manaCostPct 18 (18% of base mana;
+	// ManaCost 0). Spell-level dispel stays 0: wago
+	// SpellCategories DispelType is 0, the Magic type
+	// lives in the effect misc — the 13005/16350
+	// precedent does not apply where wago says 0. NOT
+	// carried: Attributes_0 0x10000 / Attributes_2
+	// 0x80000 (no field); Category 0,
+	// StartRecoveryCategory 133 (no field).
+	{id: 27609, castTimeIdx: 1, rangeIdx: 4, school: schoolHoly, manaCostPct: 18, effects: [3]effect{
+		{effect: effDispel, basePoints: 1, dieSides: 1, misc: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 44174 "Renew" (Wowhead name MATCH; C++
+	// boss_priestess_delrissa.cpp:67 enum) — wago
+	// row 864864 + SpellMisc 459127 (2.5.6.70577):
+	// eff0 Apply Aura Periodic Heal (8) bp431/die1
+	// period3000 tgtA TARGET_ALLY (21) = 432/tick,
+	// 2160 total. Cast Instant idx 1, dur8 15000ms
+	// (real row), range5 Long 40yd (real row), school
+	// Holy, mana 365, dispel 1 Magic. NOT carried:
+	// Attributes_0 0x10000 (no field);
+	// BonusCoefficient 0.2 (no field).
+	{id: 44174, dispel: 1, castTimeIdx: 1, durIdx: 8, rangeIdx: 5, school: schoolHoly, manaCost: 365, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicHeal, basePoints: 431, dieSides: 1, auraPeriod: 3000, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 44291 "Power Word: Shield" (Wowhead name MATCH;
+	// C++ boss_priestess_delrissa.cpp:66 enum) —
+	// wago row 864775 + SpellMisc 459281 + SpellPower
+	// 229868 (2.5.6.70577): eff0 Apply Aura School
+	// Absorb (69) bp1454/die1 misc127 (0x7f, all seven
+	// schools) tgtA CASTER (1). Cast Instant idx 1,
+	// dur9 30000ms (real row), range5 Long 40yd (real
+	// row), school Holy, mana 500, dispel 1 Magic,
+	// mechanic 19 Shielded. Target note: C++ casts
+	// DoCast(target) with target = me or a random alive
+	// lackey (boss_priestess_delrissa.cpp:298-307),
+	// mirrored by Lua onShield — the DBC caster
+	// target does not drive the boss cast. NOT carried:
+	// Attributes_0 0x50000 / Attributes_2 0x280000 (no
+	// field); Category 56 (no field); Weakened Soul
+	// 6788 is a description-only $6788d reference, not
+	// a trigger (TriggerSpell 0).
+	{id: 44291, dispel: 1, mechanic: 19, castTimeIdx: 1, durIdx: 9, rangeIdx: 5, school: schoolHoly, manaCost: 500, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolAbsorb, basePoints: 1454, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
