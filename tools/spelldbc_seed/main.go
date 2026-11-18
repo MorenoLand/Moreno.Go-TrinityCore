@@ -13866,6 +13866,79 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 49, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 149, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 9874 "Self Destruct" HELD — NOT seeded: Wowhead name
+	// MATCH but Effect #2 has NO row on the page (numbering
+	// jumps #1 -> #3) and the single wago attempt was
+	// bot-blocked (42nd consecutive), so eff2's contents are
+	// unknown — a 2-of-3 row would fabricate it (same class as
+	// 39016/35327). The Used-by "conflict" is RESOLVED: 9874 is
+	// the STONE KEEPER's spell, not Archaedas's — C++
+	// npc_stonekeepers::JustDied :380 DoCast(me, 9874, true);
+	// Lua boss_archaedas.lua:80,163. Derivable values recorded
+	// for the unblocking tick: eff1 SCHOOL_DAMAGE Fire Value
+	// 595 single value — bp 595/die 0 (flat per 35108), radius
+	// 5yd — radiusIdx 8 (real row, 31263 precedent); eff3
+	// DUMMY Value 1 — bp 0/die 1; cast1 instant, dur0 (no
+	// duration shown), range4 Medium 30yd (real row),
+	// school Fire. Targets unknown (no Target A/B shown).
+	// 10258 "Awaken Vault Walker" (Wowhead name is "Awaken
+	// Vault Warder" — MISMATCH; TC enum name is authoritative
+	// per the 30925 "Exploding Beaker" precedent. C++
+	// SPELL_AWAKEN_VAULT_WALKER, boss_archaedas.cpp:53;
+	// DoCast(minion, 10258, flag) :115; Lua
+	// boss_archaedas.lua:93,165) — Wowhead WotLK (verdict
+	// file wago_spells_9874_10258_10347_11206.txt; wago NOT
+	// attempted — effect row complete): single eff0 DUMMY
+	// Value 1 — bp 0/die 1; cast 5s — castTimeIdx 6 (real
+	// row); range 100yd Vision — rangeIdx 6 (real row);
+	// dur0 (no duration shown), school Physical. Targets +
+	// radius INFERRED from in-tree C++/Go constraints (seed
+	// header sanction): tgtA TARGET_UNIT_TARGET_ANY (25,
+	// 36115 precedent) — the DBC TargetA is unrecoverable
+	// from Wowhead (no Target A/B shown) and wago is blocked,
+	// but C++ casts it on a specific FRIENDLY frozen minion,
+	// so ENEMY would fizzle under
+	// checkCreatureExplicitTargetFaction while ANY passes any
+	// unit; radiusIdx 0 — Wowhead "Radius: 100 yards" equals
+	// the range and is a range echo, not an EffectRadiusIndex
+	// (23341 precedent, wago-confirmed index 0 there).
+	{id: 10258, castTimeIdx: 6, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 10347 "Archaedas Awaken" (Wowhead name is "Archaedas
+	// Awaken Visual (DND)" — MISMATCH; TC enum name is
+	// authoritative per 30925. C++
+	// SPELL_ARCHAEDAS_AWAKEN, boss_archaedas.cpp:49; minion
+	// self-cast triggered :116; SpellHit(10347) handlers
+	// :134/:285; Lua boss_archaedas.lua:101,164) — Wowhead
+	// WotLK (same verdict file; wago NOT attempted): single
+	// eff0 DUMMY Value 1 — bp 0/die 1; cast 1.5s —
+	// castTimeIdx 16 (real row); range 0 Self — rangeIdx 1;
+	// dur0 (no duration shown), school Physical; tgtA CASTER
+	// (self-cast). No Used-by NPC on Wowhead — the DND visual
+	// has no NPC list; the C++ self-cast is authoritative.
+	{id: 10347, castTimeIdx: 16, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 11206 "Boss Object Visual" (Wowhead name is "Uldaman
+	// Boss Object Visual" — MISMATCH; TC enum name is
+	// authoritative per 30925. C++
+	// SPELL_BOSS_OBJECT_VISUAL, boss_archaedas.cpp:50;
+	// player self-cast non-triggered :411, go_altar
+	// OnGossipHello; Lua boss_archaedas.lua:116) — Wowhead
+	// WotLK (same verdict file; wago NOT attempted): single
+	// eff0 APPLY_AURA DUMMY (aura 4) Value 1 — bp 0/die 1;
+	// Duration 10 minutes — dur6 600000ms (real row, 27680
+	// precedent); Range 5 yards Interact — rangeIdx 12 (real
+	// row); cast Channeled (10 min) — castTimeIdx 1 per the
+	// channeled-cast fix (32717/38153: the channel length
+	// comes from durIdx; the seed carries no AttributesEx
+	// channeled bit); school Physical; tgtA CASTER
+	// (player self-cast). No Used-by NPC on Wowhead — the
+	// C++ GO-gossip cast is authoritative.
+	{id: 11206, castTimeIdx: 1, durIdx: 6, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
