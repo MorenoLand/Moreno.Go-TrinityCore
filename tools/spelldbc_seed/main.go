@@ -18718,6 +18718,69 @@ var spells = []spell{
 	{id: 19698, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 0, dieSides: 1, targetA: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
 	}},
+	// 20229 "Blast Wave" (Wowhead name MATCH; C++
+	// SPELL_BLAST_WAVE) — eff0 School Damage (Fire),
+	// tooltip 694-806 -> bp 693/die 113 (Spell Details
+	// show only Value 694), radiusIdx 13 (real 10yd
+	// row); eff1 Decrease Run Speed -50% -> bp -51,
+	// radiusIdx 13; both targetA 22/15 (66044 Blast
+	// Wave precedent, same effect pair); cast Instant
+	// idx 1, dur 8s idx 31 (real row), range Self idx 1,
+	// school Fire. FLAG: Wowhead lists only Flamewaker
+	// Elite (11664) as a user — Majordomo NOT listed;
+	// C++ DoCastVictim :140 is the authority.
+	{id: 20229, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 693, dieSides: 113, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 20618 "Teleport" (Wowhead name MATCH; C++
+	// SPELL_TELEPORT) — eff0 Teleport, Value 1 -> bp 0,
+	// targetA ENEMY (DoCast random target :145); cast
+	// Instant idx 1, dur n/a idx 0, range 45yd idx 36
+	// (real row), school Fire. FLAG: no destination or
+	// coordinates shown on Wowhead (wago SpellEffect row
+	// check for misc/targetB).
+	{id: 20618, castTimeIdx: 1, rangeIdx: 36, school: schoolFire, effects: [3]effect{
+		{effect: effTeleportUnits, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 20619 "Magic Reflection" (Wowhead name MATCH; C++
+	// SPELL_MAGIC_REFLECTION) — eff0 Reflect All Spells
+	// (aura 28), Value 50 -> bp 49, radiusIdx 12 (real
+	// 100yd row), targetA 22/30 (caster-centred ally
+	// aura; :843 precedent); cast Instant idx 1, dur
+	// 10s idx 1 (real row), range 35yd idx 35 (real
+	// SpellRange row, :18924), school Arcane. FLAG: cast
+	// Range 35yd vs aura Radius 100yd (both as shown).
+	{id: 20619, castTimeIdx: 1, durIdx: 1, rangeIdx: 35, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraReflectSpells, basePoints: 49, dieSides: 1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 20620 "Aegis of Ragnaros" (Wowhead name MATCH; C++
+	// SPELL_AEGIS_OF_RAGNAROS) — eff0 School Absorb
+	// (aura 69), Value 30000 -> bp 29999, misc 127
+	// (all 7 schools, as listed); eff1 Damage shield
+	// (aura 15), Value 250 -> bp 249; eff2 Heal to Full
+	// (effHealMaxHealth 67), Value 1 -> bp 0; all
+	// targetA CASTER (DoCast self, triggered :125);
+	// cast Instant idx 1, dur 5 min idx 5 (real
+	// 300000ms row), range Self idx 1, school Shadow.
+	// FLAG: eff2 is absent from the tooltip text (wago
+	// SpellEffect row check).
+	{id: 20620, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolAbsorb, basePoints: 29999, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDamageShield, basePoints: 249, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effHealMaxHealth, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 21075 "Damage Shield" (Wowhead name MISMATCH vs
+	// C++ SPELL_DAMAGE_REFLECTION — IDs govern) — eff0
+	// Damage shield (aura 15), Value 100 -> bp 99,
+	// radiusIdx 12 (real 100yd row), targetA 22/30
+	// (nearby minions/allies; :843 precedent); cast
+	// Instant idx 1, dur 10s idx 1 (real row), range
+	// 35yd idx 35 (real SpellRange row), school Arcane.
+	// FLAG: cast Range 35yd vs aura Radius 100yd.
+	{id: 21075, castTimeIdx: 1, durIdx: 1, rangeIdx: 35, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDamageShield, basePoints: 99, dieSides: 1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 12, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
