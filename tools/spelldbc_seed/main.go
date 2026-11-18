@@ -19457,6 +19457,78 @@ var spells = []spell{
 	{id: 31901, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: -76, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 14034 "Fireball" (Wowhead name MATCH; C++
+	// SPELL_FIREBALL, arcatraz.cpp:64, :215
+	// DoCastVictim) — eff0 School Damage (Fire), Value
+	// 96 -> bp 95, die 1, targetA ENEMY (DoCastVictim);
+	// cast 3s idx 14 (real row), dur n/a idx 0, range5
+	// Long 40yd (real row), school Fire, manaCost 90.
+	// FLAG: tooltip states no damage number.
+	{id: 14034, castTimeIdx: 14, rangeIdx: 5, school: schoolFire, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 95, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 33975 "Pyroblast" (Wowhead name MATCH; C++
+	// SPELL_PYROBLAST, arcatraz.cpp:66, :207
+	// DoCastVictim) — eff0 School Damage (Fire), Value
+	// 319 -> bp 318, die 1, targetA ENEMY; eff1 Apply
+	// Aura Periodic Damage (aura 3), Value 60 every 3s
+	// -> bp 59, die 1, auraPeriod 3000, targetA ENEMY;
+	// cast 6s idx 92006 SYNTHETIC (no real 6000ms row —
+	// 92004/92005 precedent, FLAG wago row check),
+	// dur29 12000ms (real row), range35 Medium-Long
+	// 35yd (real row), school Fire, manaCost 130.
+	// FLAG: SP mods 0.75/0.05 not carried (no
+	// coefficient field); GCD 0s anomaly (category
+	// Normal, others 1.5s — no GCD field).
+	{id: 33975, castTimeIdx: 92006, durIdx: 29, rangeIdx: 35, school: schoolFire, manaCost: 130, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 318, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 59, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 36879 "Conjure Water" (Wowhead name MATCH; C++
+	// SPELL_CONJURE_WATER, arcatraz.cpp:58, :162
+	// DoCast(me)) — eff0 Dummy, Value 1 -> bp 0, die 1,
+	// targetA CASTER (DoCast me; 45941 precedent —
+	// server-side script only, no summon/item shown);
+	// cast 3s idx 14 (real row), dur n/a idx 0, range1
+	// Self, school Arcane, manaCost 885.
+	{id: 36879, castTimeIdx: 14, rangeIdx: 1, school: schoolArcane, manaCost: 885, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 36880 "Arcane Intellect" (Wowhead name MATCH; C++
+	// SPELL_ARCANE_INTELLECT, arcatraz.cpp:59, :172
+	// DoCast(me)) — eff0 Apply Aura Mod Stat
+	// (Intellect) (aura 29), Value 100 -> bp 99, die 1,
+	// misc 3 Intellect (13326/8733 precedent), targetA
+	// CASTER (DoCast me); cast Instant idx 1, dur30
+	// 1800000ms (real row), range1 Self, school Arcane,
+	// dispel 1 Magic, manaCost 1850. FLAG: tooltip says
+	// "the target's" but Details Range is Self.
+	{id: 36880, dispel: 1, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolArcane, manaCost: 1850, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModStat, basePoints: 99, dieSides: 1, misc: 3, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 36881 "Ice Armor" (Wowhead name MATCH; C++
+	// SPELL_ICE_ARMOR, arcatraz.cpp:60, :167 DoCast(me))
+	// — eff0 Apply Aura Mod Resistance (Physical)
+	// (aura 22), Value 2000 -> bp 1999, die 1, misc 1
+	// Physical, targetA CASTER; eff1 Apply Aura Proc
+	// Trigger Spell (aura 42), Value 1 -> bp 0, die 1,
+	// trigger 7321 Chilled (NOT seeded — outside the
+	// five), targetA CASTER; eff2 Apply Aura Mod
+	// Resistance (Frost) (aura 22), Value 50 -> bp 49,
+	// die 1, misc 16 Frost, targetA CASTER; 12544
+	// Frost Armor is the direct twin (aura22 misc1 +
+	// aura42 trigger, dur30/dispel1/range1/school
+	// Frost); cast Instant idx 1, dur30 1800000ms
+	// (real row), range1 Self, school Frost, dispel 1
+	// Magic, manaCost 630. FLAG: tooltip slow numbers
+	// (25% move / 30% attack, 5s) live in 7321, not
+	// this row; Aura proc chance 100% not carried (no
+	// proc table).
+	{id: 36881, dispel: 1, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolFrost, manaCost: 630, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModResistance, basePoints: 1999, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 7321, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModResistance, basePoints: 49, dieSides: 1, misc: 16, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
@@ -19610,6 +19682,8 @@ func main() {
 		{92004, 3500, 0},
 		// synthetic SpellCastTimes 92005 (1600ms) for 35158/35159 Reflective shields — no real 1600ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
 		{92005, 1600, 0},
+		// synthetic SpellCastTimes 92006 (6000ms) for 33975 Pyroblast — no real 6000ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
+		{92006, 6000, 0},
 		{2, 250, 0},    // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
 		{14, 3000, 0},  // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
 		{16, 1500, 0},  // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
