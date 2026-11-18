@@ -17372,6 +17372,91 @@ var spells = []spell{
 	{id: 62136, castTimeIdx: 1, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
 		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetUnitSrcAreaEntry, radiusIdx: 12, chainAmplitude: 1},
 	}},
+	// 49427 "Ride Emerald Drake Que" (Wowhead name MATCH; C++
+	// oculus.cpp:77 enum, :303 CastSpell(summoner, ..., true);
+	// Lua oculus.lua:97 const, :436 CastSpell(summoner, ...,
+	// true), :112 RegisterAuraEvent) — Wowhead WotLK (verdict
+	// wago_spells_49427_49459_49463_50241.txt; wago NOT opened
+	// — trigger link shown): single effect 6 APPLY_AURA
+	// aura23 PERIODIC_TRIG Value 1 every 2.5 seconds — bp
+	// 0/die 1, auraPeriod 2500, trigger 49346 ("Emerald Drake
+	// Saddle", Wowhead link; NOT seeded — triggered spell);
+	// targetA 21 TARGET_ALLY (cast on the summoner; the
+	// AuraScript hooks periodic only, no target constraint —
+	// TDB binds 49427 to
+	// spell_oculus_ride_ruby_emerald_amber_drake_que, whose
+	// handler has GetTarget cast the saddle on the caster, so
+	// the que aura must sit on the summoner; FLAG: needs a
+	// wago SpellEffect row check — Wowhead-derived target;
+	// 25 TARGET_ANY alternative (59319 Ride Frost Wyrm
+	// control-vehicle precedent, same cast shape);
+	// dur90018 synthetic 2500ms (Duration 2.5 seconds; the
+	// C++ comment's "3 seconds" is stale — Wowhead reads the
+	// DBC row); cast1 instant; range13 real 50000yd
+	// (Anywhere - Unlimited); school Physical. NOT carried:
+	// flags (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 49427, castTimeIdx: 1, durIdx: 90018, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 2500, trigger: 49346, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 49459 "Ride Amber Drake Que" (Wowhead name MATCH; C++
+	// oculus.cpp:65 enum, :306 CastSpell(summoner, ..., true);
+	// Lua oculus.lua:98 const, :438 CastSpell(summoner, ...,
+	// true), :113 RegisterAuraEvent) — Wowhead WotLK (same
+	// verdict file; wago NOT opened — trigger link shown):
+	// single effect 6 APPLY_AURA aura23 PERIODIC_TRIG Value
+	// 1 every 2.5 seconds — bp 0/die 1, auraPeriod 2500,
+	// trigger 49460 ("Amber Drake Saddle", Wowhead link; NOT
+	// seeded — triggered spell); targetA 21 TARGET_ALLY
+	// (same derivation as 49427; FLAG: needs a wago
+	// SpellEffect row check); dur90018 synthetic 2500ms
+	// (Duration 2.5 seconds; C++ "3 seconds" stale); cast1
+	// instant; range13 real 50000yd (Anywhere - Unlimited);
+	// school Physical. NOT carried: flags (incl. "Allow Cast
+	// While Casting", no attributes field); GCD 0 / Cost None
+	// (no fields).
+	{id: 49459, castTimeIdx: 1, durIdx: 90018, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 2500, trigger: 49460, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 49463 "Ride Ruby Drake Que" (Wowhead name MATCH; C++
+	// oculus.cpp:52 enum, :300 CastSpell(summoner, ..., true);
+	// Lua oculus.lua:99 const, :434 CastSpell(summoner, ...,
+	// true), :114 RegisterAuraEvent) — Wowhead WotLK (same
+	// verdict file; wago NOT opened — trigger link shown):
+	// single effect 6 APPLY_AURA aura23 PERIODIC_TRIG Value
+	// 1 every 2.5 seconds — bp 0/die 1, auraPeriod 2500,
+	// trigger 49464 ("Ruby Drake Saddle", Wowhead link; NOT
+	// seeded — triggered spell); targetA 21 TARGET_ALLY
+	// (same derivation as 49427; FLAG: needs a wago
+	// SpellEffect row check); dur90018 synthetic 2500ms
+	// (Duration 2.5 seconds; C++ "3 seconds" stale); cast1
+	// instant; range13 real 50000yd (Anywhere - Unlimited);
+	// school Physical. NOT carried: flags (no attributes
+	// field); GCD 0 / Cost None (no fields).
+	{id: 49463, castTimeIdx: 1, durIdx: 90018, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 2500, trigger: 49464, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 50241 "Evasive Charges" (Wowhead name MISMATCH — omits
+	// "Ruby" vs C++ enum SPELL_RUBY_EVASIVE_CHARGES; C++
+	// oculus.cpp:56 enum, :484-491 proc handling (Validate +
+	// RemoveAuraFromStack/HasAura); Lua oculus.lua:471 const,
+	// GetAura/RemoveAura in evasiveManeuversProc :485/:489/
+	// :494; no TDB binding — granted by the 50248 aura's
+	// proc, not scripted itself) — Wowhead WotLK (same
+	// verdict file; wago NOT opened — no trigger row):
+	// single effect 6 APPLY_AURA aura4 DUMMY Value 1 — bp
+	// 0/die 1, misc 127 ("Dummy (127)" — the parenthetical
+	// is the MiscValue, same display rule as knockback/pull
+	// "(N)"); targetA CASTER (Range 0 Self + the C++ proc
+	// target is the drake); dur9 real 30000ms (30 seconds);
+	// cast1 instant; range1 Self 0yd; school Fire. NOT
+	// carried: "Requires level 70" (no field); buff text
+	// ("1 charges stored for Evasive Maneuvers."); flags
+	// ("Generates no threat", no attributes field); GCD 0 /
+	// Cost None (no fields).
+	{id: 50241, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -17420,6 +17505,7 @@ func main() {
 		{90015, 3600000, 0, 3600000}, // synthetic duration for 8733 Blessing of Blackfathom (no real 3600000ms row in the table; 90014 stays reserved for 38116 Searing Totem 35000ms)
 		{90016, 240000, 0, 240000},   // synthetic duration for 56119 Summon Swarmers (no real 240000ms row in the table)
 		{90017, 35000, 0, 35000},     // synthetic duration for 72884 Recently Infected (no real 35000ms row in the table; 90014 stays reserved for 38116 Searing Totem)
+		{90018, 2500, 0, 2500},       // synthetic duration for 49427/49459/49463 Ride Drake Que (no real 2500ms row in the table)
 		{4, 120000, 0, 120000},       // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
 		{8, 15000, 0, 15000},         // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
 		{27, 3000, 0, 3000},          // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
