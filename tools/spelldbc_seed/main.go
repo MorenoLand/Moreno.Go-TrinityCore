@@ -19071,6 +19071,82 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 495, dieSides: 1, targetA: targetEnemy, radiusIdx: 10, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 319, dieSides: 61, auraPeriod: 3000, targetA: targetEnemy, radiusIdx: 10, chainAmplitude: 1},
 	}},
+	// 31534 "Spell Reflection" (Wowhead name MATCH; C++
+	// SPELL_SPELL_REFLECTION, boss_warlord_kalithresh.cpp:39,
+	// :186 DoCast(me), re-arm 15s+rand10s) — eff0 Apply Aura
+	// Reflect All Spells (aura 28), Value 100 -> bp 99,
+	// die 1, targetA CASTER (DoCast self; aura 28 leg live,
+	// immunity.go:1020); cast Instant idx 1, dur 8s idx 31
+	// (real row), range Self idx 1, school Physical.
+	{id: 31534, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraReflectSpells, basePoints: 99, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 31543 "Warlord's Rage" (Wowhead display PARTIAL vs C++
+	// SPELL_WARLORDS_RAGE_NAGA, boss_warlord_kalithresh.cpp:42,
+	// distiller :86 DoCast(me, true) triggered) — eff0 Dummy,
+	// Value 0 -> bp -1, die 1 (10530/10762 precedent); eff1
+	// Apply Aura Periodic Trigger Spell (aura 23), Value 0
+	// -> bp -1, die 1, auraPeriod 3000, trigger 37076 (NOT
+	// seeded — 61727 precedent; 37076 is the distiller's own
+	// rage spell, outside this five); targetA CASTER
+	// (self-cast channel); cast Channeled 12s idx 92006
+	// (synthetic row, FLAG real row ID unknown), dur n/a
+	// idx 0, range Unlimited idx 13 (real row), school
+	// OMITTED (0 — no School row shown, FLAG wago
+	// SpellMisc row check).
+	{id: 31543, castTimeIdx: 92006, rangeIdx: 13, effects: [3]effect{
+		{effect: effDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 3000, trigger: 37076, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 36453 "Warlord's Rage" (Wowhead display PARTIAL vs C++
+	// SPELL_WARLORDS_RAGE_PROC, boss_warlord_kalithresh.cpp:44,
+	// SpellHit :154-157 RemoveAurasDueToSpell when distiller
+	// DONE; Triggered by 37081 per Wowhead) — eff0 Apply Aura
+	// Mod Damage Done % (Physical), Value 75% -> bp 74,
+	// die 1, aura 13 misc 1 (wago-verified 8269/29837
+	// precedent: aura 13 NOT 79); eff1 Apply Aura Mod Melee
+	// Attack Speed -%, Value 70% -> bp 69, die 1, aura 138
+	// (31475/31914 precedent); eff2 Apply Aura Mod Size %,
+	// Value 15% -> bp 14, die 1, aura 61 (1942 precedent);
+	// all targetA CASTER (triggered self-buff); cast Instant
+	// idx 1, dur 10 min idx 6 (real row), range Self idx 1,
+	// school Physical. FLAG: tooltip "by 75" lacks the %
+	// sign; eff2 Mod Size has no tooltip counterpart.
+	{id: 36453, castTimeIdx: 1, durIdx: 6, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: 74, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 69, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 14, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 37081 "Warlord's Rage" (Wowhead name MATCH; C++
+	// SPELL_WARLORDS_RAGE, boss_warlord_kalithresh.cpp:41,
+	// :177 DoCast(me), re-arm 3s+rand15s) — eff0 Dummy,
+	// Value 0 -> bp -1, die 1; eff1 Apply Aura Periodic
+	// Trigger Spell (aura 23), Value 0 -> bp -1, die 1,
+	// auraPeriod 12000, trigger 36453 (seeded above);
+	// targetA CASTER (self-cast channel); cast Channeled
+	// 12s idx 92006 (synthetic row, FLAG real row ID
+	// unknown), dur n/a idx 0, range Unlimited idx 13
+	// (real row), school OMITTED (0 — no School row shown,
+	// FLAG wago SpellMisc row check).
+	{id: 37081, castTimeIdx: 92006, rangeIdx: 13, effects: [3]effect{
+		{effect: effDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 12000, trigger: 36453, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39061 "Impale" (Wowhead name MATCH; C++
+	// SPELL_IMPALE, boss_warlord_kalithresh.cpp:40, :194
+	// DoCast(target), random target, re-arm 7.5s+rand5s) —
+	// eff0 Apply Aura Periodic Damage (aura 3), Value 750
+	// every 3s -> bp 749, die 1, auraPeriod 3000, targetA
+	// ENEMY (DoCast random target); cast Instant idx 1,
+	// dur 12s idx 29 (real row), range 5-30yd idx 54 (real
+	// row — FLAG whether 54 is "Monster Shoot Range"),
+	// school Physical. FLAG: Kalithresh NOT listed as a
+	// user on Wowhead (only Tidewalker Harpooner) + Level
+	// 20 Hunter class conflict — C++ :194 is the
+	// authority (Ragnaros precedent).
+	{id: 39061, castTimeIdx: 1, durIdx: 29, rangeIdx: 54, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 749, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 	// 26837 "Summon InCombat Trigger" — LEFT UNSEEDED:
 	// no Wowhead WotLK page exists ("Spell #26837
 	// doesn't exist"); the name matches the C++ enum
@@ -19234,6 +19310,8 @@ func main() {
 		{92004, 3500, 0},
 		// synthetic SpellCastTimes 92005 (1600ms) for 35158/35159 Reflective shields — no real 1600ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
 		{92005, 1600, 0},
+		// synthetic SpellCastTimes 92006 (12000ms) for 31543/37081 Warlord's Rage (channeled 12 sec) — no real 12000ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
+		{92006, 12000, 0},
 		{2, 250, 0},    // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
 		{14, 3000, 0},  // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
 		{16, 1500, 0},  // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
