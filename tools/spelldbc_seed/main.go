@@ -16080,6 +16080,77 @@ var spells = []spell{
 	{id: 22187, dispel: 1, manaCost: 110, castTimeIdx: 1, durIdx: 25, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
 		{effect: effApplyAura, aura: auraSchoolAbsorb, dieSides: 1, basePoints: 205, misc: 127, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 21401 "Frost Shock" (Wowhead SpellName MATCH; C++
+	// boss_priestess_delrissa.cpp:75 enum, :1200 DoCastVictim;
+	// Lua boss_apoko.lua:92 const, :165 CastSpell(victim)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_21401_27626_44256_46026.txt; wago NOT attempted
+	// — contiguous rows, both Values present, no trigger):
+	// eff0 6 APPLY_AURA MOD_DECREASE_SPEED (aura 33) Value -50%
+	// — bp -51/die 1 (the 47442 negative-value convention; the
+	// 29954 Frostbolt precedent), mechanic 11 SNARE
+	// (MECHANIC_SNARE, SharedDefines.h:1368); eff1 2
+	// SCHOOL_DAMAGE Frost Value 178 — bp 177/die 1 (the 31436
+	// flat convention); both targetA TARGET_ENEMY; cast1
+	// instant; dur31 8000ms 8s (real row); range3 Short 20yd
+	// (real row); school Frost; dispel 1 Magic; manaCost 115.
+	// NOT carried: "Cannot be used while shapeshifted" / "Do
+	// Not Sheath" / "Spell damage depends on caster level" (no
+	// level-scaling field; the 178 is seeded as the flat base,
+	// the 26192 note) (no attributes field).
+	{id: 21401, dispel: 1, manaCost: 115, castTimeIdx: 1, durIdx: 31, rangeIdx: 3, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, mechanic: 11, basePoints: -51, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 177, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 27626 "Purge" (Wowhead SpellName MATCH; C++
+	// boss_priestess_delrissa.cpp:73 enum, :1193 DoCast random
+	// target; Lua boss_apoko.lua:95 const, :146
+	// CastSpell(target)) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted — single effect with a Value, no
+	// trigger): single effect 38 DISPEL Value 2 — bp 1/die 1,
+	// misc 1 Magic (the 19492 precedent); targetA TARGET_ENEMY
+	// (DoCast random threat-list target); cast1 instant; dur0;
+	// range4 Medium 30yd (real row); school Nature; manaCostPct
+	// 5 (5% of base mana, the 29963 precedent). NOT carried:
+	// "Cannot be used while shapeshifted" (no attributes field).
+	{id: 27626, manaCostPct: 5, castTimeIdx: 1, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effDispel, basePoints: 1, dieSides: 1, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 44256 "Lesser Healing Wave" (Wowhead SpellName MATCH; C++
+	// boss_priestess_delrissa.cpp:74 enum, :1206 DoCast me; Lua
+	// boss_apoko.lua:93 const, :171 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 10
+	// HEAL, tooltip range 2590-3010 — bp 2589/die 421 (the 30633
+	// range convention: bp = low-1, die = high-low+1, so the
+	// engine rolls 2590..3010); targetA CASTER (DoCast me);
+	// cast16 1500ms (real row); dur0; range5 Long 40yd (real
+	// row); school Nature; manaCost 380. NOT carried: "Cannot
+	// be used while shapeshifted" (no attributes field); SP mod
+	// 0.429 (no coefficient field).
+	{id: 44256, manaCost: 380, castTimeIdx: 16, rangeIdx: 5, school: schoolNature, effects: [3]effect{
+		{effect: effHeal, basePoints: 2589, dieSides: 421, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 46026 "War Stomp" (Wowhead SpellName MATCH; C++
+	// boss_priestess_delrissa.cpp:72 enum, :1186 DoCast me; Lua
+	// boss_apoko.lua:91 const, :158 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// the sole effect is valueless Apply Aura: Stun, not a
+	// Trigger Spell / periodic-trigger row): single effect 6
+	// APPLY_AURA MOD_STUN (aura 12) — no Value shown, bp 0/die
+	// 1 (the 75212 valueless-aura precedent); mechanic 12 STUN
+	// at both levels (MECHANIC_STUN, SharedDefines.h:1369; the
+	// 25852 both-levels shape); targetA SRC_CASTER 22 /
+	// targetB SRC_AREA_ENEMY 15 (the 26192 AOE precedent);
+	// radius 8yd — radiusIdx 14 (real row); maxTargets 5;
+	// cast3 500ms (real row); dur39 2000ms 2s (real row);
+	// range1 Self Only (real row); school Physical. NOT
+	// carried: "Is Ability" / "Cannot be used while
+	// shapeshifted" / "Do Not Sheath" / "Cannot be reflected" /
+	// "All spell effects are harmful" (no attributes field).
+	{id: 46026, mechanic: 12, maxTargets: 5, castTimeIdx: 3, durIdx: 39, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, mechanic: 12, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
 }
 
 func main() {
