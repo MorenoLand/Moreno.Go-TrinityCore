@@ -15071,6 +15071,92 @@ var spells = []spell{
 	{id: 52723, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolShadow, dispel: 1, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 25640 "Thorns" (Wowhead SpellName MATCH; C++
+	// boss_buru.cpp:36 enum, :91 DoCast(me) on engage; Lua
+	// boss_buru.lua:87 const, :21 self-cast THORNS) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_5255_19593_24721_25640.txt; wago NOT
+	// attempted — single effect with a Value, no trigger):
+	// single effect 6 APPLY_AURA Damage shield Value 40 —
+	// aura 15 DAMAGE_SHIELD bp 39/die 1 (the 40184 flat
+	// convention); targetA CASTER (DoCast(me) self-cast —
+	// the page is the generic Druid spell, "friendly
+	// target" + Requires Druid is unseeded metadata, the
+	// 42354 precedent; in-tree damage-shield rows all use
+	// targetCaster); engine damage-shield leg is live
+	// (damage_shield.go, aura-15); cast1 instant; dur0
+	// (Wowhead Duration n/a — "Lasts until cancelled");
+	// range4 Medium 30yd; school Nature. NOT carried:
+	// "Cannot be used while shapeshifted" (no attributes
+	// field).
+	{id: 25640, castTimeIdx: 1, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDamageShield, basePoints: 39, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 24721 "Buru Transform" (Wowhead SpellName MATCH; C++
+	// boss_buru.cpp:37 enum, :178 DoCast(me) at <20% HP,
+	// enrage; Lua boss_buru.lua:88 const, :29 self-cast
+	// BURU_TRANSFORM) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted — contiguous rows, both Values
+	// present, no trigger): eff0 6 APPLY_AURA Change Model
+	// Value 1 — aura 56 TRANSFORM bp 0/die 1, misc 15507
+	// (the linked "Buru the Gorger Transform Visual" NPC
+	// ID — transform misc is the model creature, the
+	// 1147/1773/2400 precedents); eff1 3 DUMMY Value 1 —
+	// bp 0/die 1, radius 100yd — radiusIdx 12 (real row),
+	// "Server-side script"; both targetA CASTER (DoCast
+	// me); cast1 instant; dur0; range1 Self Only; school
+	// Physical. NOT carried: "Cast time is hidden" / "No
+	// Aura Icon" / "Persists through death" (no attributes
+	// field).
+	{id: 24721, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraTransform, basePoints: 0, dieSides: 1, misc: 15507, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 19593 "Egg Explosion" (Wowhead SpellName MISMATCH —
+	// C++ EXPLODE vs display "Egg Explosion", TC enum
+	// authoritative per 30925, seeder writes no name
+	// column; boss_buru.cpp:39 enum, :227 DoCastAOE
+	// triggered by the egg on death; Lua
+	// boss_buru.lua:92 const, :287 CastSpell(creature,
+	// 19593, true), RegisterSpellEvent ev5) — Wowhead WotLK
+	// (same verdict file; wago NOT attempted — contiguous
+	// rows, both Values present, no trigger): eff0 3 DUMMY
+	// Value 1 — bp 0/die 1, radius 25yd — radiusIdx 20
+	// (real row), "Server-side script" (the distance-scaled
+	// damage lives in the Lua ev5 handler, not the DBC);
+	// eff1 28 SUMMON Value 1 — bp 0/die 1, misc 15964
+	// (the linked "Buru Egg Trigger" NPC ID), miscB 64
+	// (the generic SummonProperties row — the spell's real
+	// row is unconfirmed, flag for wago; the 24081/51017/
+	// 63081 plain-summon precedents all use 64); eff0
+	// targetA SRC_CASTER 22 / targetB SRC_AREA_ENEMY 15
+	// ("hurting all nearby enemies"), eff1 targetA CASTER
+	// (summon at the egg); cast1 instant; dur27 3000ms
+	// (real row); range1 Self Only; school Physical.
+	{id: 19593, castTimeIdx: 1, durIdx: 27, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 20, chainAmplitude: 1},
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 15964, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 5255 "Explosion" (Wowhead SpellName MISMATCH — C++
+	// EXPLODE_2 vs display "Explosion", TC enum
+	// authoritative per 30925; boss_buru.cpp:40 enum, :228
+	// DoCastAOE triggered by the egg on death, "Unknown
+	// purpose"; Lua boss_buru.lua:93 const, :292
+	// CastSpell(creature, 5255, true)) — Wowhead WotLK
+	// (same verdict file; wago NOT attempted — single
+	// effect with a Value, no trigger): single effect 2
+	// SCHOOL_DAMAGE Physical Value 1 — bp 0/die 1 (the
+	// Value 1 is a placeholder per the verdict, not a real
+	// damage amount — carried as-is, never guessed);
+	// targetA SRC_CASTER 22 / targetB SRC_AREA_ENEMY 15
+	// (DoCastAOE); NO radius shown — radiusIdx 0; cast1
+	// instant; dur0; range13 Anywhere 50000yd (real row);
+	// school Physical. NOT carried: "Can be used while
+	// dead" / "Does not engage target" (no attributes
+	// field).
+	{id: 5255, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
