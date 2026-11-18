@@ -16537,6 +16537,88 @@ var spells = []spell{
 	{id: 61696, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
 		{effect: effWeaponPercentDamage, basePoints: 49, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 29310 "Spell Disruption" (Wowhead SpellName MATCH; C++
+	// boss_heigan.cpp:31 enum, :156 DoCastAOE; Lua
+	// boss_heigan.lua:132 const, :170 CastSpell(creature)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_29310_29350_29998_30211.txt; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 6
+	// APPLY_AURA MOD_CASTING_SPEED_NOT_STACK (aura 65) Value -300%
+	// — bp -301/die 1 (the 47442 negative-value convention);
+	// targetA DEST_CASTER 18 / targetB UNIT_DEST_AREA_ENEMY 16
+	// (the 46026 wago-verified DoCast-me AOE-aura shape; Wowhead
+	// shows no targets — wago confirmation still open, see
+	// checkpoint); radiusIdx 10 (30yd real row); cast1 instant;
+	// dur1 10000ms 10s (real row); range1 Self 0yd (real row);
+	// school Shadow. NOT carried: 15s cooldown (no cooldown
+	// field); "Requires level 20" (no level field); "Is Ability"
+	// / "Cannot be used while shapeshifted" / "Cannot be
+	// reflected" / "All spell effects are harmful" / "Ignore Line
+	// of Sight" (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 29310, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCastingSpeed, basePoints: -301, dieSides: 1, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 29350 "Plague Cloud" (Wowhead SpellName MATCH; C++
+	// boss_heigan.cpp:32 enum, :172 DoCastAOE; Lua
+	// boss_heigan.lua:135 const, :205 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// periodic-trigger effect with a Value AND a triggered-spell
+	// link, so the wago condition is not met): single effect 6
+	// APPLY_AURA PERIODIC_TRIGGER_SPELL (aura 23) Value 1 every
+	// 2s — bp 0/die 1; auraPeriod 2000; trigger 30122 (the
+	// Wowhead triggered-spell link, "Plague Cloud" 30122 — a
+	// trigger-only spell, NOT seeded per the trigger-only rule,
+	// same as 24929 behind 24928); targetA CASTER (DoCastAOE
+	// self-cast; the aura sits on the caster and triggers
+	// 30122); cast1 instant (Channeled, 45 sec cast — no
+	// channeled cast-time row); dur22 45000ms 45s (real row);
+	// range135 Tower 100yd (real row); school Nature. NOT
+	// carried: "Cast time is hidden" / "Cannot be reflected" /
+	// "Channeled" / "All spell effects are harmful" / "No Aura
+	// Icon" (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 29350, castTimeIdx: 1, durIdx: 22, rangeIdx: 135, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 2000, trigger: 30122, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29998 "Decrepit Fever" (Wowhead SpellName MATCH; C++
+	// boss_heigan.cpp:30 enum, :160 DoCastAOE; Lua
+	// boss_heigan.lua:133 const, :178 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// both effects have Values, no trigger): eff0 6 APPLY_AURA
+	// MOD_INCREASE_HEALTH (aura 34) Value -50% — bp -51/die 1
+	// (the 47442 negative-value convention); eff1 6 APPLY_AURA
+	// PERIODIC_DAMAGE (aura 3) Value 3000 every 3s — bp 2999/
+	// die 1 (Buff confirms 3000/tick, 21s remaining); auraPeriod
+	// 3000; both targetA DEST_CASTER 18 / targetB
+	// UNIT_DEST_AREA_ENEMY 16 (the 46026 wago-verified
+	// DoCast-me AOE-aura shape; Wowhead shows no targets —
+	// wago confirmation still open, see checkpoint) and
+	// radiusIdx 9 (20yd real row); cast1 instant; dur86 21000ms
+	// 21s (real row); range1 Self 0yd (real row); school Nature;
+	// dispel 3 Disease. NOT carried: the 25-man spell 55011 (a
+	// separate spell, not in this batch); "Is Ability" /
+	// "Ignore Line of Sight" (no attributes field); GCD 0 /
+	// Cost None (no fields).
+	{id: 29998, dispel: 3, castTimeIdx: 1, durIdx: 86, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModIncreaseHealth, basePoints: -51, dieSides: 1, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 2999, dieSides: 1, auraPeriod: 3000, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 30211 "Teleport Self" (Wowhead SpellName MATCH; C++
+	// boss_heigan.cpp:33 enum, :171 DoCast self; Lua
+	// boss_heigan.lua:134 const, :204 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, not a trigger): single effect
+	// 5 TELEPORT_UNITS Value 1 — bp 0/die 1; targetA CASTER
+	// (DoCast self); cast1 instant; dur0; range13 Anywhere
+	// 50000yd (real row, "Anywhere - Unlimited"); school
+	// Physical. NOT carried: "Is Ability" / "Cast time is
+	// hidden" / "Cannot be reflected" / "All spell effects are
+	// harmful" / "No Aura Icon" / "Ignore Line of Sight" (no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 30211, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
