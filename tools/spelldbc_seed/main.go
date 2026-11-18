@@ -17457,6 +17457,85 @@ var spells = []spell{
 	{id: 50241, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 52921 "Arc Lightning" (Wowhead name MATCH; C++
+	// boss_loken.cpp:48 enum, :152 DoCast(target); Lua
+	// boss_loken.lua:127 const, :189 CastSpell(target)) —
+	// Wowhead WotLK (verdict
+	// wago_spells_52921_52960_52961_59414.txt; wago NOT opened
+	// — no trigger row): eff0 2 SCHOOL_DAMAGE Nature Value
+	// 3238, tooltip "3238 to 3762" — bp 3237/die 525
+	// (tooltip-range derivation; FLAG: needs a wago
+	// SpellEffect row check — same class as 47772/malicia
+	// dieSides); eff1 6 APPLY_AURA aura4 DUMMY Value 3238 —
+	// bp 3237/die 1 (single-Value convention; FLAG: needs a
+	// wago SpellEffect row check — 525 alternative, the
+	// dummy may mirror the damage die); both targetA ENEMY
+	// (DoCast target); dur27 real 3000ms (Duration 3
+	// seconds, the "Electrified" buff); cast1 instant;
+	// range37 Extended 0-50yd; school Nature. NOT carried:
+	// buff text; flags (no attributes field); GCD 0 / Cost
+	// None (no fields).
+	{id: 52921, castTimeIdx: 1, durIdx: 27, rangeIdx: 37, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3237, dieSides: 525, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, basePoints: 3237, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 52960 "Lightning Nova" (Wowhead name MATCH; C++
+	// boss_loken.cpp:49 enum, :158 DoCastAOE (self-cast per
+	// the DoCastAOE convention); Lua boss_loken.lua:128
+	// const, :219 CastSpell(creature)) — Wowhead WotLK (same
+	// verdict file; wago NOT opened — no trigger row):
+	// single effect 2 SCHOOL_DAMAGE Nature Value 6013,
+	// tooltip "6013 to 6987" — bp 6012/die 975
+	// (tooltip-range derivation; FLAG: needs a wago
+	// SpellEffect row check); targetA SRC_CASTER + targetB
+	// SRC_AREA_ENEMY ("enemies within 20 yards"; 50774
+	// precedent; FLAG: needs a wago SpellEffect row check —
+	// Wowhead-derived targets); radiusIdx 9 real 20yd
+	// (Wowhead row shows Radius 20 yards); cast6 real
+	// 5000ms (5s cast); dur0 (Duration n/a); range1 Self
+	// 0yd; school Nature. NOT carried: flags (incl. "Can
+	// only target the player", no attributes field); GCD 0 /
+	// Cost None (no fields).
+	{id: 52960, castTimeIdx: 6, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 6012, dieSides: 975, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 52961 "Pulsing Shockwave" (Wowhead name MATCH; C++
+	// boss_loken.cpp:51 enum, :166 DoCast(me, ..., true)
+	// triggered; Lua boss_loken.lua:129 const, :204
+	// CastSpell(creature, ..., true)) — Wowhead WotLK (same
+	// verdict file; wago NOT opened — trigger link shown):
+	// single effect 6 APPLY_AURA aura23 PERIODIC_TRIG
+	// valueless — bp 0/die 1, auraPeriod 2000, trigger 52942
+	// (Wowhead link; NOT seeded — triggered spell; note the
+	// link resolves to 52942, NOT to 59414); targetA CASTER
+	// (DoCast me; 70720/47756 precedent); cast1 instant;
+	// dur0 (Duration n/a); range1 Self 0yd; school Physical.
+	// NOT carried: flags ("Aura is hidden" / "Cast time is
+	// hidden", no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 52961, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 2000, trigger: 52942, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 59414 "Pulsing Shockwave Aura" (Wowhead name MATCH;
+	// C++ boss_loken.cpp:52 enum, :164 DoCast(me, ..., true)
+	// triggered; Lua boss_loken.lua:130 const, :203
+	// CastSpell(creature, ..., true)) — Wowhead WotLK (same
+	// verdict file; wago NOT opened — no trigger row):
+	// single effect 6 APPLY_AURA aura87 MOD_DAMAGE_PERCENT_
+	// TAKEN Value 25% — bp 24/die 1, misc 8 (Nature school
+	// mask; 63420 precedent uses misc as the school mask);
+	// targetA 15 SRC_AREA_ENEMY (aura lands on enemies
+	// around Loken; 63420 precedent — same effect shape;
+	// FLAG: needs a wago SpellEffect row check —
+	// Wowhead-derived target + misc); radiusIdx 91007
+	// (50000yd; Wowhead row shows Radius 50000 yards);
+	// cast1 per the channeled-cast fix; dur0 (Duration n/a);
+	// range13 real 50000yd (Anywhere - Unlimited); school
+	// Nature. NOT carried: buff text; flags (no attributes
+	// field); GCD 0 / Cost None (no fields).
+	{id: 59414, castTimeIdx: 1, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: 24, dieSides: 1, misc: 8, targetA: targetSrcAreaEnemy, radiusIdx: 91007, chainAmplitude: 1},
+	}},
 }
 
 func main() {
