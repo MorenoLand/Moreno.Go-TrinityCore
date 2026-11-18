@@ -15411,6 +15411,82 @@ var spells = []spell{
 	// no Wowhead verdict read — needs its own read before seeding;
 	// derivable values unknown, do NOT seed from the sibling
 	// 75187 row).
+	// 25646 "Mortal Wound" (Wowhead SpellName MATCH; C++
+	// boss_kurinnaxx.cpp:27 enum, :105 DoCastVictim; Lua
+	// boss_kurinnaxx.lua:55 const, :112 CastSpell(victim)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_25646_25648_25814_26527.txt; wago NOT attempted
+	// — single effect with a Value, no trigger): single effect 6
+	// APPLY_AURA MOD_HEALING_PCT (aura 118) Value -10% — bp
+	// -11/die 1 (the 16856/31911 Mortal Strike precedent:
+	// displayed -50% -> bp -51, misc 127 all schools);
+	// targetA TARGET_UNIT_TARGET_ENEMY (DoCastVictim); cast1
+	// instant; dur8 15000ms (real row — Duration 15 seconds,
+	// Buff + Spell Details agree); range2 Combat 5yd (real row);
+	// school Physical. NOT carried: "Unaffected by
+	// invulnerability" / "Ignore Line of Sight" (no attributes
+	// field).
+	{id: 25646, castTimeIdx: 1, durIdx: 8, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModHealingPct, basePoints: -11, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 25648 "Sand Trap" (Wowhead SpellName MATCH; C++
+	// boss_kurinnaxx.cpp:28 enum, :110-113 random target (or
+	// victim fallback) self-cast, triggered; Lua
+	// boss_kurinnaxx.lua:56 const, :136 CastSpell(target, ...,
+	// true) / :140 CastSpell(victim, ..., true)) — Wowhead WotLK
+	// (same verdict file; wago NOT attempted — single effect with
+	// a Value, no trigger): single effect 76 SUMMON_OBJECT_WILD
+	// Value 1 — bp 0/die 1 (the 45423 precedent: no plain
+	// SUMMON_OBJECT in SharedDefines.h; the "(180647)" link is a
+	// GameObject, confirmed); misc 180647 Sand Trap GO; targetA
+	// DEST_CASTER 18 (the trap spawns under the caster, the
+	// 45423/36462 precedent); cast1 instant; dur3 60000ms (real
+	// row — Duration 1 minute); range13 Anywhere 50000yd (real
+	// row); school Physical. NOT carried: the trap-trigger spell
+	// (no trigger on the page) / the GO template (lives in DB).
+	{id: 25648, castTimeIdx: 1, durIdx: 3, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummonObjectWild, basePoints: 0, dieSides: 1, misc: 180647, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
+	// 25814 "Wide Slash" (Wowhead SpellName MATCH; C++
+	// boss_kurinnaxx.cpp:32 enum, :117 DoCast(me); Lua
+	// boss_kurinnaxx.lua:59 const, :156/:173
+	// CastSpell(creature)) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted — single effect with a Value, no
+	// trigger): single effect 58 WEAPON_DAMAGE Value 500 — bp
+	// 499/die 1 (the 31345 Cleave flat convention: "normal damage
+	// plus 500"); targetA UNIT_CONE_ENEMY 24 (the 31914 cone
+	// precedent — "enemies in a cone in front of the caster");
+	// radius 10yd — radiusIdx 13 (real row; distinct from the
+	// 30yd spell Range); cast1 instant; dur0; range4 Medium
+	// 30yd (real row); school Physical. NOT carried: "Is Ability"
+	// / "Do Not Sheath" (no attributes field) and the cone arc
+	// itself (engine cone gate, the 31914 precedent).
+	{id: 25814, castTimeIdx: 1, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 499, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 26527 "Frenzy" (Wowhead display MISMATCH vs C++ ENRAGE —
+	// TC enum authoritative per 30925, seeder writes no name
+	// column; C++ boss_kurinnaxx.cpp:29 enum, :79 DoCast(me); Lua
+	// boss_kurinnaxx.lua:57 const, :256 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// contiguous rows, all Values present, no trigger): eff0 6
+	// APPLY_AURA MOD_DAMAGE_DONE (aura 13) Value 250 — bp
+	// 249/die 1, misc 1 Physical; eff1 6 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) Value 75% — bp 74/die 1; eff2 6
+	// APPLY_AURA MOD_SCALE (aura 61) Value 20% — bp 19/die 1
+	// (the hidden size leg — in neither tooltip nor Buff); all
+	// targetA CASTER (self-cast); cast1 instant; dur4 120000ms
+	// (real row — Duration 2 minutes); range1 Self Only (real
+	// row); school Physical. The exact 8269 Frenzy template
+	// (aura 13/138/61, dur4, range1, all TargetA 1), values
+	// 250/75/20 vs 8269's 50/60/15. NOT carried: "Is Ability" /
+	// "Do Not Sheath" / "Does not appear in log" (no attributes
+	// field).
+	{id: 26527, castTimeIdx: 1, durIdx: 4, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: 249, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 74, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
