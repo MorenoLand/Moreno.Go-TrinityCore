@@ -19610,6 +19610,77 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 250, trigger: 42784, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effDummy, basePoints: 42786, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 15659 "Chain Lightning" (Wowhead name MATCH; C++
+	// SPELL_CHAIN_LIGHTNING, boss_darkweaver_syth.cpp:44,
+	// :192 DoCast(target)) — eff0 School Damage (Nature),
+	// tooltip 139-165 -> bp 138, die 27 (30925 precedent),
+	// targetA ENEMY (DoCast target), chainAmplitude 1
+	// (31717 convention); cast 3s idx 14 (real row), dur
+	// n/a idx 0, range4 Medium 30yd (real row), maxTargets
+	// 3 (tooltip "affects up to 3 targets"), school
+	// Nature, manaCost 150. FLAG: 6s cooldown not carried
+	// (no cooldown field); "Spell damage depends on caster
+	// level" — no scaling field in the seed struct.
+	{id: 15659, castTimeIdx: 14, rangeIdx: 4, maxTargets: 3, school: schoolNature, manaCost: 150, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 138, dieSides: 27, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 33537 "Summon Syth Fire Elemental" (Wowhead name
+	// PARTIAL, adds "Elemental"; C++ SPELL_SUMMON_SYTH_FIRE,
+	// boss_darkweaver_syth.cpp:45, :160-163 DoCast(me,
+	// true) triggered) — eff0 Summon, Value 1 -> bp 0,
+	// die 1, misc 19203 Syth Fire Elemental, radiusIdx 14
+	// (8yd real row), targetA 32 DEST_CASTER_SUMMON
+	// (31264 pattern), miscB 64 WILD TempSummon branch
+	// (38755/30707 precedent); cast Instant idx 1, dur5
+	// 300000ms (real row), range4 Medium 30yd (real row),
+	// school Shadow, manaCost 80. FLAG: miscB 64 inferred
+	// — needs a wago SummonProperties row check; 20s
+	// cooldown not carried.
+	{id: 33537, castTimeIdx: 1, durIdx: 5, rangeIdx: 4, school: schoolShadow, manaCost: 80, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 19203, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 33538 "Summon Syth Arcane Elemental" (Wowhead name
+	// PARTIAL, adds "Elemental"; C++ SPELL_SUMMON_SYTH_ARCANE,
+	// boss_darkweaver_syth.cpp:46, :160-163 DoCast(me,
+	// true) triggered) — eff0 Summon, Value 1 -> bp 0,
+	// die 1, misc 19205 Syth Arcane Elemental, radiusIdx
+	// 14 (8yd real row), targetA 32 DEST_CASTER_SUMMON,
+	// miscB 64 WILD TempSummon branch (38755/30707
+	// precedent); cast Instant idx 1, dur5 300000ms (real
+	// row), range4 Medium 30yd (real row), school Shadow,
+	// manaCost 80. FLAG: miscB 64 inferred — needs a wago
+	// SummonProperties row check; no cooldown shown.
+	{id: 33538, castTimeIdx: 1, durIdx: 5, rangeIdx: 4, school: schoolShadow, manaCost: 80, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 19205, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 33539 "Summon Syth Frost Elemental" (Wowhead name
+	// PARTIAL, adds "Elemental"; C++ SPELL_SUMMON_SYTH_FROST,
+	// boss_darkweaver_syth.cpp:47, :160-163 DoCast(me,
+	// true) triggered) — eff0 Summon, Value 1 -> bp 0,
+	// die 1, misc 19204 Syth Frost Elemental, radiusIdx 14
+	// (8yd real row), targetA 32 DEST_CASTER_SUMMON,
+	// miscB 64 WILD TempSummon branch (38755/30707
+	// precedent); cast Instant idx 1, dur5 300000ms (real
+	// row), range4 Medium 30yd (real row), school Shadow,
+	// manaCost 80. FLAG: miscB 64 inferred — needs a wago
+	// SummonProperties row check; 40s cooldown not carried.
+	{id: 33539, castTimeIdx: 1, durIdx: 5, rangeIdx: 4, school: schoolShadow, manaCost: 80, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 19204, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 33540 "Summon Syth Shadow Elemental" (Wowhead name
+	// PARTIAL, adds "Elemental"; C++ SPELL_SUMMON_SYTH_SHADOW,
+	// boss_darkweaver_syth.cpp:48, :160-163 DoCast(me,
+	// true) triggered) — eff0 Summon, Value 1 -> bp 0,
+	// die 1, misc 19206 Syth Shadow Elemental, radiusIdx
+	// 14 (8yd real row), targetA 32 DEST_CASTER_SUMMON,
+	// miscB 64 WILD TempSummon branch (38755/30707
+	// precedent); cast Instant idx 1, dur5 300000ms (real
+	// row), range4 Medium 30yd (real row), school Shadow,
+	// manaCost 80. FLAG: miscB 64 inferred — needs a wago
+	// SummonProperties row check; 1 min cooldown not carried.
+	{id: 33540, castTimeIdx: 1, durIdx: 5, rangeIdx: 4, school: schoolShadow, manaCost: 80, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 19206, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 14, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
