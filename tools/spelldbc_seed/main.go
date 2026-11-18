@@ -18367,6 +18367,51 @@ var spells = []spell{
 	{id: 55074, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraControlVehicle, basePoints: 0, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
 	}},
+	// 37387 "Use Legion Teleporter" (Wowhead name MISMATCH;
+	// C++ SPELL_TELE_A_TO) — at_scripts; eff0 Teleport
+	// (Value 1 -> bp 0/die 0 per 51112 wago-verified shape),
+	// targetA CASTER, targetB DEST_DB 17 (dest rides
+	// spell_target_position in the world DB, 50476 note);
+	// cast 3s idx 14, range Self idx 1. Requires level 1 /
+	// description / flags / GCD / Cost NOT carried.
+	// FLAG: needs a wago SpellEffect row check (teleport
+	// die-sides 0 vs 1 + dest DB row).
+	{id: 37387, castTimeIdx: 14, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	// 37389 "Use Legion Teleporter" (Wowhead name MISMATCH;
+	// C++ SPELL_TELE_H_TO; same display name as 37387) —
+	// same as 37387 but cast Instant idx 1. FLAG: needs a
+	// wago SpellEffect row check (teleport die-sides + dest
+	// DB row).
+	{id: 37389, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	// 42644 "Nat Pagle's Fish Paste" (Wowhead name MISMATCH;
+	// C++ SPELL_FISH_PASTE) — at_scripts; eff0 Apply Aura
+	// Dummy (Value 1 -> bp 0), targetA CASTER (self-cast;
+	// C++ HasAura check on the player); cast 2s idx 5, dur
+	// 5 min = 300000ms idx 90006 (synthetic, 24081/26662/
+	// 54369 precedent), range Self idx 1. Buff text /
+	// description / flags / GCD / Cost NOT carried.
+	{id: 42644, castTimeIdx: 5, durIdx: 90006, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 34400 "A-52 Neuralyzer" (Wowhead name MISMATCH only by
+	// hyphen; C++ SPELL_A52_NEURALYZER) — at_scripts; eff0
+	// Apply Aura Dummy (Value 1 -> bp 0), targetA CASTER
+	// (AddAura(player, player)); eff1 Summon (Value 1 ->
+	// bp 0), misc 19913 = "Area 52 Spotlight" entry (TDB
+	// creature_template line 14041), miscB 64, targetA
+	// CASTER (397 precedent, no radius shown so radiusIdx
+	// omitted); cast Instant idx 1, dur 10s idx 1, range
+	// 100yd Vision idx 6. Buff text / flags / GCD / Cost
+	// NOT carried. FLAG: needs a wago SpellEffect row check
+	// (summon radius).
+	{id: 34400, castTimeIdx: 1, durIdx: 1, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 19913, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
