@@ -14597,6 +14597,87 @@ var spells = []spell{
 	// school Fire. The totem's
 	// attack (20 yards, 13-17 Fire damage) is the summoned NPC's
 	// own spell, not an effect of this spell — not seeded.
+	// 8398 "Frostbolt Volley" (Wowhead "Frostbolt Volley" vs C++
+	// FROST_BOLT_VOLLEY — MISMATCH on spacing only ("Frostbolt" vs
+	// "Frost Bolt"), TC enum authoritative per 30925, seeder writes
+	// no name column; C++ blackfathom_deeps.cpp:33 enum, :168-170
+	// DoCast(target) on a random alive target, 2-4s init; Lua
+	// blackfathom_deeps.lua:89 const, :174 CastSpell(target)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_8391_8398_8733_9268.txt; wago NOT attempted — no
+	// "Spell #N" trigger on any page): eff0 APPLY_AURA Decrease Run
+	// Speed % Value -50% — bp -51/die 1, mechanic 11 Snared (the
+	// 30600/30633 slow precedent), radius 20yd; eff1 SCHOOL_DAMAGE
+	// (Frost) Value 226, tooltip 226-240 — bp 225/die 15 (the 30633
+	// Thunderclap range convention); target pair 22/15 (the 15245
+	// volley precedent — cast on a target, AoE around the caster);
+	// radiusIdx 9 (20yd, real row); cast5 2000ms (29954 precedent);
+	// dur31 8000ms (15531 precedent); range4 Medium 0-30yd; school
+	// Frost; manaCost 180; dispel 1 Magic. Spell-level mechanic n/a
+	// — NOT carried as 0. Cooldown n/a not encodable.
+	{id: 8398, castTimeIdx: 5, durIdx: 31, rangeIdx: 4, school: schoolFrost, manaCost: 180, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -51, mechanic: 11, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 225, dieSides: 15, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 8733 "Blessing of Blackfathom" (Wowhead SpellName MATCH; C++
+	// blackfathom_deeps.cpp:30 enum, :50-51 player:AddAura on GO
+	// gossip hello lacking the aura; Lua
+	// blackfathom_deeps.lua:90 const, :248-249 HasAura gate +
+	// AddAura) — Wowhead WotLK (same verdict file; wago NOT
+	// attempted): eff0 APPLY_AURA Mod Stat (Intellect) Value 5 —
+	// bp 4/die 1, misc 3 (the 13326 Intellect precedent); eff1 Mod
+	// Stat (Spirit) Value 5 — bp 4/die 1, misc 4; eff2 Mod Damage
+	// Done (Frost) Value 15 — bp 14/die 1, misc 16 (Frost school
+	// mask; aura 13 misc is a school mask per
+	// creature_auras.go:447 / pet_combat.go:2993); targetA CASTER
+	// (AddAura self); cast1 instant; dur90015 synthetic 3600000ms
+	// (no real 1-hour row in the table); range6 Vision 0-100yd;
+	// school Frost. No level shown (no level field seeded).
+	{id: 8733, castTimeIdx: 1, durIdx: 90015, rangeIdx: 6, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModStat, dieSides: 1, basePoints: 4, misc: 3, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModStat, dieSides: 1, basePoints: 4, misc: 4, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, basePoints: 14, misc: 16, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 9268 "Teleport Darnassus" (Wowhead "Teleport to Darnassus -
+	// Event" vs C++ TELEPORT_DARNASSUS — MISMATCH on the "to" + "
+	// - Event" suffix, TC enum authoritative per 30925; C++
+	// blackfathom_deeps.cpp:34 enum, :224 DoCast(player) on gossip
+	// select; Lua blackfathom_deeps.lua:283 const, :319
+	// CastSpell(player)) — Wowhead WotLK (same verdict file; wago
+	// NOT attempted): single effect 5 TELEPORT_UNITS, Value 1 — die
+	// 1 (the 70860 Frozen Throne Teleport shape: effTeleportUnits
+	// die 1, targetA 25 TARGET_UNIT_TARGET_ANY, targetB 87
+	// TARGET_DEST_DEST); cast4 1000ms (30633 precedent); dur0
+	// (Duration n/a); range3 Twenty yards 0-20yd (real row);
+	// school Physical. Destination resolves from
+	// spell_target_position (3561 precedent, engine
+	// caster_dest_targets.go:208) — no DBC misc carries it, and no
+	// (9268, 0) row ships in sql/*/world.sql; the landing needs
+	// that row in the deployment DB. "Cast time is hidden" flag not
+	// encodable.
+	{id: 9268, castTimeIdx: 4, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, dieSides: 1, targetA: targetUnitTargetAny, targetB: targetDestDest, chainAmplitude: 1},
+	}},
+	// 8391 "Ravage" — HELD (tooltip/effect Value conflict
+	// unresolvable): Wowhead SpellName MATCH (C++ SPELL_RAVAGE,
+	// blackfathom_deeps.cpp:31 enum, :160-161 DoCastVictim, 5-8s
+	// init; Lua blackfathom_deeps.lua:87 const, :141
+	// CastSpell(victim)) — Wowhead WotLK (same verdict file; wago
+	// BLOCKED 2026-11-17 22:15 EST: "Your request was blocked", then
+	// 404 on a fresh route — no DBC rows obtained): tooltip
+	// "Inflicts normal damage plus 44", but Spell Details eff0 Deal
+	// Weapon Damage shows Value 4. Candidates bp 43/die 1 (tooltip)
+	// vs bp 3/die 1 (effect Value, the Value-1 convention) — no
+	// in-tree weapon-damage precedent distinguishes them (10101
+	// Knock Away was wago-sourced; its Wowhead verdict file is
+	// gone). Do NOT seed either candidate. Derivable values for
+	// the unblocking tick: eff0 58 WEAPON_DAMAGE TargetA 6
+	// (DoCastVictim), eff1 6 APPLY_AURA aura 12 MOD_STUN Value 1 —
+	// bp 0/die 1, mechanic 12 (the 40184/4378 stun convention),
+	// TargetA 6; cast1 instant; dur27 3000ms (real row); range2
+	// Combat 0-5yd; school Physical; mechanic 12 Stunned.
+	// "On next swing" flag and the Level 80-vs-6 header conflict
+	// are not encodable (no flag/level fields).
 }
 
 func main() {
@@ -14641,29 +14722,30 @@ func main() {
 		{90010, 500, 0, 500},
 		{90011, 40000, 0, 40000},
 		{90012, 14400000, 0, 14400000},
-		{90013, 24000, 0, 24000},   // synthetic duration for 30938 Corruption (no real 24000ms row in the table)
-		{4, 120000, 0, 120000},     // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
-		{8, 15000, 0, 15000},       // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
-		{27, 3000, 0, 3000},        // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
-		{9, 30000, 0, 30000},       // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
-		{85, 18000, 0, 18000},      // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85) — value CONFIRMED 2026-11-16 by wago.tools 3.4.0.47659 SpellDuration row 85 (verdict wago_spells_50756_50757_50758.txt)
-		{387, 16000, 0, 16000},     // real SpellDuration 387 for 50756 (wago.tools 3.4.0.47659 SpellDuration row 387, 2026-11-16 verdict wago_spells_50756_50757_50758.txt)
-		{25, 30000, 0, 30000},      // real SpellDuration 25 (wago.tools 3.4.0.47659 SpellDuration row 25, browser 74701ec4) — CORRECTED 2026-11-16 from 180000ms (old value was a Wowhead display cross-check for 1834, never a DBC-row read); this also re-times the other durIdx-25 spells 1834/45532/16128 to 30000ms
-		{367, 7200000, 0, 7200000}, // real SpellDuration 367 for 23261 (wago.tools 3.4.0.47659 SpellDuration row 367)
-		{5, 300000, 0, 300000},     // real SpellDuration 5 for 18377 (wago.tools 3.4.0.47659 SpellDuration row 5, browser 32eeed6d)
-		{36, 1000, 0, 1000},        // real SpellDuration 36 for 64562 (wago.tools 3.4.0.47659 SpellDuration row 36, 2026-11-15 verdict)
-		{30, 1800000, 0, 1800000},  // real SpellDuration 30 for 12544 Frost Armor (wago.tools 3.4.0.47659 SpellDuration row 30, browser c857c690)
-		{29, 12000, 0, 12000},      // real SpellDuration 29 for 35759 Felfire Shock (wago.tools 3.4.0.47659 SpellDuration row 29, browser 2f3bd931)
-		{555, 4500, 0, 4500},       // real SpellDuration 555 for 36512 Knock Away (wago.tools 3.4.0.47659 SpellDuration row 555, browser 2f3bd931)
-		{327, 500, 0, 500},         // real SpellDuration 327 for 34799 Arcane Devastation (wago.tools 3.4.0.47659 SpellDuration row 327, browser bb66d46a)
-		{305, 14000, 0, 14000},     // real SpellDuration 305 for 25033 Lightning Cloud (wago.tools 3.4.0.47659 SpellDuration row 305, browser f28d47f3)
-		{38, 11000, 0, 11000},      // real SpellDuration 38 for 31673 Foul Spores (wago.tools 3.4.0.47659 SpellDuration row 38, browser 45c90da6)
-		{63, 25000, 0, 25000},      // real SpellDuration 63 for 36119 Void Zone (wago.tools 3.4.0.47659 SpellDuration row 63, 2026-11-16 verdict wago_spells_16045_36119.txt)
-		{41, 360000, 0, 360000},    // real SpellDuration 41 for 30977 Conflagration Blast (wago.tools 3.4.0.47659 SpellDuration row 41, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
-		{62, 75000, 0, 75000},      // real SpellDuration 62 for 28240 Poison Cloud (wago.tools 3.4.0.47659 SpellDuration row 62, 2026-11-16 verdict wago_spells_28157_28169_28240.txt)
-		{86, 21000, 0, 21000},      // real SpellDuration 86 for 20294 Immolate (wago.tools 3.4.0.47659 SpellDuration row 86, 2026-11-16 verdict wago_spells_20294_17820_17467.txt)
-		{347, 900000, 0, 900000},   // real SpellDuration 347 for 12255 Curse of Tuten'kash (wago.tools 3.4.0.47659 SpellDuration row 347, 2026-11-17 verdict wago_spells_8876_12252_12255.txt)
-		{561, 3300000, 0, 3300000}, // real SpellDuration 561 for 39288 (wago.tools 3.4.0.47659 SpellDuration row 561, 2026-11-17 verdict wago_spells_39288_39289_39290.txt)
+		{90013, 24000, 0, 24000},     // synthetic duration for 30938 Corruption (no real 24000ms row in the table)
+		{90015, 3600000, 0, 3600000}, // synthetic duration for 8733 Blessing of Blackfathom (no real 3600000ms row in the table; 90014 stays reserved for 38116 Searing Totem 35000ms)
+		{4, 120000, 0, 120000},       // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
+		{8, 15000, 0, 15000},         // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
+		{27, 3000, 0, 3000},          // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
+		{9, 30000, 0, 30000},         // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
+		{85, 18000, 0, 18000},        // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85) — value CONFIRMED 2026-11-16 by wago.tools 3.4.0.47659 SpellDuration row 85 (verdict wago_spells_50756_50757_50758.txt)
+		{387, 16000, 0, 16000},       // real SpellDuration 387 for 50756 (wago.tools 3.4.0.47659 SpellDuration row 387, 2026-11-16 verdict wago_spells_50756_50757_50758.txt)
+		{25, 30000, 0, 30000},        // real SpellDuration 25 (wago.tools 3.4.0.47659 SpellDuration row 25, browser 74701ec4) — CORRECTED 2026-11-16 from 180000ms (old value was a Wowhead display cross-check for 1834, never a DBC-row read); this also re-times the other durIdx-25 spells 1834/45532/16128 to 30000ms
+		{367, 7200000, 0, 7200000},   // real SpellDuration 367 for 23261 (wago.tools 3.4.0.47659 SpellDuration row 367)
+		{5, 300000, 0, 300000},       // real SpellDuration 5 for 18377 (wago.tools 3.4.0.47659 SpellDuration row 5, browser 32eeed6d)
+		{36, 1000, 0, 1000},          // real SpellDuration 36 for 64562 (wago.tools 3.4.0.47659 SpellDuration row 36, 2026-11-15 verdict)
+		{30, 1800000, 0, 1800000},    // real SpellDuration 30 for 12544 Frost Armor (wago.tools 3.4.0.47659 SpellDuration row 30, browser c857c690)
+		{29, 12000, 0, 12000},        // real SpellDuration 29 for 35759 Felfire Shock (wago.tools 3.4.0.47659 SpellDuration row 29, browser 2f3bd931)
+		{555, 4500, 0, 4500},         // real SpellDuration 555 for 36512 Knock Away (wago.tools 3.4.0.47659 SpellDuration row 555, browser 2f3bd931)
+		{327, 500, 0, 500},           // real SpellDuration 327 for 34799 Arcane Devastation (wago.tools 3.4.0.47659 SpellDuration row 327, browser bb66d46a)
+		{305, 14000, 0, 14000},       // real SpellDuration 305 for 25033 Lightning Cloud (wago.tools 3.4.0.47659 SpellDuration row 305, browser f28d47f3)
+		{38, 11000, 0, 11000},        // real SpellDuration 38 for 31673 Foul Spores (wago.tools 3.4.0.47659 SpellDuration row 38, browser 45c90da6)
+		{63, 25000, 0, 25000},        // real SpellDuration 63 for 36119 Void Zone (wago.tools 3.4.0.47659 SpellDuration row 63, 2026-11-16 verdict wago_spells_16045_36119.txt)
+		{41, 360000, 0, 360000},      // real SpellDuration 41 for 30977 Conflagration Blast (wago.tools 3.4.0.47659 SpellDuration row 41, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
+		{62, 75000, 0, 75000},        // real SpellDuration 62 for 28240 Poison Cloud (wago.tools 3.4.0.47659 SpellDuration row 62, 2026-11-16 verdict wago_spells_28157_28169_28240.txt)
+		{86, 21000, 0, 21000},        // real SpellDuration 86 for 20294 Immolate (wago.tools 3.4.0.47659 SpellDuration row 86, 2026-11-16 verdict wago_spells_20294_17820_17467.txt)
+		{347, 900000, 0, 900000},     // real SpellDuration 347 for 12255 Curse of Tuten'kash (wago.tools 3.4.0.47659 SpellDuration row 347, 2026-11-17 verdict wago_spells_8876_12252_12255.txt)
+		{561, 3300000, 0, 3300000},   // real SpellDuration 561 for 39288 (wago.tools 3.4.0.47659 SpellDuration row 561, 2026-11-17 verdict wago_spells_39288_39289_39290.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
