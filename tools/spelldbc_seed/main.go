@@ -17894,6 +17894,89 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 4624, dieSides: 1, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 29, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraRoot, mechanic: 7, basePoints: 0, dieSides: 1, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 29, chainAmplitude: 1},
 	}},
+	// 54235 "Firebolt" (Wowhead name MATCH; C++
+	// boss_lavanthor.cpp:26 enum, :70 DoCast(target)
+	// non-triggered; Lua boss_lavanthor.lua:78 const, :154
+	// CastSpell(target, SPELL_FIREBOLT)) — Wowhead WotLK
+	// (verdict wago_spells_54235_54249_54282_59466.txt; wago
+	// NOT opened — no trigger row): single effect 2
+	// SCHOOL_DAMAGE Fire Value 1890, tooltip "1890 to 2310"
+	// — bp 1889/die 421 (tooltip-range derivation; FLAG:
+	// needs a wago SpellEffect row check); targetA ENEMY
+	// (DoCast target); cast1 instant; dur0 (Duration n/a);
+	// range5 real 40yd Long; school Fire. NOT carried:
+	// "Requires level 70" (no field); flags ("Can only target
+	// the player", no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 54235, castTimeIdx: 1, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1889, dieSides: 421, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 54282 "Flame Breath" (Wowhead name MATCH; C++
+	// boss_lavanthor.cpp:27 enum, :76 DoCastVictim; Lua
+	// boss_lavanthor.lua:79 const, :171 CastSpell(nil,
+	// SPELL_FLAME_BREATH)) — Wowhead WotLK (same verdict
+	// file; wago NOT opened — no trigger row): single effect
+	// 2 SCHOOL_DAMAGE Fire Value 2868, tooltip "2868 to
+	// 3332" — bp 2867/die 465 (tooltip-range derivation;
+	// FLAG: needs a wago SpellEffect row check); targetA 104
+	// CONE_ENEMY ("enemies in a cone in front of the
+	// caster"; Cone of Cold 120 precedent — cone damage,
+	// same shape; FLAG: needs a wago SpellEffect row check —
+	// the cone variant is the open question), radiusIdx 18
+	// real 15yd (Wowhead row shows Radius 15 yards); cast16
+	// real 1500ms (1.5s cast); dur0 (Duration n/a); range7
+	// real 10yd Very Short; school Fire. NOT carried: flags
+	// (no attributes field); GCD 0 / Cost None (no fields).
+	{id: 54282, castTimeIdx: 16, rangeIdx: 7, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2867, dieSides: 465, targetA: targetUnitConeEnemy104, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 54249 "Lava Burn" (Wowhead name MATCH; C++
+	// boss_lavanthor.cpp:28 enum, :83 DoCast(target)
+	// non-triggered; Lua boss_lavanthor.lua:80 const, :188
+	// CastSpell(target, SPELL_LAVA_BURN)) — Wowhead WotLK
+	// (same verdict file; wago NOT opened — no trigger row):
+	// eff0 2 SCHOOL_DAMAGE Fire Value 3793, tooltip "3793 to
+	// 4407" — bp 3792/die 615 (tooltip-range derivation;
+	// FLAG: needs a wago SpellEffect row check), targetA
+	// ENEMY (DoCast target); eff1 76 SUMMON_OBJECT_WILD
+	// "Summon Object(194952)" Value 1 — bp 0/die 1, misc
+	// 194952 (the GO entry; 36462 wago precedent: misc =
+	// the summoned object entry), targetA 53
+	// DEST_TARGET_ENEMY (the Lava Bomb lands at the enemy;
+	// FLAG: needs a wago SpellEffect row check — the summon
+	// destination is the open question); dur63 real 25000ms
+	// (Duration 25 seconds); cast5 real 2000ms (2s cast);
+	// range37 real 50yd Extended; school Fire. NOT carried:
+	// flags (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 54249, castTimeIdx: 5, durIdx: 63, rangeIdx: 37, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3792, dieSides: 615, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSummonObjectWild, basePoints: 0, dieSides: 1, misc: 194952, targetA: targetDestTargetEnemy, chainAmplitude: 1},
+	}},
+	// 59466 "Cauterizing Flames" (Wowhead name MATCH; C++
+	// boss_lavanthor.cpp:25 enum, heroic-only, :91
+	// DoCastAOE; Lua boss_lavanthor.lua:81 const, :205
+	// CastSpell(creature, SPELL_CAUTERIZING_FLAMES)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened — no
+	// trigger row): eff0 2 SCHOOL_DAMAGE Fire Value 3238,
+	// tooltip "3238 to 3762" — bp 3237/die 525
+	// (tooltip-range derivation; FLAG: needs a wago
+	// SpellEffect row check — same numbers as 52921); eff1 6
+	// APPLY_AURA aura87 MOD_DAMAGE_PERCENT_TAKEN Value 35% —
+	// bp 34/die 1, misc 4 (Fire school mask; 59414/63420
+	// precedent); both targetA SRC_CASTER + targetB
+	// SRC_AREA_ENEMY ("nearby enemies"; FLAG: needs a wago
+	// SpellEffect row check — Wowhead-derived targets),
+	// radiusIdx 12 real 100yd (Wowhead rows show Radius 100
+	// yards); dur90007 synthetic 180000ms (Duration 3
+	// minutes, the debuff buff); cast5 real 2000ms (2s cast);
+	// range1 Self 0yd; school Fire. NOT carried: buff text;
+	// flags (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 59466, castTimeIdx: 5, durIdx: 90007, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3237, dieSides: 525, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: 34, dieSides: 1, misc: 4, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
