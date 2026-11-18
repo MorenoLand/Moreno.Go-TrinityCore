@@ -18781,6 +18781,79 @@ var spells = []spell{
 	{id: 21075, castTimeIdx: 1, durIdx: 1, rangeIdx: 35, school: schoolArcane, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDamageShield, basePoints: 99, dieSides: 1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 12, chainAmplitude: 1},
 	}},
+	// 19712 "Arcane Explosion" (Wowhead name MATCH; C++
+	// SPELL_ARCANE_EXPLOSION) — eff0 School Damage
+	// (Arcane), tooltip 925-1075 -> bp 924/die 151
+	// (Spell Details show only Value 925), radiusIdx 10
+	// (real 30yd row), targetA 22/15 (caster-centred
+	// AoE; 66044/20229 idiom); cast 500ms idx 3 (real
+	// SpellCastTimes row), dur n/a idx 0, range Self
+	// idx 1, school Arcane, dispel 1 (Magic, as shown).
+	// FLAG: direct-damage spell carrying a dispel type
+	// (wago Spell row check).
+	{id: 19712, castTimeIdx: 3, rangeIdx: 1, school: schoolArcane, dispel: 1, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 924, dieSides: 151, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 19713 "Shazzrah's Curse" (Wowhead name MATCH; C++
+	// SPELL_SHAZZRAH_CURSE) — eff0 Mod % Damage Taken
+	// (All), Value 100% -> bp 99, misc 127 (all
+	// schools), radiusIdx 11 (real 45yd row), targetA
+	// 22/15 (caster-centred AoE; tooltip "nearby
+	// enemies"); cast Instant idx 1, dur 5 min idx 5
+	// (real 300000ms row), range Self idx 1, school
+	// Arcane, dispel 2 (Curse). Aura is 14
+	// MOD_DAMAGE_TAKEN, NOT 87 MOD_DAMAGE_PERCENT_TAKEN
+	// (8269 Frenzy analogy: wago-verified aura 13 for
+	// the "Mod Damage Done %" wording, not 79).
+	// FLAG: aura 14 vs 87 + target 22/15 vs 6 (C++
+	// DoCast target) — wago SpellEffect row check.
+	{id: 19713, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolArcane, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: 99, dieSides: 1, misc: 127, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 19714 "Magic Grounding" (Wowhead name MATCH; C++
+	// SPELL_MAGIC_GROUNDING) — eff0 Mod % Damage Taken
+	// (All), Value -50% -> bp -51, misc 127 (all
+	// schools), targetA CASTER (self buff, "by the
+	// caster"); cast Instant idx 1, dur 30s idx 9
+	// (real 30000ms row), range Self idx 1, school
+	// Nature (as shown, NOT Arcane), dispel 1 (Magic),
+	// manaCost 250. Aura 14, same 8269 analogy as
+	// 19713. FLAG: aura 14 vs 87 (wago row check).
+	{id: 19714, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolNature, dispel: 1, manaCost: 250, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: -51, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 19715 "Counterspell" (Wowhead name MATCH; C++
+	// SPELL_COUNTERSPELL) — eff0 Interrupt Cast, no
+	// Value shown -> bp -1/die 1 (2139 Counterspell
+	// precedent), mechanic 26 (Interrupted, as shown
+	// on the effect; :11281 precedent carries 26),
+	// radiusIdx 11 (real 45yd row, as shown), targetA
+	// 22/15 (caster-centred AoE; tooltip "nearby
+	// enemies" + shown radius, vs 2139 single-target
+	// no-radius); cast Instant idx 1, dur 10s idx 1
+	// (real row), range 30yd idx 4 (real SpellRange
+	// row), school Arcane. FLAG: target 22/15 vs 6
+	// (C++ DoCastVictim + 2139 precedent) — wago
+	// SpellEffect row check.
+	{id: 19715, castTimeIdx: 1, durIdx: 1, rangeIdx: 4, school: schoolArcane, effects: [3]effect{
+		{effect: effInterruptCast, basePoints: -1, dieSides: 1, mechanic: 26, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 23138 "Gate of Shazzrah" (PARTIAL match vs C++
+	// SPELL_SHAZZRAH_GATE_DUMMY — DUMMY qualifier only
+	// in C++) — eff0 Dummy, Value 1 -> bp 0, radiusIdx
+	// 12 (real 100yd row), targetA 15 (SRC_AREA_ENEMY:
+	// the C++ SpellScript registers
+	// OnObjectAreaTargetSelect EFFECT_0
+	// TARGET_UNIT_SRC_AREA_ENEMY, FilterTargets picks
+	// one random target, HandleScript has it cast
+	// SPELL_SHAZZRAH_GATE 23139 on the caster);
+	// cast Instant idx 1, dur n/a idx 0, range Self
+	// idx 1, school Arcane. 23139 NOT seeded (script-
+	// triggered, not live-cast). FLAG: dummy carries
+	// no teleport in the DBC row (script-side).
+	{id: 23138, castTimeIdx: 1, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
