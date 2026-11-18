@@ -19759,6 +19759,76 @@ var spells = []spell{
 	{id: 32424, castTimeIdx: 5, durIdx: 6, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 18478, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 8, chainAmplitude: 1},
 	}},
+	// 40065 "Apexis Reprisal" (Wowhead display name MISMATCH
+	// vs C++ SPELL_BAD_PRESS_DAMAGE — tooltip "Bad button
+	// press. Ouch!" + sound SimonGame_Visual_BadPress
+	// corroborate the enum; zone_blades_edge_mountains.cpp:348
+	// enum, :787-800 SpellHitTarget casts it on the player
+	// itself with bp = fails*0.33*maxHealth — that scaling
+	// explains the commenter's 2367/2368 observed damage vs
+	// DBC Value 50; Lua npc_simon_bunny.lua:701-714
+	// CastCustomSpell(target, target, ...)) — eff0 School
+	// Damage (Physical), Value 50 -> bp 49, die 1, targetA
+	// CASTER (C++/Lua self-cast); cast Instant idx 1,
+	// range4 Medium 30yd (real row), school Physical.
+	// NOT carried: flags ("Cannot crit / Do Not Display
+	// Range / Do Not Log Caster", no attributes field).
+	// FLAG: DBC targetA needs a wago SpellEffect row check.
+	{id: 40065, castTimeIdx: 1, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 40387 "Simon Game - Visual - Game Start" (Wowhead
+	// display name PARTIAL vs C++ SPELL_VISUAL_START_AI_LEVEL
+	// — "Visual" matches, "Game Start" carries no AI/Level;
+	// zone_blades_edge_mountains.cpp:345 enum, :469
+	// DoCast(SPELL_VISUAL_START_AI_LEVEL) self; Lua
+	// npc_simon_bunny.lua:201 const) — eff0 Dummy, Value 1
+	// -> bp 0, die 1, "Server-side script", targetA CASTER
+	// (DoCast self); cast Instant idx 1, range1 Self,
+	// school Physical.
+	{id: 40387, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 40391 "Simon Game - Visual - Game Tick" (Wowhead display
+	// name MISMATCH vs C++ SPELL_AUDIBLE_GAME_TICK — enum says
+	// AUDIBLE, Wowhead name + sound say Visual; the wording
+	// does not change the DBC row, the C++ enum is authority
+	// for the ID binding; zone_blades_edge_mountains.cpp:343
+	// enum, :443 DoCast(SPELL_AUDIBLE_GAME_TICK) self; Lua
+	// npc_simon_bunny.lua:199 const) — eff0 Dummy, Value 1
+	// -> bp 0, die 1, "Server-side script", targetA CASTER
+	// (DoCast self); cast Instant idx 1, range1 Self,
+	// school Physical.
+	{id: 40391, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 40436 "Simon Game - Visual - Level Start" (Wowhead
+	// display name PARTIAL vs C++ SPELL_VISUAL_START_PLAYER_LEVEL
+	// — "Visual" + "Level Start" correspond, no "Player";
+	// zone_blades_edge_mountains.cpp:344 enum, :435
+	// DoCast(SPELL_VISUAL_START_PLAYER_LEVEL) self; Lua
+	// npc_simon_bunny.lua:200 const) — eff0 Dummy, Value 1
+	// -> bp 0, die 1, "Server-side script", targetA CASTER
+	// (DoCast self); cast Instant idx 1, range1 Self,
+	// school Physical.
+	{id: 40436, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 41241 "Simon Game - Bad Press" — LEFT UNSEEDED: its only
+	// effect is "Trigger Spell from Target with Caster as
+	// Target", Value 1, and no 3.3.5 SpellEffect name matches
+	// it (SharedDefines.h:875/953/962 — 64 TRIGGER_SPELL, 142
+	// TRIGGER_SPELL_WITH_VALUE, 151 TRIGGER_SPELL_2 =
+	// ritual-of-summoning; same unknown as 51849 eff1 and
+	// 72091). The triggered spell is also unnamed on Wowhead
+	// (C++ :795 DoCast(player, TRIGGER, true) + :808-814
+	// SpellHitTarget comment name 40065 as the triggered
+	// spell, but the DBC TriggerSpell field needs a row read).
+	// Wago SpellEffect row check delegated this tick — seed
+	// eff0 (effect type + trigger + bp/die + targets) on its
+	// handoff; do not guess either value. (This comment block
+	// holds the place so the gap stays visible in-tree; no
+	// seed row for 41241 exists.)
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
