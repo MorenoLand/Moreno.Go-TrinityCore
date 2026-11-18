@@ -14759,6 +14759,83 @@ var spells = []spell{
 	{id: 31463, castTimeIdx: 1, rangeIdx: 1, school: schoolShadow, dispel: 2, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 10212, dieSides: 1075, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
 	}},
+	// 31340 "Rain of Fire" (Wowhead SpellName MATCH; C++
+	// boss_azgalor.cpp:26 enum, :151 DoCast on a random alive
+	// player within 30; Lua boss_azgalor.lua:110 const, :187
+	// CastSpell(target)) — Wowhead WotLK (verdict file
+	// wago_spells_31340_31344_31345_31347.txt; wago NOT attempted
+	// — contiguous rows, both Values present, trigger link has an
+	// ID): eff0 27 PERSISTENT_AREA_AURA PERIODIC_DAMAGE Value
+	// 1619 every 2s, tooltip 1619-1881 — bp 1618/die 263 (the
+	// 30633 range convention), period 2000, radius 15yd; eff1 27
+	// PERSISTENT_AREA_AURA PERIODIC_TRIGGER_SPELL Value 1 every
+	// 2s — bp 0/die 1 (the 40321 trigger precedent), period 2000,
+	// trigger 31341 Unquenchable Flames (link target, ID shown);
+	// both effects targetA TARGET_DEST_DYNOBJ_ENEMY (the 19717 /
+	// 28794 Rain of Fire precedents — 28794 is also target-cast
+	// on a random player); radiusIdx 18 (15yd, real row); cast1
+	// instant; dur1 10000ms; range5 Long 40yd; school Fire.
+	// 31341 itself is NOT seeded here (not live-cast — a trigger
+	// reference only, per the 30598/40321 practice).
+	{id: 31340, castTimeIdx: 1, durIdx: 1, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 1618, dieSides: 263, auraPeriod: 2000, targetA: targetDestDynobjEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 2000, trigger: 31341, targetA: targetDestDynobjEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 31347 "Doom" (Wowhead SpellName MATCH; C++
+	// boss_azgalor.cpp:27 enum, :157 DoCast on a random target,
+	// position 1, 100yd, never the tank; Lua
+	// boss_azgalor.lua:111 const, :198 CastSpell(target)) —
+	// Wowhead WotLK (same verdict file; wago attempted ONLY for
+	// the trigger 31348 — Wowhead shows it as plain "Spell
+	// #31348", no name/link, and says it doesn't exist): single
+	// effect 6 APPLY_AURA PERIODIC_TRIGGER_SPELL Value 1 every
+	// 20s — bp 0/die 1 (the 40321 trigger precedent), period
+	// 20000, trigger 31348, radius 99yd — radiusIdx 33 (real row,
+	// 51110 precedent); cast4 1000ms; dur18 20000ms; range135
+	// Tower 100 (real row); school Shadow. 31348 itself is NOT
+	// seeded here (trigger-only reference); the retail-build wago
+	// row for 31348 (INSTAKILL, tgtA caster) is supplementary
+	// only — do NOT seed 31348 from retail data. The Lesser
+	// Doomguard spawn in the tooltip has no leg in the C++/Lua
+	// and presumably lives in 31348's own DBC rows — flag for
+	// its future seed batch.
+	{id: 31347, castTimeIdx: 4, durIdx: 18, rangeIdx: 135, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 20000, trigger: 31348, targetA: targetEnemy, radiusIdx: 33, chainAmplitude: 1},
+	}},
+	// 31344 "Howl of Azgalor" (Wowhead SpellName MATCH; C++
+	// boss_azgalor.cpp:28 enum, :163 DoCast(me) self-cast, 30s
+	// init; Lua boss_azgalor.lua:112 const, :211
+	// CastSpell(creature)) — Wowhead WotLK (same verdict file;
+	// wago attempted for the valueless effect — retail-build
+	// row, supplementary only: aura 27 MOD_SILENCE,
+	// BasePointsF 0, TargetA 22 TargetB 15, no trigger): single
+	// effect 6 APPLY_AURA Silence, NO Value shown — bp 0/die 1
+	// (the 40823 silence precedent: bp 0/die 1, mechanic 9,
+	// 22/15), mechanic 9 Silenced (spell + effect, the 30633 /
+	// 31480 pattern); radius 50000yd — radiusIdx 28 (real row);
+	// cast1 instant; dur28 5000ms; range1 Self Only; school
+	// Shadow.
+	{id: 31344, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolShadow, mechanic: 9, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSilence, mechanic: 9, dieSides: 1, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 28, chainAmplitude: 1},
+	}},
+	// 31345 "Cleave" (Wowhead SpellName MATCH; C++
+	// boss_azgalor.cpp:29 enum, :169 DoCastVictim; Lua
+	// boss_azgalor.lua:113 const, :220 CastSpell(victim)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no periodic trigger): single
+	// effect 58 WEAPON_DAMAGE Value 1750 — bp 1749/die 1 (the
+	// tooltip "plus 1750" AGREES with the effect Value, unlike
+	// held 8391); targetA TARGET_UNIT_TARGET_ENEMY (DoCastVictim);
+	// chainTargets 5 (tooltip "up to 5 targets", the 20691
+	// weapon-damage chain precedent); chainAmplitude 1
+	// (unconfirmed — 20691 uses 0.66 for its chain); cast1
+	// instant; dur0; range2 Combat 5yd; school Physical. NOT
+	// carried: "knocking them back" has no effect row (the page
+	// shows a single unnumbered effect) — flag for a wago check;
+	// generic shared NPC Cleave (37 users), not Azgalor-unique.
+	{id: 31345, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 1749, dieSides: 1, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 1},
+	}},
 }
 
 func main() {
