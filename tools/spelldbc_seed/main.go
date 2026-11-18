@@ -17623,6 +17623,109 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 449, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 59723 "Parting Sorrow" (Wowhead name MATCH; C++
+	// boss_maiden_of_grief.cpp:33 enum, :110 DoCast(target)
+	// non-triggered, random target; Lua
+	// boss_maiden_of_grief.lua:98 const, :228
+	// CastSpell(target, SPELL_PARTING_SORROW)) — Wowhead
+	// WotLK (verdict wago_spells_50752_50760_50761_59723.txt;
+	// wago NOT opened — no trigger row): single effect 62
+	// POWER_BURN Value 2660 — bp 2659/die 1 (single Value,
+	// no tooltip range — the tooltip gives no numbers, just
+	// "1 damage per point of mana"; FLAG: needs a wago
+	// SpellEffect row check — Wowhead-derived die);
+	// targetA ENEMY (DoCast target; 29907 wago precedent:
+	// POWER_BURN targetA 6); cast5 real 2000ms (2s cast);
+	// dur0 (Duration n/a); range4 real 30yd "Medium Range"
+	// (wago-verified for 54690); school Shadow. NOT carried:
+	// flags (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 59723, castTimeIdx: 5, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effPowerBurn, basePoints: 2659, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 50752 "Storm of Grief" (Wowhead name MATCH; C++
+	// boss_maiden_of_grief.cpp:34 enum, :114
+	// DoCastVictim(SPELL_STORM_OF_GRIEF, true) triggered;
+	// Lua boss_maiden_of_grief.lua:95 const, :142
+	// CastSpell(nil, SPELL_STORM_OF_GRIEF, true)) — Wowhead
+	// WotLK (same verdict file; wago NOT opened — no trigger
+	// row): eff0 2 SCHOOL_DAMAGE Shadow Value 1665, tooltip
+	// "1665 to 1935" — bp 1664/die 271 (tooltip-range
+	// derivation; FLAG: needs a wago SpellEffect row check);
+	// eff1 27 PERSISTENT_AREA_AURA aura3 PERIODIC_DMG Value
+	// "602 every 1 second", tooltip "602 to 698" — bp
+	// 601/die 97, auraPeriod 1000 (tooltip-range derivation;
+	// FLAG: needs a wago SpellEffect row check); both
+	// targetA 16 DEST_AREA_ENEMY, radiusIdx 40 real 9yd
+	// (Wowhead rows show Radius 9 yards; 8814 pair
+	// precedent — damage + persistent-area-aura, both
+	// targetA 16; FLAG: needs a wago SpellEffect row check
+	// — Wowhead-derived targets); dur18 real 20000ms
+	// (Duration 20 seconds, wago-verified for 29946);
+	// cast1 instant; range4 real 30yd Medium; school Shadow.
+	// NOT carried: "Requires level 1" (no field); flags
+	// ("No Aura Icon", no attributes field); GCD 0 / Cost
+	// None (no fields).
+	{id: 50752, castTimeIdx: 1, durIdx: 18, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1664, dieSides: 271, targetA: targetUnitDestAreaEnemy, radiusIdx: 40, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 601, dieSides: 97, auraPeriod: 1000, targetA: targetUnitDestAreaEnemy, radiusIdx: 40, chainAmplitude: 1},
+	}},
+	// 50760 "Shock of Sorrow" (Wowhead name MATCH; C++
+	// boss_maiden_of_grief.cpp:35 enum, :120
+	// DoCastAOE(SPELL_SHOCK_OF_SORROW); Lua
+	// boss_maiden_of_grief.lua:96 const, :161
+	// CastSpell(creature, SPELL_SHOCK_OF_SORROW)) — Wowhead
+	// WotLK (same verdict file; wago NOT opened — no trigger
+	// row): eff0 2 SCHOOL_DAMAGE Shadow Value 1750, tooltip
+	// "1750 to 2250" — bp 1749/die 501 (tooltip-range
+	// derivation; FLAG: needs a wago SpellEffect row check —
+	// 29511's flat-die-0 alternative, but 29511's tooltip
+	// showed no range at all while this one does); eff1 6
+	// APPLY_AURA aura12 STUN Value 1 — bp 0/die 1, mechanic
+	// 12 (29511 exact template: same Value 1750 damage +
+	// incapacitate, radius 100yd — TC 3.3.5 Mechanics has NO
+	// incapacitate entry, Wowhead's "Incapacitated" maps to
+	// the stun aura); spell mechanic 12; both targetA
+	// SRC_CASTER + targetB SRC_AREA_ENEMY ("all nearby enemy
+	// targets"; 29511/15578 self-AoE-with-radius precedent;
+	// FLAG: needs a wago SpellEffect row check —
+	// Wowhead-derived targets), radiusIdx 12 real 100yd
+	// (Wowhead rows show Radius 100 yards); dur32 real
+	// 6000ms (Duration 6 seconds, the incapacitate buff);
+	// cast15 real 4000ms (4s cast); range6 real 100yd
+	// "Vision Range" (wago-verified for Aran bolts; FLAG:
+	// needs a wago SpellRange row check — Wowhead shows "100
+	// yards (Unlimited)"); school Shadow; dispel 1 (Magic).
+	// NOT carried: Cooldown 10s (no field); flags (no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 50760, mechanic: 12, castTimeIdx: 15, durIdx: 32, rangeIdx: 6, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1749, dieSides: 501, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, mechanic: 12, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 50761 "Pillar of Woe" (Wowhead name MATCH; C++
+	// boss_maiden_of_grief.cpp:36 enum, :125 DoCast(target,
+	// SPELL_PILLAR_OF_WOE) / :127 DoCastVictim; Lua
+	// boss_maiden_of_grief.lua:97 const, :249
+	// CastSpell(target, SPELL_PILLAR_OF_WOE) / :251
+	// CastSpell(nil, SPELL_PILLAR_OF_WOE)) — Wowhead WotLK
+	// (same verdict file; wago NOT opened — no trigger row):
+	// eff0 2 SCHOOL_DAMAGE Shadow Value 2313 — bp 2312/die
+	// 1 (single Value, no tooltip range); eff1 6 APPLY_AURA
+	// aura3 PERIODIC_DMG Value "1018 every 2 seconds" — bp
+	// 1017/die 1, auraPeriod 2000; both targetA ENEMY
+	// (DoCast target / DoCastVictim; FLAG: needs a wago
+	// SpellEffect row check — Wowhead-derived targets);
+	// dur1 real 10000ms (Duration 10 seconds, wago-verified
+	// for 31266); cast4 real 1000ms (1s cast); range37 real
+	// 50yd Extended; school Shadow; dispel 1 (Magic). NOT
+	// carried: Cooldown 2s (no field); SP mod 0.25
+	// (SpellBonusData, no field); flags ("Can only target
+	// the player", no attributes field); GCD 0 / Cost None
+	// (no fields).
+	{id: 50761, castTimeIdx: 4, durIdx: 1, rangeIdx: 37, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2312, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 1017, dieSides: 1, auraPeriod: 2000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
