@@ -154,6 +154,7 @@ const (
 	auraPeriodicHealthFunnel   = 62  // SPELL_AURA_PERIODIC_HEALTH_FUNNEL (SpellAuraDefines.h:142)
 	auraModResistPct           = 101
 	auraModAttackPower         = 99  // SPELL_AURA_MOD_ATTACK_POWER (SpellAuraDefines.h:179)
+	auraModRangedAttackPower   = 124 // SPELL_AURA_MOD_RANGED_ATTACK_POWER (SpellAuraDefines.h:204)
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	auraModMeleeHaste          = 138
 	auraHasteSpells            = 216 // SPELL_AURA_HASTE_SPELLS (SpellAuraDefines.h:296)
@@ -18853,6 +18854,85 @@ var spells = []spell{
 	// no teleport in the DBC row (script-side).
 	{id: 23138, castTimeIdx: 1, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
 		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 19777 "Dark Strike" (Wowhead name MATCH; C++
+	// SPELL_DARK_STRIKE) — eff0 Deal Weapon Damage,
+	// tooltip 570-630 -> bp 569/die 61, targetA ENEMY
+	// (19983 Cleave precedent); cast Instant idx 1,
+	// dur n/a idx 0, range 10yd idx 7 (real SpellRange
+	// row, :19056), school Shadow, manaCost 250.
+	// FLAG: Wowhead lists only Flamewaker Priest as a
+	// user — Sulfuron NOT listed; C++ DoCast self :94
+	// is the authority.
+	{id: 19777, castTimeIdx: 1, rangeIdx: 7, school: schoolShadow, manaCost: 250, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 569, dieSides: 61, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 19778 "Demoralizing Shout" (Wowhead name MATCH;
+	// C++ SPELL_DEMORALIZING_SHOUT) — eff0 Mod Melee
+	// Attack Power (aura 99), Value -300 -> bp -301;
+	// eff1 Mod Ranged Attack Power (aura 124, NEW
+	// const), Value -300 -> bp -301; both radiusIdx 11
+	// (real 45yd row), targetA 22/15 (caster-centred
+	// AoE; 23511 precedent, same aura/shape); cast
+	// Instant idx 1, dur 30s idx 9 (real row), range
+	// Self idx 1, school Physical. GCD 1.5s NOT
+	// carried (no field in the seed struct). FLAG:
+	// melee aura is 99 MOD_ATTACK_POWER (23511
+	// precedent) — wago SpellEffect row check.
+	{id: 19778, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModAttackPower, basePoints: -301, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModRangedAttackPower, basePoints: -301, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 19779 "Inspire" (Wowhead name MATCH; C++
+	// SPELL_INSPIRE) — eff0 Mod Melee Attack Speed
+	// (aura 138), Value 100% -> bp 99; eff1 Mod Damage
+	// Done % (Physical) (aura 13), Value 25% -> bp 24,
+	// misc 1 (Physical mask; 29837 precedent); eff2
+	// Mod Size % (aura 61), Value 25% -> bp 24 (8269
+	// precedent: bp 14 = +15% size); all targetA 21
+	// (TARGET_UNIT_TARGET_ALLY; C++ casts on a random
+	// healer or self); cast Instant idx 1, dur 10s idx
+	// 1 (real row), range 45yd idx 36 (real row),
+	// school Fire (as shown, despite the Physical
+	// tooltip). FLAG: eff2 Mod Size is absent from
+	// the tooltip (wago row check).
+	{id: 19779, castTimeIdx: 1, durIdx: 1, rangeIdx: 36, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 99, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: 24, dieSides: 1, misc: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 24, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 19780 "Hand of Ragnaros" (Wowhead name MISMATCH
+	// vs C++ SPELL_KNOCKDOWN — wholly different name;
+	// IDs govern per the 21075 precedent) — eff0 Stun
+	// (aura 12), Value 1 -> bp 0; eff1 Knock Back
+	// (75), Value 75 -> bp 74, misc 75 (the "(75)"
+	// parenthetical IS the MiscValue, 2026-11-17
+	// rule); eff2 School Damage (Fire), tooltip
+	// 300-400 -> bp 299/die 101; all radiusIdx 13
+	// (real 10yd row), targetA 22/15 (caster-centred
+	// AoE; tooltip "nearby enemies"); cast Instant
+	// idx 1, dur 2s idx 39 (real 2000ms row), range
+	// Self idx 1, school Fire, mechanic 12 (STUN, as
+	// shown in Spell Details; 64668 precedent carries
+	// spell-level mechanic).
+	{id: 19780, castTimeIdx: 1, durIdx: 39, rangeIdx: 1, school: schoolFire, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 74, dieSides: 1, misc: 75, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 299, dieSides: 101, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 19781 "Flame Spear" (Wowhead name MATCH apart
+	// from spacing; C++ SPELL_FLAMESPEAR) — eff0
+	// School Damage (Fire), tooltip 850-1150 -> bp
+	// 849/die 301, radiusIdx 13 (real 10yd row),
+	// targetA 53/16 (target-centred splash: DEST_TARGET
+	// + DEST_AREA_ENEMY; :1680 precedent, same shape —
+	// "scorching any other enemies in the vicinity of
+	// the target"); cast Instant idx 1, dur n/a idx 0,
+	// range 45yd idx 36 (real row), school Fire.
+	// FLAG: target pair 53/54 vs single-target 6
+	// (C++ DoCast target) — wago SpellEffect row check.
+	{id: 19781, castTimeIdx: 1, rangeIdx: 36, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 849, dieSides: 301, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
