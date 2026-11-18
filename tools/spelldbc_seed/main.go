@@ -17071,6 +17071,76 @@ var spells = []spell{
 	{id: 61236, castTimeIdx: 1, durIdx: 63, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 70021 "Gunship Cannon Fire" (Wowhead name MISMATCH —
+	// omits "Missile Alliance" vs C++ enum
+	// SPELL_GUNSHIP_CANNON_FIRE_MISSILE_ALLIANCE; C++
+	// halls_of_reflection.h:172 enum,
+	// halls_of_reflection.cpp:2849 (GetTarget casts nullptr,
+	// triggered); Lua instance_halls_of_reflection.lua:551
+	// CastSpell(nil, true)) — Wowhead WotLK (verdict
+	// wago_spells_70021_70246_70720_72130.txt; wago NOT opened —
+	// single valued effect): single effect 3 DUMMY Value 1 —
+	// bp 0/die 1; targetA CASTER (no-target cast by the cannon;
+	// FLAG: needs a wago SpellEffect row check — DEST_CASTER
+	// alternative); radiusIdx 8 real 5yd (Wowhead row shows
+	// Radius 5 yards); cast1 instant; dur0 (Duration n/a);
+	// range13 real 50000yd (Anywhere - Unlimited); school
+	// Physical. NOT carried: "Server-side script" (no field);
+	// flags (no attributes field).
+	{id: 70021, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 70246 "Gunship Cannon Fire" (Wowhead name MISMATCH —
+	// omits "Missile Horde" vs C++ enum
+	// SPELL_GUNSHIP_CANNON_FIRE_MISSILE_HORDE; C++
+	// halls_of_reflection.h:173 enum,
+	// halls_of_reflection.cpp:2847 (GetTarget casts nullptr,
+	// triggered); Lua instance_halls_of_reflection.lua:549
+	// CastSpell(nil, true)) — Wowhead WotLK (same verdict file;
+	// wago NOT opened — single valued effect): single effect 3
+	// DUMMY Value 1 — bp 0/die 1; targetA CASTER (no-target cast
+	// by the cannon; FLAG: needs a wago SpellEffect row check —
+	// DEST_CASTER alternative); radiusIdx 8 real 5yd (Wowhead row
+	// shows Radius 5 yards); cast1 instant; dur0 (Duration n/a);
+	// range13 real 50000yd (Anywhere - Unlimited); school
+	// Physical. NOT carried: "Server-side script" (no field);
+	// flags (no attributes field).
+	{id: 70246, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 70720 "Essence of the Captured" (Wowhead name MISMATCH —
+	// inserts "the" vs C++ enum SPELL_ESSENCE_OF_CAPTURED; C++
+	// halls_of_reflection.h:177 enum,
+	// instance_halls_of_reflection.cpp:456 (bunny casts nullptr);
+	// Lua instance_halls_of_reflection.lua:219 const, :515
+	// CastSpell(bunny, self)) — Wowhead WotLK (same verdict file;
+	// wago NOT opened — trigger link shown): single effect 6
+	// APPLY_AURA aura23 PERIODIC_TRIG valueless — bp 0/die 1,
+	// auraPeriod 330, trigger 70719 (Wowhead link; 70719 NOT
+	// seeded — triggered spell); targetA CASTER (bunny casts on
+	// self); cast1 instant; dur90001 synthetic 2000ms (2s — no
+	// real 2000ms row in the table); range13 real 50000yd
+	// (Anywhere - Unlimited); school Physical. NOT carried:
+	// flags (no attributes field); GCD 0 / Cost None (no fields).
+	{id: 70720, castTimeIdx: 1, durIdx: 90001, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 330, trigger: 70719, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 72130 "Spirit Activate Visual" (Wowhead name MISMATCH —
+	// adds "Visual" vs C++ enum SPELL_SPIRIT_ACTIVATE; C++
+	// halls_of_reflection.h:158 enum ("cast when unit
+	// activates"), instance_halls_of_reflection.cpp:592 (temp
+	// casts on temp, not triggered); Lua
+	// instance_halls_of_reflection.lua:218 const, :378
+	// CastSpell(temp, false)) — Wowhead WotLK (same verdict
+	// file; wago NOT opened — single valued effect): single
+	// effect 6 APPLY_AURA aura61 MOD_SCALE Value 25% — bp 24/die
+	// 1; targetA CASTER (temp casts on self); cast14 real 3000ms
+	// (3s cast); dur0 (Duration n/a); range1 Self 0yd; school
+	// Physical. NOT carried: flags (no attributes field); GCD 0
+	// / Cost None (no fields).
+	{id: 72130, castTimeIdx: 14, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModScale, basePoints: 24, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
