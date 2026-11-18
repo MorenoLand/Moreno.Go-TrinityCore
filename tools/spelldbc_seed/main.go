@@ -19838,25 +19838,28 @@ var spells = []spell{
 	// enum, :149 DoCast(me)) — eff0 Apply Area Aura Party
 	// Mod Resistance (Physical), Value 20 -> bp 19, die 1,
 	// misc 1 Physical (3429/7134 precedent), radiusIdx 10
-	// (30yd real row), targetA DEST_CASTER (5821/16041
-	// area-aura precedent); dur90016 240000ms (pre-existing
-	// synthetic row — no real 240000ms row in the table),
-	// range1 Self, cast Instant idx 1, school Holy.
+	// (30yd real row), targetA CASTER (wago row 687335
+	// ImplicitTarget_0 1; the DEST_CASTER area-aura pattern
+	// does not hold for this row); dur90016 240000ms
+	// (pre-existing synthetic row — seed SpellDuration.dbc
+	// has no row 26); RealPointsPerLevel 20 not carried
+	// (no field). Range1 Self, cast Instant idx 1, school Holy.
 	{id: 8258, castTimeIdx: 1, durIdx: 90016, rangeIdx: 1, school: schoolHoly, effects: [3]effect{
-		{effect: effApplyAreaAuraParty, aura: auraModResistance, basePoints: 19, dieSides: 1, misc: 1, targetA: targetDestCaster, radiusIdx: 10, chainAmplitude: 1},
+		{effect: effApplyAreaAuraParty, aura: auraModResistance, basePoints: 19, dieSides: 1, misc: 1, targetA: targetCaster, radiusIdx: 10, chainAmplitude: 1},
 	}},
 	// 13005 "Hammer of Justice" (Wowhead name MATCH; C++
 	// SPELL_HAMMER_OF_JUSTICE, boss_captain_skarloc.cpp:44
 	// enum, :135 DoCastVictim) — eff0 Apply Aura Stun
 	// (aura 12), no Value shown -> bp -1, die 1 (32421
-	// wago precedent for a valueless aura); mechanic 5
-	// Stunned + dispel 1 Magic at spell level; dur32
+	// wago precedent for a valueless aura); mechanic 12
+	// Stunned (SharedDefines.h:1369; 5 is FEAR) + dispel 1
+	// Magic at spell level; dur32
 	// 6000ms (real row), range7 Very Short 10yd (real row),
 	// cast Instant idx 1, school Holy, manaCost 50.
-	// FLAG: bp/die + rangeIdx 7 need a wago SpellEffect/
-	// SpellMisc row check; flag "Prevents Anim" shown
-	// truncated on Wowhead (no attributes field).
-	{id: 13005, mechanic: 5, dispel: 1, castTimeIdx: 1, durIdx: 32, rangeIdx: 7, school: schoolHoly, manaCost: 50, effects: [3]effect{
+	// Wago-verified: row 690730 bp -1 die 1 targetA 6;
+	// SpellMisc 324179 rangeIdx 7. Flag "Prevents Anim"
+	// shown truncated on Wowhead (no attributes field).
+	{id: 13005, mechanic: 12, dispel: 1, castTimeIdx: 1, durIdx: 32, rangeIdx: 7, school: schoolHoly, manaCost: 50, effects: [3]effect{
 		{effect: effApplyAura, aura: auraStun, basePoints: -1, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 	// 29380 "Cleanse" (Wowhead name MATCH; C++
@@ -19864,27 +19867,27 @@ var spells = []spell{
 	// :128 DoCast(me)) — eff0 Dispel Poison (misc 4),
 	// eff1 Dispel Disease (misc 3), eff2 Dispel Magic
 	// (misc 1; SharedDefines.h:1405-1408), Value 1 each ->
-	// bp 0, die 1, targetA CASTER (DoCast me self-cast);
-	// cast Instant idx 1, range4 Medium 30yd (real row),
-	// school Holy, manaCost 175. FLAG: DBC targetA needs
-	// a wago SpellEffect row check.
+	// bp 0, die 1, targetA ALLY (wago rows 847442-44
+	// ImplicitTarget_0 21; self is a valid ally target for
+	// DoCast(me)); cast Instant idx 1, range4 Medium 30yd
+	// (real row), school Holy, manaCost 175.
 	{id: 29380, castTimeIdx: 1, rangeIdx: 4, school: schoolHoly, manaCost: 175, effects: [3]effect{
-		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 4, targetA: targetCaster, chainAmplitude: 1},
-		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 3, targetA: targetCaster, chainAmplitude: 1},
-		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 4, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 3, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
 	}},
 	// 29427 "Holy Light" (Wowhead name MATCH; C++
 	// SPELL_HOLY_LIGHT, boss_captain_skarloc.cpp:42 enum,
 	// :121 DoCast(me)) — eff0 Heal, Value 700 -> bp 699,
-	// die 1, targetA CASTER (DoCast me self-cast; 31285
-	// self-cast heal precedent); cast19 2500ms (real row,
-	// wago-verified for 66042), range5 Long 40yd (real
-	// row), school Holy, manaCost 150. NOT carried:
-	// "Spell damage depends on caster level" (no scaling
-	// field). FLAG: DBC targetA needs a wago SpellEffect
-	// row check.
-	{id: 29427, castTimeIdx: 19, rangeIdx: 5, school: schoolHoly, manaCost: 150, effects: [3]effect{
-		{effect: effHeal, basePoints: 699, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	// die 113 (heal 700-812; wago row 847886), targetA ALLY
+	// (ImplicitTarget_0 21; self is a valid ally target for
+	// DoCast(me)); cast20 2500ms (real row; row 19 is also
+	// 2500ms but this spell's CastingTimeIndex is 20),
+	// range5 Long 40yd (real row), school Holy, manaCost 150.
+	// NOT carried: "Spell damage depends on caster level"
+	// (no scaling field); EffectBonusCoefficient 1 (no field).
+	{id: 29427, castTimeIdx: 20, rangeIdx: 5, school: schoolHoly, manaCost: 150, effects: [3]effect{
+		{effect: effHeal, basePoints: 699, dieSides: 113, targetA: targetUnitTargetAlly, chainAmplitude: 1},
 	}},
 	// 31904 "Holy Shield" (Wowhead name MATCH; C++
 	// SPELL_HOLY_SHIELD, boss_captain_skarloc.cpp:45 enum,
@@ -19895,10 +19898,9 @@ var spells = []spell{
 	// die 1, targetA CASTER; dur31 8000ms (real row),
 	// range1 Self, cast Instant idx 1, school Holy,
 	// manaCost 200. NOT carried: aura proc chance 100%
-	// (no SpellAuraOptions field). FLAG: eff0 die 75
-	// derived from the tooltip range (Details shows
-	// Value 463 only) — needs a wago SpellEffect row
-	// check; no Flags row shown on the Wowhead page.
+	// (no SpellAuraOptions field). Wago rows 851381/851382
+	// confirm eff0 die 75, eff1 die 1, both targetA CASTER;
+	// no Flags row shown on the Wowhead page.
 	{id: 31904, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolHoly, manaCost: 200, effects: [3]effect{
 		{effect: effApplyAura, aura: auraProcTriggerDamage, basePoints: 462, dieSides: 75, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModBlockPercent, basePoints: 74, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
