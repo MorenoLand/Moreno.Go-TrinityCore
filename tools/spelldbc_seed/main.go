@@ -16151,6 +16151,84 @@ var spells = []spell{
 	{id: 46026, mechanic: 12, maxTargets: 5, castTimeIdx: 3, durIdx: 39, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraStun, mechanic: 12, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
 	}},
+	// 18151 "Noxious Catalyst" (Wowhead SpellName MATCH; C++
+	// boss_lorekeeper_polkelt.cpp:34 enum, :89 DoCastVictim
+	// triggered; Lua boss_lorekeeper_polkelt.lua:29 const, :118
+	// CastSpell(victim, ..., true)) — Wowhead WotLK (verdict
+	// file wago_spells_18151_18270_23313_24928.txt; wago NOT
+	// attempted — single effect with a Value, no trigger):
+	// single effect 6 APPLY_AURA MOD_RESISTANCE (aura 22)
+	// Value -6 — bp -7/die 1 (the 47442 negative-value
+	// convention), misc 8 Nature (the 13787 school-mask
+	// precedent); targetA TARGET_ENEMY; cast1 instant; dur4
+	// 120000ms 2min (real row); range2 Combat 5yd (real row);
+	// school Nature; dispel 3 Disease. The tooltip/Buff "89"
+	// is the level-80 display (level-scaled); the effect-row
+	// Value -6 is the seeded base (the 11647 note). NOT
+	// carried: no Flags section shown (no attributes field).
+	{id: 18151, dispel: 3, castTimeIdx: 1, durIdx: 4, rangeIdx: 2, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModResistance, basePoints: -7, dieSides: 1, misc: 8, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 18270 "Dark Plague" (Wowhead SpellName MATCH; C++
+	// boss_lorekeeper_polkelt.cpp:32 enum, :81 DoCastVictim
+	// triggered; Lua boss_lorekeeper_polkelt.lua:27 const, :83
+	// CastSpell(victim, ..., true)) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted — contiguous rows, both
+	// Values present, no trigger): eff0 2 SCHOOL_DAMAGE Nature
+	// Value 250 — bp 249/die 1 (the 31436 flat convention);
+	// eff1 6 APPLY_AURA PERIODIC_DAMAGE (aura 3) Value 16
+	// every 5s — bp 15/die 1, period 5000; both targetA
+	// TARGET_ENEMY; cast1 instant; dur23 90000ms 1.5min (real
+	// row — the Buff's "1 minute remaining" is a display
+	// truncation, Details say 1.5 minutes); range4 Medium 30yd
+	// (real row); school Nature; dispel 3 Disease. NOT
+	// carried: no Flags section shown (no attributes field); SP
+	// mod 0.1 (no coefficient field).
+	{id: 18270, dispel: 3, castTimeIdx: 1, durIdx: 23, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 249, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 15, dieSides: 1, auraPeriod: 5000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 23313 "Corrosive Acid" (Wowhead SpellName MATCH; C++
+	// boss_lorekeeper_polkelt.cpp:33 enum, :85 DoCastVictim
+	// triggered; Lua boss_lorekeeper_polkelt.lua:28 const, :100
+	// CastSpell(victim, ..., true)) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted — contiguous rows, both
+	// Values present, no trigger): eff0 6 APPLY_AURA
+	// PERIODIC_DAMAGE (aura 3) Value 875 every 3s — tooltip
+	// range 875-1125, so bp 874/die 251 (the 30633 range
+	// convention), period 3000, radius 100yd — radiusIdx 12
+	// (real row); eff1 6 APPLY_AURA MOD_RESISTANCE (aura 22)
+	// Value -3938 — bp -3939/die 1, misc 1 Physical, radius
+	// 100yd — radiusIdx 12; both targetA TARGET_ENEMY; cast5
+	// 2000ms (real row); dur8 15000ms 15s (real row); range1
+	// Self Only (real row); school Nature. The tooltip/Buff
+	// "Armor reduced by 4500" is the level-scaled display; the
+	// effect-row Value -3938 is the seeded base (the 11647
+	// note). NOT carried: "Cannot be reflected" / "All spell
+	// effects are harmful" (no attributes field).
+	{id: 23313, castTimeIdx: 5, durIdx: 8, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 874, dieSides: 251, auraPeriod: 3000, targetA: targetEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModResistance, basePoints: -3939, dieSides: 1, misc: 1, targetA: targetEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 24928 "Volatile Infection" (Wowhead SpellName MATCH; C++
+	// boss_lorekeeper_polkelt.cpp:31 enum, :77 DoCastVictim
+	// triggered; Lua boss_lorekeeper_polkelt.lua:26 const, :66
+	// CastSpell(victim, ..., true)) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted — the periodic-trigger
+	// row HAS its triggered-spell link on Wowhead, to 24929):
+	// single effect 6 APPLY_AURA PERIODIC_TRIGGER_SPELL (aura
+	// 23) Value 1 — bp 0/die 1, period 5000, trigger 24929 (the
+	// 44197 precedent); targetA TARGET_ENEMY; cast1 instant;
+	// dur4 120000ms 2min (real row); range6 Vision 100yd (real
+	// row); school Nature; dispel 3 Disease. 24929 is
+	// trigger-only, unseeded (the 15093/15094 precedent) — the
+	// "875 to 1125" damage belongs to 24929, NOT this row, so
+	// no die 251 here. NOT carried: "Wearer Casts Proc
+	// Trigger" / "Ignore Line of Sight" / "Can only target the
+	// player" (no attributes field).
+	{id: 24928, dispel: 3, castTimeIdx: 1, durIdx: 4, rangeIdx: 6, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 5000, trigger: 24929, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
