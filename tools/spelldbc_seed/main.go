@@ -15942,6 +15942,72 @@ var spells = []spell{
 	{id: 27695, castTimeIdx: 1, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 11647 "Power Word: Shield" (Wowhead SpellName MATCH; C++
+	// boss_high_inquisitor_fairbanks.cpp:29 enum, :92 DoCastSelf;
+	// Lua boss_high_inquisitor_fairbanks.lua:72 const, :317
+	// CastSpell(creature)) — Wowhead WotLK (verdict file
+	// wago_spells_11647_12039_12096_15090.txt; wago NOT attempted
+	// — single effect with a Value, no trigger): single effect 6
+	// APPLY_AURA SCHOOL_ABSORB (aura 69) Value 781 — bp 780/die
+	// 1, misc 127 all schools (the 12040 precedent); targetA
+	// CASTER (DoCastSelf); cast1 instant; dur25 30000ms 30s
+	// (real row); range5 Long 40yd (real row); school Holy;
+	// manaCost 100. The tooltip's 801 absorb is the level-80
+	// display (level-scaled); the effect-row Value 781 is the
+	// seeded base (the 26192 note). NOT carried: "Cannot be
+	// used while shapeshifted" / "Do Not Sheath" (no attributes
+	// field).
+	{id: 11647, manaCost: 100, castTimeIdx: 1, durIdx: 25, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolAbsorb, dieSides: 1, basePoints: 780, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 12039 "Heal" (Wowhead SpellName MATCH; C++
+	// boss_high_inquisitor_fairbanks.cpp:28 enum, :99 DoCastSelf;
+	// Lua boss_high_inquisitor_fairbanks.lua:71 const, :303/:329
+	// CastSpell(creature)) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted — single effect with a Value, no
+	// trigger): single effect 10 HEAL Value 590 — bp 589/die 1
+	// (the 31436 flat convention); targetA CASTER (DoCastSelf);
+	// cast14 3000ms (real row); dur0; range5 Long 40yd (real
+	// row); school Holy; manaCost 215. NOT carried: "Cannot be
+	// used while shapeshifted" / "Spell damage depends on caster
+	// level" (no level-scaling field; the 590 is seeded as the
+	// flat base, the 26192 note) (no attributes field).
+	{id: 12039, manaCost: 215, castTimeIdx: 14, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
+		{effect: effHeal, basePoints: 589, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 12096 "Fear" (Wowhead SpellName MATCH; C++
+	// boss_high_inquisitor_fairbanks.cpp:27 enum, :142 DoCast
+	// target; Lua boss_high_inquisitor_fairbanks.lua:70 const,
+	// :192 CastSpell(target)) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted — the sole effect is valueless
+	// Apply Aura: Fear, not a Trigger Spell / periodic-trigger
+	// row): single effect 6 APPLY_AURA MOD_FEAR (aura 7) — no
+	// Value shown, bp 0/die 1 (the 75212 valueless-aura
+	// precedent); mechanic 5 FEAR at both levels (MECHANIC_FEAR,
+	// SharedDefines.h:1362; the 25852 both-levels shape);
+	// targetA TARGET_ENEMY (DoCast target); cast16 1500ms (real
+	// row); dur31 8000ms 8s (real row); range3 Short 20yd (real
+	// row); school Shadow; dispel 1 Magic; manaCost 35. NOT
+	// carried: "Cannot be used while shapeshifted" /
+	// "Heartbeat Resist" (no attributes field).
+	{id: 12096, mechanic: 5, dispel: 1, manaCost: 35, castTimeIdx: 16, durIdx: 31, rangeIdx: 3, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, mechanic: 5, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 15090 "Dispel Magic" (Wowhead SpellName MATCH; C++
+	// boss_high_inquisitor_fairbanks.cpp:26 enum, :137 DoCast
+	// target; Lua boss_high_inquisitor_fairbanks.lua:69 const,
+	// :172 CastSpell(target)) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted — single effect with a Value, no
+	// trigger): single effect 38 DISPEL Value 1 — bp 0/die 1,
+	// misc 1 Magic (the 19492 precedent); targetA TARGET_ENEMY
+	// (DoCast target — removes 1 beneficial spell from an
+	// enemy); cast1 instant; dur0; range4 Medium 30yd (real
+	// row); school Holy; dispel 1 Magic; manaCost 75. NOT
+	// carried: "Cannot be used while shapeshifted" (no
+	// attributes field).
+	{id: 15090, dispel: 1, manaCost: 75, castTimeIdx: 1, rangeIdx: 4, school: schoolHoly, effects: [3]effect{
+		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
