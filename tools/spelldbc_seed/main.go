@@ -19155,6 +19155,69 @@ var spells = []spell{
 	{id: 39061, castTimeIdx: 1, durIdx: 29, rangeIdx: 54, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 749, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 31981 "Tainted Earthgrab Totem" (Wowhead name MATCH; C++
+	// SPELL_TAINTED_EARTHGRAB_TOTEM, boss_mennu_the_betrayer.cpp:39,
+	// :110 DoCast(me), one-shot) — eff0 Summon, Value 5 -> bp 4,
+	// die 1, misc 18176 = Tainted Earthgrab Totem NPC entry
+	// (Wowhead Summons link), miscB 64 (real SummonProperties
+	// row; 61727/24081/30916 precedent), targetA CASTER
+	// (DoCast self); cast Instant idx 1, dur 30s idx 9 (real
+	// row), range Self idx 1, school Physical, manaCost 95.
+	// NOT carried: the totem's immobilize/damage numbers live
+	// in the summoned NPC's own spell (31983 Earthgrab), not
+	// in this row.
+	{id: 31981, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, manaCost: 95, effects: [3]effect{
+		{effect: effSummon, basePoints: 4, dieSides: 1, misc: 18176, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 31985 "Tainted Stoneskin Totem" (Wowhead name MATCH; C++
+	// SPELL_TAINTED_STONESKIN_TOTEM, boss_mennu_the_betrayer.cpp:38,
+	// :106 DoCast(me), 30s health-gated) — eff0 Summon, Value 5
+	// -> bp 4, die 1, misc 18177 = Tainted Stoneskin Totem NPC
+	// entry, miscB 64, targetA CASTER; cast Instant idx 1, dur
+	// 1 min idx 3 (real row), range Self idx 1, school Nature,
+	// manaCost 260. NOT carried: the totem's "640 within 30yd"
+	// aura numbers live in the summoned NPC, not this row.
+	{id: 31985, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolNature, manaCost: 260, effects: [3]effect{
+		{effect: effSummon, basePoints: 4, dieSides: 1, misc: 18177, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 31991 "Corrupted Nova Totem" (Wowhead name MATCH; C++
+	// SPELL_CORRUPTED_NOVA_TOTEM, boss_mennu_the_betrayer.cpp:40,
+	// :113 DoCast(me), one-shot) — eff0 Summon, Value 5 -> bp 4,
+	// die 1, misc 18179 = Corrupted Nova Totem NPC entry,
+	// miscB 64, targetA CASTER; cast Instant idx 1, dur 20s
+	// idx 18 (real row), range Self idx 1, school Fire.
+	// NOT carried: the totem's fire damage lives in the
+	// summoned NPC's own spells (33132 Fire Nova), not this
+	// row; 414266 Desecration on the NPC page is a Wowhead
+	// anomaly, NOT seeded.
+	{id: 31991, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSummon, basePoints: 4, dieSides: 1, misc: 18179, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 34980 "Mennu's Healing Ward" (Wowhead name MATCH apart
+	// from the apostrophe; C++ SPELL_MENNUS_HEALING_WARD,
+	// boss_mennu_the_betrayer.cpp:41, :116 DoCast(me)) — eff0
+	// Summon, Value 5 -> bp 4, die 1, misc 20208 = Mennu's
+	// Healing Ward NPC entry, miscB 64, targetA CASTER; cast
+	// Instant idx 1, dur 30s idx 9 (real row), range Self
+	// idx 1, school Physical, manaCost 30. NOT carried: the
+	// ward's heal lives in the summoned NPC's own spell
+	// (34977, See also link only, NOT seeded); 414266
+	// Desecration on the NPC page is a Wowhead anomaly.
+	{id: 34980, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, manaCost: 30, effects: [3]effect{
+		{effect: effSummon, basePoints: 4, dieSides: 1, misc: 20208, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 35010 "Lightning Bolt" (Wowhead name MATCH — the NPC-ability
+	// version, not the player rank spell; C++ SPELL_LIGHTNING_BOLT,
+	// boss_mennu_the_betrayer.cpp:42, :120 DoCastVictim(35010,
+	// true) triggered) — eff0 School Damage (Nature), Value 255
+	// -> bp 254, die 1, targetA ENEMY (DoCastVictim; the triggered
+	// flag lives in the Lua cast call, not the DBC row); cast 3s
+	// idx 14 (real row), dur n/a idx 0, range 40yd idx 5 (real
+	// row), school Nature, manaCost 90. NOT carried: "Spell
+	// damage depends on caster level" (no per-level field).
+	{id: 35010, castTimeIdx: 14, rangeIdx: 5, school: schoolNature, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 254, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 	// 26837 "Summon InCombat Trigger" — LEFT UNSEEDED:
 	// no Wowhead WotLK page exists ("Spell #26837
 	// doesn't exist"); the name matches the C++ enum
