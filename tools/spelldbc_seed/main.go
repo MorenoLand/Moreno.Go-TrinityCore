@@ -19532,19 +19532,77 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 95, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 	// 33975 "Pyroblast" (Wowhead name MATCH; C++
+	// 15282 "Encaged Emberseer" (Wowhead name MATCH; C++
+	// boss_pyroguard_emberseer.cpp:132 CastSpell(me),
+	// :38 enum) — wago row 692369: eff0 ApplyAura
+	// Dummy (4) bp0/die1 tgtCaster. Cast Instant idx 1,
+	// dur21 indefinite (real row), range1 Self, school
+	// Physical. NOT carried: BonusCoefficient 1 (no field).
+	{id: 15282, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 16047 "Emberseer Full Strength" (Wowhead name
+	// MATCH; C++ boss_pyroguard_emberseer.cpp:44 enum)
+	// — wago row 693708: eff0 Dummy (3) bp0/die1 tgtA
+	// CASTER (1) + tgtB DEST_CASTER (18) (direct dummy,
+	// aura NONE — unlike 15282's APPLY_AURA/DUMMY).
+	// Cast Instant idx 1, dur0, range1 Self, school
+	// Physical. NOT carried: BonusCoefficient 1 (no field).
+	{id: 16047, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, targetB: targetDestCaster, chainAmplitude: 1},
+	}},
+	// 16048 "Emberseer Growing" (Wowhead name MATCH; C++
+	// boss_pyroguard_emberseer.cpp:42 enum) — wago row
+	// 693787: eff0 ApplyAura Periodic Trigger Spell
+	// (23) bp0/die1 period3000 trigger16049 tgtCaster.
+	// Cast Instant idx 1, dur3 60000ms 1min (real row),
+	// range6 Vision 100yd (real row), school Physical.
+	// NOT carried: BonusCoefficient 1 (no field).
+	{id: 16048, castTimeIdx: 1, durIdx: 3, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 3000, trigger: 16049, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 16049 "Emberseer Growing" (Wowhead name MATCH; C++
+	// boss_pyroguard_emberseer.cpp:43 enum, triggered by
+	// 16048) — wago rows 693788/693789: eff0 Dummy (3)
+	// bp0/die1 tgtA DEST_CASTER (18); eff1 ApplyAura
+	// Mod Scale (61) bp4/die1 tgtCaster (Wowhead 5%).
+	// Cast Instant idx 1, dur225 604800000ms 7d (real
+	// row), range1 Self, school Physical. NOT carried:
+	// BonusCoefficient 1 on eff0 (no field).
+	{id: 16049, castTimeIdx: 1, durIdx: 225, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetDestCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 4, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 17274 "Pyroblast" (Wowhead name MATCH; C++
+	// boss_pyroguard_emberseer.cpp:47 enum, combat
+	// DoCastVictim) — wago rows 693978/693979: eff0
+	// School Damage (Fire) bp636/die103 tgtEnemy (Wowhead
+	// 637 base, die adds variance to 739); eff1 ApplyAura
+	// Periodic Damage (3) bp59/die1 period3000 tgtEnemy
+	// (Wowhead 60 every 3s). Cast 6s idx 171 (real row),
+	// dur29 12000ms (real row), range35 Medium-Long 35yd
+	// (real row), school Fire, manaCost 130. NOT carried:
+	// SP mods 0.75/0.05 (no coefficient field); Speed 24
+	// (no speed field); Attributes (no attributes field).
+	{id: 17274, castTimeIdx: 171, durIdx: 29, rangeIdx: 35, school: schoolFire, manaCost: 130, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 636, dieSides: 103, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 59, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 	// SPELL_PYROBLAST, arcatraz.cpp:66, :207
 	// DoCastVictim) — eff0 School Damage (Fire), Value
 	// 319 -> bp 318, die 1, targetA ENEMY; eff1 Apply
 	// Aura Periodic Damage (aura 3), Value 60 every 3s
 	// -> bp 59, die 1, auraPeriod 3000, targetA ENEMY;
-	// cast 6s idx 92006 SYNTHETIC (no real 6000ms row —
-	// 92004/92005 precedent, FLAG wago row check),
+	// cast 6s idx 171 (real row — wago SpellCastTimes
+	// row 171, 2026-11-18 verdict
+	// wago_spells_15282_16047_16048_16049_17274_wago.txt;
+	// replaces synthetic 92006),
 	// dur29 12000ms (real row), range35 Medium-Long
 	// 35yd (real row), school Fire, manaCost 130.
 	// FLAG: SP mods 0.75/0.05 not carried (no
 	// coefficient field); GCD 0s anomaly (category
 	// Normal, others 1.5s — no GCD field).
-	{id: 33975, castTimeIdx: 92006, durIdx: 29, rangeIdx: 35, school: schoolFire, manaCost: 130, effects: [3]effect{
+	{id: 33975, castTimeIdx: 171, durIdx: 29, rangeIdx: 35, school: schoolFire, manaCost: 130, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 318, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 59, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
 	}},
@@ -20400,8 +20458,7 @@ func main() {
 		{92004, 3500, 0},
 		// synthetic SpellCastTimes 92005 (1600ms) for 35158/35159 Reflective shields — no real 1600ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
 		{92005, 1600, 0},
-		// synthetic SpellCastTimes 92006 (6000ms) for 33975 Pyroblast — no real 6000ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
-		{92006, 6000, 0},
+		{171, 6000, 0}, // real SpellCastTimes 171 for 17274 Pyroblast + 33975 Pyroblast (wago.tools 3.4.0.47659 SpellCastTimes row 171, 2026-11-18 verdict wago_spells_15282_16047_16048_16049_17274_wago.txt; retires synthetic 92006)
 		{2, 250, 0},    // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
 		{14, 3000, 0},  // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
 		{16, 1500, 0},  // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
