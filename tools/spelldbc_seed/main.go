@@ -14339,6 +14339,91 @@ var spells = []spell{
 	{id: 46345, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 30584 "Fear" (Wowhead SpellName MATCH; C++ SPELL_FEAR,
+	// boss_warbringer_omrogg.cpp:46; non-triggered DoCast(me)
+	// :357, self-cast; Lua boss_warbringer_omrogg.lua:101,331,
+	// non-triggered self-cast) — Wowhead WotLK (verdict file
+	// wago_spells_30584_30598_30600_30633.txt; wago NOT
+	// attempted — effect row complete): eff0 APPLY_AURA FEAR
+	// (aura 7, SPELL_AURA_MOD_FEAR) — NO Value shown, so bp
+	// 0/die 0, the no-Value encoding (30940 stun precedent);
+	// self-centered AoE — tgtA SRC_CASTER (22) + tgtB
+	// SRC_AREA_ENEMY (15), radius 30yd — radiusIdx 10 (real
+	// row). Duration 3s — dur27 (real row); range 0 Self —
+	// rangeIdx 1; cast1 instant; school Shadow; mechanic
+	// Fleeing — mechanic 5 (MECHANIC_FEAR); dispel Magic —
+	// dispel 1.
+	{id: 30584, castTimeIdx: 1, durIdx: 27, rangeIdx: 1, school: schoolShadow, mechanic: 5, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 30598 "Burning Maul" (Wowhead SpellName MATCH; C++
+	// SPELL_BURNING_MAUL, boss_warbringer_omrogg.cpp:49;
+	// non-triggered DoCast(me) :334, self-cast; Lua
+	// boss_warbringer_omrogg.lua:103,283, non-triggered
+	// self-cast) — Wowhead WotLK (same verdict file; wago
+	// attempted ONCE — blocked, 44th consecutive — but the
+	// trigger IDs come from the Wowhead link targets, so no
+	// wago data was needed): eff0 APPLY_AURA PROC_TRIGGER_SPELL
+	// (aura 42) Value 1 — bp 0/die 1, trigger 30599 (the link
+	// target, a distinct spell also named "Burning Maul");
+	// eff1 APPLY_AURA PERIODIC_TRIGGER_SPELL (aura 23) Value 1
+	// every 18 seconds — bp 0/die 1, trigger 30620 (the link
+	// target, "Spell #30620"), auraPeriod 18000; tgtA CASTER
+	// both. Duration 18s — dur85 (real row, CONFIRMED
+	// 2026-11-16); range 0 Self — rangeIdx 1; cast1 instant;
+	// school Physical. Proc chance 100% not encodable (no proc
+	// table). 30599/30620 are trigger targets only, NOT in this
+	// batch. No Used-by NPC on the page — C++ DoCast is
+	// authoritative.
+	{id: 30598, castTimeIdx: 1, durIdx: 85, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, basePoints: 0, trigger: 30599, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, trigger: 30620, auraPeriod: 18000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 30600 "Blast Wave" (Wowhead SpellName MATCH; C++
+	// SPELL_BLAST_WAVE, boss_warbringer_omrogg.cpp:45;
+	// non-triggered DoCast(me) :321, self-cast; Lua
+	// boss_warbringer_omrogg.lua:100,265, non-triggered
+	// self-cast) — Wowhead WotLK (same verdict file; wago NOT
+	// attempted): eff0 SCHOOL_DAMAGE Fire Value 2544, no
+	// tooltip range — flat bp 2544/die 0 (35108 precedent);
+	// eff1 APPLY_AURA DECREASE_RUN_SPEED_PCT (aura 33) Value
+	// -50% — bp -51/die 1 (the negative-value convention, 1027
+	// precedent); self-centered AoE — tgtA SRC_CASTER (22) +
+	// tgtB SRC_AREA_ENEMY (15), radius 10yd — radiusIdx 13
+	// (real row), both effects. Duration 6s — dur32 (real row);
+	// range 0 Self — rangeIdx 1; cast 1 second — castTimeIdx 4
+	// (real row); school Fire. Mechanic NOT encoded (0):
+	// Wowhead's "Incapacitated" has no TC Mechanics entry (the
+	// 29511 precedent maps it to the stun aura ONLY because that
+	// spell's effect IS a stun; 30600's effect is a slow with no
+	// mechanic on the row, so a guessed 12 would misroute
+	// immunity checks). "Requires Mage" not encodable.
+	{id: 30600, castTimeIdx: 4, durIdx: 32, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2544, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -51, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 30633 "Thunderclap" (Wowhead SpellName MATCH; C++
+	// SPELL_THUNDERCLAP, boss_warbringer_omrogg.cpp:47;
+	// non-triggered DoCast(me) :365, self-cast; Lua
+	// boss_warbringer_omrogg.lua:102,341, non-triggered
+	// self-cast) — Wowhead WotLK (same verdict file; wago NOT
+	// attempted): eff0 SCHOOL_DAMAGE Nature tooltip 938-1062
+	// — bp 937/die 125; eff1 APPLY_AURA DECREASE_RUN_SPEED_PCT
+	// (aura 33) Value -35% — bp -36/die 1, mechanic 11 (SNARE,
+	// shown on the effect row; 1027 precedent); eff2 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) Value -35% — bp -36/die 1;
+	// self-centered AoE — tgtA SRC_CASTER (22) + tgtB
+	// SRC_AREA_ENEMY (15), radius 10yd — radiusIdx 13 (real
+	// row), all three effects. Duration 10s — dur1 (real row);
+	// range 0 Self — rangeIdx 1; cast 1 second — castTimeIdx 4
+	// (real row); school Nature; mechanic Snared — mechanic 11;
+	// dispel Magic — dispel 1. Cooldown 2 seconds not
+	// encodable (no cooldown field).
+	{id: 30633, castTimeIdx: 4, durIdx: 1, rangeIdx: 1, school: schoolNature, mechanic: 11, dispel: 1, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 937, dieSides: 125, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -36, mechanic: 11, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: -36, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
 }
 
 func main() {
