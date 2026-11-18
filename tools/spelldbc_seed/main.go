@@ -128,6 +128,7 @@ const (
 	auraTransform              = 56
 	auraMechanicImmunity       = 77 // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
 	auraModScale               = 61
+	auraModPacifySilence       = 60  // SPELL_AURA_MOD_PACIFY_SILENCE (SpellAuraDefines.h:140)
 	auraSchoolImmunity         = 39  // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:119)
 	auraModCastingSpeed        = 65  // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
 	auraDetectAmore            = 170 // SPELL_AURA_DETECT_AMORE (SpellAuraDefines.h:250)
@@ -14423,6 +14424,89 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 937, dieSides: 125, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -36, mechanic: 11, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: -36, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 40184 "Paralyzing Screech" (Wowhead SpellName MATCH; C++
+	// SPELL_PARALYZING_SCREECH, boss_anzu.cpp:37; C++ DoCastVictim
+	// :128-130 → Lua creature:CastSpell(nil, 40184) (nil = victim
+	// fallback), 14s init, 25s repeat) — Wowhead WotLK (verdict
+	// file wago_spells_40184_40303_40321_42354.txt; wago NOT
+	// attempted — no "Spell #N" trigger on any page): eff0 APPLY_AURA
+	// STUN (aura 12) Value -15 — bp -16/die 1 (the negative-value
+	// convention; negative-stun precedent at 4378/5582, bp -1/die 1);
+	// self-centered AoE — the DoCastVictim framing is the cast call,
+	// the spell itself is self-centered AoE (Range 0 Self, "Stuns
+	// all nearby enemies", 29511 precedent) — tgtA SRC_CASTER (22) +
+	// tgtB SRC_AREA_ENEMY (15), radius 100yd — radiusIdx 12 (real
+	// row). Duration 6s — dur32 (real row); range 0 Self —
+	// rangeIdx 1; cast 5 seconds — castTimeIdx 6 (real row); school
+	// Shadow; mechanic Stunned — mechanic 12. Cooldown 10 seconds
+	// not encodable (no cooldown field).
+	{id: 40184, castTimeIdx: 6, durIdx: 32, rangeIdx: 1, school: schoolShadow, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: -16, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 40303 "Spell Bomb" — HELD (trigger spell unknown): Wowhead
+	// SpellName MATCH (C++ SPELL_SPELL_BOMB, boss_anzu.cpp:38;
+	// DoCast(target) + Talk(SAY_SPELL_BOMB 1, target), one-shot,
+	// Lua spellBombTick, POWER_MANA gate) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted): the ONLY effect is APPLY_AURA
+	// PROC_TRIGGER_SPELL_WITH_VALUE (aura 231,
+	// SPELL_AURA_PROC_TRIGGER_SPELL_WITH_VALUE, SpellAuraDefines.h:311)
+	// Value 1001, and the page names/links NO triggered spell, so the
+	// spell fired when the victim casts is unrecoverable from Wowhead;
+	// no C++/Lua/Go source in either tree names it either (the other
+	// SPELL_BOMB hits are unrelated bosses' enums). Derivable values
+	// for the unblocking tick: aura 231, bp 1000/die 1 (Value 1001),
+	// trigger UNKNOWN, tgtA ENEMY (targeted 50yd Curse), dur31 8000ms
+	// (real row), rangeIdx 37 "Extended Range" 0-50yd (real row),
+	// cast1 instant, school Arcane, dispel 2 (Curse). Do NOT seed
+	// with Value 1001 as the trigger ID — the page does not label it
+	// as one.
+	// 40321 "Cyclone of Feathers" (Wowhead SpellName MATCH; C++
+	// SPELL_CYCLONE_OF_FEATHERS, boss_anzu.cpp:39; DoCast(target)
+	// :132-135, random threat target, 5s init, 21s repeat) — Wowhead
+	// WotLK (same verdict file; wago NOT attempted): eff0 APPLY_AURA
+	// PERIODICALLY_TRIGGER_SPELL (aura 23) Value 1 every 500
+	// milliseconds — bp 0/die 1, trigger 40324 "Feathery Cyclone
+	// Burst" (the link target), auraPeriod 500; eff1 APPLY_AURA
+	// SCHOOL_IMMUNITY (aura 39) Value 1 — bp 0/die 1, misc 127 (all
+	// schools, 9636 precedent); eff2 APPLY_AURA STUN (aura 12) Value 1
+	// — bp 0/die 1; tgtA ENEMY all three (targeted cast on a player;
+	// "Can only target the player" flag). Duration 6s — dur32 (real
+	// row); range 45 yards (Longer) — rangeIdx 36 (real row); cast 2.5
+	// seconds — castTimeIdx 19 (real row; cast20 is the other real
+	// 2500ms row); school Shadow; dispel Magic — dispel 1. Cooldown 5
+	// seconds not encodable (no cooldown field).
+	{id: 40321, castTimeIdx: 19, durIdx: 32, rangeIdx: 36, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, trigger: 40324, auraPeriod: 500, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraSchoolImmunity, dieSides: 1, basePoints: 0, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 42354 "Banish Self" (Wowhead SpellName MATCH; C++
+	// SPELL_BANISH_SELF, boss_anzu.cpp:40; DoCast(me) self-cast
+	// after the 7x brood summon, Lua summonTick) — Wowhead WotLK
+	// (same verdict file; wago NOT attempted): the page presents a
+	// player Warlock spell (level 28, Soul Shard reagent, Recipes
+	// tab, no Used-by NPC tab) and its tooltip says "Banishes an
+	// enemy" — but the C++ enum, the DoCast(me) self-cast, Range 0
+	// Self, and the effect set (pacify+silence, school immunity,
+	// root) all fit the self-banish; the level/reagent/recipe
+	// metadata is not a seeded field, so the seeded fields below are
+	// the self-cast ones. eff0 APPLY_AURA PACIFY_SILENCE (aura 60,
+	// new const, SPELL_AURA_MOD_PACIFY_SILENCE) — NO Value shown, bp
+	// 0/die 0 (no-Value encoding, 30584 precedent); eff1 APPLY_AURA
+	// SCHOOL_IMMUNITY (aura 39) — NO Value shown, bp 0/die 1, misc
+	// 127 (all schools; the 9636 uniform precedent for misc-127
+	// immunity rows — the aura's value is engine-inert); eff2
+	// APPLY_AURA ROOT (aura 26, auraRoot) Value 1 — bp 0/die 1; tgtA
+	// CASTER all three (INFERRED from DoCast(me) + Range Self, the
+	// 10258-class inference — a self-cast aura on an enemy target
+	// would fizzle). Duration 45s — dur22 (real row); range 0 Self
+	// — rangeIdx 1; cast1 instant; school Shadow. Auras 60/26 are
+	// live in the engine (boss_ai.go:12452, 13111-13119).
+	{id: 42354, castTimeIdx: 1, durIdx: 22, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModPacifySilence, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraSchoolImmunity, dieSides: 1, basePoints: 0, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
