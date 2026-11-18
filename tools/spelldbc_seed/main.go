@@ -14882,9 +14882,12 @@ var spells = []spell{
 	// CastSpell(target)) — Wowhead WotLK (same verdict file;
 	// wago NOT attempted — contiguous rows, both Values
 	// present, no trigger): eff0 98 KNOCK_BACK Value 100 — bp
-	// 99/die 1 (rolled value * 0.1 = speedZ 10, the 65100
-	// precedent; MiscValue NOT shown on Wowhead — seeded 0,
-	// flag for a wago DBC check, speedXY is 0 until then);
+	// 99/die 1, misc 150 (rolled value * 0.1 = speedZ 10,
+	// the 65100 precedent; the "(150)" IS the MiscValue —
+	// the 32055 precedent: "(10)" = misc 10 — so speedXY =
+	// 15.0; CORRECTED 2026-11-17 from misc 0, which the
+	// epoch-hunter tick seeded by misreading the
+	// parenthetical as unshown);
 	// eff1 2 SCHOOL_DAMAGE Physical Value 750, tooltip
 	// 750-1250 — bp 749/die 501 (the 30633 range convention);
 	// both targetA SRC_CASTER 22 / targetB SRC_AREA_ENEMY 15
@@ -14894,7 +14897,7 @@ var spells = []spell{
 	// radius 15yd — radiusIdx 18 (real row); cast1 instant;
 	// dur0; range1 Self Only; school Physical.
 	{id: 31475, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
-		{effect: effKnockBack, basePoints: 99, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 99, dieSides: 1, misc: 150, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
 		{effect: effSchoolDamage, basePoints: 749, dieSides: 501, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
 	}},
 	// 33834 "Magic Disruption Aura" (Wowhead SpellName MATCH;
@@ -14914,6 +14917,83 @@ var spells = []spell{
 	// reference, per the 30598/40321 practice).
 	{id: 33834, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolShadow, dispel: 1, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 3000, trigger: 33835, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 31457 "Arcane Blast" (Wowhead SpellName MATCH; C++
+	// boss_chrono_lord_deja.cpp:38 enum, :119 DoCastVictim;
+	// Lua boss_chrono_lord_deja.lua:80 const, :128
+	// CastSpell(victim)) — Wowhead WotLK (verdict file
+	// wago_spells_31457_31467_31472_38540.txt; wago NOT
+	// attempted — contiguous rows, all Values present, no
+	// trigger): eff0 98 KNOCK_BACK Value 30 — bp 29/die 1,
+	// misc 75 (the "(75)" IS the MiscValue, the 32055
+	// precedent — this is what the epoch-hunter tick missed
+	// on 31475's "(150)"); eff1 2 SCHOOL_DAMAGE Arcane
+	// Value 3063, tooltip 3063-3937 — bp 3062/die 875 (the
+	// 30633 range convention); both targetA
+	// TARGET_UNIT_TARGET_ENEMY (DoCastVictim); NO radius
+	// shown on either row — radiusIdx 0; cast1 instant;
+	// dur0; range2 Combat 5yd ("Melee Range" in the
+	// tooltip, same thing); school Arcane.
+	{id: 31457, castTimeIdx: 1, rangeIdx: 2, school: schoolArcane, effects: [3]effect{
+		{effect: effKnockBack, basePoints: 29, dieSides: 1, misc: 75, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 3062, dieSides: 875, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31467 "Time Lapse" (Wowhead SpellName MATCH; C++
+	// boss_chrono_lord_deja.cpp:42 enum, :124 DoCast(me);
+	// Lua boss_chrono_lord_deja.lua:84 const, :131
+	// CastSpell(creature)) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted — contiguous rows, both
+	// Values present, no trigger): eff0 6 APPLY_AURA Mod
+	// Melee Attack Speed -% Value -60 — aura 138
+	// MOD_MELEE_HASTE bp -61/die 1 (the 40184 negative
+	// convention); eff1 6 APPLY_AURA Decrease Run Speed %
+	// Value -60 — aura 33 DEC_SPEED bp -61/die 1; both
+	// targetA SRC_CASTER 22 / targetB SRC_AREA_ENEMY 15
+	// (self-cast, auras hit enemies around the caster),
+	// radius 20yd — radiusIdx 9 (real row); mechanic 11
+	// Snared (spell + both effects, the 30633 / 31480
+	// pattern); dispel 1 Magic; manaCost 140; cast1
+	// instant; dur1 10000ms; range1 Self Only; school
+	// Arcane. NOT carried: the 10s cooldown (no field).
+	{id: 31467, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolArcane, mechanic: 11, dispel: 1, manaCost: 140, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, mechanic: 11, basePoints: -61, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, mechanic: 11, basePoints: -61, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 31472 "Arcane Discharge" (Wowhead SpellName MATCH; C++
+	// boss_chrono_lord_deja.cpp:40 enum, :129 DoCast on a
+	// random target; Lua boss_chrono_lord_deja.lua:82 const,
+	// :137 CastSpell(target)) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted — single effect with a Value,
+	// no trigger): single effect 2 SCHOOL_DAMAGE Arcane
+	// Value 2313, tooltip 2313-2687 — bp 2312/die 375 (the
+	// 30633 range convention); targetA SRC_CASTER 22 /
+	// targetB SRC_AREA_ENEMY 15 (tooltip "enemies in an area
+	// around the caster" — self-centered AoE; the C++
+	// random-target cast is the cast call, the 40184 /
+	// 31475 framing); radius 50yd — radiusIdx 27 (real
+	// row, the 32265 precedent); manaCost 150; cast5
+	// 2000ms; dur0; range1 Self Only; school Arcane.
+	{id: 31472, castTimeIdx: 5, rangeIdx: 1, school: schoolArcane, manaCost: 150, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2312, dieSides: 375, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 27, chainAmplitude: 1},
+	}},
+	// 38540 "Attraction" (Wowhead SpellName MATCH; C++
+	// boss_chrono_lord_deja.cpp:43 enum, :133 DoCast(me),
+	// heroic-only ("Not Implemented (Heroic mode)" in C++);
+	// Lua boss_chrono_lord_deja.lua:85 const, :142
+	// CastSpell(creature)) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted — single effect with a Value,
+	// no trigger): single effect 124 PULL_TOWARDS Value 1
+	// — bp 0/die 1, misc 125 (the "(125)" IS the MiscValue,
+	// the 32055 precedent, and the 32265 pull precedent
+	// also uses misc 125); targetA SRC_CASTER 22 / targetB
+	// SRC_AREA_ENEMY 15; radius 50yd — radiusIdx 27 (real
+	// row); cast1 instant; dur0; range1 Self Only; school
+	// Arcane. NOT carried: the empty tooltip (no
+	// description to seed from) and the heroic-only gate
+	// (lives in the Lua EVENT_ATTRACTION arm, no DBC
+	// field); "Ignore Line of Sight" (no attributes field).
+	{id: 38540, castTimeIdx: 1, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effPullTowards, basePoints: 0, dieSides: 1, misc: 125, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 27, chainAmplitude: 1},
 	}},
 }
 
