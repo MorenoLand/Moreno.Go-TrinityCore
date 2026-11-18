@@ -14508,6 +14508,95 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraSchoolImmunity, dieSides: 1, basePoints: 0, misc: 127, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 8004 "Healing Surge" — HELD (bp/die split unresolvable):
+	// Wowhead display name "Lesser Healing Wave" is a MISMATCH
+	// against C++ SPELL_HEALING_SURGE (zone_bloodmyst_isle.cpp:136;
+	// the /healing-surge URL redirects to /lesser-healing-wave) —
+	// TC enum authoritative per the 30925 precedent, and the seeder
+	// writes no name column, so the name alone would not block.
+	// The blocker is numeric: tooltip "Heals a friendly target for
+	// 170 to 195" vs effect Value "162 (SP mod: 0.807)". The effect
+	// Value is the DBC minimum (bp+1) and the tooltip max agrees
+	// with it (bp 161/die 34 → rolls 162-195), but the tooltip min
+	// (170) contradicts the effect min (162); the tooltip-only
+	// reconstruction (bp 169/die 26) contradicts the effect Value.
+	// No in-tree precedent resolves an effect-vs-tooltip MIN
+	// disagreement (30633 was agreement, effect = tooltip min;
+	// 20228/30938 SP-mod cases also agreed), and no independent
+	// DBC copy exists in the repo (grep: only code comments). Both
+	// candidates recorded: (a) bp 161/die 34, (b) bp 169/die 26.
+	// Derivable values for the unblocking tick: effHeal (10), tgtA
+	// CASTER (DoCast(self), health <85% gate, Lua healing-surge
+	// arm), castTimeIdx 16 (1.5s, real row), rangeIdx 5 (Long 40yd,
+	// real row), school Nature, durIdx 0 (n/a), manaCost 15% of base
+	// mana NOT encodable (the seed carries a flat manaCost, not a
+	// percentage — 30938's flat 100 is a different shape). SP mod
+	// 0.807 not encodable (20228/30938 precedent).
+	// 8056 "Frost Shock" — HELD (bp/die split unresolvable, same
+	// class as 8004): Wowhead SpellName MATCH (C++
+	// SPELL_FROST_SHOCK, zone_bloodmyst_isle.cpp:135; DoCastVictim
+	// :436 → Lua creature:CastSpell(nil, 8056), 1s init, 10-15s
+	// re-arm). Tooltip "95 to 101 Frost damage" vs effect #2 Value
+	// "89 (SP mod: 0.386)": the effect Value is the DBC minimum
+	// (bp+1) and the tooltip max agrees with it (bp 88/die 13 →
+	// rolls 89-101), but the tooltip min (95) contradicts the
+	// effect min (89); the tooltip-only reconstruction (bp 94/die
+	// 7) contradicts the effect Value. Both candidates recorded:
+	// (a) bp 88/die 13, (b) bp 94/die 7. Derivable values for the
+	// unblocking tick: eff0 APPLY_AURA DECREASE_RUN_SPEED_PCT
+	// (aura 33) Value -50% — bp -51/die 1, mechanic 11 (SNARE,
+	// shown on the effect row); eff1 SCHOOL_DAMAGE Frost (see
+	// above); tgtA ENEMY both (DoCastVictim); dur31 8000ms (real
+	// row); rangeIdx 34 "Twenty-Five yards" 0-25 (real row);
+	// cast1 instant; school Frost; dispel Magic — dispel 1. The
+	// 6-second spell cooldown vs the 10-15s Lua re-arm is NOT a
+	// conflict (the re-arm is the AI timer, not the spell
+	// cooldown). SP mod 0.386 not encodable.
+	// 31633 "Strength of Earth Totem" (Wowhead SpellName MATCH;
+	// C++ SPELL_STRENGTH_OF_EARTH_TOTEM, zone_bloodmyst_isle.cpp:138;
+	// non-triggered DoCast(me) self-cast; Lua strength-of-earth-totem
+	// arm, 20s init then 110-130s) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted): single effect 28 SUMMON, Value 5
+	// — bp 4/die 1 (CalcValue +1 = 5, the 15786 Earthbind Totem
+	// precedent, wago-verified DBC row), misc 21992 (Strength of
+	// Earth Totem NPC, the effect link target), miscB 81 (earth
+	// totem SummonProperties — Control 1/Guardian, Title 4/TOTEM,
+	// Slot 2, real row; "Tools: Earth Totem" confirms the slot),
+	// targetA TARGET_DEST_CASTER_FRONT_RIGHT (41, the 15786
+	// totem-summon precedent — "at the feet of the caster"),
+	// RadiusIndex 0 (no radius shown, same as 15786). Duration 2
+	// minutes — dur4 120000ms (real row); range 0 Self — rangeIdx 1;
+	// cast1 instant; school Nature; manaCost 25. The totem's +10
+	// strength within 30 yards is the summoned NPC's own aura, not
+	// an effect of this spell — not seeded. A missing
+	// SummonProperties row would skip the summon in the engine
+	// (boss_ai.go:12292, C++ `if (!SummonProperties) break`), so
+	// miscB 81 being a real seeded row is load-bearing here.
+	{id: 31633, castTimeIdx: 1, durIdx: 4, rangeIdx: 1, school: schoolNature, manaCost: 25, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, basePoints: 4, targetA: targetDestCasterFrontRight, misc: 21992, miscB: 81, chainAmplitude: 1},
+	}},
+	// 38116 "Searing Totem" — HELD (SummonProperties row unknown):
+	// Wowhead SpellName MATCH (C++ SPELL_SEARING_TOTEM,
+	// zone_bloodmyst_isle.cpp:137; non-triggered DoCast(me)
+	// self-cast; Lua searing-totem arm, 15s init then 110-130s) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted):
+	// single effect 28 SUMMON, Value 5 — bp 4/die 1 (the 15786
+	// precedent), misc 21995 (Searing Totem NPC, the effect link
+	// target), targetA TARGET_DEST_CASTER_FRONT_RIGHT (41, the
+	// 15786 totem-summon precedent). The blocker is miscB: this is
+	// a FIRE totem ("Tools: Fire Totem", Slot 1), and no fire-totem
+	// SummonProperties row (Title 4/TOTEM, Slot 1) exists in the
+	// seeder's table (rows present: 64, 61, 81 earth Slot 2, 1362,
+	// 66, 121) — 81 would be the wrong slot and 64 is not a totem
+	// row, and a missing row skips the summon in the engine
+	// (boss_ai.go:12292). Do NOT guess the fire-totem
+	// SummonProperties ID. Derivable values for the unblocking
+	// tick: bp 4/die 1, misc 21995, targetA 41, durIdx 90014
+	// (synthetic 35000ms row to be added by the unblocking tick —
+	// no real 35000ms row in the table), rangeIdx 1, cast1 instant,
+	// school Fire. The totem's
+	// attack (20 yards, 13-17 Fire damage) is the summoned NPC's
+	// own spell, not an effect of this spell — not seeded.
 }
 
 func main() {
