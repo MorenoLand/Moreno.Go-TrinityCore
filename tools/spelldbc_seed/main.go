@@ -15495,7 +15495,7 @@ var spells = []spell{
 	// — contiguous rows, all Values present, no trigger): eff0 2
 	// SCHOOL_DAMAGE Nature Value 1313, no range shown — bp
 	// 1312/die 1 (the 31436 flat convention); eff1 6 APPLY_AURA
-	// PERIODIC DAMAGE Value 413 every 2s — bp 412/die 174 (the
+	// PERIODIC DAMAGE Value 413 every 2s — bp 412/die 175 (the
 	// Buff "413 to 587" IS the die source, the 30633 range
 	// convention), period 2000; both targetA SRC_CASTER 22 /
 	// targetB SRC_AREA_ENEMY 15 (DoCast(me) self-cast, the
@@ -15508,7 +15508,7 @@ var spells = []spell{
 	// and the 0.1 SP mod (no coefficient field).
 	{id: 25991, castTimeIdx: 1, durIdx: 1, rangeIdx: 6, school: schoolNature, dispel: 4, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 1312, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
-		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 412, dieSides: 174, auraPeriod: 2000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 412, dieSides: 175, auraPeriod: 2000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
 	}},
 	// 25993 "Poison Shock" (Wowhead SpellName MATCH; C++
 	// boss_viscidus.cpp:29 enum, :240 DoCast(me); Lua
@@ -15516,7 +15516,7 @@ var spells = []spell{
 	// Wowhead WotLK (same verdict file; wago NOT attempted —
 	// single effect with a Value, no trigger): single effect 2
 	// SCHOOL_DAMAGE Nature Value 1050, tooltip 1050-1350 — bp
-	// 1049/die 300 (the 30633 range convention); targetA
+	// 1049/die 301 (the 30633 range convention); targetA
 	// UNIT_CONE_ENEMY 24 (the 31914 cone precedent —
 	// "Splashes all targets in front of the caster"); radius
 	// 15yd — radiusIdx 18 (real row); cast1 instant; dur0;
@@ -15526,7 +15526,7 @@ var spells = []spell{
 	// target the player" (no attributes field) and the level
 	// 20 requirement (no level field in the seeder).
 	{id: 25993, castTimeIdx: 1, rangeIdx: 11, school: schoolNature, effects: [3]effect{
-		{effect: effSchoolDamage, basePoints: 1049, dieSides: 300, targetA: targetUnitConeEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 1049, dieSides: 301, targetA: targetUnitConeEnemy, radiusIdx: 18, chainAmplitude: 1},
 	}},
 	// 26003 "Viscidus Suicide Trigger" (Wowhead display MISMATCH
 	// vs C++ VISCIDUS_SUICIDE — Wowhead adds "Trigger"; TC enum
@@ -15554,12 +15554,14 @@ var spells = []spell{
 	// Value 1 every 10s — bp 0/die 1, period 10000, trigger
 	// 25989 (the 63322 auraPeriodicTrig precedent: aura 23 +
 	// trigger + targetA CASTER); targetA CASTER (DoCast(me)
-	// self-cast); cast1 instant; dur0; range13 Anywhere
+	// self-cast); cast1 instant; dur21 (-1 infinite, real row —
+	// Duration n/a on Wowhead, aura removed by script via C++
+	// RemoveAura :129, the 44197 precedent); range13 Anywhere
 	// 50000yd (real row); school Nature. 25989 itself is NOT
 	// seeded here (trigger-only reference, per the 25852->6608
 	// practice). NOT carried: "Passive spell" / "Can only
 	// target the player" (no attributes field).
-	{id: 26575, castTimeIdx: 1, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+	{id: 26575, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 10000, trigger: 25989, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
