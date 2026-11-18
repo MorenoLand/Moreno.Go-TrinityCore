@@ -220,6 +220,7 @@ const (
 	targetDestDynobjEnemy      = 28  // TARGET_DEST_DYNOBJ_ENEMY (SharedDefines.h:1464)
 	targetDestChannelTarget    = 76  // TARGET_DEST_CHANNEL_TARGET (SpellInfo.cpp:296)
 	targetUnitConeEnemy104     = 104 // TARGET_UNIT_CONE_ENEMY_104 (SharedDefines.h:1540)
+	targetUnitConeEnemy54      = 54  // TARGET_UNIT_CONE_ENEMY_54 (SharedDefines.h:1490)
 	targetUnitConeEntry        = 60  // TARGET_UNIT_CONE_ENTRY (SharedDefines.h:1496)
 	targetUnitMaster           = 27  // TARGET_UNIT_MASTER (SharedDefines.h:1463)
 	targetUnitSrcAreaAlly      = 30  // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
@@ -20061,6 +20062,72 @@ var spells = []spell{
 		{effect: effTriggerSpell, trigger: 38987, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 26100 "Ground Rupture" (Wowhead name MATCH; C++
+	// boss_ouro.cpp:138 DoCastVictim) — wago rows 689261-62
+	// (DifficultyID 0): eff0 School Damage Physical, Value
+	// 2250-2750 -> bp 2249, die 501, targetA ENEMY (6);
+	// eff1 Knock Back (250), Value 100 -> bp 99, die 201,
+	// misc 250, targetA ENEMY (6). Cast Instant idx 1,
+	// range1 Self, school Physical. NOT carried: "Cannot be
+	// reflected / All spell effects are harmful" (no
+	// attributes field).
+	{id: 26100, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2249, dieSides: 501, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 99, dieSides: 201, misc: 250, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 26102 "Sand Blast" (Wowhead name MATCH; C++
+	// boss_ouro.cpp:106 DoCastVictim) — wago rows 685565-66:
+	// eff0 School Damage Nature, Value 3400-4600 -> bp
+	// 3399, die 1201, radiusIdx 24 (65yd real row), targetA
+	// CONE_180_ENEMY (54, TARGET_UNIT_CONE_ENEMY_54);
+	// eff1 Apply Aura Stun (aura 12), no Value -> bp -1,
+	// die 1, mechanic 12, radiusIdx 24, targetA
+	// CONE_180_ENEMY (54). Cast 2000ms idx 5, dur28
+	// 5000ms, range6 Vision 100yd, school Nature. NOT
+	// carried: "Targets hit by Sand Blast are ignored" (no
+	// field; engine-side target filtering).
+	{id: 26102, castTimeIdx: 5, durIdx: 28, rangeIdx: 6, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3399, dieSides: 1201, targetA: targetUnitConeEnemy54, radiusIdx: 24, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: -1, dieSides: 1, mechanic: 12, targetA: targetUnitConeEnemy54, radiusIdx: 24, chainAmplitude: 1},
+	}},
+	// 26103 "Sweep" (Wowhead name MATCH; C++
+	// boss_ouro.cpp:99 DoCastVictim) — wago rows 700085-86:
+	// eff0 School Damage Physical, Value 2625-3375 -> bp
+	// 2624, die 751, radiusIdx 10 (30yd real row), targetA
+	// SRC_CASTER (22) + targetB SRC_AREA_ENEMY (15); eff1
+	// Knock Back (300), Value 100 -> bp 99, die 51, misc
+	// 300, radiusIdx 10, targetA SRC_CASTER + targetB
+	// SRC_AREA_ENEMY. Cast 1500ms idx 16, range1 Self,
+	// school Physical. NOT carried: 5s cooldown is
+	// CategoryRecoveryTime 5000 (RecoveryTime 0; no cooldown
+	// field); Wowhead tooltip "within 0" is a display error
+	// (effect rows + wago agree 30yd).
+	{id: 26103, castTimeIdx: 16, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2624, dieSides: 751, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 99, dieSides: 51, misc: 300, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 26262 "Birth" (Wowhead name MATCH; C++
+	// boss_ouro.cpp:86 DoCastVictim, The Birth Animation) —
+	// wago row 703968: eff0 Spawn (46), Value 1 -> bp 0,
+	// die 0, targetA CASTER (1). Cast 250ms idx 2, range1
+	// Self, school Physical. NOT carried: "Aura is hidden,
+	// Cast time is hidden" (no attributes field).
+	{id: 26262, castTimeIdx: 2, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSpawn, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 26092 "Dirt Mound Passive" — LEFT UNSEEDED: no WotLK
+	// data exists. Wowhead WotLK: "Spell #26092 doesn't
+	// exist"; wago.tools 3.4.0.47659 has no Spell,
+	// SpellEffect or SpellMisc row (all difficulties).
+	// C++ boss_ouro.cpp:117 casts it live (DoCast(me) as
+	// the submerge self-aura), so the Lua arm currently has
+	// no DBC row to resolve. Classic 1.13 data (NOT WotLK,
+	// do not seed from it without a separate decision):
+	// Apply Aura Periodic Trigger, 1s period, triggers
+	// Quake 26093 (School Damage Nature 675, radius 8yd).
+	// Retry only if a WotLK row surfaces; until then the
+	// gap stays visible here. (This comment block holds the
+	// place; no seed row for 26092 exists.)
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
