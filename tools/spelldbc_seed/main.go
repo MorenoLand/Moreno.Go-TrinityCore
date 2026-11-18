@@ -19687,20 +19687,18 @@ var spells = []spell{
 	// SPELL_STOLEN_SOUL, boss_exarch_maladaar.cpp:152,
 	// :287 DoCast(target)) — eff0 School Damage (Shadow),
 	// Value 100 -> bp 99, die 1, targetA ENEMY (DoCast
-	// target); eff1 Apply Aura Mod Damage Done % (aura
-	// 13), Value -50% -> bp -51, die 1, misc 127
-	// all-schools (6361/31901 precedent), targetA ENEMY;
-	// eff2 Apply Aura Mod Healing Power - % (aura 136
-	// MOD_HEALING_DONE_PERCENT, SpellAuraDefines.h:216),
-	// Value -50% -> bp -51, die 1, misc 127, targetA
-	// ENEMY; cast 1s idx 4 (real row), dur4 120000ms
-	// (real row), range5 Long 40yd (real row), school
-	// Shadow. FLAG: eff2 aura 136 vs 118 is a judgment
-	// call (buff says healing DONE -50%; 118 is healing
-	// taken) — needs a wago SpellEffect row check.
+	// target); eff1 Apply Aura Mod Damage Done % (aura 79
+	// MOD_DAMAGE_PERCENT_DONE, wago-verified row
+	// 850667), Value -50% -> bp -51, die 1, misc 127
+	// all-schools, targetA ENEMY; eff2 Apply Aura Mod
+	// Healing Power - % (aura 136 MOD_HEALING_DONE_PERCENT,
+	// wago-verified row 850668, NOT 118), Value -50% ->
+	// bp -51, die 1, misc 127, targetA ENEMY; cast 1s
+	// idx 4 (real row), dur4 120000ms (real row), range5
+	// Long 40yd (real row), school Shadow.
 	{id: 32346, castTimeIdx: 4, durIdx: 4, rangeIdx: 5, school: schoolShadow, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 99, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
-		{effect: effApplyAura, aura: auraModDamageDone, basePoints: -51, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: -51, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModHealingDonePct, basePoints: -51, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 	// 32395 "Stolen Soul Visual" (Wowhead name MATCH;
@@ -19718,17 +19716,17 @@ var spells = []spell{
 	// 32421 "Soul Scream" (Wowhead name MATCH; C++
 	// SPELL_SOUL_SCREAM, boss_exarch_maladaar.cpp:151,
 	// :305 DoCast(me)) — eff0 Apply Aura Confuse
-	// (aura 5), no Value shown -> bp/die omitted (0/0,
-	// 45254 precedent; 34322 fear precedent),
-	// radiusIdx 13 (10yd real row), targetA 15
-	// SRC_AREA_ENEMY (34322/19134 precedent);
+	// (aura 5), wago row 850859: bp -1, die 1, targetA
+	// 22 SRC_CASTER + targetB 15 SRC_AREA_ENEMY,
+	// radiusIdx 13 (10yd real row, wago SpellRadius
+	// row 13 = 10yd);
 	// mechanic 5 Fleeing at spell level (34322
 	// precedent); cast Instant idx 1, dur39 2000ms
 	// (real row, NOT the 90001 synthetic), range1
 	// Self, maxTargets 5 (shown), school Shadow,
 	// manaCost 210.
 	{id: 32421, mechanic: 5, castTimeIdx: 1, durIdx: 39, rangeIdx: 1, maxTargets: 5, school: schoolShadow, manaCost: 210, effects: [3]effect{
-		{effect: effApplyAura, aura: auraModConfuse, targetA: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModConfuse, basePoints: -1, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
 	// 32422 "Ribbon of Souls" (Wowhead name MATCH; C++
 	// SPELL_RIBBON_OF_SOULS, boss_exarch_maladaar.cpp:150,
@@ -19736,15 +19734,14 @@ var spells = []spell{
 	// (Shadow), tooltip 999-1351 -> bp 998, die 353
 	// (30925 precedent), targetA ENEMY (DoCast
 	// target); cast 1.5s idx 16 (real row), dur n/a
-	// idx 0, range6 Vision 100yd (real row), school
-	// Shadow, manaCost 100. FLAG: Wowhead shows "100
-	// yards (Long)" — no DBC row is both Long-labeled
-	// and 100yd (Long idx 5 = 40yd); seeded on the
-	// numeric distance with idx 6 (39329 Void Bolt
-	// precedent) — needs a wago SpellRange row check;
+	// idx 0, range5 Long 40yd (wago SpellMisc row
+	// 449555 + SpellRange row 5: "Long Range", max 40;
+	// Wowhead's "100 yards" number is wrong, "Long"
+	// is only the range's short display name), school
+	// Shadow, manaCost 100;
 	// "Spell damage depends on caster level" — no
 	// scaling field in the seed struct.
-	{id: 32422, castTimeIdx: 16, rangeIdx: 6, school: schoolShadow, manaCost: 100, effects: [3]effect{
+	{id: 32422, castTimeIdx: 16, rangeIdx: 5, school: schoolShadow, manaCost: 100, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 998, dieSides: 353, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 	// 32424 "Summon Avatar" (Wowhead name MATCH; C++
@@ -19752,12 +19749,13 @@ var spells = []spell{
 	// :267 DoCast(me)) — eff0 Summon, Value 1 -> bp 0,
 	// die 1, misc 18478 Avatar of the Martyred,
 	// radiusIdx 8 (5yd real row), targetA 32
-	// DEST_CASTER_SUMMON (31264 pattern), miscB 64
-	// WILD TempSummon branch (38755/30707 precedent);
-	// cast 2s idx 5 (real row), dur6 600000ms (real
-	// row), range2 Combat 5yd (real row), school
-	// Physical. FLAG: miscB 64 inferred — needs a wago
-	// SummonProperties row check.
+	// DEST_CASTER_SUMMON (31264 pattern), miscB 64 =
+	// SummonPropertiesID 64 (wago-verified SpellEffect
+	// row 850863; SummonProperties row 64: Control 0
+	// NONE, Flags 0x100; no SummonType column on this
+	// wago build); cast 2s idx 5 (real row), dur6
+	// 600000ms (real row), range2 Combat 5yd (real
+	// row), school Physical.
 	{id: 32424, castTimeIdx: 5, durIdx: 6, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 18478, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 8, chainAmplitude: 1},
 	}},
