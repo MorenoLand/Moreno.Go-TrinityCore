@@ -121,6 +121,7 @@ const (
 	auraRoot                   = 26
 	auraSilence                = 27
 	auraModStat                = 29  // SPELL_AURA_MOD_STAT (SpellAuraDefines.h:109)
+	auraModSkill               = 30  // SPELL_AURA_MOD_SKILL (SpellAuraDefines.h:110)
 	auraModIncreaseSpeed       = 31  // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
 	auraModSpeedAlways         = 129 // SPELL_AURA_MOD_SPEED_ALWAYS (SpellAuraDefines.h:209)
 	auraDecSpeed               = 33
@@ -15563,6 +15564,79 @@ var spells = []spell{
 	// target the player" (no attributes field).
 	{id: 26575, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 10000, trigger: 25989, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 7393 "Heal Brother" (Wowhead SpellName MATCH; C++
+	// boss_twinemperors.cpp:38 enum, :209 DoCast(pOtherBoss); Lua
+	// boss_veknilash.lua:94 const, :254 CastSpell(other)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_7393_26007_26613_26638.txt; wago NOT attempted
+	// — contiguous rows, all Values present, no trigger): two
+	// identical Heal effects Value 30000 each — bp 29999/die 1
+	// (the 31436 flat convention); eff0 targetA
+	// TARGET_UNIT_TARGET_ALLY 21 (the other twin, the DoCast
+	// target — the 67528 heal precedent), eff1 targetA CASTER 1:
+	// C++ :199 "this spell heals caster and the other brother"
+	// (one Heal per twin);
+	// cast1 instant; dur0; range14 Extra Long 60yd (real row);
+	// school Nature. NOT carried: "Unaffected by invulnerability"
+	// / "Exclude Caster" / "Ignore Line of Sight" / "Cannot crit"
+	// (no attributes field).
+	{id: 7393, castTimeIdx: 1, rangeIdx: 14, school: schoolNature, effects: [3]effect{
+		{effect: effHeal, basePoints: 29999, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effHeal, basePoints: 29999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 26007 "Uppercut" (Wowhead SpellName MATCH; C++
+	// boss_twinemperors.cpp:44 enum, :460 DoCast(randomMelee); Lua
+	// boss_veknilash.lua:89 const, :165 CastSpell(target)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// contiguous rows, all Values present, no trigger): eff0 Deal
+	// Weapon Damage Value 950, tooltip 950-1050 — bp 949/die 101
+	// (the 30633 range convention; the 31345 Cleave eff58
+	// precedent); eff1 Knock Back (100) Value 94 — bp 93/die 1,
+	// misc 100 (the "(N) is MiscValue" rule, 31475 precedent);
+	// both targetA UNIT_TARGET_ENEMY 6 (random melee target);
+	// cast1 instant; dur0; range7 Very Short 10yd (real row);
+	// school Physical. NOT carried: "Is Ability" (no attributes
+	// field) and the level 40 requirement (no level field in the
+	// seeder).
+	{id: 26007, castTimeIdx: 1, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 949, dieSides: 101, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 93, dieSides: 1, misc: 100, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 26613 "Unbalancing Strike" (Wowhead SpellName MATCH; C++
+	// boss_twinemperors.cpp:45 enum, :452 DoCastVictim; Lua
+	// boss_veknilash.lua:88 const, :135 CastSpell(victim)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// contiguous rows, all Values present, no trigger): eff0
+	// Weapon Damage - % Value 350 — bp 349/die 1 (eff31, the 66081
+	// precedent); eff1 APPLY_AURA Mod Skill - Temporary (Defense)
+	// Value -100 — bp -101/die 1 (the 30633 negative convention),
+	// aura 30 (NEW const auraModSkill; engine spellAuraModSkill
+	// leg live, aura_skill.go), misc 95 SKILL_DEFENSE (engine
+	// skillID := MiscValue); both targetA UNIT_TARGET_ENEMY 6;
+	// cast1 instant; dur32 6000ms (real row — Duration 6 seconds,
+	// Buff agrees); range2 Combat 5yd; school Physical. NOT
+	// carried: "Is Ability" / "Cannot be used while shapeshifted"
+	// / "Do Not Sheath" (no attributes field) and the level 1 /
+	// melee-weapon requirements (no level/requirement fields).
+	{id: 26613, castTimeIdx: 1, durIdx: 32, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 349, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModSkill, basePoints: -101, dieSides: 1, misc: 95, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 26638 "Twin Teleport Visual" (Wowhead SpellName MATCH; C++
+	// boss_twinemperors.cpp:40 enum, :243 DoCast(me); Lua
+	// boss_veknilash.lua:92 const, :291 twin:CastSpell(twin)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 3
+	// DUMMY Value 1 — bp 0/die 1 (the 19593 dummy precedent);
+	// radius 100yd shown — radiusIdx 12 (real row); targetA
+	// CASTER (DoCast me self-cast); cast1 instant; dur0; range1
+	// Self Only (real row); school Physical. NOT carried: "Aura
+	// is hidden" / "Cast time is hidden" / "Does not appear in
+	// log" (no attributes field); the behaviour itself is
+	// server-side script per Wowhead — no further seedable values.
+	{id: 26638, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, radiusIdx: 12, chainAmplitude: 1},
 	}},
 }
 
