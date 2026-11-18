@@ -19218,6 +19218,66 @@ var spells = []spell{
 	{id: 35010, castTimeIdx: 14, rangeIdx: 5, school: schoolNature, manaCost: 90, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 254, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 45254 "Suicide" (Wowhead name MATCH; C++
+	// SPELL_SUICIDE, boss_ahune.cpp:88, :238 DoCastSelf
+	// on the frozen core) — eff0 Instakill, no Value
+	// shown -> bp 0/die 0 (46104 precedent), targetA
+	// CASTER (DoCastSelf; effInstakill leg live,
+	// positivity.go:34, spells.go:24311); cast Instant
+	// idx 1, dur n/a idx 0, range Self idx 1, school
+	// Physical.
+	{id: 45254, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effInstakill, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 45941 "Summon Ahune's Loot Missile" (Wowhead display
+	// PARTIAL vs C++ SPELL_SUMMON_LOOT_MISSILE — adds
+	// "Ahune's"; boss_ahune.cpp:89, :294 DoCast) — eff0
+	// Dummy, Value 1 -> bp 0, die 1, targetA CASTER
+	// (DoCast self); cast Instant idx 1, dur n/a idx 0,
+	// range 100yd Vision idx 6 (real row), school
+	// Physical. FLAG: Wowhead shows NO summon effect —
+	// Dummy + "Server-side script" only; the loot-missile
+	// summon is server-side, not in this row.
+	{id: 45941, castTimeIdx: 1, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 46371 "Ice Spear Control Aura" (Wowhead display PARTIAL
+	// vs C++ SPELL_ICE_SPEAR_AURA — inserts "Control";
+	// boss_ahune.cpp:76, :286 DoCastSelf) — eff0 Apply Aura
+	// Periodic Dummy (aura 226), Value 1 -> bp 0, die 1,
+	// auraPeriod 6000, targetA CASTER (DoCastSelf); cast
+	// Instant idx 1, dur n/a idx 0, range Self idx 1,
+	// school Physical.
+	{id: 46371, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDummy, basePoints: 0, dieSides: 1, auraPeriod: 6000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 46810 "Frozen Core Gets Hit" (Wowhead name MATCH; C++
+	// SPELL_FROZEN_CORE_GETS_HIT, boss_ahune.cpp:90, :285
+	// DoCastSelf) — eff0 Apply Aura Proc Trigger Spell
+	// (aura 42), Value 1 -> bp 0, die 1, trigger 46809
+	// (NOT seeded — 61727 precedent; 46809 Make Ahune's
+	// Ghost Burst is outside this five), targetA CASTER
+	// (DoCastSelf); cast Instant idx 1, dur n/a idx 0,
+	// range Self idx 1, school Physical. FLAG: tooltip
+	// "(7s cooldown)" vs Details Cooldown n/a — seed has
+	// no cooldown field.
+	{id: 46810, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 46809, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 46843 "Minion Despawner" (Wowhead name MATCH; C++
+	// SPELL_MINION_DESPAWNER, boss_ahune.cpp:91, :295
+	// DoCast) — eff0 Apply Aura Dummy (aura 4), Value 1
+	// -> bp 0, die 1, targetA SRC_CASTER 22 / targetB
+	// SRC_AREA_ALLY 30 (38196 precedent — the despawned
+	// minions are the core's ALLIES; SRC_AREA_ENEMY would
+	// hit players instead), radiusIdx 30 (500yd real row);
+	// cast Instant idx 1, dur 1s idx 36 (real row), range
+	// Self idx 1, school Physical. FLAG: target pair
+	// inferred from the C++ hit set + 38196 precedent —
+	// needs a wago SpellEffect row check.
+	{id: 46843, castTimeIdx: 1, durIdx: 36, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 30, chainAmplitude: 1},
+	}},
 	// 26837 "Summon InCombat Trigger" — LEFT UNSEEDED:
 	// no Wowhead WotLK page exists ("Spell #26837
 	// doesn't exist"); the name matches the C++ enum
