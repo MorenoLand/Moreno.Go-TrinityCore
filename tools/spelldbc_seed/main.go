@@ -14271,6 +14271,74 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: -51, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -51, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 45964 "Find Opening Visual" (Wowhead SpellName MATCH; C++
+	// SPELL_FIND_OPENING_VISUAL, boss_ahune.cpp:51; triggered
+	// bonfireBunny->CastSpell(beamBunny, true) :577; Lua
+	// npc_earthen_ring_flamecaller.lua:59,113, triggered
+	// bonfire->beam cast) — Wowhead WotLK (verdict file
+	// wago_spells_45964_46333_46341_46345.txt; wago NOT
+	// attempted — effect rows complete): eff0/eff1 APPLY_AURA
+	// DUMMY (aura 4) Value 1 — bp 0/die 1 each; eff2 SCRIPT
+	// EFFECT (effect 77) Value 1 — no bp/die per the
+	// 66545/52267 precedents; tgtA TARGET_UNIT_TARGET_ANY (25)
+	// all three — the beam bunny is a friendly encounter bunny
+	// (10258/38015 rule: ENEMY would fizzle per
+	// checkCreatureExplicitTargetFaction). Duration n/a — durIdx
+	// 0; range 50000yd Anywhere — rangeIdx 13 (real row); cast
+	// Channeled — castTimeIdx 1 per the channeled-cast fix;
+	// school Physical. The "Server-side script" tag marks the
+	// dummy auras as script hooks.
+	{id: 45964, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effScriptEffect, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 46333 "Find Opening Beam End" HELD — target unrecoverable:
+	// the spell is NEVER cast and NEVER AddAura'd anywhere in
+	// the C++ tree, the Lua tree, or the Go engine — it appears
+	// only as the enum (boss_ahune.cpp:52) and the removal
+	// (beamBunny->RemoveAurasDueToSpell :583; Lua
+	// npc_earthen_ring_flamecaller.lua:60). No cast exists, so
+	// no constraint forces any TargetA (contrast 10258/38015,
+	// where a friendly-target cast forced TARGET_ANY) — any
+	// target would be a pure guess. Derivable values, for the
+	// unblocking tick: eff0 APPLY_AURA PERIODIC_DUMMY (aura
+	// 226, SpellAuraDefines.h:306; line-367 precedent carries
+	// bp + auraPeriod) Value 1 every 1.7 seconds — bp 0/die 1,
+	// auraPeriod 1700; Duration n/a — durIdx 0; range 50000yd
+	// Anywhere — rangeIdx 13; cast Instant — castTimeIdx 1;
+	// school Physical. Wowhead WotLK (same verdict file; wago
+	// NOT attempted — effect row complete).
+	// 46341 "Find Opening Trigger" (Wowhead name is "Find Opening
+	// Visual Trigger" — MISMATCH; TC enum name is authoritative
+	// per 30925. C++ SPELL_FIND_OPENING_TRIGGER,
+	// boss_ahune.cpp:53; non-triggered DoCast(bonfireBunny)
+	// :576; Lua npc_earthen_ring_flamecaller.lua:61,112,
+	// non-triggered cast on the bonfire bunny) — Wowhead WotLK
+	// (same verdict file; wago NOT attempted): eff0/eff1
+	// APPLY_AURA DUMMY (aura 4) Value 1 — bp 0/die 1 each;
+	// tgtA TARGET_UNIT_TARGET_ANY (25) both — the bonfire bunny
+	// is a friendly encounter bunny (10258/38015 rule). Duration
+	// n/a — durIdx 0; range 50000yd Anywhere — rangeIdx 13;
+	// cast Channeled — castTimeIdx 1 per the channeled-cast
+	// fix; school Physical.
+	{id: 46341, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 46345 "Find Opening Channel" (Wowhead name is "Find Opening
+	// Visual Trigger (Channel)" — MISMATCH; TC enum name is
+	// authoritative per 30925. C++ SPELL_FIND_OPENING_CHANNEL,
+	// boss_ahune.cpp:54; non-triggered DoCastSelf :513/:581; Lua
+	// npc_earthen_ring_flamecaller.lua:62,115,144, non-triggered
+	// self-cast) — Wowhead WotLK (same verdict file; wago NOT
+	// attempted): eff0 APPLY_AURA DUMMY (aura 4) Value 1 — bp
+	// 0/die 1; tgtA CASTER (self-cast). Duration n/a — durIdx 0;
+	// range 50000yd Anywhere — rangeIdx 13; cast Channeled —
+	// castTimeIdx 1 per the channeled-cast fix; school Physical.
+	{id: 46345, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
