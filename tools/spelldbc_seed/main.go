@@ -18412,6 +18412,48 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 19913, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 61875 "Spring Fling" (Wowhead name MATCH; C++
+	// SPELL_SPRING_FLING) — npc_spring_rabbit; eff0 Dummy
+	// (Value 1 -> bp 0), cast on self (triggered). No flags
+	// shown / GCD / Cost NOT carried (no fields).
+	{id: 61875, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 61724 "Spring Rabbit Jump" (Wowhead name MATCH; C++
+	// SPELL_SPRING_RABBIT_JUMP) — eff0 Jump Behind Target
+	// (30) -> misc 30 per 64652 precedent (MiscValue = min
+	// jump height x10), bp 0/die 1 (Value 1); targetA 25
+	// (jump target is the friendly partner rabbit; 64652
+	// used ENEMY for a victim — FLAG for wago); range
+	// 5-45yd idx 93010 (synthetic Hunter 45, 55550
+	// precedent). Flags / GCD / Cost NOT carried.
+	{id: 61724, castTimeIdx: 1, rangeIdx: 93010, school: schoolPhysical, effects: [3]effect{
+		{effect: effJump, basePoints: 0, dieSides: 1, misc: 30, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 61727 "Summon Baby Bunny" (Wowhead name MATCH; C++
+	// SPELL_SUMMON_BABY_BUNNY) — eff0 Summon (Value 1 ->
+	// bp 0), radius 5yd idx 8, misc 32793 = Baby Bunny
+	// entry (Wowhead npc link), miscB 64, targetA CASTER
+	// (DoCast self); eff1 Trigger Spell -> 61736 (NOT
+	// seeded — trigger only), targetA 25 per 61839
+	// precedent; dur 1 min idx 3. Flags / GCD / Cost NOT
+	// carried.
+	{id: 61727, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, radiusIdx: 8, misc: 32793, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effTriggerSpell, trigger: 61736, targetA: targetUnitTargetAny},
+	}},
+	// 61728 "Spring Rabbit In Love" (Wowhead name MATCH;
+	// C++ SPELL_SPRING_RABBIT_IN_LOVE) — eff0 + eff1 BOTH
+	// Apply Aura Dummy (Value 1 -> bp 0), targetA CASTER
+	// (AddAura on self); channeled -> castTimeIdx 1 (house
+	// rule, 0 sec cast); range 50000 idx 13. Flags (incl.
+	// Channeled) / GCD / Cost NOT carried. FLAG: needs a
+	// wago SpellEffect row check (duplicate dummy auras —
+	// check whether eff1 differs, e.g. misc).
+	{id: 61728, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
