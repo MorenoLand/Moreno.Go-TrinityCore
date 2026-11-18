@@ -15159,7 +15159,7 @@ var spells = []spell{
 	}},
 	// 25749 "Stinger Spray" (Wowhead SpellName MATCH; C++
 	// boss_ayamiss.cpp:28 enum, :194 DoCast(me); Lua
-	// boss_ayamiss.lua:87 const, :148 CastSpell(creature))
+	// boss_ayamiss.lua:87 const, :150 CastSpell(creature))
 	// — Wowhead WotLK (verdict file
 	// wago_spells_25725_25748_25749_25852.txt; wago NOT
 	// attempted — single effect with a Value, no trigger):
@@ -15176,7 +15176,7 @@ var spells = []spell{
 	}},
 	// 25748 "Poison Stinger" (Wowhead SpellName MATCH; C++
 	// boss_ayamiss.cpp:29 enum, :198 DoCastVictim; Lua
-	// boss_ayamiss.lua:88 const, :156 CastSpell(victim)) —
+	// boss_ayamiss.lua:88 const, :160 CastSpell(victim)) —
 	// Wowhead WotLK (same verdict file; wago NOT attempted
 	// — contiguous rows, both Values present, no trigger):
 	// eff0 2 SCHOOL_DAMAGE Nature Value 875, tooltip
@@ -15195,7 +15195,7 @@ var spells = []spell{
 	}},
 	// 25725 "Paralyze" (Wowhead SpellName MATCH; C++
 	// boss_ayamiss.cpp:30 enum, :204 DoCast on a random
-	// target; Lua boss_ayamiss.lua:89 const, :167
+	// target; Lua boss_ayamiss.lua:89 const, :179
 	// CastSpell(target)) — Wowhead WotLK (same verdict
 	// file; wago NOT attempted — contiguous rows, both
 	// Values present, no trigger): eff0 5 TELEPORT_UNITS
@@ -15219,7 +15219,7 @@ var spells = []spell{
 	}},
 	// 25852 "Lash" (Wowhead SpellName MATCH; C++
 	// boss_ayamiss.cpp:33 enum, :232 DoCastVictim; Lua
-	// boss_ayamiss.lua:92 const, :192 CastSpell(victim)) —
+	// boss_ayamiss.lua:92 const, :196 CastSpell(victim)) —
 	// Wowhead WotLK (same verdict file; wago attempted for
 	// eff1's missing Value — bot-walled, "Your request was
 	// blocked", no rows): eff0 6 APPLY_AURA Stun Value 1 —
@@ -15239,6 +15239,89 @@ var spells = []spell{
 	{id: 25852, castTimeIdx: 1, durIdx: 39, rangeIdx: 2, school: schoolPhysical, mechanic: 12, effects: [3]effect{
 		{effect: effApplyAura, aura: auraStun, mechanic: 12, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 6608, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 26192 "Arcane Explosion" (Wowhead SpellName MATCH; C++
+	// boss_skeram.cpp:33 enum, :163 DoCastAOE triggered; Lua
+	// boss_skeram.lua:83 const, :135 CastSpell(creature, ..., true))
+	// — Wowhead WotLK (verdict file
+	// wago_spells_2313_26192_26194_61286.txt; wago NOT attempted
+	// — single effect with a Value, no trigger): single effect 2
+	// SCHOOL_DAMAGE Arcane Value 388, NO upper value shown — bp
+	// 387/die 1 (the 31436 flat convention); targetA SRC_CASTER 22
+	// / targetB SRC_AREA_ENEMY 15 (C++ SpellScript FilterTargets
+	// TARGET_UNIT_SRC_AREA_ENEMY, boss_skeram.cpp:237); radius
+	// 30yd — radiusIdx 10 (real row, the 31308 precedent); cast4
+	// 1000ms (real row); dur0; range1 Self Only (real row, 0
+	// yards); school Arcane; dispel 1 Magic; manaCost 20. NOT
+	// carried: "Spell damage depends on caster level" (no
+	// level-scaling field in the seeder; the 388 is seeded as the
+	// flat base) / "Cannot be used while shapeshifted" /
+	// "Ignore Line of Sight" (no attributes field). The triggered
+	// flag is a cast-call property, not a DBC field.
+	{id: 26192, castTimeIdx: 4, rangeIdx: 1, school: schoolArcane, dispel: 1, manaCost: 20, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 387, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 26194 "Earth Shock" (Wowhead SpellName MATCH; C++
+	// boss_skeram.cpp:34 enum, :178 DoCastVictim; Lua
+	// boss_skeram.lua:87 const, :237 CastSpell(victim)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// contiguous rows, both Values present, no trigger): eff0 2
+	// SCHOOL_DAMAGE Nature Value 654 — bp 653/die 1 (the 31436
+	// flat convention); eff1 68 INTERRUPT_CAST Value 1 — bp
+	// 0/die 1, mechanic 26 Interrupted (MECHANIC_INTERRUPT,
+	// SharedDefines.h); both targetA TARGET_UNIT_TARGET_ENEMY
+	// (DoCastVictim); NO radius shown on either row — radiusIdx
+	// 0; cast1 instant; dur39 2000ms (real row — the 2s interrupt
+	// in the tooltip); range6 Vision 100yd (real row); school
+	// Nature; manaCost 130. NOT carried: "Can only target the
+	// player" / "Ignore Line of Sight" (no attributes field).
+	{id: 26194, castTimeIdx: 1, durIdx: 39, rangeIdx: 6, school: schoolNature, manaCost: 130, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 653, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effInterruptCast, mechanic: 26, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 2313 "True Fulfillment" (Wowhead display MATCH on the base
+	// name — the "_2" is an enum-only disambiguator, no "2" in the
+	// display; C++ boss_skeram.cpp:36 enum, SpellScript :265 casts
+	// it on the hit unit after 61286; Lua boss_skeram.lua:86
+	// const, :202 CastSpell(target)) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted — contiguous rows, all Values
+	// present, no trigger): eff0 6 APPLY_AURA HASTE_SPELLS (aura
+	// 216) Value 100000% — bp 99999/die 1 (the 31948 aura-216
+	// precedent; percent convention bp = Value - 1); eff1 6
+	// APPLY_AURA MOD_RESISTANCE (aura 22) Value 50 — bp 49/die 1,
+	// misc 127 all schools (the 40321 misc-127 precedent); eff2 6
+	// APPLY_AURA MOD_INCREASE_SPEED (aura 31) Value 40% — bp
+	// 39/die 1 (the 1328/7731 percent convention); all targetA
+	// TARGET_UNIT_TARGET_ENEMY (cast on the SpellScript hit unit,
+	// the charmed player — target inferred, no target on the
+	// page, the 25725 random-target precedent); cast1 instant;
+	// dur18 20000ms (real row); range13 Anywhere 50000yd (real
+	// row); school Nature. NOT carried: "Aura is hidden" /
+	// "Unaffected by invulnerability" (no attributes field).
+	{id: 2313, castTimeIdx: 1, durIdx: 18, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraHasteSpells, basePoints: 99999, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModResistance, basePoints: 49, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseSpeed, basePoints: 39, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 61286 "Generic Dismount" (Wowhead display MISMATCH —
+	// "World Generic Dismount/Cancel Shapeshift"; TC enum
+	// authoritative per 30925, seeder writes no name column; C++
+	// boss_skeram.cpp:39 enum, SpellScript :264 casts it on the
+	// hit unit before 2313; Lua boss_skeram.lua:85 const, :201
+	// CastSpell(target)) — Wowhead WotLK (same verdict file; wago
+	// NOT attempted — single effect with a Value, no trigger):
+	// single effect 6 APPLY_AURA MECHANIC_IMMUNITY (aura 77)
+	// Value 1 — bp 0/die 1, misc 21 MECHANIC_MOUNT
+	// (SharedDefines.h:1378; the 9580 aura-77 precedent);
+	// targetA TARGET_UNIT_TARGET_ENEMY (cast on the SpellScript
+	// hit unit — target inferred, no target on the page, the
+	// 25725 precedent); cast1 instant; dur327 500ms (real row,
+	// the 34799 precedent); range3 Twenty yards (real row, 20yd
+	// Short); school Physical. NOT carried: "Can be used while
+	// mounted" / "Generates no threat" / "Does not appear in log"
+	// (no attributes field).
+	{id: 61286, castTimeIdx: 1, durIdx: 327, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraMechanicImmunity, basePoints: 0, dieSides: 1, misc: 21, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
