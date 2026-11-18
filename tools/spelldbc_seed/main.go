@@ -61,6 +61,7 @@ const (
 	effLearnSpell              = 36 // SPELL_EFFECT_LEARN_SPELL (SharedDefines.h:847)
 	effDispel                  = 38 // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
 	effDualWield               = 40 // SPELL_EFFECT_DUAL_WIELD (SharedDefines.h:851)
+	effJump                    = 41 // SPELL_EFFECT_JUMP (SharedDefines.h:852)
 	effSummon                  = 28
 	effPersistentAreaAura      = 27 // SPELL_EFFECT_PERSISTENT_AREA_AURA (SharedDefines.h)
 	effEnergize                = 30
@@ -16761,6 +16762,100 @@ var spells = []spell{
 	{id: 28159, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetUnitTargetAlly, radiusIdx: 12, chainAmplitude: 1},
 	}},
+	// 64652 "Stomp" (Wowhead SpellName MATCH; C++
+	// icecrown_citadel.cpp:81 enum, :490 DoCastVictim; Lua
+	// npc_rotting_frost_giant.lua:20 const, :123 CastSpell(nil) =
+	// victim-cast) — Wowhead WotLK (verdict
+	// wago_spells_64652_72848_72865_72884.txt; wago NOT opened —
+	// no trigger/periodic-trigger effect): three effects. eff0
+	// "Jump Behind Target (100)" Radius 1yd, no Value — effJump
+	// (41, SharedDefines.h:852; NEW const), bp 0/die 1, misc 100
+	// (the "(100)" IS the MiscValue — same rendering as the
+	// knockback "(N)" rule; TC CalculateJumpSpeeds uses MiscValue
+	// as min jump height x10, SpellEffects.cpp:1149), targetA
+	// ENEMY (the victim; FLAG for wago), radiusIdx 16 (real 1yd).
+	// eff1 "Knock Back (25)" Value 200 Radius 50yd — effKnockBack
+	// (98), bp 199/die 1 (Value-1; 32055 precedent), misc 25
+	// (the "(25)" IS the MiscValue — horizontal speed = misc x
+	// 0.1, EffectKnockBack), targetA 15 SRC_AREA_ENEMY (enemies
+	// within 50 yds; 29107 AOE-damage precedent — FLAG for wago),
+	// radiusIdx 27 (real 50yd). eff2 "School Damage (Frost)"
+	// Value 12000 Radius 50yd — bp 11999/die 1, targetA 15,
+	// radiusIdx 27. cast3 500ms; dur0 (Duration n/a); range1 Self
+	// 0yd; school Frost. NOT carried: 5 sec cooldown (no field);
+	// GCD 0 / Cost None (no fields).
+	{id: 64652, castTimeIdx: 3, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effJump, basePoints: 0, dieSides: 1, misc: 100, targetA: targetEnemy, radiusIdx: 16, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 199, dieSides: 1, misc: 25, targetA: targetSrcAreaEnemy, radiusIdx: 27, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 11999, dieSides: 1, targetA: targetSrcAreaEnemy, radiusIdx: 27, chainAmplitude: 1},
+	}},
+	// 72848 "Arctic Breath" (Wowhead SpellName MATCH; C++
+	// icecrown_citadel.cpp:82 enum, :494 DoCastVictim; Lua
+	// npc_rotting_frost_giant.lua:21 const, :140 CastSpell(nil) =
+	// victim-cast) — Wowhead WotLK (same verdict file; wago NOT
+	// opened): three effects. eff0 Dummy Value 1 — bp 0/die 1,
+	// targetA ENEMY (cast target; FLAG for wago). eff1 "Apply
+	// Aura: Periodic Damage" Value 4000 every 500ms Radius 100yd
+	// — aura3 bp 3999/die 1, auraPeriod 500 (4000 x 4 ticks =
+	// 16000 tooltip total, consistent), targetA 24 CONE_ENEMY
+	// (tooltip: "in a cone in front of the caster"; 38576 /
+	// cone-aura precedent — FLAG for wago), radiusIdx 12 (real
+	// 100yd). eff2 "Apply Aura: Stun" Value 1 Radius 100yd —
+	// aura12 bp 0/die 1, effect-mechanic 12 STUN (46026 both-
+	// levels shape), targetA 24, radiusIdx 12. cast1 (channeled
+	// — 29350 precedent); dur39 real 2000ms (2 seconds); range6
+	// Vision 100yd; school Frost; spell-mechanic 12 Stunned
+	// (SharedDefines.h:1372). NOT carried: "Channeled" /
+	// "Cannot be reflected" / "All spell effects are harmful" /
+	// "Track Target in Channel" (no attributes field); "Requires
+	// level 82" (no field); GCD 0 / Cost None (no fields).
+	{id: 72848, mechanic: 12, castTimeIdx: 1, durIdx: 39, rangeIdx: 6, school: schoolFrost, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 3999, dieSides: 1, auraPeriod: 500, targetA: targetUnitConeEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 1, mechanic: 12, targetA: targetUnitConeEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 72865 "Death Plague" (Wowhead SpellName MISMATCH — missing
+	// "Aura" vs C++ enum SPELL_DEATH_PLAGUE_AURA; C++
+	// icecrown_citadel.cpp:78 enum, :485 DoCast random target;
+	// Lua npc_rotting_frost_giant.lua:11 const, :105
+	// CastSpell(target)) — Wowhead WotLK (same verdict file; wago
+	// NOT opened — Wowhead DOES show the triggered-spell link):
+	// single effect 6 APPLY_AURA periodic-trigger, Interval 15s,
+	// no Value — aura23 bp 0/die 1, auraPeriod 15000, trigger
+	// 72864 (Wowhead link "Death Plague" — 72864 is trigger-only,
+	// NOT seeded: the Lua comment records spell_frost_giant_
+	// death_plague STAYS OUT, no C++ caster; 29350/24928
+	// precedent); targetA ENEMY (DoCast random target); cast1
+	// instant; dur8 real 15000ms (15 seconds); range6 Vision
+	// 100yd; school Nature. NOT carried: the Buff text's 8-yard
+	// spread / 8000 damage / host-death (72864's, not this row's);
+	// "Wearer Casts Proc Trigger" / "Can be used while dead" /
+	// "Aura is Debuff" / "Unaffected by invulnerability" / "Aura
+	// Unique" / "Can only target the player" / "Allow Cast While
+	// Casting" (no attributes field); "Requires level 80" (no
+	// field); GCD 0 / Cost None (no fields).
+	{id: 72865, castTimeIdx: 1, durIdx: 8, rangeIdx: 6, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 15000, trigger: 72864, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 72884 "Recently Infected" (Wowhead SpellName MATCH; C++
+	// icecrown_citadel.cpp:79 enum, no direct cast — HasAura gate
+	// in the Lua target selector (:79), applied via the death-
+	// plague chain; Lua npc_rotting_frost_giant.lua:12 const) —
+	// Wowhead WotLK (same verdict file; wago NOT opened —
+	// valueless Dummy aura, not a trigger effect): single effect
+	// 6 APPLY_AURA Dummy, no Value — aura4 bp 0/die 1, targetA
+	// ENEMY (applied to the infected enemy player; FLAG for
+	// wago); cast1 instant; dur90017 NEW synthetic 35000ms (35
+	// seconds — 90014 stays reserved for 38116 per the 90015
+	// comment, so a fresh synthetic row); range37 real Extended
+	// 50yd (wago-verified row for 45532); school Nature. NOT
+	// carried: "Aura is Debuff" / "Unaffected by invulnerability"
+	// / "Aura Unique" / "Can only target the player" / "Allow
+	// Cast While Casting" (no attributes field); "Requires level
+	// 80" (no field); GCD 0 / Cost None (no fields).
+	{id: 72884, castTimeIdx: 1, durIdx: 90017, rangeIdx: 37, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -16808,6 +16903,7 @@ func main() {
 		{90013, 24000, 0, 24000},     // synthetic duration for 30938 Corruption (no real 24000ms row in the table)
 		{90015, 3600000, 0, 3600000}, // synthetic duration for 8733 Blessing of Blackfathom (no real 3600000ms row in the table; 90014 stays reserved for 38116 Searing Totem 35000ms)
 		{90016, 240000, 0, 240000},   // synthetic duration for 56119 Summon Swarmers (no real 240000ms row in the table)
+		{90017, 35000, 0, 35000},     // synthetic duration for 72884 Recently Infected (no real 35000ms row in the table; 90014 stays reserved for 38116 Searing Totem)
 		{4, 120000, 0, 120000},       // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
 		{8, 15000, 0, 15000},         // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
 		{27, 3000, 0, 3000},          // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
