@@ -16856,6 +16856,84 @@ var spells = []spell{
 	{id: 72884, castTimeIdx: 1, durIdx: 90017, rangeIdx: 37, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 29212 "Cripple" (Wowhead SpellName MATCH; C++
+	// boss_noth.cpp:58 enum, :231 DoCastAOE triggered; Lua
+	// boss_noth.lua:106 const, :262 CastSpell(creature, true))
+	// — Wowhead WotLK (verdict wago_spells_29212_29213_29216_
+	// 29231.txt; wago NOT opened — all effects valued): three
+	// APPLY_AURA effects, all Radius 45yd — real row 11 (NOT
+	// 36: 36 is SpellRange 45yd / SpellDuration 1000ms, and
+	// SpellRadius 36 is all zeros), all targetA 18 DEST_CASTER
+	// / targetB 16 UNIT_DEST_AREA_ENEMY (DoCastAOE self-cast
+	// AOE-aura shape, wago-verified 46026 — NOT the 22/15 shape
+	// wago corrected on 46026; FLAG for wago): eff0 aura33
+	// DECREASE_SPEED Value -50% — bp -51/die 1, effect-mechanic
+	// 11 SNARE (SharedDefines.h:1372); eff1 aura138
+	// MOD_MELEE_HASTE Value -100% — bp -101/die 1; eff2 aura29
+	// MOD_STAT Value -50% — bp -51/die 1, misc 0 (the "(0)" IS
+	// the MiscValue, Strength, per the aura-name parenthetical
+	// rule — 52373 precedent); cast1 instant; dur8 real
+	// 15000ms (15 seconds); range1 Self 0yd; school Shadow;
+	// dispel 1 Magic. NOT carried: "Cannot be used while
+	// shapeshifted" / "Cannot be reflected" / "All spell effects
+	// are harmful" / "Can only target the player" (no attributes
+	// field); "Requires level 1" (no field); GCD 0 / Cost None
+	// (no fields).
+	{id: 29212, dispel: 1, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, mechanic: 11, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -101, dieSides: 1, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModStat, basePoints: -51, dieSides: 1, misc: 0, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 29213 "Curse of the Plaguebringer" (Wowhead SpellName
+	// MISMATCH — extra "of the Plaguebringer" vs C++ enum
+	// SPELL_CURSE; C++ boss_noth.cpp:57 enum, :218 DoCastAOE;
+	// Lua boss_noth.lua:105 const, :230 CastSpell(creature))
+	// — Wowhead WotLK (same verdict file; wago NOT opened —
+	// Wowhead DOES show the triggered-spell link): single effect
+	// 6 APPLY_AURA periodic-trigger, Interval 10s, Radius 200yd,
+	// no Value — aura23 bp 0/die 1, auraPeriod 10000, trigger
+	// 29214 (Wowhead link "Wrath of the Plaguebringer" — 29214
+	// is trigger-only, NOT seeded; 29350/24928 precedent);
+	// targetA 18 DEST_CASTER / targetB 16 UNIT_DEST_AREA_ENEMY
+	// (DoCastAOE self-cast AOE-aura shape, 46026 class — the
+	// aura must land on enemies, not the caster, so 29350's
+	// CASTER target does not apply here; FLAG for wago),
+	// radiusIdx 22 (real 200yd); cast1 instant; dur1 real
+	// 10000ms (10 seconds); range1 Self 0yd; school Shadow;
+	// dispel 2 Curse. NOT carried: the Buff text's spread /
+	// infection (29214's, not this row's); "Cannot be used while
+	// shapeshifted" / "Cannot be reflected" / "All spell effects
+	// are harmful" / "Can only target the player" (no attributes
+	// field); GCD 0 / Cost None (no fields).
+	{id: 29213, dispel: 2, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 10000, trigger: 29214, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 22, chainAmplitude: 1},
+	}},
+	// 29216 "Teleport" (Wowhead SpellName MATCH; C++
+	// boss_noth.cpp:60 enum, :267 DoCastAOE; Lua
+	// boss_noth.lua:107 const, :332 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened):
+	// single effect 5 TELEPORT_UNITS Value 1 — bp 0/die 1,
+	// targetA CASTER (DoCastAOE self-cast; 30211 "Teleport
+	// Self" precedent); cast1 instant; dur0 (Duration n/a);
+	// range1 Self 0yd; school Physical. NOT carried: "Is
+	// Ability" / "Cast time is hidden" (no attributes field);
+	// GCD 0 / Cost None (no fields).
+	{id: 29216, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29231 "Teleport Return" (Wowhead SpellName MISMATCH —
+	// "Return" vs C++ enum SPELL_TELEPORT_BACK "Back"; C++
+	// boss_noth.cpp:61 enum, :96/:291 DoCastAOE; Lua
+	// boss_noth.lua:108 const, :387/:453 CastSpell(creature))
+	// — Wowhead WotLK (same verdict file; wago NOT opened):
+	// single effect 5 TELEPORT_UNITS Value 1 — bp 0/die 1,
+	// targetA CASTER (same shape as 29216); cast1 instant;
+	// dur0 (Duration n/a); range1 Self 0yd; school Physical.
+	// NOT carried: "Is Ability" / "Cast time is hidden" (no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 29231, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
