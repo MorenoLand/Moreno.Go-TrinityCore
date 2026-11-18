@@ -155,6 +155,7 @@ const (
 	auraModCastSpeedNotStack   = 65  // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
 	auraForceReaction          = 139 // SPELL_AURA_FORCE_REACTION (SpellAuraDefines.h:219)
 	auraModHealingPct          = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
+	auraModHealingReceived     = 283 // SPELL_AURA_MOD_HEALING_RECEIVED (SpellAuraDefines.h:363)
 	auraMeleeSlow              = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
 	auraRangedApAttackerBonus  = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
 	auraMeleeApAttackerBonus   = 165 // SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:245)
@@ -17286,6 +17287,80 @@ var spells = []spell{
 	// attributes field); GCD 0 (no field).
 	{id: 47773, castTimeIdx: 16, rangeIdx: 5, school: schoolFire, manaCost: 90, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 1699, dieSides: 1, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 50053 "Centrifuge Shield" (Wowhead name MATCH; C++
+	// oculus.h:82 enum; boss_varos.cpp:80 DoCast me; Lua
+	// boss_varos.lua:431 const, :445 CastSpell(creature);
+	// aura events :479/:493) — Wowhead WotLK (verdict
+	// wago_spells_50053_50785_51054_62136.txt; wago NOT opened
+	// — no trigger row): eff0 6 APPLY_AURA aura4 DUMMY Value
+	// 1 — bp 0/die 1; eff1 3 DUMMY Value 1 — bp 0/die 1; both
+	// targetA CASTER (DoCast me, channeled self-shield);
+	// cast1 per the channeled-cast fix; dur0 (Duration n/a);
+	// range7 real 0-10yd (Very Short); school Arcane. NOT
+	// carried: flags ("Channeled", no attributes field); GCD
+	// 0 / Cost None (no fields).
+	{id: 50053, castTimeIdx: 1, rangeIdx: 7, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 50785 "Energize Cores" (Wowhead name MATCH; C++
+	// boss_varos.cpp:38 enum, :122 DoCast me; Lua
+	// boss_varos.lua:154 const, :271 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened —
+	// both trigger links shown): eff0 2 SCHOOL_DAMAGE Arcane
+	// Value 5938, tooltip/C++ range "5938 to 6562" (C++
+	// :38 enum comment) — bp 5937/die 625; eff1/eff2 64
+	// TRIGGER_SPELL valueless — bp 0/die 1, triggers 54069 /
+	// 56251 (Wowhead links; NOT seeded — triggered spells);
+	// targetA ENEMY (DoCast me + "Hurls a bolt of magic at
+	// an enemy" + "Can only target the player" flag; FLAG:
+	// needs a wago SpellEffect row check — Wowhead-derived
+	// target); radiusIdx 12 real 100yd (Wowhead row shows
+	// Radius 100 yards); cast4 real 1000ms (1s cast); dur0
+	// (Duration n/a); range5 Long 0-40; school Arcane. NOT
+	// carried: flags (no attributes field); GCD 0 / Cost
+	// None (no fields).
+	{id: 50785, castTimeIdx: 4, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 5937, dieSides: 625, targetA: targetEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 54069, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 56251, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 51054 "Amplify Magic" (Wowhead name MISMATCH — omits
+	// "Call" vs C++ enum SPELL_CALL_AMPLIFY_MAGIC; C++
+	// boss_varos.cpp:43 enum, :146 DoCastVictim; Lua
+	// boss_varos.lua:164 const, :220 CastSpell(nil)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened — no
+	// trigger row): eff0 6 APPLY_AURA aura14 MOD_DAMAGE_TAKEN
+	// Value 900 — bp 899/die 1, misc 127 (All schools; 58025
+	// precedent uses misc as the school mask); eff1 6
+	// APPLY_AURA aura283 MOD_HEALING_RECEIVED Value 1800 —
+	// bp 1799/die 1, misc 127 (All; FLAG: needs a wago
+	// SpellEffect row check — aura 283 assignment + misc
+	// 127 are derivations); both targetA ENEMY (DoCastVictim);
+	// dispel 1 (Magic); dur9 real 30000ms (30 seconds);
+	// range37 Extended 0-50yd; cast1 instant; school Arcane.
+	// NOT carried: "Requires level 80" (no field); flags (no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 51054, dispel: 1, castTimeIdx: 1, durIdx: 9, rangeIdx: 37, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: 899, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModHealingReceived, basePoints: 1799, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 62136 "Energize Cores" (Wowhead name MISMATCH — omits
+	// "Visual" vs C++ enum SPELL_ENERGIZE_CORES_VISUAL; C++
+	// boss_varos.cpp:37 enum, :134 DoCast me; Lua
+	// boss_varos.lua:163 const, :251 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened — no
+	// trigger row): single effect 3 DUMMY Value 1 — bp 0/die
+	// 1; radiusIdx 12 real 100yd (Wowhead row shows Radius
+	// 100 yards); targetA CASTER (DoCast me; 70021 precedent;
+	// FLAG: needs a wago SpellEffect row check — tooltip says
+	// "at an enemy", CASTER vs ENEMY alternative); cast1
+	// instant; dur0 (Duration n/a); range5 Long 0-40; school
+	// Arcane. NOT carried: flags (no attributes field); GCD
+	// 0 / Cost None (no fields).
+	{id: 62136, castTimeIdx: 1, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, radiusIdx: 12, chainAmplitude: 1},
 	}},
 }
 
