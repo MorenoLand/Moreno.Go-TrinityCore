@@ -18454,6 +18454,49 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 35161 "Head Crack" (Wowhead name MATCH; C++
+	// SPELL_HEADCRACK) — boss_mechano_lord_capacitus; eff0
+	// Apply Aura Mod Stat (Stamina), Value -200 -> bp -201,
+	// misc 2 (Stamina per 16333 precedent), targetA ENEMY
+	// (victim, DoCastVictim); cast Instant idx 1, dur 15s
+	// idx 8, range 5yd Combat idx 2. Requires level 70 /
+	// Next Melee / buff text / flags / GCD / Cost NOT
+	// carried (no fields).
+	{id: 35161, castTimeIdx: 1, durIdx: 8, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModStat, basePoints: -201, dieSides: 1, misc: 2, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 35159 "Reflective Damage Shield" (Wowhead name MATCH;
+	// C++ SPELL_REFLECTIVE_DAMAGE_SHIELD) — eff0 Apply Aura
+	// Damage Shield, Value 750 -> bp 749 per 32358
+	// wago-verified precedent, targetA CASTER; cast 1.6s
+	// -> synthetic 92005 (1600ms — no real 1600ms row in
+	// the table); dur 10s idx 1, range Self idx 1, school
+	// Arcane. Requires level 70 / 40s cooldown / buff text
+	// / flags / GCD / Cost NOT carried. FLAG: needs a wago
+	// SpellCastTimes row check (real 1600ms row ID unknown).
+	{id: 35159, castTimeIdx: 92005, durIdx: 1, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDamageShield, dieSides: 1, basePoints: 749, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 35158 "Reflective Magic Shield" (Wowhead name MATCH;
+	// C++ SPELL_REFLECTIVE_MAGIC_SHIELD) — eff0 Apply Aura
+	// Reflect All Spells, Value 100 -> bp 99 per 32358
+	// precedent, targetA CASTER; cast 1.6s -> synthetic
+	// 92005 (same row as 35159); dur 10s idx 1, range Self
+	// idx 1, school Arcane. Same NOT-carried list. FLAG:
+	// needs a wago SpellCastTimes row check (same 1600ms row).
+	{id: 35158, castTimeIdx: 92005, durIdx: 1, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraReflectSpells, dieSides: 1, basePoints: 99, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39096 "Polarity Shift" (Wowhead name MATCH; C++
+	// SPELL_POLARITY_SHIFT) — eff0 Dummy (Value 1 -> bp 0),
+	// radius 100yd idx 12 (real row), targetA CASTER
+	// (DoCastAOE self-cast); cast 3s idx 14, dur n/a idx 0,
+	// range Self idx 1, school Nature. Heroic-only gating
+	// lives in Lua/C++ (IsHeroic), not the DBC. Flags / GCD
+	// / Cost NOT carried.
+	{id: 39096, castTimeIdx: 14, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
@@ -18605,6 +18648,8 @@ func main() {
 		{92003, 600, 0},
 		// synthetic SpellCastTimes 92004 (3500ms) for 71020 Dark Mending — no real 3500ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
 		{92004, 3500, 0},
+		// synthetic SpellCastTimes 92005 (1600ms) for 35158/35159 Reflective shields — no real 1600ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
+		{92005, 1600, 0},
 		{2, 250, 0},    // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
 		{14, 3000, 0},  // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
 		{16, 1500, 0},  // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
