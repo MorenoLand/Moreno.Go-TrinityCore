@@ -2145,6 +2145,85 @@ var spells = []spell{
 	{id: 16390, castTimeIdx: 5, rangeIdx: 2, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 19, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
 	}},
+	// 15620 "Shoot" (Wowhead name MATCH; C++
+	// boss_priestess_delrissa.cpp:1003 enum, Garaxxas
+	// hunter) — wago row 692888 + SpellMisc 326019
+	// (2.5.6.70577): eff0 School Damage (2) bp71/die25
+	// tgtA ENEMY (6). Cast Instant idx 1, dur0 (no
+	// SpellDuration row), range54 Monster Shoot 5-30yd
+	// (real row), school Physical. NOT carried:
+	// Attributes_0 0x480012 (no field); no SpellPower
+	// row, mana 0. Wago bp71/die25 = 72-97 damage, NOT
+	// Wowhead TBC's flat 72.
+	{id: 15620, castTimeIdx: 1, rangeIdx: 54, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 71, dieSides: 25, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 27634 "Concussive Shot" (Wowhead name MATCH;
+	// C++ boss_priestess_delrissa.cpp:1004 enum) —
+	// wago rows 703648/703649 + SpellMisc 334592 +
+	// SpellCategories 77940 (2.5.6.70577): eff0 Apply
+	// Aura Dec Speed (33) bp-51/die1 tgtA ENEMY (6);
+	// eff1 Trigger Spell (64) trigger 28445 (TBC
+	// Improved Concussive Shot, NOT retail 100940)
+	// tgtA ENEMY (6). Mechanic 11 Snared + dispel 1
+	// Magic at spell level (13005 precedent). Cast idx
+	// 18 (Base -1000000; C++ CalcCastTime clamps Base
+	// <= 0 to 0, SpellInfo.cpp:3091-3109, so instant),
+	// dur27 3000ms (real row), range114 Hunter 0-35yd
+	// (real row, added below), school Arcane. NOT
+	// carried: Attributes_0 0x10002 / Attributes_2
+	// 0x20000 (no field); Category 42,
+	// StartRecoveryCategory 133 (no field); no
+	// SpellPower row, mana 0.
+	{id: 27634, mechanic: 11, dispel: 1, castTimeIdx: 18, durIdx: 27, rangeIdx: 114, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 0, trigger: 28445, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31942 "Multi-Shot" (Wowhead name MATCH; C++
+	// boss_priestess_delrissa.cpp:1005 enum) — wago
+	// row 850541 + SpellMisc 449232 (2.5.6.70577):
+	// eff0 Weapon Damage (58) bp74/die1 tgtA ENEMY (6),
+	// chainTargets 3 (the "up to 3 targets"). Cast
+	// Instant idx 1, dur0, range54 Monster Shoot 5-30yd
+	// (real row), school Arcane (TBC; retail says
+	// Physical). NOT carried: Attributes_0 0x10002 /
+	// Attributes_5 0x8000 (no field); EffectAmplitude 1
+	// (no field); no SpellPower row, mana 0.
+	{id: 31942, castTimeIdx: 1, rangeIdx: 54, school: schoolArcane, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 74, dieSides: 1, targetA: targetEnemy, chainTargets: 3, chainAmplitude: 1},
+	}},
+	// 44271 "Aimed Shot" Rank 6 (Wowhead name MATCH;
+	// C++ boss_priestess_delrissa.cpp:1002 enum) —
+	// wago row 864462 + SpellMisc 459344 + SpellPower
+	// 229629 (2.5.6.70577): eff0 Normalized Weapon
+	// Damage (121) bp1614/die171 tgtA ENEMY (6) =
+	// 1615-1785. Cast 3s idx 14 (real row), dur0,
+	// range114 Hunter 0-35yd (real row, added below),
+	// school Physical, mana 310. NOT carried:
+	// Attributes_0 0x410012 / Attributes_2 0x20000 (no
+	// field); Category 2 (no field).
+	{id: 44271, castTimeIdx: 14, rangeIdx: 114, school: schoolPhysical, manaCost: 310, effects: [3]effect{
+		{effect: effNormalizedWeaponDmg, basePoints: 1614, dieSides: 171, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 44286 "Wing Clip" (Wowhead name MATCH; C++
+	// boss_priestess_delrissa.cpp:1006 enum) — wago
+	// rows 864669/864670/864671 + SpellMisc 459277 +
+	// SpellPower 229788 (2.5.6.70577): eff0 Apply Aura
+	// Dec Speed (33) bp-61/die1 mechanic 11 tgtA ENEMY
+	// (6); eff1 School Damage (2) bp49/die1 tgtA ENEMY
+	// (6); eff2 Trigger Spell (64) trigger 19229 (TBC
+	// Improved Wing Clip, NOT retail 47168) tgtA ENEMY
+	// (6). Spell-level mechanic 0 (11 lives on eff0
+	// only). Cast Instant idx 1, dur1 10000ms (real
+	// row), range2 Combat 5yd (real row), school
+	// Physical, mana 80. NOT carried: Attributes_0
+	// 0x50000 / Attributes_1 0x200 / Attributes_3 0x408
+	// (no field).
+	{id: 44286, castTimeIdx: 1, durIdx: 1, rangeIdx: 2, school: schoolPhysical, manaCost: 80, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -61, dieSides: 1, mechanic: 11, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 49, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 0, trigger: 19229, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
@@ -20526,6 +20605,8 @@ func main() {
 		{171, 6000, 0}, // real SpellCastTimes 171 for 17274 Pyroblast + 33975 Pyroblast (wago.tools 3.4.0.47659 SpellCastTimes row 171, 2026-11-18 verdict wago_spells_15282_16047_16048_16049_17274_wago.txt; retires synthetic 92006)
 		{2, 250, 0},    // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
 		{14, 3000, 0},  // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
+		// real SpellCastTimes 18 (Base -1000000, Minimum -1000000) for 27634 Concussive Shot (wago.tools 2.5.6.70577 SpellCastTimes row 18, 2026-11-18 verdict wago_spells_15620_27634_31942_44271_44286_wago.txt); C++ CalcCastTime clamps Base <= 0 to 0 (SpellInfo.cpp:3091-3109), so this is instant
+		{18, 4293967296, 4293967296},
 		{16, 1500, 0},  // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
 		{19, 2500, 0},  // real SpellCastTimes 19 for 66042 (wago.tools 3.4.0.43659)
 		{90, 1700, 0},  // real SpellCastTimes 90 for 65868 (wago.tools 3.4.0.43659)
@@ -20578,6 +20659,7 @@ func main() {
 		{134, f32(0), f32(0), f32(80), f32(80), 0},      // real SpellRange 134 "Tower 80" for 30967 Fireball (wago.tools 3.4.0.47659 SpellRange row 134, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
 		{14, f32(0), f32(0), f32(60), f32(60), 0},       // real SpellRange 14 "Extra Long Range" for 57942 (wago.tools 3.4.0.47659, 2026-11-16 verdict wago_spells_57941_57942_57949.txt)
 		{181, f32(0), f32(0), f32(200), f32(200), 0},    // real SpellRange 181 for 74071 (wago.tools 3.4.0.47659 SpellMisc RangeIndex 181, 2026-11-18 verdict wago_spells_73953_74071_75076_75106_75420_wago.txt; 0-200yd per Wowhead)
+		{114, f32(0), f32(0), f32(35), f32(35), 2},      // real SpellRange 114 "Hunter Range" for 27634/44271 (wago.tools 2.5.6.70577 SpellRange row 114 read on-page, 2026-11-18 handoff f94cba5b: Flags 0x2 RANGED, RangeMin 0, RangeMax 35)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)

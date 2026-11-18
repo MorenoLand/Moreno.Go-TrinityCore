@@ -4858,13 +4858,16 @@ func spellRangeTolerance(rangeFlags uint32, maxRange float64, strict bool) float
 
 // spellCastTimeMs reads the DBC cast time for a spell, 0 when the entry is
 // missing or instant (mirrors Spell::GetCastTime's m_casttime == 0 reads in
-// Spell::CheckRange, Spell.cpp:6531).
+// Spell::CheckRange, Spell.cpp:6531). A non-positive DBC base clamps to 0,
+// mirroring SpellInfo::CalcCastTime (SpellInfo.cpp:3091-3109: (castTime > 0)
+// ? castTime : 0) — SpellCastTimes row 18 carries Base -1000000, which is
+// instant, not a negative cast bar.
 func (s *session) spellCastTimeMs(spell wotlk.Spell) int32 {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return 0
 	}
 	castMs, ok, err := s.server.Data.SpellCastTime(spell.CastingTimeIndex)
-	if err != nil || !ok {
+	if err != nil || !ok || castMs <= 0 {
 		return 0
 	}
 	return castMs
