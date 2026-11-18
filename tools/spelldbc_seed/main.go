@@ -15937,7 +15937,8 @@ var spells = []spell{
 	// dur0; range1 Self Only (real row); school Shadow. The
 	// SpellScript (boss_kormok.cpp:146-177) casts 2x a random of
 	// 27696-27699 triggered on the caster — 27696-27699 are
-	// trigger-only, unseeded (the 15093/15094 precedent). NOT
+	// script-cast via the SpellScript (no EffectTriggerSpell
+	// link), unseeded. NOT
 	// carried: no Flags row shown (no attributes field).
 	{id: 27695, castTimeIdx: 1, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
@@ -16007,6 +16008,77 @@ var spells = []spell{
 	// attributes field).
 	{id: 15090, dispel: 1, manaCost: 75, castTimeIdx: 1, rangeIdx: 4, school: schoolHoly, effects: [3]effect{
 		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 8990 "Retribution Aura" (Wowhead SpellName MATCH; C++
+	// boss_mograine_and_whitemane.cpp:46 enum, :98/:209
+	// DoCastSelf triggered, :264 DoCastSelf; Lua
+	// boss_mograine_and_whitemane.lua:91 const, :276/:359/:468
+	// CastSpell(creature)) — Wowhead WotLK (verdict file
+	// wago_spells_8990_9232_9256_22187.txt; wago NOT attempted
+	// — single effect with a Value, no trigger): single effect
+	// 35 APPLY_AREA_AURA_PARTY, aura 15 DAMAGE_SHIELD Value 3
+	// — bp 2/die 1 (the 31436 flat convention); targetA
+	// DEST_CASTER 18 (the 31673 area-aura-party precedent);
+	// radius 30yd — radiusIdx 10 (real row); cast1 instant;
+	// dur0; range1 Self Only (real row); school Holy. NOT
+	// carried: "Cannot be used while shapeshifted" / "Do Not
+	// Sheath" / "Can be used while sitting" (no attributes
+	// field).
+	{id: 8990, castTimeIdx: 1, rangeIdx: 1, school: schoolHoly, effects: [3]effect{
+		{effect: effApplyAreaAuraParty, aura: auraDamageShield, basePoints: 2, dieSides: 1, targetA: targetDestCaster, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 9232 "Scarlet Resurrection" (Wowhead SpellName MATCH; C++
+	// boss_mograine_and_whitemane.cpp:50 enum, :398 DoCast
+	// mograine; Lua boss_mograine_and_whitemane.lua:93 const,
+	// :552 CastSpell(target)) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted — contiguous rows, both Values
+	// present, no trigger): eff0 67 HEAL_MAX_HEALTH Value 1 —
+	// bp 0/die 1; eff1 30 ENERGIZE Value 10000 — bp 9999/die 1,
+	// misc 0 Mana (the "(Mana)" is the power type, default 0 —
+	// the 63337 precedent carries no misc); both targetA
+	// TARGET_ALLY 21 (DoCast on Mograine, the ally target — the
+	// 67528 heal precedent); cast5 2000ms (real row); dur0;
+	// range13 Anywhere 50000yd (real row); school Physical. NOT
+	// carried: "Ignore Line of Sight" (no attributes field).
+	{id: 9232, castTimeIdx: 5, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effHealMaxHealth, basePoints: 0, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effEnergize, basePoints: 9999, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 9256 "Deep Sleep" (Wowhead SpellName MATCH; C++
+	// boss_mograine_and_whitemane.cpp:49 enum, :367 DoCastAOE;
+	// Lua boss_mograine_and_whitemane.lua:92 const, :492
+	// CastSpell(creature)) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted — single effect with a Value, no
+	// trigger): single effect 6 APPLY_AURA MOD_STUN (aura 12)
+	// Value 1 — bp 0/die 1; mechanic 10 SLEEP at both levels
+	// (MECHANIC_SLEEP, SharedDefines.h:1367; the 25852
+	// both-levels shape); targetA SRC_CASTER 22 / targetB
+	// SRC_AREA_ENEMY 15 (the 25749 AOE precedent); radius
+	// 100yd — radiusIdx 12 (real row); cast1 instant; dur1
+	// 10000ms 10s (real row); range13 Anywhere 50000yd (real
+	// row); school Nature; dispel 1 Magic. NOT carried:
+	// "Cannot be used while shapeshifted" / "Stops
+	// auto-attack" / "Unaffected by invulnerability" /
+	// "Cannot be reflected" / "All spell effects are harmful" /
+	// "Prevents Anim" / "Ignore Line of Sight" (no attributes
+	// field).
+	{id: 9256, mechanic: 10, dispel: 1, castTimeIdx: 1, durIdx: 1, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, mechanic: 10, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 22187 "Power Word: Shield" (Wowhead SpellName MATCH; C++
+	// boss_mograine_and_whitemane.cpp:54 enum, :332 DoCastSelf;
+	// Lua boss_mograine_and_whitemane.lua:106 const, :401
+	// CastSpell(creature)) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted — single effect with a Value, no
+	// trigger): single effect 6 APPLY_AURA SCHOOL_ABSORB (aura
+	// 69) Value 206 — bp 205/die 1, misc 127 all schools (the
+	// 12040/11647 precedent); targetA CASTER (DoCastSelf);
+	// cast1 instant; dur25 30000ms 30s (real row); range5 Long
+	// 40yd (real row); school Holy; dispel 1 Magic; manaCost
+	// 110. NOT carried: "Cannot be used while shapeshifted" /
+	// "Do Not Sheath" (no attributes field).
+	{id: 22187, dispel: 1, manaCost: 110, castTimeIdx: 1, durIdx: 25, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolAbsorb, dieSides: 1, basePoints: 205, misc: 127, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
