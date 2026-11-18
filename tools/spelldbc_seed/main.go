@@ -19984,7 +19984,7 @@ var spells = []spell{
 	// SpawnCast zone_shadowmoon_valley.cpp:726 {12000,
 	// 20000, 16102} Illidari Highlord) — eff0 School
 	// Damage Fire, tooltip range 228-232 -> bp 227,
-	// die 4, radiusIdx 8 (5yd real row), targetA
+	// die 5, radiusIdx 8 (5yd real row), targetA
 	// DEST_AREA_ENEMY (FLAG: Wowhead-only, no wago row
 	// read); eff1 Persistent Area Aura Periodic Damage,
 	// Value 48 every 2s -> bp 47, die 1 (FLAG), auraPeriod
@@ -19997,7 +19997,7 @@ var spells = []spell{
 	// FLAG: die/targetA on both effects need a wago
 	// SpellEffect row check.
 	{id: 16102, castTimeIdx: 14, durIdx: 31, rangeIdx: 4, school: schoolFire, manaCost: 260, effects: [3]effect{
-		{effect: effSchoolDamage, basePoints: 227, dieSides: 4, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 227, dieSides: 5, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 47, dieSides: 1, auraPeriod: 2000, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 	}},
 	// 17194 "Mind Blast" (Wowhead name MATCH; C++
