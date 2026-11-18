@@ -17152,7 +17152,10 @@ var spells = []spell{
 	// melee-AP aura; 102 is vs-type, 165 attacker-bonus);
 	// targetA 20 CASTER_AREA_PARTY (DoCast me + "nearby friendly
 	// targets" + 15yd radius; FLAG: needs a wago SpellEffect row
-	// check); radiusIdx 18 real 15yd (Wowhead row shows Radius 15
+	// check — 22 SRC_CASTER + 30 SRC_AREA_ALLY alternative
+	// (31308 Brilliance Aura precedent; the 4 commanders are NPCs,
+	// not a player party, so the party leg may land on the caster
+	// only); radiusIdx 18 real 15yd (Wowhead row shows Radius 15
 	// yards); cast1 instant; dur4 real 120000ms (2 minutes);
 	// range1 Self 0yd; school Physical. NOT carried: "Requires
 	// level 1" (no field); flags (no attributes field).
@@ -17208,6 +17211,81 @@ var spells = []spell{
 		{effect: effCharge, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effWeaponDamage, basePoints: 74, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 1, mechanic: 12, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 47714 "Telestra Spawns Back In" (Wowhead name MISMATCH —
+	// adds "Spawns" and "In" vs C++ enum SPELL_TELESTRA_BACK;
+	// C++ boss_magus_telestra.cpp:34 enum, :264 DoCast me; Lua
+	// boss_magus_telestra.lua:109 const, :222
+	// CastSpell(creature, self)) — Wowhead WotLK (verdict
+	// wago_spells_47714_47756_47772_47773.txt; wago NOT opened —
+	// single valued effect): single effect 3 DUMMY Value 1 —
+	// bp 0/die 1; targetA CASTER (DoCast me); cast1 instant;
+	// dur0 (Duration n/a); range1 Self 0yd; school Physical
+	// (n/a). NOT carried: flags ("Cast time is hidden" / "No
+	// Aura Icon", no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 47714, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 47756 "Gravity Well" (Wowhead name MATCH; C++
+	// boss_magus_telestra.cpp:33 enum, :340 DoCast target; Lua
+	// boss_magus_telestra.lua:108 const, :281
+	// CastSpell(victim)) — Wowhead WotLK (same verdict file;
+	// wago NOT opened — both trigger links shown): eff0/eff1
+	// 6 APPLY_AURA aura23 PERIODIC_TRIG Value 1 every 200ms —
+	// bp 0/die 1, auraPeriod 200, triggers 47764 ("Gravity
+	// Well Effect") / 47765 ("Gravity Well") (Wowhead links;
+	// NOT seeded — triggered spells); targetA CASTER
+	// (channeled self-aura; 70720 precedent — the C++ DoCast
+	// target is the cast target, the aura lands on the
+	// caster); cast1 per the channeled-cast fix; dur32 real
+	// 6000ms (Duration 6 seconds); range1 Self 0yd; school
+	// Physical. NOT carried: "75 Shadow damage per sec"
+	// (lives in triggered 47764, not seeded here); flags
+	// (no attributes field); GCD 0 / Cost None (no fields).
+	{id: 47756, castTimeIdx: 1, durIdx: 32, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 200, trigger: 47764, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 200, trigger: 47765, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 47772 "Ice Nova" (Wowhead name MATCH; C++
+	// boss_magus_telestra.cpp:29 enum, :330 DoCast target, not
+	// triggered; Lua boss_magus_telestra.lua:106 const, :272
+	// CastSpell(target); heroic 56935 NOT switched) — Wowhead
+	// WotLK (same verdict file; wago NOT opened — no trigger
+	// row): eff0 2 SCHOOL_DAMAGE Frost Value 2357, tooltip
+	// "2357 to 2643" — bp 2356/die 287 (tooltip-range
+	// derivation; FLAG: needs a wago SpellEffect row check —
+	// same class as malicia dieSides); eff1 6 APPLY_AURA
+	// aura12 STUN Value 1 — bp 0/die 1, mechanic 12; both
+	// targetA SRC_CASTER + targetB SRC_AREA_ENEMY (Range 0
+	// Self + "all enemies within 60 yards"; 50774 Thundering
+	// Stomp wago-verified precedent; FLAG: needs a wago
+	// SpellEffect row check — Wowhead-derived targets);
+	// radiusIdx 48 real 60yd; cast5 real 2000ms (2s cast);
+	// dur27 real 3000ms (3s stun); range1 Self 0yd; school
+	// Frost. NOT carried: buff text ("Stunned."); flags
+	// (none present).
+	{id: 47772, castTimeIdx: 5, durIdx: 27, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2356, dieSides: 287, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 48, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 1, mechanic: 12, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 48, chainAmplitude: 1},
+	}},
+	// 47773 "Firebomb" (Wowhead name MATCH; C++
+	// boss_magus_telestra.cpp:31 enum, :350 DoCast target, not
+	// triggered; Lua boss_magus_telestra.lua:107 const, :290
+	// CastSpell(target); heroic 56934 NOT switched) — Wowhead
+	// WotLK (same verdict file; wago NOT opened — no trigger
+	// row): single effect 2 SCHOOL_DAMAGE Fire Value 1700 —
+	// bp 1699/die 1; targetA DEST_TARGET_ENEMY + targetB
+	// UNIT_DEST_AREA_ENEMY ("an enemy and enemies nearby";
+	// 3476 precedent; FLAG: needs a wago SpellEffect row
+	// check — Wowhead-derived targets); radiusIdx 8 real 5yd
+	// (Wowhead row shows Radius 5 yards); cast16 real 1500ms
+	// (1.5s cast); dur0 (Duration n/a); range5 Long 0-40;
+	// manaCost 90 (Cost: 90 Mana); school Fire. NOT carried:
+	// flags ("Cannot be used while shapeshifted", no
+	// attributes field); GCD 0 (no field).
+	{id: 47773, castTimeIdx: 16, rangeIdx: 5, school: schoolFire, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1699, dieSides: 1, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 	}},
 }
 
