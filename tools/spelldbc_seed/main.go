@@ -111,6 +111,7 @@ const (
 	auraSchoolAbsorb           = 69  // SPELL_AURA_SCHOOL_ABSORB (SpellAuraDefines.h:149)
 	auraModDamageDone          = 13  // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93) — NOT auraModDmgDone=79 (that is MOD_DAMAGE_PERCENT_DONE, SpellAuraDefines.h:159; pre-existing misnomer, left alone)
 	auraModInvisibility        = 18  // SPELL_AURA_MOD_INVISIBILITY
+	auraModInvisDetect         = 19  // SPELL_AURA_MOD_INVISIBILITY_DETECT (SpellAuraDefines.h:99)
 	auraObsModHealth           = 20  // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
 	auraObsModPower            = 21  // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
 	auraModResistance          = 22  // SPELL_AURA_MOD_RESISTANCE (SpellAuraDefines.h:102)
@@ -15323,6 +15324,93 @@ var spells = []spell{
 	{id: 61286, castTimeIdx: 1, durIdx: 327, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraMechanicImmunity, basePoints: 0, dieSides: 1, misc: 21, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 75180 "Detect QZS 3" (Wowhead display MISMATCH — "Detect QZS
+	// 3", not "Detect Invis"; TC enum authoritative per 30925,
+	// seeder writes no name column; C++ zone_durotar.cpp:44 enum,
+	// :130 AddAura on the summoner; Lua
+	// npc_tiger_matriarch_credit.lua:53 const, :93
+	// summoner:AddAura) — Wowhead WotLK (verdict file
+	// wago_spells_75180_75187_75212_75213.txt; wago NOT attempted
+	// for this spell — single effect with a Value, no trigger):
+	// single effect 6 APPLY_AURA MOD_INVISIBILITY_DETECT (aura
+	// 19) Value 1000 — bp 999/die 1 (the 31436 flat convention),
+	// misc 9 (the "(9)" parenthetical after the aura name — the
+	// invisibility-type mask, GENERAL bit 0 + bit 3); targetA
+	// CASTER (AddAura on the summoner, the 8733 precedent);
+	// cast1 instant; dur0 (Duration n/a — the C++ removes it
+	// explicitly); range1 Self Only (real row, 0 yards); school
+	// Physical. NOT carried: "Aura is hidden" / "No Aura Icon"
+	// (no attributes field). New const auraModInvisDetect 19
+	// (SpellAuraDefines.h:99); engine twin spellAuraInvisibilityDetect
+	// live (spells.go:655).
+	{id: 75180, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModInvisDetect, basePoints: 999, dieSides: 1, misc: 9, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 75187 "Summon Tiger Matriarch" (Wowhead SpellName MATCH;
+	// C++ zone_durotar.cpp:42 enum, :131 CastSpell on the
+	// summoner, triggered; Lua npc_tiger_matriarch_credit.lua:51
+	// const, :94 CastSpell(summoner, ..., true)) — Wowhead WotLK
+	// (same verdict file; wago NOT attempted — single effect with
+	// a Value, no trigger): single effect 28 SUMMON Value 1 — bp
+	// 0/die 1, misc 40312 Tiger Matriarch (Wowhead link target,
+	// ID confirmed), miscB 64 (real WILD SummonProperties row —
+	// the 19593 generic-row precedent; the summon-properties row
+	// for this spell is unconfirmed, flagged for a future wago
+	// check); radius 10yd — radiusIdx 13 (real row); targetA
+	// CASTER (self-cast on the summoner, the 19593 precedent);
+	// cast1 instant; dur3 60000ms (real row — Duration 1 minute);
+	// range13 Anywhere 50000yd (real row); school Physical. NOT
+	// carried: "Can be used while mounted" / "Usable in arena" /
+	// "Allow While Riding Vehicle" (no attributes field).
+	{id: 75187, castTimeIdx: 1, durIdx: 3, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 40312, miscB: 64, targetA: targetCaster, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 75212 "Controller Summon Zen'tabra Trigger" (Wowhead display
+	// MISMATCH partial — the core "Summon Zen'tabra Trigger"
+	// matches, the full name adds the prefix "Controller"; TC enum
+	// authoritative per 30925; C++ zone_durotar.cpp:45 enum, :209
+	// AddAura on the summoner; Lua
+	// npc_tiger_matriarch_credit.lua:54 const, :97
+	// vehSummoner:AddAura in npc_tiger_matriarch.lua) — Wowhead
+	// WotLK (same verdict file; wago NOT attempted — single effect
+	// with a Value, no trigger): single effect 6 APPLY_AURA Dummy
+	// (aura 4) Value 1 — bp 0/die 1; targetA CASTER (AddAura on
+	// the summoner, the 8733 precedent); cast1 instant; dur36
+	// 1000ms (real row — Duration 1 second); range13 Anywhere
+	// 50000yd (real row); school Physical. NOT carried: "Aura
+	// Unique" / "Ignore Line of Sight" / "Server-side script" (no
+	// attributes field; the trigger logic lives outside the DBC).
+	{id: 75212, castTimeIdx: 1, durIdx: 36, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 75213 "Boss Emote & No Summon Aura" (Wowhead display
+	// MISMATCH partial — the core "No Summon Aura" matches, the
+	// full name adds the prefix "Boss Emote & "; TC enum
+	// authoritative per 30925; C++ zone_durotar.cpp:43 enum, :129
+	// AddAura on the summoner, reapplied :245; Lua
+	// npc_tiger_matriarch_credit.lua:52 const, :92
+	// summoner:AddAura) — Wowhead WotLK (same verdict file; wago
+	// attempted for eff0's missing Value — bot-walled, "Your
+	// request was blocked", no rows): eff0 77 SCRIPT_EFFECT, NO
+	// Value shown — bp 0/die 1 (the 25852/40321 valueless
+	// precedent; no misc derivable from the page, flagged for a
+	// future wago check); eff1 6 APPLY_AURA Dummy (aura 4) Value
+	// 1 — bp 0/die 1; both targetA CASTER (AddAura on the
+	// summoner; eff0's target inferred — same unit, no target on
+	// the page); cast1 instant; dur3 60000ms (real row — Duration
+	// 1 minute); range13 Anywhere 50000yd (real row); school
+	// Physical. NOT carried: "Generates no threat" / "Ignore Line
+	// of Sight" / "Server-side script" (no attributes field).
+	{id: 75213, castTimeIdx: 1, durIdx: 3, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// HELD 75181 "Summon Zentabra" (C++ zone_durotar.cpp:50 enum,
+	// :210 CastSpell on the summoner — live-cast in C++ but NOT
+	// referenced in any Lua file, so outside the live-cast census;
+	// no Wowhead verdict read — needs its own read before seeding;
+	// derivable values unknown, do NOT seed from the sibling
+	// 75187 row).
 }
 
 func main() {
