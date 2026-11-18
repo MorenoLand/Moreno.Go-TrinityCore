@@ -15800,6 +15800,82 @@ var spells = []spell{
 	{id: 31612, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 47407 "Direbrew's Disarm (precast)" (Wowhead SpellName
+	// MATCH; C++ boss_coren_direbrew.cpp:63 enum, :271
+	// DoCastSelf triggered; Lua boss_coren_direbrew.lua:128
+	// const, :202 CastSpell(creature, ..., true)) — Wowhead
+	// WotLK (verdict file
+	// wago_spells_47407_47409_47442_47691.txt; wago NOT
+	// attempted — contiguous rows, all Values present, no
+	// trigger): eff0 6 APPLY_AURA ROOT (aura 26) Value 1 —
+	// bp 0/die 1; eff1 6 APPLY_AURA PERIODIC_DUMMY (aura 226)
+	// Value 50 every 1s — bp 49/die 1, period 1000 (the
+	// periodic tick drives the 47409 grow, Lua :89-90); both
+	// targetA CASTER (DoCastSelf); cast1 instant; dur35
+	// 4000ms (real row — Duration 4 seconds); range1 Self
+	// Only (real row); school Physical. NOT carried: "Cast
+	// time is hidden" / "No Aura Icon" (no attributes field).
+	{id: 47407, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRoot, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDummy, basePoints: 49, dieSides: 1, auraPeriod: 1000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 47409 "Direbrew's Disarm (grow)" (Wowhead SpellName
+	// MATCH; C++ boss_coren_direbrew.cpp:66 enum, AuraScript
+	// OnApply arm; Lua boss_coren_direbrew.lua:133 const, :434
+	// target:CastSpell(target, ..., true)) — Wowhead WotLK
+	// (same verdict file; wago NOT attempted — single effect
+	// with a Value, no trigger): single effect 6 APPLY_AURA
+	// MOD_SCALE (aura 61, SpellAuraDefines.h:141; the 26527
+	// precedent) Value 18% — bp 17/die 1; targetA CASTER (the
+	// AuraScript target casts it on itself); cast1 instant;
+	// dur1 10000ms (real row — Duration 10 seconds); range1
+	// Self Only (real row); school Physical. NOT carried:
+	// "Cast time is hidden" / "No Aura Icon" (no attributes
+	// field).
+	{id: 47409, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModScale, basePoints: 17, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 47442 "Barreled!" (Wowhead SpellName MATCH; C++
+	// boss_coren_direbrew.cpp:77 enum; Lua
+	// boss_coren_direbrew.lua:132 const, :448
+	// target:CastSpell(nil, ..., true)) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted — contiguous rows, all
+	// Values present, no trigger): eff0 6 APPLY_AURA CONFUSE
+	// (aura 5) Value 1 — bp 0/die 1, effect mechanic 12 STUN
+	// (shown on the effect row; spell-level Mechanic is n/a
+	// so the spell mechanic stays 0 — NOT the 25852 shape,
+	// which carried 12 at both levels); eff1 6 APPLY_AURA
+	// MOD_INCREASE_SPEED (aura 31) Value -30% — bp -31/die 1
+	// (the 31467 negative-value convention); eff2 2
+	// SCHOOL_DAMAGE Physical Value 2438 — bp 2437/die 1 (the
+	// 31436 flat convention); all targetA 6 (victim player,
+	// "Can only target the player"); cast1 instant; dur31
+	// 8000ms (real row — Duration 8 seconds); range36 Longer
+	// 45yd (real row); school Physical. NOT carried: "Cannot
+	// be reflected" / "All spell effects are harmful" / "Can
+	// only target the player" (no attributes field).
+	{id: 47442, castTimeIdx: 1, durIdx: 31, rangeIdx: 36, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModConfuse, mechanic: 12, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseSpeed, basePoints: -31, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 2437, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 47691 "Summon Mole Machine Target Picker" (Wowhead
+	// SpellName MATCH; C++ boss_coren_direbrew.cpp:64 enum,
+	// :266 CastSpell(nullptr); Lua boss_coren_direbrew.lua:127
+	// const, :187 CastSpell(creature, ..., true)) — Wowhead
+	// WotLK (same verdict file; wago NOT attempted — single
+	// effect with a Value, no trigger): single effect 77
+	// SCRIPT_EFFECT Value 1 — bp 0/die 1 (the 75213
+	// precedent), radius 60yd — radiusIdx 48 (real row);
+	// targetA CASTER (CastSpell with no explicit target; the
+	// script picks the mole-machine target); cast1 instant;
+	// dur0; range1 Self Only (real row); school Physical. NOT
+	// carried: "Cast time is hidden" / "Ignore Line of Sight"
+	// / "Can only target the player" / "AI Doesn't Face
+	// target" (no attributes field).
+	{id: 47691, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetCaster, radiusIdx: 48, chainAmplitude: 1},
+	}},
 }
 
 func main() {
