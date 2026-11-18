@@ -14678,6 +14678,87 @@ var spells = []spell{
 	// Combat 0-5yd; school Physical; mechanic 12 Stunned.
 	// "On next swing" flag and the Level 80-vs-6 header conflict
 	// are not encodable (no flag/level fields).
+	// 31436 "Malevolent Cleave" (Wowhead "Malevolent Cleave" vs C++
+	// CLEAVE — MISMATCH, TC enum authoritative per 30925, seeder
+	// writes no name column; C++ boss_kazrogal.cpp:28 enum, :146
+	// DoCast(me) self-cast, 5s init; Lua boss_kazrogal.lua:89
+	// const, :123 CastSpell(creature)) — Wowhead WotLK (verdict
+	// file wago_spells_31436_31447_31463_31480.txt; wago NOT
+	// attempted — single effect row with a Value, no trigger):
+	// single effect 2 SCHOOL_DAMAGE (Physical) Value 22800 — bp
+	// 22799/die 1 (no range shown); target pair 22/15 (the 15245
+	// self-centered AoE precedent; 29961 precedent for 22/15 with
+	// radiusIdx 0 — no radius shown); cast1 instant; dur0; range1
+	// Self Only 0yd; school Physical. NOT carried: the "damage
+	// divided up evenly" split is SPELL_ATTR0_CU_SHARE_DAMAGE
+	// (0x8, SpellInfo.h:181; SpellEffects.cpp:336 divides by the
+	// hit-target count) — the seeder has no attributes field and
+	// the Go engine has no such leg (only aura share-damage).
+	// "Melee Chain Targeting" / "Treat as Area Effect" flags not
+	// encodable.
+	{id: 31436, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 22799, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 31480 "War Stomp" (Wowhead SpellName MATCH; C++
+	// boss_kazrogal.cpp:29 enum, :152 DoCast(me) self-cast, 15s
+	// init; Lua boss_kazrogal.lua:90 const, :130 CastSpell
+	// (creature)) — wago.tools 3.4.5.63697 SpellEffect rows
+	// 848849/909778, DifficultyID 0 (verdict file; fallback
+	// triggered by the missing Effect #2 + valueless Effect #1):
+	// eff0 6 APPLY_AURA aura 12 MOD_STUN Base -1 Die 1 Radius 32
+	// TargetA 22 TargetB 15; NO EffectIndex 1 row exists in the
+	// client data (the empty middle slot below — row() skips
+	// effect==0, the engine skips Effect==0 slots); eff2 2
+	// SCHOOL_DAMAGE Base 2249 Die 1 Radius 32 TargetA 22 TargetB
+	// 15 (Wowhead Value 2250 = Base+1; radius 32 = 12yd real row);
+	// cast1 instant; dur28 5000ms (real row); range1 Self Only;
+	// school Physical; mechanic 12 Stunned (spell + stun effect).
+	// "Requires level 45" is the Tauren-racial presentation, not
+	// a seeded field.
+	{id: 31480, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: -1, mechanic: 12, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 32, chainAmplitude: 1},
+		{},
+		{effect: effSchoolDamage, basePoints: 2249, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 32, chainAmplitude: 1},
+	}},
+	// 31447 "Mark of Kaz'rogal" (Wowhead "Mark of Kaz'rogal" vs
+	// C++ MARK — MISMATCH, TC enum authoritative per 30925; C++
+	// boss_kazrogal.cpp:30 enum, :158 DoCastAOE self-cast; Lua
+	// boss_kazrogal.lua:91 const, RegisterAuraEvent ev7 tick) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted):
+	// single effect 6 APPLY_AURA Periodically Drain Power (Mana)
+	// Value 600 every 1 second — bp 599/die 1, auraPeriod 1000
+	// (the 10332 mana-leech precedent, no misc — mana is the aura's
+	// own power); target pair 22/15 (C++ FilterTargets
+	// boss_kazrogal.cpp:193-196: TARGET_UNIT_SRC_AREA_ENEMY, mana
+	// users only — the filter is PORTED in the Lua ev7 arm, not
+	// the DBC); radiusIdx 28 (50000yd, real row); cast4 1000ms;
+	// dur28 5000ms; range1 Self Only; school Shadow. NOT carried:
+	// the detonation has no triggered-spell link in the effect row
+	// (the "See also" link to 31463 is not an effect trigger) —
+	// the 31463 cast lives in the Lua tick (mana 0 -> target
+	// CastSpell(target, 31463, true)) and C++ SpellScript
+	// OnPeriodic, not the DBC.
+	{id: 31447, castTimeIdx: 4, durIdx: 28, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicManaLeech, dieSides: 1, basePoints: 599, auraPeriod: 1000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 28, chainAmplitude: 1},
+	}},
+	// 31463 "Mark of Kaz'rogal" damage (Wowhead "Mark of
+	// Kaz'rogal" vs C++ MARK_DAMAGE — MISMATCH, same display name
+	// as 31447, TC enum authoritative per 30925; C++
+	// boss_kazrogal.cpp:31 enum; Lua boss_kazrogal.lua:215 const,
+	// :221 target:CastSpell(target, 31463, true) at mana 0) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted):
+	// single effect 2 SCHOOL_DAMAGE (Shadow) Value 10213,
+	// tooltip 10213-11287 — bp 10212/die 1075 (the 30633 range
+	// convention; the tooltip's mana-drain text is a garbled
+	// conflation — the effect row is damage and governs);
+	// target pair 22/15 (self-cast AoE around the marked target);
+	// radiusIdx 18 (15yd, real row); cast1 instant; dur0;
+	// range1 Self Only; school Shadow; dispel 2 Curse (the 19716
+	// precedent — shown on the page although the effect is instant
+	// damage with no aura, so the dispel is inert in the engine).
+	{id: 31463, castTimeIdx: 1, rangeIdx: 1, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 10212, dieSides: 1075, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
 }
 
 func main() {
