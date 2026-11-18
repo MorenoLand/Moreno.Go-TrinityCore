@@ -191,6 +191,7 @@ const (
 	targetDestCasterFrontRight = 41  // TARGET_DEST_CASTER_FRONT_RIGHT (SharedDefines.h:1477)
 	targetDestCasterSummon     = 32  // TARGET_DEST_CASTER_SUMMON
 	targetDestCasterRadius     = 73  // TARGET_DEST_CASTER_RADIUS
+	targetDestCasterRandom     = 72  // TARGET_DEST_CASTER_RANDOM (SharedDefines.h:1508)
 	targetUnitTargetAny        = 25  // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
 	targetUnitConeEnemy        = 24  // TARGET_UNIT_CONE_ENEMY_24 (SharedDefines.h:1460)
 	targetDestTargetAny        = 63  // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
@@ -13771,6 +13772,100 @@ var spells = []spell{
 	// boss_shadow_hunter_voshgajin.cpp:25, DoCast random
 	// player; Lua eastern_kingdoms/
 	// boss_shadow_hunter_voshgajin.lua:53,122.
+	// 40823 "Silencing Shriek" (Wowhead SpellName MATCH;
+	// C++ SPELL_SILENCING_SHRIEK, boss_mother_shahraz.cpp:41;
+	// DoCastVictim :167; Lua blacktemple/
+	// boss_mother_shahraz.lua:80,115, 22s then {18s,30s}) —
+	// Wowhead WotLK (verdict file wago_spells_40823_40867_
+	// 40869_45078.txt; wago NOT attempted — effect row
+	// complete): single eff0 APPLY_AURA SILENCE (aura 27)
+	// no Value shown — bp 0/die 1 (34190/9394 precedent),
+	// mechanic SILENCE 9 (SharedDefines.h:1366), radius
+	// 18yd — radiusIdx 19 (real row, 30035 eff1
+	// precedent); tooltip "silences all nearby enemies"
+	// makes this a self-centred AoE: tgtA SRC_CASTER tgtB
+	// SRC_AREA_ENEMY (6903 silence precedent), NOT a
+	// victim-only silence — the DoCastVictim cast trigger
+	// is the tank in melee range, so the range arm passes
+	// (TC CheckRange reach terms; boss_ai.go
+	// checkCreatureSpellRange). Duration 10s — dur1
+	// (real row); range1 Self (Wowhead "0 yards (Self)"),
+	// cast1 instant, school Shadow, manaCost 125 (Wowhead
+	// "Cost 125 Mana"; Aran precedent).
+	{id: 40823, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolShadow, manaCost: 125, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSilence, mechanic: 9, dieSides: 1, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 19, chainAmplitude: 1},
+	}},
+	// 40867 "Random Periodic" (Wowhead SpellName MATCH;
+	// C++ SPELL_RANDOM_PERIODIC, boss_mother_shahraz.cpp:48;
+	// triggered DoCastSelf :143 at <10% hp; Lua
+	// boss_mother_shahraz.lua:81,259 + RegisterAuraEvent
+	// randomPeriodicTick, tick 190) — Wowhead WotLK (same
+	// verdict file): single eff0 APPLY_AURA PERIODIC
+	// TRIGGER SPELL (aura 23) Value 1 every 6s — bp 0/die 1,
+	// auraPeriod 6000; NO triggered-spell link is shown
+	// anywhere on the page and the single wago attempt was
+	// bot-blocked (41st consecutive), so trigger is 0 —
+	// NOT a fabricated beam: C++ OnPeriodic :308-316 does
+	// PreventDefaultAction + self-casts a random beam, and
+	// the Lua handler returns true (PreventDefault twin),
+	// so the Go default trigger cast never fires — the DBC
+	// trigger field is behaviorally inert (engine
+	// fireAuraPeriodicTick runs ahead of the aura-23
+	// default leg, spells.go:44367). tgtA CASTER; dur0
+	// (no duration shown), cast1 instant, range1 Self,
+	// school Physical.
+	{id: 40867, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 6000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 40869 "Fatal Attraction Teleport" (Wowhead name is the
+	// shorter "Fatal Attraction" — MISMATCH; TC enum name is
+	// authoritative per the 30925 "Exploding Beaker"
+	// precedent. C++ SPELL_FATAL_ATTRACTION_TELEPORT,
+	// boss_mother_shahraz.cpp:43; DoCastSelf :163 with
+	// SPELLVALUE_MAX_TARGETS 3; Lua boss_mother_shahraz.
+	// lua:79,149) — Wowhead WotLK (same verdict file):
+	// eff0 DUMMY Value 1 — bp 0/die 1; eff1 TELEPORT_UNITS
+	// Value 1 — bp 0/die 1; both Radius 50000 yards —
+	// radiusIdx 28 (real row, 39878 precedent). Targets
+	// per the C++ hooks: FilterTargets EFFECT_ALL
+	// TARGET_UNIT_SRC_AREA_ENEMY :202, SetDest EFFECT_1
+	// TARGET_DEST_CASTER_RANDOM :206 — tgtA SRC_AREA_ENEMY
+	// both, tgtB DEST_CASTER_RANDOM (72, new const) on
+	// eff1. The 3-target clamp is a cast-time SPELLVALUE,
+	// NOT a DBC maxTargets — left 0. The script's 50yd
+	// SetDest override (GetRandomNearPosition 50.0f :208)
+	// has no Go bridge (Lua header standing gap), so the
+	// engine resolves the dest via TC's default CasterRandom
+	// branch (radius-based, Spell.cpp:1393-1424) — a
+	// documented delta, not a seed error. Tooltip ("Deals
+	// shadow damage") contradicts the effects (Dummy +
+	// Teleport only); the damage comes via 41001 cast on
+	// hit units :213, not seeded here. cast1 instant, dur0
+	// (no duration shown), range1 Self, school Shadow.
+	{id: 40869, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effDummy, dieSides: 1, basePoints: 0, targetA: targetSrcAreaEnemy, radiusIdx: 28, chainAmplitude: 1},
+		{effect: effTeleportUnits, dieSides: 1, basePoints: 0, targetA: targetSrcAreaEnemy, targetB: targetDestCasterRandom, radiusIdx: 28, chainAmplitude: 1},
+	}},
+	// 45078 "Berserk" (Wowhead SpellName MATCH; C++
+	// SPELL_BERSERK, boss_mother_shahraz.cpp:44; DoCastSelf
+	// :176, 10min one-shot; Lua boss_mother_shahraz.lua:78,
+	// 183) — Wowhead WotLK (same verdict file): eff0
+	// APPLY_AURA MOD_DAMAGE_PERCENT_DONE (aura 79) 500%
+	// all 7 schools — bp 499/die 1, misc 127 (27680
+	// precedent); eff1 APPLY_AURA MOD_SCALE (aura 61) 50%
+	// — bp 49/die 1; eff2 APPLY_AURA MOD_MELEE_HASTE (aura
+	// 138) 150% — bp 149/die 1 (47008 precedent); tgtA
+	// CASTER all three. cast1 instant, dur0 (Wowhead
+	// Duration n/a — no duration row; permanent until
+	// death), range1 Self, school Physical. Engine twins:
+	// auraModDmgDone 79 (27680/47008 live), auraModScale 61
+	// (aura_unit.go:50), auraModMeleeHaste 138
+	// (aura_haste.go:44).
+	{id: 45078, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 499, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 49, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 149, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
