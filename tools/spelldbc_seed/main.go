@@ -16454,6 +16454,89 @@ var spells = []spell{
 	{id: 59933, castTimeIdx: 16, durIdx: 6, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 27598, targetA: targetCaster, radiusIdx: 15, chainAmplitude: 1},
 	}},
+	// 29107 "Disrupting Shout" (Wowhead SpellName MATCH; C++
+	// boss_razuvious.cpp:37 enum, :153 DoCastAOE; Lua
+	// boss_razuvious.lua:129 const, :259 CastSpell(creature)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_29107_29125_55550_61696.txt; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 2
+	// SCHOOL_DAMAGE Physical, effect-row Value 7125, tooltip range
+	// 7125-7875 — bp 7124/die 751 (the 30633 range convention:
+	// bp = low-1, die = high-low+1, so the engine rolls
+	// 7125..7875); targetA SRC_AREA_ENEMY 15 (the 363/367/397
+	// self-cast AOE-damage precedent); radiusIdx 48 (60yd real
+	// row); cast1 instant; dur0; range1 Self 0yd (real row);
+	// school Physical. NOT carried: "Is Ability" / "Cannot be
+	// reflected" / "All spell effects are harmful" / "Ignore Line
+	// of Sight" / "Treat As Periodic" (no attributes field); GCD 0
+	// / Cost None (no fields).
+	{id: 29107, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 7124, dieSides: 751, targetA: targetSrcAreaEnemy, radiusIdx: 48, chainAmplitude: 1},
+	}},
+	// 29125 "Hopeless" (Wowhead SpellName MATCH; C++
+	// boss_razuvious.cpp:39 enum, :114 DoCastAOE triggered; Lua
+	// boss_razuvious.lua:131 const, :332 CastSpell(creature,
+	// true)) — Wowhead WotLK (same verdict file; wago NOT
+	// attempted — single effect with a Value, no trigger): single
+	// effect 6 APPLY_AURA MOD_DAMAGE_TAKEN (aura 14) Value 5000%
+	// — bp 4999/die 1; misc 127 (all 7 schools listed in the
+	// effect name — Arcane, Fire, Frost, Holy, Nature, Physical,
+	// Shadow — the school-mask derivation, same family as the
+	// 18151 misc 8 and the 52373 "(127)" parenthetical);
+	// targetA DEST_CASTER 18 / targetB UNIT_DEST_AREA_ENEMY 16
+	// (the 46026 wago-verified DoCast-me AOE-aura shape;
+	// Wowhead shows no targets — wago confirmation still open,
+	// see checkpoint); radiusIdx 12 (100yd real row); cast1
+	// instant; dur0; range1 Self 0yd (real row); school Physical.
+	// NOT carried: "Aura is Debuff" (no attributes field); GCD 0
+	// / Cost None (no fields). NOTE: tooltip ("damage dealt by
+	// nearby Death Knight Understudies") vs Buff row ("damage
+	// taken") differ verbatim — the aura makes the raid take
+	// +5000%, so the understudies' damage rises; the seed
+	// carries the aura as shown.
+	{id: 29125, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: 4999, dieSides: 1, misc: 127, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 55550 "Jagged Knife" (Wowhead SpellName MATCH; C++
+	// boss_razuvious.cpp:38 enum, :158 DoCast target; Lua
+	// boss_razuvious.lua:130 const, :231 CastSpell(target)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// both effects have Values, no trigger): eff0 2
+	// SCHOOL_DAMAGE Physical, effect-row Value 5088, tooltip
+	// range 5088-5912 — bp 5087/die 825 (the 30633 range
+	// convention); eff1 6 APPLY_AURA PERIODIC_DAMAGE (aura 3)
+	// Value 2000 every 1s — bp 1999/die 1 (Buff confirms
+	// 2000/tick, 5s remaining); auraPeriod 1000; effect mechanic
+	// 15 BLEED (MECHANIC_BLEED, SharedDefines.h:1372 — the
+	// 25852 both-levels shape is not used: the spell-level
+	// mechanic is n/a, only the effect row shows Bleeding); both
+	// targetA TARGET_ENEMY (DoCast target); cast1 instant; dur28
+	// 5000ms 5s (real row); range93010 NEW synthetic 5-45yd
+	// (Hunter 45) — no real 5-45 row in the table; school
+	// Physical. NOT carried: "Requires Hunter" / "Requires level
+	// 70" (no class/level fields); "Is Ability" / "Track Target
+	// in Cast (Player Only)" / "Cannot be reflected" / "All
+	// spell effects are harmful" (no attributes field); GCD 0 /
+	// Cost None (no fields).
+	{id: 55550, castTimeIdx: 1, durIdx: 28, rangeIdx: 93010, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 5087, dieSides: 825, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, mechanic: 15, basePoints: 1999, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 61696 "Blood Strike" (Wowhead display name lacks the C++
+	// enum's UNDERSTUDY qualifier — same spell ID, same owner;
+	// the page's "Used by NPC" is Death Knight Understudy, and
+	// the C++ :213 DoCastVictim sits in the understudy AI; Lua
+	// boss_razuvious.lua:383 const, :390 CastSpell(nil) =
+	// DoCastVictim) — Wowhead WotLK (same verdict file; wago NOT
+	// attempted — single effect with a Value, no trigger):
+	// single effect 31 WEAPON_PERCENT_DAMAGE Value 50 — bp 49/
+	// die 1 (50% weapon damage); targetA TARGET_ENEMY
+	// (DoCastVictim); cast1 instant; dur0; range2 Combat 5yd
+	// (real row); school Physical. NOT carried: 4s cooldown (no
+	// cooldown field); GCD 1.5s / Cost None (no fields).
+	{id: 61696, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 49, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -16626,6 +16709,7 @@ func main() {
 		{93007, f32(0), f32(0), f32(100), f32(100), 0},
 		{93008, f32(0), f32(0), f32(50000), f32(50000), 0},
 		{93009, f32(0), f32(0), f32(2), f32(2), 0},
+		{93010, f32(5), f32(5), f32(45), f32(45), 0},    // synthetic SpellRange 93010 (5-45 yards, Hunter 45) for 55550 Jagged Knife — no real 5-45 row in the table
 		{36, f32(0), f32(0), f32(45), f32(45), 0},       // real SpellRange 36 "Longer Range" for 29946/32265 (wago.tools 3.4.0.47659, aux read 54197700)
 		{37, f32(0), f32(0), f32(50), f32(50), 0},       // real SpellRange 37 "Extended Range" for 45532 (wago.tools 3.4.0.47659 SpellRange row 37, browser 4d453dd5)
 		{11, f32(0), f32(0), f32(15), f32(15), 0},       // real SpellRange 11 "Fifteen yards" for 29961 (wago.tools 3.4.0.47659, aux read 54197700)
