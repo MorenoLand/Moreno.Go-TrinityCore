@@ -100,7 +100,8 @@ const (
 	effSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
 	effSpawn                   = 46  // SPELL_EFFECT_SPAWN (SharedDefines.h:857; clientside-only, spells.go:19747)
 	auraPeriodicDmg            = 3
-	auraPeriodicHeal           = 8 // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
+	auraPeriodicEnergize       = 24 // SPELL_AURA_PERIODIC_ENERGIZE (SpellAuraDefines.h:104)
+	auraPeriodicHeal           = 8  // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
 	auraDummy                  = 4
 	auraModAttackSpeed         = 9 // SPELL_AURA_MOD_ATTACKSPEED (SpellAuraDefines.h:89)
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
@@ -18562,6 +18563,84 @@ var spells = []spell{
 	{id: 29794, castTimeIdx: 1, durIdx: 18, rangeIdx: 6, school: schoolArcane, effects: [3]effect{
 		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 29815, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 20000, trigger: 29806, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 23513 "Essence of the Red" (Wowhead name MATCH; C++
+	// SPELL_ESSENCEOFTHERED) — blackwinglair/boss_vaelastrasz;
+	// eff0-2 Periodically give power, Value 500/50/200 ->
+	// bp 499/49/199, period 1000, misc 0 Mana / 3 Energy /
+	// 1 Rage, radiusIdx 12 (real 100yd row), all targetA
+	// CASTER (DoCast self; aura sits on caster, radius =
+	// energize area, inferred from C++ cast usage); cast
+	// Instant idx 1, dur 3 min idx 90007 (180000ms
+	// synthetic — no real 180s row in the table), range
+	// Self idx 1, school Physical. Runic Power: NO effect
+	// row (tooltip only) — NOT seeded. FLAG: needs a wago
+	// SpellEffect row check (Rage Value 200 vs tooltip
+	// 20/sec; Runic Power 4th effect?).
+	{id: 23513, castTimeIdx: 1, durIdx: 90007, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicEnergize, basePoints: 499, dieSides: 1, auraPeriod: 1000, misc: 0, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicEnergize, basePoints: 49, dieSides: 1, auraPeriod: 1000, misc: 3, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicEnergize, basePoints: 199, dieSides: 1, auraPeriod: 1000, misc: 1, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 23461 "Flame Breath" (Wowhead name MATCH; C++
+	// SPELL_FLAMEBREATH) — eff0 School Damage (Fire),
+	// tooltip 3500-4500 -> bp 3499/die 1001 (row shows
+	// 3500 only), targetA 104 cone (54282/120 precedent),
+	// radiusIdx 11 (real 45yd row); eff1 Periodic Damage,
+	// tooltip 938-1062 -> bp 937/die 125 (row shows 938
+	// only), period 3000, targetA 104, radiusIdx 11; cast
+	// 2s idx 5 (real 2000ms row), dur 15s idx 8 (real
+	// row), range 45yd idx 36 (real row), school Fire.
+	// FLAG: needs a wago SpellEffect row check (cone
+	// target 104 + die sides from tooltip ranges).
+	{id: 23461, castTimeIdx: 5, durIdx: 8, rangeIdx: 36, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3499, dieSides: 1001, targetA: targetUnitConeEnemy104, radiusIdx: 11, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 937, dieSides: 125, auraPeriod: 3000, targetA: targetUnitConeEnemy104, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 19983 "Cleave" (Wowhead name MATCH; C++
+	// SPELL_CLEAVE) — eff0 Weapon Damage, Value 50 -> bp
+	// 49/die 1, targetA ENEMY (DoCastVictim), maxTargets
+	// 10 (tooltip "up to 10 targets"); cast Instant idx
+	// 1, dur n/a idx 0, range Combat 5yd idx 2 (real row),
+	// school Physical. "Next Melee" NOT carried (no field).
+	{id: 19983, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, maxTargets: 10, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 49, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 18173 "Burning Adrenaline" (Wowhead name MATCH; C++
+	// SPELL_BURNINGADRENALINE) — eff0 Mod Damage Done %
+	// (all 7 schools) Value 100 -> bp 99, misc 127
+	// (54160 precedent), targetA ENEMY (random mana target
+	// / victim); eff1 Mod Spell Haste % Value 100000 ->
+	// bp 99999 (70227 wago-verified precedent: same aura +
+	// base), targetA ENEMY; eff2 Periodically trigger
+	// spell Value 1 -> bp 0, period 1000, trigger 23619
+	// (NOT seeded — Wowhead points to 23619, NOT 23478),
+	// targetA ENEMY; cast Instant idx 1, dur 20s idx 18
+	// (real row), range Vision 100yd idx 6 (real row),
+	// school Fire. FLAG: needs a wago SpellEffect row
+	// check (haste Value 100000 vs tooltip 100%;
+	// 23619-vs-23478 trigger; no row for the 5%/s health
+	// reduction — presumably inside 23619).
+	{id: 18173, castTimeIdx: 1, durIdx: 18, rangeIdx: 6, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: 99, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModCastingSpeed, basePoints: 99999, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 23619, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 23478 "Burning Adrenaline" (PARTIAL match vs C++
+	// SPELL_BURNINGADRENALINE_EXPLOSION — base name only)
+	// — eff0 School Damage (Fire), Value 2188 -> bp 2187/
+	// die 1, radiusIdx 13 (real 10yd row), targetA
+	// targetSrcCaster + targetB targetUnitSrcAreaAlly
+	// (20476 wago-verified shape for self-cast ally-area
+	// Fire damage; C++ :262 self-cast on aura removal);
+	// cast Instant idx 1, dur n/a idx 0, range 50000yd
+	// idx 13 (real row), school Fire. FLAG: needs a wago
+	// SpellEffect row check (Value 2188 vs 18173 tooltip
+	// 4376-5624; target pair inferred — Wowhead shows no
+	// target and no "Used by NPC" tab, C++ cast is the
+	// authority, 41634 precedent).
+	{id: 23478, castTimeIdx: 1, rangeIdx: 13, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2187, dieSides: 1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 13, chainAmplitude: 1},
 	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
