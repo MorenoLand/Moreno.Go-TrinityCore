@@ -17819,6 +17819,93 @@ var spells = []spell{
 	{id: 51849, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 50841, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 71993 "Frozen Mallet" (Wowhead name MATCH; C++
+	// boss_toravon.cpp:30 enum, :54 DoCastSelf non-triggered;
+	// Lua boss_toravon.lua:106 const, :286 CastSpell(creature,
+	// SPELL_FROZEN_MALLET)) — Wowhead WotLK (verdict
+	// wago_spells_71993_72034_72090_72091.txt; wago NOT opened
+	// — trigger link shown): single effect 6 APPLY_AURA
+	// aura42 PROC_TRIGGER_SPELL Value 1 — bp 0/die 1, trigger
+	// 72004 Frostbite (NOT seeded — triggered spell; Wowhead
+	// link; the Frostbite damage 2438-2562 every 2s for 20s
+	// belongs to 72004, not this spell); targetA CASTER
+	// (DoCastSelf); cast1 instant; dur0 (Duration n/a);
+	// range13 real 50000yd Anywhere; school Physical. NOT
+	// carried: proc chance 100% (no proc table); flags (no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 71993, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 72004, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 72034 "Whiteout" (Wowhead name MATCH; C++
+	// boss_toravon.cpp:29 enum, :84 DoCastSelf non-triggered;
+	// Lua boss_toravon.lua:105 const, :253 CastSpell(creature,
+	// SPELL_WHITEOUT)) — Wowhead WotLK (same verdict file;
+	// wago NOT opened — no trigger row): eff0 2 SCHOOL_DAMAGE
+	// Frost Value 11213 (13163 Heroic / 25-player) — bp
+	// 11212, die 675 from tooltip-range width 13837-13163+1
+	// (67280 malicia precedent: bp from the base effect-row
+	// Value, die from the tooltip width; FLAG: needs a wago
+	// SpellEffect DifficultyID-0 row check — the die is
+	// derived from the heroic tooltip range); eff1 6
+	// APPLY_AURA aura87 MOD_DAMAGE_PERCENT_TAKEN Value 15% —
+	// bp 14/die 1, misc 16 (Frost school mask; 59414/63420
+	// precedent); eff2 77 SCRIPT_EFFECT Value 10 — bp 9/die
+	// 1 (no C++ SpellScript consumer found for 72034, no TDB
+	// binding; FLAG: needs a wago SpellEffect row check —
+	// Wowhead-derived target); all targetA SRC_CASTER +
+	// targetB SRC_AREA_ENEMY ("all nearby enemies"; FLAG:
+	// needs a wago SpellEffect row check — Wowhead-derived
+	// targets), radiusIdx 91007 (50000yd; Wowhead rows show
+	// Radius 50000 yards); dur3 real 60000ms (Duration 1
+	// minute, the debuff buff); cast19 real 2500ms (2.5s
+	// cast); range13 real 50000yd Anywhere; school Frost. NOT
+	// carried: Cooldown 10s (no field); flags ("Can only
+	// target the player", "Do Not Display Duration", no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 72034, castTimeIdx: 19, durIdx: 3, rangeIdx: 13, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 11212, dieSides: 675, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91007, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: 14, dieSides: 1, misc: 16, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91007, chainAmplitude: 1},
+		{effect: effScriptEffect, basePoints: 9, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91007, chainAmplitude: 1},
+	}},
+	// 72090 "Freezing Ground" (Wowhead name MATCH; C++
+	// boss_toravon.cpp:27 enum, :89 DoCast(target)
+	// non-triggered; Lua boss_toravon.lua:103 const, :271
+	// CastSpell(target, SPELL_FREEZING_GROUND)) — Wowhead
+	// WotLK (same verdict file; wago NOT opened — no trigger
+	// row): eff0 2 SCHOOL_DAMAGE Frost Value 4625 — bp
+	// 4624/die 1 (single Value, no tooltip range); eff1 6
+	// APPLY_AURA aura26 ROOT valueless — bp 0/die 1,
+	// mechanic 7 (ROOT; the row shows Mechanic: Rooted;
+	// spell-level mechanic stays 0 — Spell Details says n/a);
+	// both targetA 53 DEST_TARGET_ENEMY + targetB 16
+	// DEST_AREA_ENEMY ("nearby enemies" around the DoCast
+	// target; line 803 precedent; FLAG: needs a wago
+	// SpellEffect row check — Wowhead-derived targets),
+	// radiusIdx 29 real 6yd (Wowhead rows show Radius 6
+	// yards); dur28 real 5000ms (Duration 5 seconds, the
+	// root buff); cast1 instant; range93011 synthetic 55yd
+	// (no real 55yd row in the table; FLAG: needs a wago
+	// SpellRange row check — the real row ID is unknown);
+	// school Frost; dispel 1 (Magic); maxTargets 3 (Default;
+	// Wowhead shows 3 Default / 5 Heroic / 5 25-player).
+	// NOT carried: flags (no attributes field); GCD 0 / Cost
+	// None (no fields).
+	{id: 72090, castTimeIdx: 1, durIdx: 28, rangeIdx: 93011, school: schoolFrost, dispel: 1, maxTargets: 3, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 4624, dieSides: 1, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 29, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, mechanic: 7, basePoints: 0, dieSides: 1, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 29, chainAmplitude: 1},
+	}},
+	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
+	// the same "Trigger Spell from Target with Caster as
+	// Target" type as 51849's eff1 (numeric effect type
+	// unknown, no 3.3.5 effect name matches it) AND its
+	// trigger spell is unknown (no Wowhead link; the Lua
+	// header says the orb entry lives in the Spell.dbc summon
+	// effect of the triggered spell, which is itself
+	// unknown). Both unknowns need a wago.tools SpellEffect
+	// row read; wago.tools was bot-walled 2026-11-18. Retry
+	// on a later tick — do not guess either value. (This
+	// comment block holds the place so the gap stays visible
+	// in-tree; no seed row for 72091 exists.)
 }
 
 func main() {
@@ -17995,6 +18082,7 @@ func main() {
 		{93008, f32(0), f32(0), f32(50000), f32(50000), 0},
 		{93009, f32(0), f32(0), f32(2), f32(2), 0},
 		{93010, f32(5), f32(5), f32(45), f32(45), 0},    // synthetic SpellRange 93010 (5-45 yards, Hunter 45) for 55550 Jagged Knife — no real 5-45 row in the table
+		{93011, f32(0), f32(0), f32(55), f32(55), 0},    // synthetic SpellRange 93011 (0-55 yards) for 72090 Freezing Ground — no real 55yd row in the table (FLAG: needs a wago SpellRange row check — the real row ID is unknown)
 		{36, f32(0), f32(0), f32(45), f32(45), 0},       // real SpellRange 36 "Longer Range" for 29946/32265 (wago.tools 3.4.0.47659, aux read 54197700)
 		{37, f32(0), f32(0), f32(50), f32(50), 0},       // real SpellRange 37 "Extended Range" for 45532 (wago.tools 3.4.0.47659 SpellRange row 37, browser 4d453dd5)
 		{11, f32(0), f32(0), f32(15), f32(15), 0},       // real SpellRange 11 "Fifteen yards" for 29961 (wago.tools 3.4.0.47659, aux read 54197700)
