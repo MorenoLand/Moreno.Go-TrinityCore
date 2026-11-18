@@ -18934,6 +18934,79 @@ var spells = []spell{
 	{id: 19781, castTimeIdx: 1, rangeIdx: 36, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 849, dieSides: 301, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
+	// 17731 "Eruption" (Wowhead name MATCH; C++
+	// SPELL_ERRUPTION) — eff0 School Damage (Fire),
+	// base Value 5184 -> bp 5183, die 863 from
+	// tooltip width 7931-7069+1 (67280/72034 malicia
+	// precedent: bp from the base effect-row Value,
+	// die from the tooltip width; single DBC row holds
+	// the base value), radiusIdx 8 (real 5yd row),
+	// targetA 53/16 (victim-centred: lava erupts under
+	// the DoCastVictim target, :1680 precedent); eff1
+	// Activate Object (5), Value 1 -> bp 0, misc 5
+	// (the "(5)" parenthetical IS the MiscValue — the
+	// engine leg reads eff.MiscValue as GameObjectActions,
+	// spells.go:19393), targetA 40 (GO_NEARBY_ENTRY;
+	// 24082/24083 precedent), radiusIdx 17 (real 13yd
+	// row); cast Instant idx 1, dur n/a idx 0, range
+	// Self idx 1, school Fire. FLAG: base 5184 vs
+	// Heroic/25P 7069 vs 40P 1313 spread + target 53/16
+	// vs 22/15 — wago SpellEffect DifficultyID-0 row
+	// check. Ragnaros NOT listed as a user on Wowhead;
+	// C++ DoCastVictim :208 is the authority.
+	{id: 17731, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 5183, dieSides: 863, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effActivateObj, basePoints: 0, dieSides: 1, misc: 5, targetA: targetGONearbyEntry, radiusIdx: 17, chainAmplitude: 1},
+	}},
+	// 20564 "Elemental Fire" (Wowhead name MATCH; C++
+	// SPELL_ELEMENTAL_FIRE) — eff0 School Damage
+	// (Fire), tooltip 2160-2640 -> bp 2159/die 481,
+	// targetA ENEMY (DoCastVictim, "ignites the
+	// target"); eff1 Periodic Damage (aura 3), Value
+	// 600 -> bp 599, period 1000, targetA ENEMY;
+	// cast Instant idx 1, dur 8s idx 31 (real row),
+	// range 25yd idx 34 (real SpellRange row, :19117),
+	// school Fire.
+	{id: 20564, castTimeIdx: 1, durIdx: 31, rangeIdx: 34, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2159, dieSides: 481, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 599, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 20565 "Magma Blast" (Wowhead name MATCH; C++
+	// SPELL_MAGMA_BLAST) — eff0 School Damage (Fire),
+	// Value 6000 -> bp 5999/die 1, targetA ENEMY
+	// (DoCastVictim, "to an enemy"); cast 1s idx 4
+	// (real SpellCastTimes row), dur n/a idx 0, range
+	// 50000yd idx 13 (real row), school Fire.
+	{id: 20565, castTimeIdx: 4, rangeIdx: 13, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 5999, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 20566 "Wrath of Ragnaros" (Wowhead name MATCH;
+	// C++ SPELL_WRATH_OF_RAGNAROS) — eff0 School Damage
+	// (Fire), Value 1000 -> bp 999/die 1, radiusIdx 20
+	// (real 25yd row); eff1 Knock Back (100), Value
+	// 400 -> bp 399, misc 100 (the "(100)"
+	// parenthetical IS the MiscValue, 2026-11-17
+	// rule), radiusIdx 20; both targetA 22/15
+	// (caster-centred AoE; tooltip "nearby enemies");
+	// cast Instant idx 1, dur n/a idx 0, range Self
+	// idx 1, school Fire. Cooldown 3s NOT carried (no
+	// field in the seed struct).
+	{id: 20566, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 999, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 20, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 399, dieSides: 1, misc: 100, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 20, chainAmplitude: 1},
+	}},
+	// 21158 "Lava Burst" (Wowhead name MATCH; C++
+	// SPELL_LAVA_BURST) — eff0 School Damage (Fire),
+	// tooltip 925-1075 -> bp 924/die 151, radiusIdx 21
+	// (real 35yd row), targetA 22/15 (caster-centred
+	// AoE; tooltip "all enemies within 35 yards");
+	// cast Instant idx 1, dur n/a idx 0, range Self
+	// idx 1, school Fire. Ragnaros NOT listed as a
+	// user on Wowhead; C++ DoCastVictim :224 is the
+	// authority.
+	{id: 21158, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 924, dieSides: 151, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 21, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
