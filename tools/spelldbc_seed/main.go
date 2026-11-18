@@ -14836,6 +14836,85 @@ var spells = []spell{
 	{id: 31345, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
 		{effect: effWeaponDamage, basePoints: 1749, dieSides: 1, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 1},
 	}},
+	// 31914 "Sand Breath" (Wowhead SpellName MATCH; C++
+	// boss_epoch_hunter.cpp:42 enum, :120 DoCastVictim + Talk
+	// SAY_BREATH; Lua boss_epoch_hunter.lua:61 const, :120
+	// CastSpell(victim)) — Wowhead WotLK (verdict file
+	// wago_spells_31475_31914_31916_33834.txt; wago NOT attempted
+	// — contiguous rows, all Values present, no trigger): eff0 2
+	// SCHOOL_DAMAGE Arcane Value 1700 — bp 1699/die 1 (the
+	// 31436 flat convention: rolled value = bp+1); eff1 6
+	// APPLY_AURA Mod Melee Attack Speed -% Value -100 — aura
+	// 138 MOD_MELEE_HASTE bp -101/die 1 (the 40184 negative
+	// convention); eff2 6 APPLY_AURA Decrease Run Speed % Value
+	// -50 — aura 33 DEC_SPEED bp -51/die 1 (the 30600 slow
+	// precedent); all three targetA TARGET_UNIT_CONE_ENEMY_24
+	// (tooltip "cone in front of the caster", the 3452 cone
+	// precedent), radius 20yd — radiusIdx 9 (real row); cast5
+	// 2000ms; dur1 10000ms; range2 Combat 5yd (the cast range —
+	// the victim must be in melee range, tooltip "Melee Range");
+	// school Arcane. NOT carried: "Spell damage depends on
+	// caster level" (per-level scaling, no field) and the
+	// cone arc itself (engine cone gate).
+	{id: 31914, castTimeIdx: 5, durIdx: 1, rangeIdx: 2, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1699, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -101, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 31916 "Impending Death" (Wowhead SpellName MATCH; C++
+	// boss_epoch_hunter.cpp:43 enum, :136 DoCastVictim; Lua
+	// boss_epoch_hunter.lua:62 const, :136 CastSpell(victim)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 6
+	// APPLY_AURA PERIODIC_DAMAGE Value 750 every 3s — bp
+	// 749/die 1, period 3000; targetA TARGET_UNIT_TARGET_ENEMY
+	// (DoCastVictim); NO radius shown — radiusIdx 0; cast1
+	// instant; dur90013 24000ms (synthetic row, added for
+	// 30938, reused — no real 24000ms row in the table);
+	// range36 Longer 45yd; school Shadow. NOT carried: "Can
+	// only target the player" (no attributes field).
+	{id: 31916, castTimeIdx: 1, durIdx: 90013, rangeIdx: 36, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 749, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31475 "Wing Buffet" (Wowhead SpellName MATCH; C++
+	// boss_epoch_hunter.cpp:45 enum, :148 DoCast on a random
+	// target; Lua boss_epoch_hunter.lua:63 const, :148
+	// CastSpell(target)) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted — contiguous rows, both Values
+	// present, no trigger): eff0 98 KNOCK_BACK Value 100 — bp
+	// 99/die 1 (rolled value * 0.1 = speedZ 10, the 65100
+	// precedent; MiscValue NOT shown on Wowhead — seeded 0,
+	// flag for a wago DBC check, speedXY is 0 until then);
+	// eff1 2 SCHOOL_DAMAGE Physical Value 750, tooltip
+	// 750-1250 — bp 749/die 501 (the 30633 range convention);
+	// both targetA SRC_CASTER 22 / targetB SRC_AREA_ENEMY 15
+	// (tooltip "all enemies within 15 yards" — radial, not a
+	// cone; the C++ random-target cast is the cast call, the
+	// spell hits around the caster, the 40184 framing);
+	// radius 15yd — radiusIdx 18 (real row); cast1 instant;
+	// dur0; range1 Self Only; school Physical.
+	{id: 31475, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effKnockBack, basePoints: 99, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 749, dieSides: 501, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 33834 "Magic Disruption Aura" (Wowhead SpellName MATCH;
+	// C++ boss_epoch_hunter.cpp:44 enum, :160 DoCast(me); Lua
+	// boss_epoch_hunter.lua:64 const, :160 CastSpell(creature))
+	// — Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, trigger link carries ID
+	// 33835): single effect 6 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// Value 1 every 3s — bp 0/die 1 (the 40321 trigger
+	// precedent), period 3000, trigger 33835 Disrupt Magic
+	// (link target, ID shown); targetA SRC_CASTER 22 / targetB
+	// SRC_AREA_ENEMY 15 ("nearby enemies"); NO radius shown —
+	// radiusIdx 0 (the 29961 precedent for 22/15 + radius 0);
+	// cast1 instant; dur8 15000ms (real row); range1 Self Only;
+	// school Shadow (despite the Arcane-style icon); dispel 1
+	// Magic. 33835 itself is NOT seeded here (trigger-only
+	// reference, per the 30598/40321 practice).
+	{id: 33834, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 3000, trigger: 33835, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
