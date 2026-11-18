@@ -2301,6 +2301,99 @@ var spells = []spell{
 	{id: 44291, dispel: 1, mechanic: 19, castTimeIdx: 1, durIdx: 9, rangeIdx: 5, school: schoolHoly, manaCost: 500, effects: [3]effect{
 		{effect: effApplyAura, aura: auraSchoolAbsorb, basePoints: 1454, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 8988 "Silence" (boss_arcanist_doan.cpp:30 enum;
+	// Lua boss_arcanist_doan.lua:17,58 — 15s init then {15s,20s}
+	// non-triggered) — wago.tools 1.60.1.69977 SpellEffect row
+	// 686826 + SpellMisc 320972 + SpellPower 176027 +
+	// SpellCategories 72955: eff0 Apply Aura Silence (27) bp0/die1
+	// (1.60.1 BasePointsF 1 cross-checks round(0+0.5)=1; integers
+	// from the same row ID in wago 2.5.6.70577) misc126 (0x7e)
+	// tgtA SRC_CASTER (22) tgtB SRC_AREA_ENEMY (15), radiusIdx 18
+	// (15yd, real row) — FLAG: Wowhead Classic says radius 20yd and
+	// wago 2.5.6 gives radiusIdx 9 (20yd); the Classic client data
+	// (1.60.1) says 15yd and is seeded. Cast 1500ms idx 16, dur1
+	// 10000ms (real row), range1 Self Only (real row), school Nature,
+	// mana 30, dispel 1 Magic, mechanic 9 Silence. NOT carried:
+	// Attributes_0 0 / Attributes_1 0x88 / Attributes_15 0x2000 (no
+	// field); Category 32 (no field). No SpellTargetRestrictions row.
+	{id: 8988, dispel: 1, mechanic: 9, castTimeIdx: 16, durIdx: 1, rangeIdx: 1, school: schoolNature, manaCost: 30, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSilence, basePoints: 0, dieSides: 1, misc: 126, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 9433 "Arcane Explosion" (boss_arcanist_doan.cpp:31 enum;
+	// Lua boss_arcanist_doan.lua:20-21 — 3s init then 8s
+	// non-triggered DoCastVictim) — wago.tools 1.60.1.69977
+	// SpellEffect row 687234 + SpellMisc 321304 + SpellPower 176359
+	// + SpellCategories 73072: eff0 School Damage bp185/die13
+	// (1.60.1 BasePointsF 192 + Variance 0.0625 cross-check:
+	// round(185+6.5)=192, (13-1)/192=0.0625; integers from the same
+	// row ID in wago 2.5.6.70577) tgtA SRC_CASTER (22) tgtB
+	// SRC_AREA_ENEMY (15), radiusIdx 13 (10yd, real row). Cast
+	// Instant idx 1, dur0 (no row), range1 Self Only (real row),
+	// school Arcane, mana 330, dispel 1 Magic. FLAG: Wowhead tooltip
+	// 188-200 vs DBC 186-199 (Effect Value 186 = bp+1, consistent).
+	// NOT carried: RealPointsPerLevel 0.5 / BonusCoefficient 1 /
+	// Attributes / Category 0 (no fields).
+	{id: 9433, dispel: 1, castTimeIdx: 1, rangeIdx: 1, school: schoolArcane, manaCost: 330, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 185, dieSides: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 9435 "Detonation" (boss_arcanist_doan.cpp:32 enum;
+	// Lua boss_arcanist_doan.lua:35-36 — non-triggered DoCastAOE
+	// self-cast lowering) — wago.tools 1.60.1.69977 SpellEffect rows
+	// 687316/687317 + SpellMisc 321370 + SpellPower 176425 +
+	// SpellCategories 73100: eff0 School Damage bp637/die225
+	// (1.60.1 BasePointsF 750 + Variance 0.29866665602 cross-check:
+	// round(637+112.5)=750, (225-1)/750; integers from the same row
+	// IDs in wago 2.5.6.70577) tgtA SRC_CASTER (22) tgtB
+	// SRC_AREA_ENEMY (15), radiusIdx 10 (30yd, real row); eff1 Dummy
+	// bp0/die0 tgtA DEST_DYNOBJ_ENEMY — wago modern enum 18 is C++
+	// 3.3.5 28 (SharedDefines.h:1464), via targetDestDynobjEnemy.
+	// Cast 5000ms idx 6, dur0 (no row), range4 Medium 30yd (real
+	// row), school Fire, mana 153. Wowhead Value 638 = bp+1 and Dummy
+	// Value 1 = bp+1, consistent. NOT carried: BonusCoefficient 1 /
+	// Attributes / Category 63 (no fields). No DBC trigger links
+	// (TriggerSpell 0 on both effects).
+	{id: 9435, castTimeIdx: 6, rangeIdx: 4, school: schoolFire, manaCost: 153, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 637, dieSides: 225, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetDestDynobjEnemy, chainAmplitude: 1},
+	}},
+	// 9438 "Arcane Bubble" (boss_arcanist_doan.cpp:33 enum;
+	// Lua boss_arcanist_doan.lua:28 — DoCastSelf once via the
+	// _healthAbove50Pct bool) — wago.tools 1.60.1.69977 SpellEffect
+	// rows 687956/687957/687958 + SpellMisc 321877 + SpellPower
+	// 176932 + SpellCategories 73324: eff0 Apply Aura School Immunity
+	// (39) bp-1/die1 misc1 (Physical), eff1 Apply Aura Pacify (25)
+	// bp0/die1, eff2 Apply Aura School Immunity (39) bp0/die0 misc126
+	// (0x7e, the other six schools) — all tgtA CASTER (1); 1.60.1
+	// BasePointsF 0/1/0 cross-checks round(-1+0.5)=0, round(0.5)=1, 0;
+	// integers from the same row IDs in wago 2.5.6.70577. Cast Instant
+	// idx 1, dur31 8000ms (real row), range1 Self Only (real row),
+	// school Holy, mana 75. NOT carried: Attributes_0 0x20050000 /
+	// Category 37 (no fields).
+	{id: 9438, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolHoly, manaCost: 75, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolImmunity, basePoints: -1, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPacify, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraSchoolImmunity, basePoints: 0, dieSides: 0, misc: 126, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 13323 "Polymorph" (boss_arcanist_doan.cpp:34 enum;
+	// Lua boss_arcanist_doan.lua:21 — non-triggered) — wago.tools
+	// 1.60.1.69977 SpellEffect rows 690329/690330 + SpellMisc 323854
+	// + SpellPower 178909 + SpellCategories 74088 +
+	// SpellTargetRestrictions 206587: eff0 Apply Aura Confuse (5)
+	// bp-1/die1, eff1 Apply Aura Transform (56) bp0/die0 misc1933
+	// (sheep model) — both tgtA TARGET_ENEMY (6); 1.60.1
+	// BasePointsF 0/0 cross-checks round(-0.5)=0, 0; integers from the
+	// same row IDs in wago 2.5.6.70577. Cast 1500ms idx 16, dur18
+	// 20000ms (real row), range4 Medium 30yd (real row), school
+	// Physical (CLASSIC — TBC changes it to Arcane and adds a 3rd
+	// Dispel-Mounted effect; the extra 2.5.6 eff2 rows are NOT
+	// seeded), manaCostPct 10, dispel 1 Magic, mechanic 17
+	// Polymorph. NOT carried: DiminishType 16 / TargetCreatureType
+	// 211 (Beast+Dragonkin+Giant+Humanoid+Critter) / Attributes /
+	// Category 0 (no fields).
+	{id: 13323, dispel: 1, mechanic: 17, castTimeIdx: 16, durIdx: 18, rangeIdx: 4, school: schoolPhysical, manaCostPct: 10, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModConfuse, basePoints: -1, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraTransform, basePoints: 0, dieSides: 0, misc: 1933, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
