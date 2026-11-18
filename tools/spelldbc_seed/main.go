@@ -17726,6 +17726,99 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 2312, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 1017, dieSides: 1, auraPeriod: 2000, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 50830 "Chain Lightning" (Wowhead name "Chain Lightning"
+	// vs C++ SPELL_CHAIN_LIGHTING — LIGHTNING vs LIGHTING
+	// spelling only, the ID is authoritative; C++
+	// boss_sjonnir.cpp:30 enum, :167 DoCast(target)
+	// non-triggered, random player in range 100; Lua
+	// boss_sjonnir.lua:134 const, :211 CastSpell(target,
+	// SPELL_CHAIN_LIGHTING)) — Wowhead WotLK (verdict
+	// wago_spells_50830_50831_50834_51849.txt; wago NOT opened
+	// in the Wowhead read — no trigger row): single effect 2
+	// SCHOOL_DAMAGE Nature Value 1850 — bp 1849/die 1
+	// (single Value, no tooltip range); targetA ENEMY
+	// (DoCast target); chainTargets 3 (tooltip "affects up
+	// to 3 targets"); chainAmplitude 0.7 (67529 wago-verified
+	// Chain Lightning precedent — same effect shape,
+	// chainTargets 3; FLAG: needs a wago SpellEffect row
+	// check — wago.tools was bot-walled when the follow-up
+	// read ran 2026-11-18 06:16-06:19 EST, retry on a later
+	// tick); cast1 instant; dur0 (Duration n/a); range4 real
+	// 30yd Medium; school Nature. NOT carried: Cooldown 6s /
+	// GCD 1.5s (no fields); flags (no attributes field); Cost
+	// None (no field).
+	{id: 50830, castTimeIdx: 1, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1849, dieSides: 1, targetA: targetEnemy, chainTargets: 3, chainAmplitude: 0.7},
+	}},
+	// 50831 "Lightning Shield" (Wowhead name "Lightning
+	// Shield" vs C++ SPELL_LIGHTING_SHIELD — LIGHTNING vs
+	// LIGHTING spelling only; C++ boss_sjonnir.cpp:31 enum,
+	// :171 DoCast(me, SPELL_LIGHTING_SHIELD); Lua
+	// boss_sjonnir.lua:131 const, :299 CastSpell(creature,
+	// 50831)) — Wowhead WotLK (same verdict file; wago NOT
+	// opened — no trigger row): single effect 6 APPLY_AURA
+	// aura43 PROC_TRIGGER_DAMAGE Value 1000 — bp 999/die 1
+	// (27688 precedent: PROC_TRIGGER_DAMAGE bp 99 for Value
+	// 100, targetA CASTER, no misc); targetA CASTER (DoCast
+	// me); dur6 real 600000ms (Duration 10 minutes, the
+	// shield buff); cast1 instant; range4 real 30yd Medium
+	// (the DBC range even for a self-aura); school Nature;
+	// dispel 1 (Magic). NOT carried: proc chance 50% (no
+	// proc table); "10 balls / 10 charges" (no charges field
+	// in the seed struct); "Requires level 1" (no field);
+	// flags (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 50831, castTimeIdx: 1, durIdx: 6, rangeIdx: 4, school: schoolNature, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerDmg, basePoints: 999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 50834 "Static Charge" (Wowhead name MATCH; C++
+	// boss_sjonnir.cpp:29 enum, :174
+	// DoCastVictim(SPELL_STATIC_CHARGE); Lua
+	// boss_sjonnir.lua:132 const, :227 CastSpell(nil, 50834))
+	// — Wowhead WotLK (same verdict file; wago NOT opened —
+	// trigger link shown): single effect 6 APPLY_AURA aura23
+	// PERIODIC_TRIG Value "1 every 2 seconds" — bp 0/die 1
+	// (Wowhead displays basePoints+1; 52961 valueless
+	// precedent), auraPeriod 2000, trigger 50835 (NOT seeded
+	// — triggered spell; Wowhead link + C++ comment "Periodic
+	// Trigger 2s interval, spell = 50835" agree); targetA
+	// ENEMY (DoCastVictim); cast1 instant; dur1 real 10000ms
+	// (Duration 10 seconds); range6 real 100yd Vision; school
+	// Nature; dispel 1 (Magic). NOT carried: flags ("Can only
+	// target the player", no attributes field); GCD 0 / Cost
+	// None (no fields).
+	{id: 50834, castTimeIdx: 1, durIdx: 1, rangeIdx: 6, school: schoolNature, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 2000, trigger: 50835, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 51849 "Lightning Ring" (Wowhead name "Lightning Ring"
+	// vs C++ SPELL_LIGHTING_RING — LIGHTNING vs LIGHTING
+	// spelling only; C++ boss_sjonnir.cpp:27 enum, :178
+	// DoCast(me, SPELL_LIGHTING_RING); Lua
+	// boss_sjonnir.lua:133 const, :243 CastSpell(creature,
+	// 51849)) — Wowhead WotLK (same verdict file; wago NOT
+	// opened in the Wowhead read — eff1 trigger link shown,
+	// eff2 not valueless): eff0 6 APPLY_AURA aura23
+	// PERIODIC_TRIG valueless — bp 0/die 1, auraPeriod 1000
+	// (Wowhead Interval 1 second; the C++ comment says
+	// "interval 2s" — Wowhead wins, the interval comes from
+	// the DBC amplitude; FLAG: needs a wago SpellEffect row
+	// check), trigger 50841 (NOT seeded — triggered spell;
+	// Wowhead link + C++ comment agree on the ID);
+	// targetA CASTER (DoCast me). eff1 "Trigger Spell from
+	// Target with Caster as Target" Value 1 is UNSEEDED: its
+	// numeric effect type + trigger spell are unknown, no
+	// 3.3.5 effect name matches it (effect 151 is
+	// TRIGGER_SPELL_2 = ritual-of-summoning, not this), and
+	// the wago.tools SpellEffect follow-up was bot-walled on
+	// 2026-11-18 06:16-06:19 EST — RETRY the wago read on a
+	// later tick and complete eff1 then; do not guess the
+	// effect ID. cast1 per the channeled-cast fix; dur28 real
+	// 5000ms (Duration 5 seconds, the channel); range1 Self
+	// 0yd; school Physical. NOT carried: flags ("Channeled",
+	// no attributes field); GCD 0 / Cost None (no fields).
+	{id: 51849, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 50841, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
