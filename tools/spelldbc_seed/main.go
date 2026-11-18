@@ -16688,6 +16688,79 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModScale, basePoints: 99, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModIncreaseHealth, basePoints: 9999, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
 	}},
+	// 28096 "Stalagg Chain" (Wowhead SpellName MISMATCH — missing
+	// "Visual" vs C++ enum SPELL_STALAGG_CHAIN_VISUAL; C++
+	// boss_thaddius.cpp:103 enum, :631 creatureCaster->CastSpell(me,
+	// true); Lua npc_stalagg.lua:122 const, :405 CastSpell(creature,
+	// true)) — Wowhead WotLK + wago.tools SpellEffect row 704201
+	// (build 3.4.3.52237, verdict
+	// wago_spells_28096_28099_28134_28159.txt): single effect 6
+	// APPLY_AURA periodic-trigger aura23 — bp 0/die 1, auraPeriod
+	// 1000; trigger 0 (no triggered spell stored — Wowhead shows no
+	// link, correctly); misc 0 / miscB 0; targetA 38
+	// TARGET_UNIT_NEARBY_ENTRY (same-entry-as-caster, SpellInfo.cpp:
+	// 258 / SpellMgr.cpp:4333 note — misc 0 is correct, not an
+	// omission); cast1 (channeled — 29350 precedent); dur0
+	// (Duration n/a; Lua comment: channel has no finite DBC duration,
+	// beam ends via the RemoveAura leg); range13 Anywhere 50000yd;
+	// school Physical. NOT carried: "Cast time is hidden" /
+	// "Channeled" / "No Aura Icon" (no attributes field); GCD 0 /
+	// Cost None (no fields).
+	{id: 28096, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+	}},
+	// 28099 "Shock" (Wowhead SpellName MISMATCH — missing "Tesla"
+	// vs C++ enum SPELL_TESLA_SHOCK; C++ boss_thaddius.cpp:117
+	// enum, :623 creatureCaster->CastSpell(random threat target,
+	// true); Lua npc_stalagg.lua:123 const, :399 CastSpell(target,
+	// true)) — Wowhead WotLK (same verdict file; wago NOT opened —
+	// single School Damage effect): single effect 2 SCHOOL_DAMAGE
+	// Value 6563, tooltip range 6563-8437 — effect-row low matches
+	// the tooltip low, so bp 6562/die 1875 (23313/52372/29107/55550
+	// precedent); "(Nature)" is the school, not a MiscValue;
+	// targetA ENEMY (random threat target); cast4 1000ms (1 sec);
+	// dur0 (Duration n/a); range13 Anywhere 50000yd; school Nature.
+	// NOT carried: "Unaffected by invulnerability" / "Cannot be
+	// reflected" / "All spell effects are harmful" / "No Aura Icon" /
+	// "Ignore Line of Sight" / "Can only target the player" (no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 28099, castTimeIdx: 4, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 6562, dieSides: 1875, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 28134 "Power Surge" (Wowhead SpellName MISMATCH — missing
+	// "Stalagg" vs C++ enum SPELL_STALAGG_POWERSURGE; C++
+	// boss_thaddius.cpp:100 enum, :648 DoCast(me); Lua
+	// npc_stalagg.lua:107 const, :201 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened): single
+	// effect 6 APPLY_AURA Mod Melee Attack Speed Value 200% (DOM
+	// wording; a plain extraction renders "Modifies attack speed %")
+	// — aura138 MOD_MELEE_HASTE (SpellAuraDefines.h:218), bp 199/
+	// die 1; targetA CASTER (DoCast-me self-buff, 26662 precedent:
+	// same aura, same shape — FLAG: needs a wago SpellEffect row
+	// check before changing, the 44256 class would say 21);
+	// cast1 instant; dur1 real 10000ms (10 seconds); range13
+	// Anywhere 50000yd; school Physical. NOT carried: no Flags row
+	// shown (no attributes field); GCD 0 / Cost None (no fields).
+	{id: 28134, castTimeIdx: 1, durIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 199, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 28159 "Shock" (Wowhead SpellName MISMATCH — missing "Visual"
+	// vs C++ enum SPELL_SHOCK_VISUAL; C++ boss_thaddius.cpp:143
+	// enum, :542/:793 coil->CastSpell(thaddius); Lua
+	// npc_stalagg.lua:143 const, :464 CastSpell(thaddius)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened): single
+	// effect 3 DUMMY Value 1, Radius 100 yards — bp 0/die 1,
+	// radiusIdx 12 (real 100yd row); targetA 21 TARGET_ALLY
+	// (coil casts on Thaddius, an ally — 44256 wago-verified class;
+	// FLAG: needs a wago SpellEffect row check before changing,
+	// 25 TARGET_ANY is the alternative); cast1 instant; dur0
+	// (Duration n/a); range13 Anywhere 50000yd; school Physical.
+	// NOT carried: "Cast time is hidden" (no attributes field);
+	// "Server-side script" (no field); GCD 0 / Cost None (no
+	// fields).
+	{id: 28159, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetUnitTargetAlly, radiusIdx: 12, chainAmplitude: 1},
+	}},
 }
 
 func main() {
