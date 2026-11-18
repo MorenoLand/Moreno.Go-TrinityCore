@@ -16619,6 +16619,75 @@ var spells = []spell{
 	{id: 30211, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effTeleportUnits, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 56119 "Summon Swarmers" (Wowhead SpellName MATCH; C++
+	// boss_elder_nadox.cpp:39 enum ("2x 30178"), :143 DoCast me;
+	// Lua boss_elder_nadox.lua:97 const, :149 CastSpell(creature))
+	// — Wowhead WotLK (verdict wago_spells_56119_56120_56130_59465.txt;
+	// wago NOT attempted — single effect with a Value, not a trigger):
+	// single effect 28 SUMMON Value 2 — bp 1/die 1; misc 30178
+	// Ahn'kahar Swarmer (creature link, matches C++ comment); miscB
+	// 64 (SummonProperties, 24081/63081/63145/667xx summon precedent);
+	// targetA CASTER (DoCast me); cast1 instant; dur90016 NEW
+	// synthetic 240000ms (4 minutes — no real 240000ms row in the
+	// table, 90013/90015 precedent); range1 Self 0yd; school Nature.
+	// NOT carried: "Requires level 20" (no field); "Cast time is
+	// hidden" / "No Aura Icon" (no attributes field); GCD 0 /
+	// Cost None (no fields).
+	{id: 56119, castTimeIdx: 1, durIdx: 90016, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effSummon, basePoints: 1, dieSides: 1, targetA: targetCaster, misc: 30178, miscB: 64, chainAmplitude: 1},
+	}},
+	// 56120 "Summon Swarm Guardian" (Wowhead SpellName MISMATCH —
+	// "Guardian" vs C++ enum SUMMON_SWARM_GUARD "Guard"; C++
+	// boss_elder_nadox.cpp:40 enum ("1x 30176"), :164 DoCast me
+	// (50% health latch); Lua boss_elder_nadox.lua:98 const, :300
+	// CastSpell(creature)) — Wowhead WotLK (same verdict file; wago
+	// NOT attempted): single effect 28 SUMMON Value 1 — bp 0/die 1;
+	// misc 30176 Ahn'kahar Guardian (creature link, matches C++
+	// comment); miscB 64 (summon precedent, as 56119); targetA
+	// CASTER (DoCast me); cast1 instant; dur5 real 300000ms (5
+	// minutes); range1 Self 0yd; school Nature. NOT carried: as
+	// 56119.
+	{id: 56120, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, targetA: targetCaster, misc: 30176, miscB: 64, chainAmplitude: 1},
+	}},
+	// 56130 "Brood Plague" (Wowhead SpellName MATCH; C++
+	// boss_elder_nadox.cpp:36 enum, :134 DoCast random target
+	// TRIGGERED; Lua boss_elder_nadox.lua:94 const, :165
+	// CastSpell(target, true)) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted): single effect 6 APPLY_AURA periodic
+	// damage Value 1275 every 3s — bp 1274/die 1, auraPeriod 3000;
+	// tooltip total 12750 over 30s = 1275 x 10 ticks, consistent;
+	// targetA ENEMY (DoCast random target); cast1 instant; dur9
+	// real 30000ms (30 seconds); range2 Combat 5yd; school Nature;
+	// dispel 3 Disease. NOT carried: "Cannot be reflected" /
+	// "All spell effects are harmful" (no attributes field); GCD 0 /
+	// Cost None (no fields).
+	{id: 56130, dispel: 3, castTimeIdx: 1, durIdx: 9, rangeIdx: 2, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 1274, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 59465 "Brood Rage" (Wowhead SpellName MATCH; C++
+	// boss_elder_nadox.cpp:37 enum, :138 DoCast no-target (self via
+	// AITARGET_BUFF); Lua boss_elder_nadox.lua:95 const, :176
+	// CastSpell(creature), heroic-only) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted): three APPLY_AURA effects, all
+	// targetA 21 TARGET_ALLY (DoCast-me beneficial-spell precedent,
+	// wago-verified 44256; FLAG: needs a wago SpellEffect row check
+	// before changing — the 40yd range + "Enrages a Swarmer" tooltip
+	// leave the real DBC target open): eff0 aura13 MOD_DAMAGE_DONE
+	// Value 200% — bp 199/die 1, misc 127 (all 7 schools listed,
+	// 29125 school-list derivation — also FLAG for wago); eff1
+	// aura61 MOD_SCALE Value 100% — bp 99/die 1; eff2 aura34
+	// MOD_INCREASE_HEALTH Value 10000 — bp 9999/die 1; cast1
+	// instant; dur4 real 120000ms (2 minutes); range5 Long 40yd;
+	// school Shadow; dispel 9 Enrage (SharedDefines.h:1413). NOT
+	// carried: "Ignore Line of Sight" (no attributes field); the
+	// Buff text's missing size mention (effect #2 carries it); GCD 0
+	// / Cost None (no fields).
+	{id: 59465, dispel: 9, castTimeIdx: 1, durIdx: 4, rangeIdx: 5, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: 199, dieSides: 1, misc: 127, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 99, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseHealth, basePoints: 9999, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -16665,6 +16734,7 @@ func main() {
 		{90012, 14400000, 0, 14400000},
 		{90013, 24000, 0, 24000},     // synthetic duration for 30938 Corruption (no real 24000ms row in the table)
 		{90015, 3600000, 0, 3600000}, // synthetic duration for 8733 Blessing of Blackfathom (no real 3600000ms row in the table; 90014 stays reserved for 38116 Searing Totem 35000ms)
+		{90016, 240000, 0, 240000},   // synthetic duration for 56119 Summon Swarmers (no real 240000ms row in the table)
 		{4, 120000, 0, 120000},       // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
 		{8, 15000, 0, 15000},         // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
 		{27, 3000, 0, 3000},          // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
