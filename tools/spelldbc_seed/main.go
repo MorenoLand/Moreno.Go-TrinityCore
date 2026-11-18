@@ -15487,6 +15487,81 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 74, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModScale, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 25991 "Poison Bolt Volley" (Wowhead SpellName MATCH; C++
+	// boss_viscidus.cpp:30 enum, :236 DoCast(me); Lua
+	// boss_viscidus.lua:89 const, :137 CastSpell(creature)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_25991_25993_26003_26575.txt; wago NOT attempted
+	// — contiguous rows, all Values present, no trigger): eff0 2
+	// SCHOOL_DAMAGE Nature Value 1313, no range shown — bp
+	// 1312/die 1 (the 31436 flat convention); eff1 6 APPLY_AURA
+	// PERIODIC DAMAGE Value 413 every 2s — bp 412/die 174 (the
+	// Buff "413 to 587" IS the die source, the 30633 range
+	// convention), period 2000; both targetA SRC_CASTER 22 /
+	// targetB SRC_AREA_ENEMY 15 (DoCast(me) self-cast, the
+	// 25749 Stinger Spray precedent); radius 100yd — radiusIdx
+	// 12 (real row); cast1 instant; dur1 10000ms (real row —
+	// Duration 10 seconds, Buff + Spell Details agree); range6
+	// Vision 100yd (real row); school Nature; dispel 4 Poison
+	// (SharedDefines.h:1408). NOT carried: "Cannot be
+	// reflected" / "Ignore Line of Sight" (no attributes field)
+	// and the 0.1 SP mod (no coefficient field).
+	{id: 25991, castTimeIdx: 1, durIdx: 1, rangeIdx: 6, school: schoolNature, dispel: 4, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1312, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 412, dieSides: 174, auraPeriod: 2000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 25993 "Poison Shock" (Wowhead SpellName MATCH; C++
+	// boss_viscidus.cpp:29 enum, :240 DoCast(me); Lua
+	// boss_viscidus.lua:88 const, :145 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 2
+	// SCHOOL_DAMAGE Nature Value 1050, tooltip 1050-1350 — bp
+	// 1049/die 300 (the 30633 range convention); targetA
+	// UNIT_CONE_ENEMY 24 (the 31914 cone precedent —
+	// "Splashes all targets in front of the caster"); radius
+	// 15yd — radiusIdx 18 (real row); cast1 instant; dur0;
+	// range11 Fifteen yards 15yd (real row — NOT rangeIdx 3,
+	// which is the 20yd row); school Nature. NOT carried:
+	// "Do Not Sheath" / "Cannot be reflected" / "Can only
+	// target the player" (no attributes field) and the level
+	// 20 requirement (no level field in the seeder).
+	{id: 25993, castTimeIdx: 1, rangeIdx: 11, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1049, dieSides: 300, targetA: targetUnitConeEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 26003 "Viscidus Suicide Trigger" (Wowhead display MISMATCH
+	// vs C++ VISCIDUS_SUICIDE — Wowhead adds "Trigger"; TC enum
+	// authoritative per 30925, seeder writes no name column; C++
+	// boss_viscidus.cpp:37 enum, :205 DoCast(me) JustDied; Lua
+	// boss_viscidus.lua:91 const, :193 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 3
+	// DUMMY Value 1 — bp 0/die 1 (the 19593 dummy precedent);
+	// targetA CASTER (DoCast(me) self-cast); cast1 instant;
+	// dur0; range1 Self Only (real row); school Physical. NOT
+	// carried: "Cast time is hidden" / "Ignore Line of Sight"
+	// / "Does not appear in log" (no attributes field); the
+	// suicide behaviour itself is server-side script per
+	// Wowhead — no further seedable values.
+	{id: 26003, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 26575 "Toxin" (Wowhead SpellName MATCH; C++
+	// boss_viscidus.cpp:31 enum, :192 DoCast(me) engage; Lua
+	// boss_viscidus.lua:90 const, :164 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, trigger ID confirmed): single
+	// effect 6 APPLY_AURA PERIODIC_TRIGGER_SPELL (aura 23)
+	// Value 1 every 10s — bp 0/die 1, period 10000, trigger
+	// 25989 (the 63322 auraPeriodicTrig precedent: aura 23 +
+	// trigger + targetA CASTER); targetA CASTER (DoCast(me)
+	// self-cast); cast1 instant; dur0; range13 Anywhere
+	// 50000yd (real row); school Nature. 25989 itself is NOT
+	// seeded here (trigger-only reference, per the 25852->6608
+	// practice). NOT carried: "Passive spell" / "Can only
+	// target the player" (no attributes field).
+	{id: 26575, castTimeIdx: 1, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 10000, trigger: 25989, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
