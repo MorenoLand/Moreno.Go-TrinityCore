@@ -19288,6 +19288,103 @@ var spells = []spell{
 	// read; do not guess. (This comment block holds
 	// the place so the gap stays visible in-tree; no
 	// seed row for 26837 exists.)
+	// 31704 "Levitate" (Wowhead name MATCH; C++
+	// SPELL_LEVITATE, boss_the_black_stalker.cpp:36,
+	// :168 DoCast(target)) — eff0 Apply Aura Periodic
+	// Trigger Spell (aura 23), Value 1 every 3s -> bp 0,
+	// die 1, auraPeriod 3000, trigger 31701 Levitation
+	// Pulse (NOT seeded — triggered spell, outside the
+	// five), radiusIdx 11 (45yd real row), targetA ENEMY
+	// (DoCast target); eff1 Script Effect, Value 1 -> bp
+	// 0, die 1, radiusIdx 11, targetA ENEMY; cast1
+	// (channeled 6s — 51849 channeled-cast fix precedent;
+	// Channeled flag not carried, no attributes field),
+	// dur32 6000ms (real row), range6 Vision 100yd (real
+	// row), school Physical, maxTargets 1 (shown).
+	// FLAG: tooltip range 100yd vs effect radius 45yd;
+	// "helplessly suspended" is not an aura effect on
+	// the page.
+	{id: 31704, castTimeIdx: 1, durIdx: 32, rangeIdx: 6, maxTargets: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 3000, trigger: 31701, targetA: targetEnemy, radiusIdx: 11, chainAmplitude: 1},
+		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 31715 "Static Charge" (Wowhead name MATCH; C++
+	// SPELL_STATIC_CHARGE, boss_the_black_stalker.cpp:39,
+	// :188 DoCast(target, 30yd SelectTarget)) — eff0
+	// Apply Aura Periodic Damage (aura 3), Value 750
+	// every 2s -> bp 749, die 1, auraPeriod 2000, targetA
+	// ENEMY; eff1 ZERO (not displayed — numbering jumps
+	// #1 to #3, {} hole precedent); eff2 Apply Aura
+	// Periodic Trigger Spell (aura 23), Value 1 every 1s
+	// -> bp 0, die 1, auraPeriod 1000, trigger 31716
+	// (NOT seeded — triggered spell, outside the five),
+	// targetA ENEMY; cast Instant idx 1, dur29 12000ms
+	// (real row), range4 Medium 30yd (real row), school
+	// Nature. FLAG: zap radius unverifiable (no radius
+	// on either effect); 3s cooldown not carried (no
+	// cooldown field); tooltip 4500/12s = 750x6 ticks
+	// consistent.
+	{id: 31715, castTimeIdx: 1, durIdx: 29, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 749, dieSides: 1, auraPeriod: 2000, targetA: targetEnemy, chainAmplitude: 1},
+		{},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 31716, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31717 "Chain Lightning" (Wowhead name MATCH; C++
+	// SPELL_CHAIN_LIGHTNING, boss_the_black_stalker.cpp:38,
+	// :180 DoCast(target)) — eff0 School Damage (Nature),
+	// Value 278 -> bp 277, die 1, targetA ENEMY (DoCast
+	// target), chainAmplitude 1 (35010 convention); cast
+	// 3s idx 14 (real row), dur n/a idx 0, range135 Tower
+	// 100yd (real row), school Nature, manaCost 150.
+	// FLAG: chain/jump scaling + "up to 5 targets"
+	// unverified (no Max targets row, no chain data
+	// shown); 3s cooldown not carried.
+	{id: 31717, castTimeIdx: 14, rangeIdx: 135, school: schoolNature, manaCost: 150, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 277, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31719 "Suspension" (Wowhead name MATCH; C++
+	// SPELL_SUSPENSION, boss_the_black_stalker.cpp:33,
+	// :150 target->AddAura(SPELL_SUSPENSION, target)) —
+	// eff0 LEFT OUT: "Cannot dodge, block or parry"
+	// maps to no SpellAuraDefines id from the Wowhead
+	// page (49/47/51 are separate dodge/parry/block %
+	// auras; wago.tools bot-walled 2026-11-18; web
+	// search silent — do-not-guess rule, 26837/72091
+	// precedent); eff1 Apply Aura Decrease Run Speed %
+	// (aura 33), Value -50% -> bp -51, die 1 (Frostbolt
+	// -40% -> -41 precedent), targetA ENEMY (AddAura
+	// target); eff2 Apply Aura Effect Immunity (aura
+	// 37), Value 1 -> bp 0, die 1, misc 98
+	// SPELL_EFFECT_KNOCK_BACK (Go immunity.go: a.misc
+	// == eff.Effect), targetA ENEMY; dispel 1 Magic,
+	// mechanic 12 Stun (31718 precedent), cast Instant
+	// idx 1, dur18 20000ms (real row), range4 Medium
+	// 30yd (real row), school Nature, manaCost 19.
+	// FLAG: eff0 needs a wago SpellEffect row check; no
+	// Used-by-NPC tab (only the 2007 user comment links
+	// it to Levitate).
+	{id: 31719, dispel: 1, mechanic: 12, castTimeIdx: 1, durIdx: 18, rangeIdx: 4, school: schoolNature, manaCost: 19, effects: [3]effect{
+		{},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraEffImmunity, basePoints: 0, dieSides: 1, misc: 98, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 38755 "Summon Spore Strider" (Wowhead name MATCH;
+	// C++ SPELL_SUMMON_SPORE_STRIDER,
+	// boss_the_black_stalker.cpp:37, :132 DoCast(me),
+	// heroic-only) — eff0 Summon, Value 1 -> bp 0, die
+	// 1, misc 22299 Spore Strider, radiusIdx 10 (30yd
+	// real row), targetA 32 DEST_CASTER_SUMMON (31264
+	// wago-verified pattern), miscB 64 WILD TempSummon
+	// branch (C++ SummonList + DespawnAll lifecycle,
+	// 34980 precedent); cast Instant idx 1, dur90007
+	// 180000ms synthetic (63420 precedent — durIdx 25
+	// is 30000ms since the 2026-11-16 correction, NOT
+	// 3 min), range1 Self, school Arcane. FLAG: targetA
+	// 32 + miscB 64 inferred — needs a wago
+	// SpellEffect/SummonProperties row check.
+	{id: 38755, castTimeIdx: 1, durIdx: 90007, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 22299, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 10, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
