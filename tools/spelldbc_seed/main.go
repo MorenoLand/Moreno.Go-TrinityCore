@@ -19089,12 +19089,17 @@ var spells = []spell{
 	// -> bp -1, die 1, auraPeriod 3000, trigger 37076 (NOT
 	// seeded — 61727 precedent; 37076 is the distiller's own
 	// rage spell, outside this five); targetA CASTER
-	// (self-cast channel); cast Channeled 12s idx 92006
-	// (synthetic row, FLAG real row ID unknown), dur n/a
-	// idx 0, range Unlimited idx 13 (real row), school
+	// (self-cast channel); cast Instant idx 1 + dur 12s
+	// idx 29 (real row) per the 42939/49519/31387 channel
+	// convention — the channel length lives in durIdx (the
+	// seed carries no Channeled attribute bits, so durIdx 0
+	// would arm no expiry timer, boss_ai.go:9526-9529, and
+	// the periodic trigger would fire forever instead of
+	// for the 12s C++ channel); range Unlimited idx 13
+	// (real row), school
 	// OMITTED (0 — no School row shown, FLAG wago
 	// SpellMisc row check).
-	{id: 31543, castTimeIdx: 92006, rangeIdx: 13, effects: [3]effect{
+	{id: 31543, castTimeIdx: 1, durIdx: 29, rangeIdx: 13, effects: [3]effect{
 		{effect: effDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 3000, trigger: 37076, targetA: targetCaster, chainAmplitude: 1},
 	}},
@@ -19123,12 +19128,15 @@ var spells = []spell{
 	// Value 0 -> bp -1, die 1; eff1 Apply Aura Periodic
 	// Trigger Spell (aura 23), Value 0 -> bp -1, die 1,
 	// auraPeriod 12000, trigger 36453 (seeded above);
-	// targetA CASTER (self-cast channel); cast Channeled
-	// 12s idx 92006 (synthetic row, FLAG real row ID
-	// unknown), dur n/a idx 0, range Unlimited idx 13
+	// targetA CASTER (self-cast channel); cast Instant idx
+	// 1 + dur 12s idx 29 (real row) per the 42939 channel
+	// convention (durIdx 0 would leave the periodic trigger
+	// aura permanent, boss_ai.go:9526-9529 — no expiry
+	// timer — vs the 12s C++ channel); range Unlimited
+	// idx 13
 	// (real row), school OMITTED (0 — no School row shown,
 	// FLAG wago SpellMisc row check).
-	{id: 37081, castTimeIdx: 92006, rangeIdx: 13, effects: [3]effect{
+	{id: 37081, castTimeIdx: 1, durIdx: 29, rangeIdx: 13, effects: [3]effect{
 		{effect: effDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 12000, trigger: 36453, targetA: targetCaster, chainAmplitude: 1},
 	}},
@@ -19310,8 +19318,6 @@ func main() {
 		{92004, 3500, 0},
 		// synthetic SpellCastTimes 92005 (1600ms) for 35158/35159 Reflective shields — no real 1600ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
 		{92005, 1600, 0},
-		// synthetic SpellCastTimes 92006 (12000ms) for 31543/37081 Warlord's Rage (channeled 12 sec) — no real 12000ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
-		{92006, 12000, 0},
 		{2, 250, 0},    // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
 		{14, 3000, 0},  // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
 		{16, 1500, 0},  // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
