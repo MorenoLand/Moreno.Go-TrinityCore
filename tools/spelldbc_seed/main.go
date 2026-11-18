@@ -114,6 +114,7 @@ const (
 	auraModPercentStat         = 80  // SPELL_AURA_MOD_PERCENT_STAT (SpellAuraDefines.h:160)
 	auraSchoolAbsorb           = 69  // SPELL_AURA_SCHOOL_ABSORB (SpellAuraDefines.h:149)
 	auraModDamageDone          = 13  // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93) — NOT auraModDmgDone=79 (that is MOD_DAMAGE_PERCENT_DONE, SpellAuraDefines.h:159; pre-existing misnomer, left alone)
+	auraModStealthDetect       = 17  // SPELL_AURA_MOD_STEALTH_DETECT (SpellAuraDefines.h:97)
 	auraModInvisibility        = 18  // SPELL_AURA_MOD_INVISIBILITY
 	auraModInvisDetect         = 19  // SPELL_AURA_MOD_INVISIBILITY_DETECT (SpellAuraDefines.h:99)
 	auraObsModHealth           = 20  // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
@@ -18496,6 +18497,134 @@ var spells = []spell{
 	// / Cost NOT carried.
 	{id: 39096, castTimeIdx: 14, rangeIdx: 1, school: schoolNature, effects: [3]effect{
 		{effect: effDummy, basePoints: 0, dieSides: 1, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29837 "Fist of Stone" (Wowhead name MATCH; C++
+	// SPELL_FISTOFSTONE) — karazhan/npc_arcane_protector; eff0
+	// Decrease Run Speed % (aura 33), Value -75 -> bp -76/die 1;
+	// eff1 Mod Melee Attack Speed % (aura 138), Value -35 -> bp
+	// -36/die 1; eff2 Mod Damage Done % Physical (aura 79), Value
+	// 35 -> bp 34/die 1, misc 1 (Physical school mask, 24312/62662
+	// precedent); all targetA CASTER (DoCast self); cast Instant
+	// idx 1, dur 12s idx 29 (real row), range Self idx 1, school
+	// Physical. Requires level 70 / buff text / flags / GCD /
+	// Cost NOT carried (no fields). Wowhead "Used by NPC" tab
+	// confirms Arcane Protector (16504).
+	{id: 29837, castTimeIdx: 1, durIdx: 29, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -76, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -36, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 34, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 41634 "Invisibility and Stealth Detection" (Wowhead name
+	// MISMATCH — C++ SPELL_INVI is an abbreviation only) —
+	// karazhan/npc_arcane_protector; eff0 Invisibility Detection
+	// (aura 19), Value 100000 -> bp 99999/die 1, misc 0 (Wowhead
+	// shows no MiscValue; 75180 precedent had "(9)" -> misc 9 —
+	// FLAG wago SpellEffect row check); eff1 Stealth Detection
+	// (aura 17, NEW const), Value 100000 -> bp 99999/die 1, misc
+	// 0 (MOD_STEALTH_DETECT takes no misc); both targetA CASTER
+	// (DoCast self on Reset); cast Instant idx 1, dur n/a idx 0,
+	// range Self idx 1, school Physical. Passive/hidden flags
+	// NOT carried (no attributes field). No Wowhead "Used by NPC"
+	// tab — C++ Reset cast is the authority.
+	{id: 41634, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModInvisDetect, basePoints: 99999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModStealthDetect, basePoints: 99999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29788 "Return Fire" (Wowhead name PARTIAL — base name
+	// matches, C++ _MEELE qualifier absent) —
+	// karazhan/npc_arcane_protector; eff0 Proc Trigger Spell
+	// (aura 42), Value 1 -> bp 0/die 1, trigger 29815 (NOT
+	// seeded); eff1 Periodically trigger spell (aura 23), Value
+	// 1 -> bp 0/die 1, period 20000, trigger 29805 (NOT seeded,
+	// unnamed on Wowhead); both targetA CASTER (DoCast self);
+	// cast Instant idx 1, dur 20s idx 18 (real row), range Vision
+	// 0-100yd idx 6 (real row), school Arcane. Tooltip "Retaliates
+	// against melee attacks" is the melee/spell/ranged distinguisher.
+	// Proc chance 100% / flags NOT carried (no fields).
+	{id: 29788, castTimeIdx: 1, durIdx: 18, rangeIdx: 6, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 29815, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 20000, trigger: 29805, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29793 "Return Fire" (Wowhead name PARTIAL — base name
+	// matches, C++ _SPELL qualifier absent) — same shape as
+	// 29788; periodic trigger 29807 (NOT seeded, unnamed on
+	// Wowhead); tooltip "Retaliates against spell attacks".
+	{id: 29793, castTimeIdx: 1, durIdx: 18, rangeIdx: 6, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 29815, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 20000, trigger: 29807, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29794 "Return Fire" (Wowhead name PARTIAL — base name
+	// matches, C++ _RANGED qualifier absent) — same shape as
+	// 29788; periodic trigger 29806 (NOT seeded, unnamed on
+	// Wowhead); tooltip "Retaliates against ranged attacks".
+	{id: 29794, castTimeIdx: 1, durIdx: 18, rangeIdx: 6, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 29815, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 20000, trigger: 29806, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29837 "Fist of Stone" (Wowhead name MATCH; C++
+	// SPELL_FISTOFSTONE) — karazhan/npc_arcane_protector;
+	// eff0 Decrease Run Speed % Value -75 -> bp -76,
+	// eff1 Mod Melee Attack Speed -% Value -35 -> bp -36,
+	// eff2 Mod Damage Done % (Physical) Value 35 -> bp 34
+	// misc 1 (wago-verified 8269 Frenzy precedent: aura 13
+	// MiscValue 1, NOT aura 79), all targetA CASTER
+	// (DoCast self); cast Instant idx 1, dur 12s idx 29
+	// (real row), range Self idx 1, school Physical.
+	// Tooltip text / Requires level 70 / GCD / Cost NOT
+	// carried.
+	{id: 29837, castTimeIdx: 1, durIdx: 29, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -76, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -36, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: 34, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 41634 "Invisibility and Stealth Detection" (Wowhead
+	// name MISMATCH vs C++ SPELL_INVI — adds "and Stealth
+	// Detection", INVI is only an abbreviation) — eff0
+	// Invisibility Detection Value 100000 -> bp 99999,
+	// eff1 Stealth Detection Value 100000 -> bp 99999,
+	// both targetA CASTER (DoCast self on Reset); cast
+	// Instant idx 1, dur n/a idx 0, range Self idx 1,
+	// school Physical. Misc 0 on both (no "(N)"
+	// parenthetical shown on Wowhead). Passive / Aura is
+	// hidden / No Aura Icon NOT carried. FLAG: needs a
+	// wago SpellEffect row check (detection misc values).
+	{id: 41634, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModInvisDetect, basePoints: 99999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModStealthDetect, basePoints: 99999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29788 "Return Fire" (PARTIAL match vs C++
+	// SPELL_RETURNFIRE_MEELE — base name only, the _MEELE
+	// qualifier is absent) — melee variant (tooltip
+	// "Retaliates against melee attacks"); eff0 Proc
+	// Trigger Spell Value 1 -> bp 0, trigger 29815;
+	// eff1 Periodically trigger spell Value 1 every 20s
+	// -> bp 0, period 20000, trigger 29805; both targetA
+	// CASTER (DoCast self); cast Instant idx 1, dur 20s
+	// idx 18 (real row), range Vision 100yd idx 6 (real
+	// row), school Arcane. Triggers 29815/29805 NOT
+	// seeded (triggered spells, outside live-cast queue).
+	// Proc chance 100% / flags NOT carried (no fields).
+	{id: 29788, castTimeIdx: 1, durIdx: 18, rangeIdx: 6, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 29815, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 20000, trigger: 29805, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29793 "Return Fire" (PARTIAL match vs C++
+	// SPELL_RETURNFIRE_SPELL — base name only) — spell
+	// variant ("Retaliates against spell attacks"); eff0
+	// Proc Trigger Spell trigger 29815, eff1 Periodic
+	// trigger spell 29807, otherwise identical to 29788.
+	{id: 29793, castTimeIdx: 1, durIdx: 18, rangeIdx: 6, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 29815, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 20000, trigger: 29807, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29794 "Return Fire" (PARTIAL match vs C++
+	// SPELL_RETURNFIRE_RANGED — base name only) — ranged
+	// variant ("Retaliates against ranged attacks"); eff0
+	// Proc Trigger Spell trigger 29815, eff1 Periodic
+	// trigger spell 29806, otherwise identical to 29788.
+	{id: 29794, castTimeIdx: 1, durIdx: 18, rangeIdx: 6, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 29815, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 20000, trigger: 29806, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
