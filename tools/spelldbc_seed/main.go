@@ -17313,16 +17313,22 @@ var spells = []spell{
 	// :38 enum comment) — bp 5937/die 625; eff1/eff2 64
 	// TRIGGER_SPELL valueless — bp 0/die 1, triggers 54069 /
 	// 56251 (Wowhead links; NOT seeded — triggered spells);
-	// targetA ENEMY (DoCast me + "Hurls a bolt of magic at
-	// an enemy" + "Can only target the player" flag; FLAG:
-	// needs a wago SpellEffect row check — Wowhead-derived
-	// target); radiusIdx 12 real 100yd (Wowhead row shows
-	// Radius 100 yards); cast4 real 1000ms (1s cast); dur0
+	// targetA 15 SRC_AREA_ENEMY for eff0 — PROVEN: TDB
+	// spell_script_names binds 50785 to
+	// spell_varos_energize_core_area_enemy, whose Register
+	// hooks EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY
+	// (boss_varos.cpp:324-353); the ported Lua ev7 filter
+	// only fires on that area target — targetA 6 would leave
+	// it dead. eff1/eff2 trigger targets stay ENEMY (FLAG:
+	// needs a wago SpellEffect row check — no C++ hook
+	// constrains them); radiusIdx 12 real 100yd (Wowhead row
+	// shows Radius 100 yards); cast4 real 1000ms (1s cast);
+	// dur0
 	// (Duration n/a); range5 Long 0-40; school Arcane. NOT
 	// carried: flags (no attributes field); GCD 0 / Cost
 	// None (no fields).
 	{id: 50785, castTimeIdx: 4, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
-		{effect: effSchoolDamage, basePoints: 5937, dieSides: 625, targetA: targetEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 5937, dieSides: 625, targetA: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
 		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 54069, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 56251, targetA: targetEnemy, chainAmplitude: 1},
 	}},
@@ -17353,14 +17359,18 @@ var spells = []spell{
 	// Wowhead WotLK (same verdict file; wago NOT opened — no
 	// trigger row): single effect 3 DUMMY Value 1 — bp 0/die
 	// 1; radiusIdx 12 real 100yd (Wowhead row shows Radius
-	// 100 yards); targetA CASTER (DoCast me; 70021 precedent;
-	// FLAG: needs a wago SpellEffect row check — tooltip says
-	// "at an enemy", CASTER vs ENEMY alternative); cast1
+	// 100 yards); targetA 7 SRC_AREA_ENTRY — PROVEN: TDB
+	// spell_script_names binds 62136 to
+	// spell_varos_energize_core_area_entry, whose Register
+	// hooks EFFECT_0 TARGET_UNIT_SRC_AREA_ENTRY
+	// (boss_varos.cpp:366-397); the ported Lua ev7 entry
+	// filter only fires on that target — CASTER (70021
+	// precedent) would leave it dead; cast1
 	// instant; dur0 (Duration n/a); range5 Long 0-40; school
 	// Arcane. NOT carried: flags (no attributes field); GCD
 	// 0 / Cost None (no fields).
 	{id: 62136, castTimeIdx: 1, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
-		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetUnitSrcAreaEntry, radiusIdx: 12, chainAmplitude: 1},
 	}},
 }
 
