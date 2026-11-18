@@ -82,6 +82,7 @@ const (
 	effPullTowards             = 124 // SPELL_EFFECT_PULL_TOWARDS (SharedDefines.h:935)
 	effKillCredit2             = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
 	effWeaponDamage            = 58
+	effWeaponPercentDmg        = 31  // SPELL_EFFECT_WEAPON_PERCENT_DAMAGE (SharedDefines.h:842)
 	effNormalizedWeaponDmg     = 121 // SPELL_EFFECT_NORMALIZED_WEAPON_DMG (SharedDefines.h:932)
 	effHealMaxHealth           = 67  // SPELL_EFFECT_HEAL_MAX_HEALTH
 	effInterruptCast           = 68  // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
@@ -186,6 +187,7 @@ const (
 	schoolFrost                = 16
 	schoolFrostfire            = 20 // Frost (16) + Fire (4), wago SpellMisc 47610
 	schoolSpellfire            = 68 // Arcane (64) + Fire (4), wago SpellMisc 62997
+	schoolHolyShadow           = 34 // Holy (2) + Shadow (32)
 	schoolShadow               = 32
 	schoolArcane               = 64
 	targetCaster               = 1
@@ -18260,6 +18262,77 @@ var spells = []spell{
 	{id: 54207, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 54211, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 69887 "Web Beam" (Wowhead name MATCH; C++
+	// icecrown_citadel.cpp:134 enum, :1046 DoCastSelf; Lua
+	// npc_icc_nerubar_broodkeeper.lua:46 const, :166
+	// CastSpell(creature, SPELL_WEB_BEAM)) — Wowhead WotLK
+	// (verdict wago_spells_69887_70965_70980_71020.txt; wago
+	// NOT opened — Dummy effect, no trigger row): single
+	// effect 3 DUMMY "Server-side script" Value 1 — bp 0/die
+	// 1, targetA CASTER (DoCastSelf); cast1 channeled; dur0
+	// (Duration n/a); range6 real 100yd Vision; school
+	// Physical. NOT carried: flags (no attributes field); GCD
+	// 0 / Cost None (no fields).
+	{id: 69887, castTimeIdx: 1, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 70965 "Crypt Scarabs" (Wowhead name MATCH; C++
+	// icecrown_citadel.cpp:135 enum, :1080 DoCastVictim; Lua
+	// npc_icc_nerubar_broodkeeper.lua:43 const, :92
+	// CastSpell(nil, SPELL_CRYPT_SCARABS)) — Wowhead WotLK
+	// (same verdict file; wago NOT opened — no trigger row):
+	// single effect 31 WEAPON_PERCENT_DAMAGE "Weapon Damage
+	// - %" Value 100 — bp 99/die 1 (NEW constant
+	// effWeaponPercentDmg; FLAG: needs a wago SpellEffect row
+	// check — the numeric effect type + target are the open
+	// questions, 31 vs 58), targetA ENEMY (DoCastVictim); the
+	// scarab summoning itself is server-side (the C++ summons
+	// the scarabs; the row is the weapon-damage leg); cast5
+	// real 2000ms (2s cast); dur0 (Duration n/a); range5 real
+	// 40yd Long; school Physical. NOT carried: flags (no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 70965, castTimeIdx: 5, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDmg, basePoints: 99, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 70980 "Web Wrap" (Wowhead name MATCH; C++
+	// icecrown_citadel.cpp:136 enum, :1098 DoCast(target); Lua
+	// npc_icc_nerubar_broodkeeper.lua:45 const, :136
+	// CastSpell(random candidate, SPELL_WEB_WRAP)) — Wowhead
+	// WotLK (same verdict file; wago NOT opened — no trigger
+	// row): single effect 6 APPLY_AURA aura26 ROOT, valueless
+	// — bp 0/die 1, mechanic 7 (Root aura; FLAG: needs a wago
+	// SpellEffect row check — effect mechanic + target),
+	// targetA ENEMY (DoCast target); spell mechanic 12
+	// (Stunned, from Spell Details per the 50760 precedent);
+	// the 10s stun after the channel ends is a separate
+	// server-side effect, not in this row; cast1 channeled (3s
+	// channel); dur27 real 3000ms (Duration 3 seconds);
+	// range5 real 40yd Long; school Physical. NOT carried:
+	// buff text ("Immobilized."); flags (no attributes field);
+	// GCD 0 / Cost None (no fields).
+	{id: 70980, castTimeIdx: 1, durIdx: 27, rangeIdx: 5, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRoot, basePoints: 0, dieSides: 1, mechanic: 7, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 71020 "Dark Mending" (Wowhead name MATCH; C++
+	// icecrown_citadel.cpp:137 enum, :1092 DoCast(target); Lua
+	// npc_icc_nerubar_broodkeeper.lua:44 const, :115
+	// CastSpell(best, SPELL_DARK_MENDING)) — Wowhead WotLK
+	// (same verdict file; wago NOT opened — no trigger row):
+	// single effect 10 HEAL Value 74000 — bp 73999/die 1
+	// (flat, no tooltip range), targetA 21 TARGET_ALLY (heals
+	// an ally; the Lua picks the most-damaged ally); cast92004
+	// synthetic 3500ms (3.5s cast — no real 3500ms row in the
+	// table; FLAG: needs a wago SpellCastTimes row check);
+	// dur0 (Duration n/a); range5 real 40yd Long; school
+	// schoolHolyShadow 34 (Holy 2 + Shadow 32; Frostfire/
+	// Spellfire combined-constant precedent); manaCost 215
+	// (29954/13874/25263 precedent — mana costs ARE carried);
+	// FLAG: needs a wago SpellEffect row check (school mask +
+	// target). NOT carried: GCD 1.5s (no field); flags (no
+	// attributes field).
+	{id: 71020, castTimeIdx: 92004, rangeIdx: 5, school: schoolHolyShadow, manaCost: 215, effects: [3]effect{
+		{effect: effHeal, basePoints: 73999, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
@@ -18409,6 +18482,8 @@ func main() {
 		{92001, 2000, 0},
 		{92002, 3000, 0},
 		{92003, 600, 0},
+		// synthetic SpellCastTimes 92004 (3500ms) for 71020 Dark Mending — no real 3500ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
+		{92004, 3500, 0},
 		{2, 250, 0},    // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
 		{14, 3000, 0},  // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
 		{16, 1500, 0},  // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
