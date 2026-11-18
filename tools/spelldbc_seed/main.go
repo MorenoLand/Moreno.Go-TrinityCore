@@ -148,6 +148,8 @@ const (
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
 	auraPeriodicDmgPct         = 89  // SPELL_AURA_PERIODIC_DAMAGE_PERCENT (SpellAuraDefines.h:169)
+	auraProcTriggerDamage      = 43  // SPELL_AURA_PROC_TRIGGER_DAMAGE (SpellAuraDefines.h:123)
+	auraModBlockPercent        = 51  // SPELL_AURA_MOD_BLOCK_PERCENT (SpellAuraDefines.h:131)
 	auraModHitChance           = 54  // SPELL_AURA_MOD_HIT_CHANCE (SpellAuraDefines.h:134)
 	auraPeriodicLeech          = 53  // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
 	auraPeriodicManaLeech      = 64  // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
@@ -19830,6 +19832,76 @@ var spells = []spell{
 	// (spells.go:449, handler :18773 reads TriggerSpell).
 	{id: 41241, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effForceCast, trigger: 40065, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 8258 "Devotion Aura" (Wowhead name MATCH; C++
+	// SPELL_DEVOTION_AURA, boss_captain_skarloc.cpp:46
+	// enum, :149 DoCast(me)) — eff0 Apply Area Aura Party
+	// Mod Resistance (Physical), Value 20 -> bp 19, die 1,
+	// misc 1 Physical (3429/7134 precedent), radiusIdx 10
+	// (30yd real row), targetA DEST_CASTER (5821/16041
+	// area-aura precedent); dur90016 240000ms (pre-existing
+	// synthetic row — no real 240000ms row in the table),
+	// range1 Self, cast Instant idx 1, school Holy.
+	{id: 8258, castTimeIdx: 1, durIdx: 90016, rangeIdx: 1, school: schoolHoly, effects: [3]effect{
+		{effect: effApplyAreaAuraParty, aura: auraModResistance, basePoints: 19, dieSides: 1, misc: 1, targetA: targetDestCaster, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 13005 "Hammer of Justice" (Wowhead name MATCH; C++
+	// SPELL_HAMMER_OF_JUSTICE, boss_captain_skarloc.cpp:44
+	// enum, :135 DoCastVictim) — eff0 Apply Aura Stun
+	// (aura 12), no Value shown -> bp -1, die 1 (32421
+	// wago precedent for a valueless aura); mechanic 5
+	// Stunned + dispel 1 Magic at spell level; dur32
+	// 6000ms (real row), range7 Very Short 10yd (real row),
+	// cast Instant idx 1, school Holy, manaCost 50.
+	// FLAG: bp/die + rangeIdx 7 need a wago SpellEffect/
+	// SpellMisc row check; flag "Prevents Anim" shown
+	// truncated on Wowhead (no attributes field).
+	{id: 13005, mechanic: 5, dispel: 1, castTimeIdx: 1, durIdx: 32, rangeIdx: 7, school: schoolHoly, manaCost: 50, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: -1, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 29380 "Cleanse" (Wowhead name MATCH; C++
+	// SPELL_CLEANSE, boss_captain_skarloc.cpp:43 enum,
+	// :128 DoCast(me)) — eff0 Dispel Poison (misc 4),
+	// eff1 Dispel Disease (misc 3), eff2 Dispel Magic
+	// (misc 1; SharedDefines.h:1405-1408), Value 1 each ->
+	// bp 0, die 1, targetA CASTER (DoCast me self-cast);
+	// cast Instant idx 1, range4 Medium 30yd (real row),
+	// school Holy, manaCost 175. FLAG: DBC targetA needs
+	// a wago SpellEffect row check.
+	{id: 29380, castTimeIdx: 1, rangeIdx: 4, school: schoolHoly, manaCost: 175, effects: [3]effect{
+		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 4, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 3, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effDispel, basePoints: 0, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29427 "Holy Light" (Wowhead name MATCH; C++
+	// SPELL_HOLY_LIGHT, boss_captain_skarloc.cpp:42 enum,
+	// :121 DoCast(me)) — eff0 Heal, Value 700 -> bp 699,
+	// die 1, targetA CASTER (DoCast me self-cast; 31285
+	// self-cast heal precedent); cast19 2500ms (real row,
+	// wago-verified for 66042), range5 Long 40yd (real
+	// row), school Holy, manaCost 150. NOT carried:
+	// "Spell damage depends on caster level" (no scaling
+	// field). FLAG: DBC targetA needs a wago SpellEffect
+	// row check.
+	{id: 29427, castTimeIdx: 19, rangeIdx: 5, school: schoolHoly, manaCost: 150, effects: [3]effect{
+		{effect: effHeal, basePoints: 699, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 31904 "Holy Shield" (Wowhead name MATCH; C++
+	// SPELL_HOLY_SHIELD, boss_captain_skarloc.cpp:45 enum,
+	// :142 DoCast(me)) — eff0 Apply Aura Proc Trigger
+	// Damage (aura 43), tooltip/buff range 463-537 ->
+	// bp 462, die 75, targetA CASTER; eff1 Apply Aura
+	// Modify Block % (aura 51), Value 75% -> bp 74,
+	// die 1, targetA CASTER; dur31 8000ms (real row),
+	// range1 Self, cast Instant idx 1, school Holy,
+	// manaCost 200. NOT carried: aura proc chance 100%
+	// (no SpellAuraOptions field). FLAG: eff0 die 75
+	// derived from the tooltip range (Details shows
+	// Value 463 only) — needs a wago SpellEffect row
+	// check; no Flags row shown on the Wowhead page.
+	{id: 31904, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolHoly, manaCost: 200, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerDamage, basePoints: 462, dieSides: 75, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModBlockPercent, basePoints: 74, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
