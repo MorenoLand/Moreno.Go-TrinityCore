@@ -16995,6 +16995,82 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 68507, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPacify, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 55853 "Vortex" (Wowhead name MISMATCH — "Vortex" vs C++
+	// enum SPELL_VORTEX_4 "VORTEX_4"; C++ eye_of_eternity.h:82
+	// enum ("damage | used to enter to the vehicle"),
+	// instance_eye_of_eternity.cpp:180-207 VortexHandling (player
+	// casts on trigger, triggered, up to 5 players); Lua
+	// instance_eye_of_eternity.lua:245 const, :274
+	// CastSpell(trigger, true)) — Wowhead WotLK (verdict
+	// wago_spells_55853_56070_61012_61236.txt; wago NOT opened —
+	// trigger link shown): eff0 6 APPLY_AURA aura236
+	// CONTROL_VEHICLE valueless — bp 0/die 1; eff1 6 APPLY_AURA
+	// aura23 PERIODIC_TRIG valueless — bp 0/die 1, auraPeriod
+	// 1000, trigger 56256 (Wowhead link; 56256 NOT seeded —
+	// triggered spell); both targetA ENEMY (explicit-target cast
+	// on the trigger creature; FLAG: needs a wago SpellEffect row
+	// check — 25 alternative (wago-verified 59319 control-vehicle
+	// precedent, TARGET_UNIT_TARGET_ANY; the vortex trigger is a
+	// non-enemy unit); cast1 instant; dur1 real
+	// 10000ms (10s); range13 real 50000yd (Anywhere -
+	// Unlimited); school Arcane. The "2000 Arcane damage per
+	// second" is 56256's damage, NOT this spell's — no damage
+	// effect here. NOT carried: flags (no attributes field);
+	// GCD 0 / Cost None (no fields).
+	{id: 55853, castTimeIdx: 1, durIdx: 1, rangeIdx: 13, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraControlVehicle, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 56256, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 56070 "Summon Red Dragon Buddy" (Wowhead name MISMATCH —
+	// "Summon" vs C++ enum SPELL_SUMMOM_RED_DRAGON_BUDDY "SUMMOM";
+	// C++ eye_of_eternity.h:87 enum, boss_malygos.cpp:138 (58846
+	// force-cast: hit players cast 56070 on self), :2136
+	// SpellScript comment; Lua instance_eye_of_eternity.lua:104
+	// const, :205 CastSpell(player)) — Wowhead WotLK (same verdict
+	// file; wago NOT opened — single valued effect): single effect
+	// 28 SUMMON Value 1 — bp 0/die 1; misc 30161 Wyrmrest Skytalon
+	// (NPC_WYRMREST_SKYTALON, eye_of_eternity.h:56); miscB 64
+	// (summon precedent 56119/56120/667xx; SummonProperties 64
+	// REAL); targetA 73 DEST_CASTER_RADIUS (C++ SpellScript
+	// boss_malygos.cpp:2142-2156 hooks OnDestinationTargetSelect
+	// EFFECT_0/TARGET_DEST_CASTER_RADIUS — the hook only fires
+	// for a destination target, so the DBC target is 73, not
+	// CASTER; the Lua cast is still player on self, and the 10yd
+	// radius is the dest radius; FLAG: wago SpellEffect row
+	// check to confirm 73); radiusIdx 13 real 10yd (Wowhead row
+	// shows Radius 10 yards); cast1 instant; dur0 (Duration
+	// n/a); range1 Self 0yd; school Physical. NOT carried: 3s
+	// cooldown (no cooldown field); flags (no attributes field).
+	{id: 56070, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, targetA: targetDestCasterRadius, misc: 30161, miscB: 64, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 61012 "Iris Opened" (Wowhead name MATCH; C++
+	// eye_of_eternity.h:86 enum ("visual when starting
+	// encounter"); Lua instance_eye_of_eternity.lua:105 const,
+	// :188 CastSpell(bunny, self)) — Wowhead WotLK (same verdict
+	// file; wago NOT opened — single valued effect): single effect
+	// 3 DUMMY Value 1 — bp 0/die 1 (29216 Value-1 precedent);
+	// targetA CASTER (bunny casts on self); cast1 instant; dur0
+	// (Duration n/a); range1 Self 0yd; school Physical. NOT
+	// carried: "Server-side script" (no field); flags (no
+	// attributes field).
+	{id: 61012, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 61236 "Portal Opened Visual" (Wowhead name MISMATCH —
+	// adds "Visual" vs C++ enum SPELL_PORTAL_OPENED; C++
+	// eye_of_eternity.h:84 enum; Lua
+	// instance_eye_of_eternity.lua:246 const, :304
+	// CastSpell(trigger, self, true)) — Wowhead WotLK (same
+	// verdict file; wago NOT opened — single valued effect):
+	// single effect 6 APPLY_AURA aura4 DUMMY Value 1 — bp 0/die 1;
+	// targetA CASTER (trigger casts on self); cast1 instant; dur63
+	// real 25000ms (25s); range13 real 50000yd (Anywhere -
+	// Unlimited); school Physical. NOT carried: "Server-side
+	// script" (no field); flags (no attributes field).
+	{id: 61236, castTimeIdx: 1, durIdx: 63, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
