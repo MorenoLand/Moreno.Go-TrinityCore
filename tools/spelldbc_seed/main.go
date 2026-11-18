@@ -15724,6 +15724,82 @@ var spells = []spell{
 		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 15093, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 15094, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 8282 "Curse of Blood" (Wowhead SpellName MATCH; C++
+	// zone_bloodmyst_isle.cpp:133 enum, :302 DoCastVictim; Lua
+	// npc_sironas.lua:71 const, :134 CastSpell(nil)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_8282_10966_31611_31612.txt; wago NOT
+	// attempted — single effect with a Value, no trigger):
+	// single effect 6 APPLY_AURA MOD_DAMAGE_TAKEN (aura 14)
+	// Value 1 — bp 0/die 1 (the 31436 flat convention), misc
+	// 1 Physical; targetA 6 (DoCastVictim); cast5 2000ms
+	// (real row — Cast time 2 seconds, the 29953 precedent);
+	// dur4 120000ms (real row — Duration 2 minutes); range3
+	// Short 20yd (real row); school Shadow; dispel 2 Curse.
+	// NOT carried: no Flags section on the page (nothing to
+	// carry) and the level 1 requirement (no level field).
+	{id: 8282, castTimeIdx: 5, durIdx: 4, rangeIdx: 3, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: 0, dieSides: 1, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 10966 "Uppercut" (Wowhead SpellName MATCH; C++
+	// zone_bloodmyst_isle.cpp:131 enum, :294 DoCastVictim; Lua
+	// npc_sironas.lua:69 const, :116 CastSpell(nil)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// contiguous rows, all Values present, no trigger): eff0 58
+	// WEAPON_DAMAGE Value 50 — bp 49/die 1 (flat 50, no range
+	// shown — NOT the 26007 Uppercut, whose tooltip is
+	// 950-1050); eff1 98 KNOCK_BACK Value 94 — bp 93/die 1,
+	// misc 10 (the "(10)" parenthetical IS the MiscValue, the
+	// 31475 rule; handleEffectKnockBack: MiscValue*0.1 =
+	// speedXY, so 1); both targetA 6 (DoCastVictim); cast1
+	// instant; dur0; range7 Very Short 10yd (real row); school
+	// Physical. NOT carried: "Is Ability" (no attributes
+	// field) and the level 40 requirement (no level field).
+	{id: 10966, castTimeIdx: 1, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 49, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 93, dieSides: 1, misc: 10, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31611 "Bloodmyst Tesla" (Wowhead SpellName MATCH; C++
+	// zone_bloodmyst_isle.cpp:128 enum, :326 tesla-coil
+	// CastSpell; Lua npc_sironas.lua:73 const, :217
+	// coil:CastSpell(coil)) — Wowhead WotLK + wago (verdict
+	// file wago_spells_8282_10966_31611_31612.txt; wago FIRED
+	// for the periodic-trigger effect whose link lacks an ID:
+	// SpellEffect 3.4.5.63697 row 849611): single effect 6
+	// APPLY_AURA PERIODIC_TRIGGER_SPELL (aura 23) Value 1
+	// every 1s — bp 0/die 0 (wago EffectBasePoints 0 /
+	// EffectDieSides 0, the 44197 precedent), period 1000,
+	// trigger 0 (wago EffectTriggerSpell 0 — NO triggered
+	// spell exists; Wowhead's missing link matches the data),
+	// targetA TARGET_UNIT_NEARBY_ENTRY 38 (wago
+	// ImplicitTarget_0 38, the 49519 precedent); cast1
+	// instant (the 42939/49519 channeled precedent — the
+	// "Channeled" flag is not a cast-time row); dur21 (-1
+	// infinite, real row — Duration n/a, aura removed when
+	// the channel ends, the 44197/26575 precedent); range13
+	// Anywhere 50000yd (real row); school Nature. NOT
+	// carried: "Cast time is hidden" / "Channeled" / "No Aura
+	// Icon" (no attributes field).
+	{id: 31611, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 1000, trigger: 0, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+	}},
+	// 31612 "Sironas Channeling" (Wowhead SpellName MATCH; C++
+	// zone_bloodmyst_isle.cpp:129 enum, :319 DoCast(me); Lua
+	// npc_sironas.lua:72 const, :215 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 6
+	// APPLY_AURA DUMMY (aura 4) Value 1 — bp 0/die 1 (the
+	// 26003 dummy precedent), "Server-side script"; targetA
+	// CASTER (DoCast me self-cast); cast1 instant (the
+	// 42939/49519 channeled precedent); dur21 (-1 infinite,
+	// real row — Duration n/a, aura removed when the channel
+	// ends, the 44197/26575 precedent); range1 Self Only
+	// (real row); school Physical. NOT carried: "Cast time is
+	// hidden" / "Channeled" / "No Aura Icon" (no attributes
+	// field).
+	{id: 31612, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
