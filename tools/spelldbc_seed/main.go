@@ -19905,6 +19905,71 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraProcTriggerDamage, basePoints: 462, dieSides: 75, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModBlockPercent, basePoints: 74, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 15533 "Stoned - Channel Cast Visual" (Wowhead name MATCH;
+	// C++ SPELL_STONED_CHANNEL_CAST_VISUAL,
+	// zone_silithus.cpp:658 enum, :745 DoCast(me)) — eff0
+	// Apply Aura Dummy (aura 4), Value 1 -> bp 0, die 1,
+	// targetA CASTER (DoCast me self-cast); cast14 3000ms
+	// (real row, 35010 precedent), range1 Self, school
+	// Physical. NOT carried: "Channel" in the name (no
+	// channel data shown; seed has no Channeled flag field).
+	{id: 15533, castTimeIdx: 14, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 24319 "Summon Poison Cloud" (Wowhead name MATCH; C++
+	// SPELL_SUMMON_POISON_CLOUD, zone_silithus.cpp:659 enum,
+	// :725 DoCast(me)) — eff0 Summon, Value 1 -> bp 0,
+	// die 1, misc 14989 Poisonous Cloud, radius n/a (none
+	// shown), targetA 18 DEST_CASTER (wago row 702048
+	// ImplicitTarget_0 18; the 32424 DEST_CASTER_SUMMON 32
+	// pattern does not hold here — same lesson as 8258);
+	// miscB 64 SummonPropertiesID (wago row 702048
+	// MiscValue_1 64); dur1 10000ms (real row), range1 Self,
+	// cast Instant idx 1, school Nature. The wago row also
+	// settles the Wowhead instability: single Effect 28
+	// SUMMON, no Dummy eff1, no trigger — the first-load
+	// "Summon Object + Dummy / Buru" render is refuted.
+	// SpellMisc (cast1/dur1/range1) still awaits a wago
+	// check (sibling task f51ea261).
+	{id: 24319, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 14989, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
+	// 28528 "Troll Food Poisoning Visual" — LEFT UNSEEDED:
+	// the SpawnCast table slot is "Poison Cloud"
+	// (zone_silithus.cpp:292) but the DBC row is a
+	// troll-food visual ("Visual displays a green ground
+	// fog", Dummy Value 1, Instant, Self, Physical) with
+	// nothing about poison damage or a cloud NPC — the
+	// SpawnCast ID looks wrong. Seeding the row as-is
+	// would attach a Zul'Gurub quest visual to the Qiraj
+	// cast; the CORRECT poison-cloud spell ID still needs
+	// to be found (hunt on a later tick — do not guess it
+	// from the SpawnCast comment). (This comment block
+	// holds the place so the gap stays visible in-tree;
+	// no seed row for 28528 exists.)
+	// 33652 "Stoned" (Wowhead name MATCH; C++
+	// SPELL_STONED, zone_silithus.cpp:660 enum, :770
+	// DoCast(me)) — eff0 Apply Aura Stun (aura 12),
+	// Value 1 -> bp 0, die 1, targetA CASTER (DoCast me
+	// self-cast; range Self); dur9 30000ms (real row),
+	// range1 Self, cast Instant idx 1, school Physical.
+	// NOT carried: "vulnerable to shatters" (no such
+	// effect row shown).
+	{id: 33652, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 35871 "Spellbreaker" — LEFT UNSEEDED: the SpawnCast
+	// table slot is "Frost Debuff" (zone_silithus.cpp:293,
+	// C++ comment "need correct spell") but the DBC row is
+	// an Outland Blood Elf/Illidari melee ability (Weapon
+	// Damage 100% + self-trigger, Physical, Melee/5yd) —
+	// nothing frost-related. Seeding it would give a
+	// stationary Qiraj channeler a melee weapon-damage
+	// attack; the CORRECT frost-debuff spell ID still
+	// needs to be found (hunt on a later tick — do not
+	// guess it). (This comment block holds the place so
+	// the gap stays visible in-tree; no seed row for
+	// 35871 exists.)
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
