@@ -18063,6 +18063,117 @@ var spells = []spell{
 	{id: 58650, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: 1, dieSides: 1, misc: 29365, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 69222 "Throw Shield" (Wowhead name MISMATCH — "Throw
+	// Shield" vs C++ SPELL_SHIELD_THROWN, word order
+	// reversed; the ID is what matters — C++
+	// halls_of_reflection.cpp:1868 enum, :1931 DoCast(target)
+	// random player 45yd; Lua npc_frostsworn_general.lua:136
+	// const, :200 CastSpell(target, SPELL_SHIELD_THROWN)) —
+	// Wowhead WotLK (verdict
+	// wago_spells_69184_69222_69828_69861.txt; wago NOT
+	// opened — no trigger row): eff0 2 SCHOOL_DAMAGE
+	// Physical Value 7400 (base; Heroic 12025, tooltip
+	// "12025 to 13975" is the heroic range) — bp 7399/die
+	// 1951 (bp from base Value per the 67280 precedent, die
+	// from tooltip-range width 13975-12025+1; FLAG: needs a
+	// wago SpellEffect row check — the base die is the open
+	// question), targetA ENEMY (DoCast target); eff1 77
+	// SCRIPT_EFFECT Value 41214 — bp 41213/die 1 (52421
+	// precedent: script-effect Value -> basePoints; FLAG:
+	// needs a wago SpellEffect row check — bp-vs-misc
+	// question; 41214 has no C++ occurrence and no TDB
+	// spell_script_names binding), targetA ENEMY; eff2 6
+	// APPLY_AURA aura12 STUN, valueless — bp 0/die 1,
+	// targetA ENEMY (stun duration from spell Duration 2s);
+	// cast1 instant; dur39 real 2000ms (Duration 2 seconds);
+	// range93010 synthetic 5-45yd "Hunter 45" (55550 precedent;
+	// no real 5-45yd row in the table); school Physical. NOT carried: buff
+	// text ("Stunned."); flags (no attributes field); GCD 0 /
+	// Cost None (no fields).
+	{id: 69222, castTimeIdx: 1, durIdx: 39, rangeIdx: 93010, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 7399, dieSides: 1951, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effScriptEffect, basePoints: 41213, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 69184 "Ice Spikes" (Wowhead name MISMATCH — "Ice
+	// Spikes" vs C++ SPELL_SPIKE; C++
+	// halls_of_reflection.cpp:1869 enum, :1936 DoCast(target)
+	// random player 45yd; Lua npc_frostsworn_general.lua:137
+	// const, :219 CastSpell(target, SPELL_SPIKE)) — Wowhead
+	// WotLK (same verdict file; wago NOT opened — no trigger
+	// row): eff0 2 SCHOOL_DAMAGE Frost Value 3813 (base;
+	// Heroic 7624, tooltip "7624 to 8376" is the heroic
+	// range) — bp 3812/die 753 (bp from base Value per the
+	// 67280 precedent, die from tooltip-range width
+	// 8376-7624+1; FLAG: needs a wago SpellEffect row check
+	// — the base die + targets are the open questions),
+	// targetA 53 DEST_TARGET_ENEMY + targetB 16
+	// UNIT_DEST_AREA_ENEMY ("enemy targets within 3 yards"
+	// of the target; 72090 precedent), radiusIdx 15 real 3yd
+	// (Wowhead row shows Radius 3 yards); eff1 98 KNOCK_BACK
+	// Value 150 — bp 149/die 1 (38576 precedent: knockback
+	// Value -> bp+1), same targets/radius, misc NOT set (no
+	// parenthetical on the row; the 38576 knockback had misc
+	// 15 from wago; FLAG: needs a wago SpellEffect row check
+	// for the knockback MiscValue); cast1 instant; dur0
+	// (Duration n/a); range36 real 45yd "Longer"
+	// (29946/32265 wago-verified); school Frost. NOT carried:
+	// flags (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 69184, castTimeIdx: 1, rangeIdx: 36, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3812, dieSides: 753, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 15, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 149, dieSides: 1, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 15, chainAmplitude: 1},
+	}},
+	// 69828 "Halls of Reflection Clone" (Wowhead name
+	// MISMATCH — "Halls of Reflection Clone" vs C++
+	// SPELL_CLONE, prefix added; C++
+	// halls_of_reflection.cpp:1870 enum, :1959
+	// target->CastSpell(reflection, SPELL_CLONE, true)
+	// triggered; Lua npc_frostsworn_general.lua:138 const,
+	// :255 target:CastSpell(reflection, SPELL_CLONE, true)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened — no
+	// trigger row): eff0 6 APPLY_AURA aura247 CLONE_CASTER
+	// Value 1 — bp 0/die 1 (there is no plain SPELL_AURA_CLONE
+	// in SpellAuraDefines.h; 247 is the clone aura — 57507
+	// wago-verified precedent), targetA 25 TARGET_ANY (57507
+	// precedent); eff1 77 SCRIPT_EFFECT Value 69891 — bp
+	// 69890/die 1 (52421 precedent; FLAG: needs a wago
+	// SpellEffect row check — bp-vs-misc question; 69891 IS a
+	// spell, TDB-bound to spell_gen_clone_weapon), targetA 25;
+	// eff2 77 SCRIPT_EFFECT Value 69892 — bp 69891/die 1
+	// (same flag; 69892 also TDB-bound to
+	// spell_gen_clone_weapon), targetA 25; cast1 instant; dur0
+	// (Duration n/a); range13 real 50000yd Anywhere; school
+	// Physical. NOT carried: "Requires level 80" (no field);
+	// flags (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 69828, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraCloneCaster, basePoints: 0, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effScriptEffect, basePoints: 69890, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effScriptEffect, basePoints: 69891, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 69861 "Halls of Reflection Ghost Visual" (Wowhead name
+	// MISMATCH — "Halls of Reflection Ghost Visual" vs C++
+	// SPELL_GHOST_VISUAL, prefix added; C++
+	// halls_of_reflection.cpp:1871 enum, :1960
+	// target->CastSpell(reflection, SPELL_GHOST_VISUAL, true)
+	// triggered; Lua npc_frostsworn_general.lua:139 const,
+	// :256 target:CastSpell(reflection, SPELL_GHOST_VISUAL,
+	// true)) — Wowhead WotLK (same verdict file; wago NOT
+	// opened — no trigger row): eff0 6 APPLY_AURA aura4 DUMMY,
+	// valueless ("Server-side script") — bp 0/die 1, targetA
+	// 25 TARGET_ANY (same cast/target as 69828; FLAG: needs a
+	// wago SpellEffect row check — Wowhead-derived target);
+	// eff1 6 APPLY_AURA aura61 MOD_SCALE Value 30% — bp 29/die
+	// 1 (1329 precedent: aura 61, die 1, bp 29 for 30%),
+	// targetA 25 (same flag); cast1 instant; dur0 (Duration
+	// n/a); range13 real 50000yd Anywhere; school Physical.
+	// NOT carried: "Requires level 80" (no field); flags (no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 69861, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 29, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
