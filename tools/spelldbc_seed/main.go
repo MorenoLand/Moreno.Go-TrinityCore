@@ -18333,6 +18333,40 @@ var spells = []spell{
 	{id: 71020, castTimeIdx: 92004, rangeIdx: 5, school: schoolHolyShadow, manaCost: 215, effects: [3]effect{
 		{effect: effHeal, basePoints: 73999, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
 	}},
+	// 54894 "Icy Imprisonment" (Wowhead name MISMATCH; C++
+	// SPELL_ICE_PRISON) — npc_brunnhildar_prisoner; eff0
+	// Apply Aura Dummy (Value 1 -> bp 0), cast on self
+	// (triggered). Buff text NOT carried (no field); flags /
+	// GCD / Cost NOT carried (no fields).
+	{id: 54894, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 55047 "Cold Hearted: Ice Shard Impact" (Wowhead name
+	// MISMATCH; C++ SPELL_SHARD_IMPACT) — eff0 Dummy (Value
+	// 1 -> bp 0), radius 10yd, cast on self (triggered).
+	// Flags / GCD / Cost NOT carried (no fields).
+	{id: 55047, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, radiusIdx: 13, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 55048 "Free Brunnhildar Prisoner" (Wowhead name
+	// MISMATCH; C++ SPELL_FREE_PRISONER) — eff0 Script
+	// Effect (Value 1 -> bp 0 per 52421 precedent), cast on
+	// self (triggered). Flags / GCD / Cost NOT carried.
+	// FLAG: needs a wago SpellEffect row check (script-effect
+	// bp-vs-misc for Value 1).
+	{id: 55048, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 55074 "Ride Proto-Drake" (Wowhead name MISMATCH; C++
+	// SPELL_RIDE_DRAKE) — eff0 Apply Aura Control Vehicle
+	// (Value 1 -> bp 0), target 25 per 49256 precedent
+	// (C++ casts on unitCaster, Lua on drake — the aura
+	// target is the rider/vehicle pair), range 50000.
+	// Flags / GCD / Cost NOT carried. FLAG: needs a wago
+	// SpellEffect row check (control-vehicle target).
+	{id: 55074, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraControlVehicle, basePoints: 0, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
