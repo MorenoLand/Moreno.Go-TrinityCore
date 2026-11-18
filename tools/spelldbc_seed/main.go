@@ -101,6 +101,7 @@ const (
 	auraPeriodicDmg            = 3
 	auraPeriodicHeal           = 8 // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
 	auraDummy                  = 4
+	auraModAttackSpeed         = 9 // SPELL_AURA_MOD_ATTACKSPEED (SpellAuraDefines.h:89)
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
 	auraModCharm               = 6 // SPELL_AURA_MOD_CHARM (SpellAuraDefines.h:86)
 	auraStun                   = 12
@@ -18173,6 +18174,91 @@ var spells = []spell{
 	{id: 69861, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModScale, basePoints: 29, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 54141 "Power Ball Visual" (Wowhead name MATCH; C++
+	// boss_xevozz.cpp:56 enum, :207 DoCast(me) non-triggered;
+	// Lua npc_ethereal_sphere.lua:41 const, :107
+	// CastSpell(creature, SPELL_POWER_BALL_VISUAL)) — Wowhead
+	// WotLK (verdict wago_spells_54141_54160_54164_54207.txt;
+	// wago NOT opened — the periodic-trigger row HAS a
+	// triggered-spell link): single effect 6 APPLY_AURA
+	// aura23 PERIODIC_TRIGGER_SPELL Value 1, every 750ms —
+	// bp 0/die 1, auraPeriod 750, trigger 54139 (the linked
+	// "Power Ball Visual"; 54139 itself is NOT seeded —
+	// triggered spells are not seeded), targetA CASTER
+	// (DoCast me); cast1 instant; dur0 (Duration n/a); range1
+	// Self 0yd; school Physical. FLAG: needs a wago
+	// SpellEffect row check (periodic-trigger bp/die —
+	// precedents vary: 404 no bp/die, 685 bp -1/die 1, 744 bp
+	// 0/die 0). NOT carried: flags (no attributes field); GCD
+	// 0 / Cost None (no fields).
+	{id: 54141, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 750, trigger: 54139, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 54160 "Arcane Power" (Wowhead name MATCH; C++
+	// boss_xevozz.cpp:52 enum, :235 DoCastAOE; Lua
+	// npc_ethereal_sphere.lua:39 const, :78
+	// CastSpell(creature, SPELL_ARCANE_POWER)) — Wowhead WotLK
+	// (same verdict file; wago NOT opened — no trigger row):
+	// eff0 6 APPLY_AURA aura61 MOD_SCALE Value 35% — bp 34/die
+	// 1 (1329/69861 precedent), targetA CASTER; eff1 6
+	// APPLY_AURA aura13 MOD_DAMAGE_DONE Value 75% — bp 74/die
+	// 1, misc 127 (the aura name lists all 7 schools;
+	// 26662/1933 precedent: misc is the school mask),
+	// targetA CASTER; eff2 6 APPLY_AURA aura9
+	// MOD_ATTACKSPEED "Decrease Attack Speed %" Value 75% —
+	// bp 74/die 1, targetA CASTER (aura 9 is the classic
+	// attack-speed aura, SpellAuraDefines.h:89; the positive
+	// bp speeds attacks per the tooltip/buff — Wowhead's
+	// "Decrease" names the attack-TIME side; FLAG: needs a
+	// wago SpellEffect row check — the aura number + all three
+	// bps/targets are the open questions); cast1 channeled
+	// (8s channel); dur90003 synthetic 8000ms (Duration 8
+	// seconds); range34 real 25yd "Twenty-Five yards"
+	// (57994 wago-verified); school Physical. NOT carried:
+	// buff text; the tooltip/buff "casting speed" claim has no
+	// corresponding effect row (no field); flags (no
+	// attributes field); GCD 0 / Cost None (no fields).
+	{id: 54160, castTimeIdx: 1, durIdx: 90003, rangeIdx: 34, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModScale, basePoints: 34, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: 74, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModAttackSpeed, basePoints: 74, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 54164 "Summon Players" (Wowhead name MATCH; C++
+	// boss_xevozz.cpp:55 enum, :218 DoCastAOE; Lua
+	// npc_ethereal_sphere.lua:40 const, :94
+	// CastSpell(creature, SPELL_SUMMON_PLAYERS)) — Wowhead WotLK
+	// (same verdict file; wago NOT opened — Dummy effect):
+	// single effect 3 DUMMY "Server-side script" Value 1,
+	// Radius 50000 yards — bp 0/die 1, targetA 22 SRC_CASTER
+	// + targetB 15 SRC_AREA_ENEMY (57496 dummy precedent:
+	// 22/15 + radius), radiusIdx 91007 real 50000yd; cast16
+	// real 1500ms (1.5s cast); dur0 (Duration n/a); range1
+	// Self 0yd; school Arcane. FLAG: needs a wago SpellEffect
+	// row check (dummy target — Wowhead-derived). NOT carried:
+	// flags (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 54164, castTimeIdx: 16, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91007, chainAmplitude: 1},
+	}},
+	// 54207 "Power Ball Damage Trigger" (Wowhead name MATCH;
+	// C++ boss_xevozz.cpp:57 enum, :208 DoCast(me)
+	// non-triggered; Lua npc_ethereal_sphere.lua:42 const,
+	// :108 CastSpell(creature,
+	// SPELL_POWER_BALL_DAMAGE_TRIGGER)) — Wowhead WotLK (same
+	// verdict file; wago NOT opened — the periodic-trigger row
+	// HAS a triggered-spell link): single effect 6 APPLY_AURA
+	// aura23 PERIODIC_TRIGGER_SPELL Value 1, every 1 second —
+	// bp 0/die 1, auraPeriod 1000, trigger 54211 (the linked
+	// "Arcane Explosion"; 54211 itself is NOT seeded —
+	// triggered spells are not seeded), targetA CASTER (DoCast
+	// me); cast1 instant; dur0 (Duration n/a); range1 Self
+	// 0yd; school Physical. FLAG: needs a wago SpellEffect row
+	// check (periodic-trigger bp/die — precedents vary). NOT
+	// carried: flags (no attributes field); GCD 0 / Cost None
+	// (no fields).
+	{id: 54207, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 54211, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
