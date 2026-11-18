@@ -19980,6 +19980,87 @@ var spells = []spell{
 		{effect: effWeaponPercentDamage, basePoints: 99, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effTriggerSpell, trigger: 36073, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 16102 "Flamestrike" (Wowhead name MATCH; C++
+	// SpawnCast zone_shadowmoon_valley.cpp:726 {12000,
+	// 20000, 16102} Illidari Highlord) — eff0 School
+	// Damage Fire, tooltip range 228-232 -> bp 227,
+	// die 4, radiusIdx 8 (5yd real row), targetA
+	// DEST_AREA_ENEMY (FLAG: Wowhead-only, no wago row
+	// read); eff1 Persistent Area Aura Periodic Damage,
+	// Value 48 every 2s -> bp 47, die 1 (FLAG), auraPeriod
+	// 2000, radiusIdx 8, targetA DEST_AREA_ENEMY (FLAG);
+	// cast14 3000ms (real row), dur31 8000ms (real row),
+	// range4 Medium 30yd (real row), school Fire,
+	// manaCost 260. NOT carried: "Spell damage depends on
+	// caster level" (no scaling field); Ignore Line of
+	// Sight / Cannot be dodged (no attributes field).
+	// FLAG: die/targetA on both effects need a wago
+	// SpellEffect row check.
+	{id: 16102, castTimeIdx: 14, durIdx: 31, rangeIdx: 4, school: schoolFire, manaCost: 260, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 227, dieSides: 4, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 47, dieSides: 1, auraPeriod: 2000, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 17194 "Mind Blast" (Wowhead name MATCH; C++
+	// SpawnCast zone_shadowmoon_valley.cpp:724 {20000,
+	// 20000, 17194} Illidari Mind Breaker) — eff0 School
+	// Damage Shadow, Value 173 -> bp 172, die 1 (FLAG:
+	// Wowhead-only, no wago row read), targetA ENEMY
+	// (DoCastVictim; FLAG); cast16 1500ms (real row),
+	// range4 Medium 30yd (real row), school Shadow,
+	// manaCost 110. NOT carried: "Spell damage depends
+	// on caster level" (no scaling field).
+	{id: 17194, castTimeIdx: 16, rangeIdx: 4, school: schoolShadow, manaCost: 110, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 172, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 22884 "Psychic Scream" (Wowhead name MATCH; C++
+	// SpawnCast zone_shadowmoon_valley.cpp:723 {35000,
+	// 35000, 22884} Illidari Mind Breaker) — eff0 Apply
+	// Aura Fear (aura 7), Value 1 -> bp 0, die 1
+	// (65543 wago-verified fear precedent: bp -1 there
+	// because no Value was shown; here Value 1 is shown),
+	// targetA SRC_CASTER + targetB SRC_AREA_ENEMY
+	// (65543 precedent), radiusIdx 14 (8yd real row);
+	// mechanic 5 Fleeing (SharedDefines.h:1362; 13005
+	// precedent carries Wowhead Mechanic at spell level);
+	// maxTargets 5 (precedent 31948/20276/46026);
+	// cast Instant idx 1, dur35 4000ms (real row), range1
+	// Self, school Shadow, manaCost 210. FLAG: bp/die
+	// need a wago SpellEffect row check.
+	{id: 22884, mechanic: 5, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, maxTargets: 5, school: schoolShadow, manaCost: 210, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: 0, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 38010 "Curse of Flames" (Wowhead name MATCH; C++
+	// SpawnCast zone_shadowmoon_valley.cpp:725 {8000,
+	// 15000, 38010} Illidari Highlord) — eff0 Apply Aura
+	// Mod % Damage Taken (aura 87), Value 50% -> bp 49,
+	// die 1 (FLAG), misc 4 Fire school mask (412
+	// precedent: misc 32 Shadow), targetA ENEMY
+	// (DoCastVictim; 3180 precedent); dur3 60000ms (real
+	// row), range4 Medium 30yd (real row), cast Instant
+	// idx 1, school Fire, dispel 2 Curse
+	// (SharedDefines.h:1406). FLAG: bp/die/misc/targetA
+	// need a wago SpellEffect row check.
+	{id: 38010, dispel: 2, castTimeIdx: 1, durIdx: 3, rangeIdx: 4, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: 49, dieSides: 1, misc: 4, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 38985 "Focused Bursts" (Wowhead name MATCH; C++
+	// SpawnCast zone_shadowmoon_valley.cpp:722 {10000,
+	// 10000, 38985} Illidari Mind Breaker) — wago rows
+	// 858466-68 (DifficultyID 0): eff0 Apply Aura
+	// Periodic Trigger (aura 23), auraPeriod 1000,
+	// trigger 38986, targetA ENEMY; eff1 Trigger Spell
+	// (eff 64), trigger 38987, targetA ENEMY; eff2 Apply
+	// Aura Dummy (aura 4), targetA CASTER; all bp 0 die 0.
+	// Cast Instant idx 1, dur29 12000ms (real row),
+	// range5 Long 40yd (real row), school Arcane.
+	// NOT carried: "Channeled" (no channel field; 15533
+	// precedent). Triggers 38986/38987 NOT seeded (not
+	// live-cast; need wago SpellEffect/SpellMisc rows).
+	{id: 38985, castTimeIdx: 1, durIdx: 29, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 1000, trigger: 38986, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effTriggerSpell, trigger: 38987, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
