@@ -19529,6 +19529,87 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 7321, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModResistance, basePoints: 49, dieSides: 1, misc: 16, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 33009 "Blinding Light" (Wowhead name MATCH; C++
+	// SPELL_BLINDING_LIGHT, boss_astromancer.cpp:51,
+	// :250 DoCastVictim) — eff0 School Damage (Arcane),
+	// tooltip 2280-2520 -> bp 2279, die 241 (30925
+	// precedent; the "Value: 2280 - 25" line is the
+	// truncated "2280 - 2520" display), targetA ENEMY
+	// (DoCastVictim), radiusIdx 28 (50000yd real row —
+	// "Player Radius: 50000 yards" as shown); cast
+	// Instant idx 1, dur n/a idx 0, range37 Extended
+	// 50yd (real row), school Arcane, manaCost 375.
+	// FLAG: radius label is unusual (50yd range vs
+	// 50000yd radius) — needs a wago SpellEffect row
+	// check.
+	{id: 33009, castTimeIdx: 1, rangeIdx: 37, school: schoolArcane, manaCost: 375, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2279, dieSides: 241, targetA: targetEnemy, radiusIdx: 28, chainAmplitude: 1},
+	}},
+	// 33031 "Arcane Missiles" (Wowhead name MATCH; C++
+	// SPELL_ARCANE_MISSILES, boss_astromancer.cpp:48,
+	// :260 DoCast(target)) — eff0 Apply Aura Dummy
+	// (aura 4), Value 1 -> bp 0, die 1, targetA ENEMY;
+	// eff1 Script Effect, Value 1 -> bp 0, die 1,
+	// targetA ENEMY; eff2 Apply Aura Periodically
+	// trigger spell (aura 23), Value 1 every 1s -> bp
+	// 0, die 1, auraPeriod 1000, trigger 39414 (NOT
+	// seeded — triggered spell, outside the five),
+	// targetA ENEMY; cast1 (channeled 3s — 51849
+	// precedent), dur27 3000ms (real row), range36
+	// Longer 45yd (real row), school Arcane, manaCost
+	// 235. FLAG: no damage number anywhere (lives in
+	// 39414); no Used-by-NPC tab.
+	{id: 33031, castTimeIdx: 1, durIdx: 27, rangeIdx: 36, school: schoolArcane, manaCost: 235, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 39414, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34322 "Psychic Scream" (Wowhead display PARTIAL
+	// vs C++ SPELL_FEAR — "Fear" is only the aura name;
+	// boss_astromancer.cpp:52, :380 DoCast(me)) — eff0
+	// Apply Aura Fear (aura 7), no Value shown -> bp/die
+	// omitted (0/0, 45254 no-Value precedent), radiusIdx
+	// 14 (8yd real row), targetA 15 SRC_AREA_ENEMY
+	// (19134 fear precedent; DoCast me self-cast AoE);
+	// mechanic 5 Fleeing (SharedDefines.h:1362; 19134
+	// precedent), cast Instant idx 1, dur35 4000ms
+	// (real row), range1 Self, school Shadow, maxTargets
+	// 5 (shown). FLAG: effect-level mechanic left 0
+	// (not shown on Wowhead; spell-level mechanic 5
+	// is set).
+	{id: 34322, mechanic: 5, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, maxTargets: 5, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, targetA: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 39329 "Void Bolt" (Wowhead name MATCH; C++
+	// SPELL_VOID_BOLT, boss_astromancer.cpp:53, :388
+	// DoCastVictim) — eff0 School Damage (Shadow),
+	// tooltip 4394-5106 -> bp 4393, die 713 (30925
+	// precedent; Effect shows only Value 4394), targetA
+	// ENEMY (DoCastVictim); cast 3s idx 14 (real row),
+	// dur n/a idx 0, range6 Vision 100yd (real row),
+	// school Shadow, manaCost 90.
+	{id: 39329, castTimeIdx: 14, rangeIdx: 6, school: schoolShadow, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 4393, dieSides: 713, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 42783 "Wrath of the Astromancer" (Wowhead name
+	// MATCH; C++ SPELL_WRATH_OF_THE_ASTROMANCER,
+	// boss_astromancer.cpp:49, :240 DoCast(target, true)
+	// / :276 DoCast(target)) — eff0 Apply Aura
+	// Periodically trigger spell (aura 23), no Value
+	// shown -> bp/die omitted (0/0), auraPeriod 250,
+	// trigger 42784 (NOT seeded — C++ DOT enum :50),
+	// targetA ENEMY (DoCast target); eff1 Dummy, Value
+	// 42787 -> bp 42786, die 1, targetA ENEMY (C++
+	// AfterRemove casts CalcValue() = 42787 on expire —
+	// boss_astromancer.cpp:530, CONFIRMED, not
+	// inferred); cast Instant idx 1, dur32 6000ms (real
+	// row), range13 Anywhere (real row), school Arcane.
+	// FLAG: 5400-6600 damage lives in 42784, not this
+	// row; "nearby allies" radius unstated.
+	{id: 42783, castTimeIdx: 1, durIdx: 32, rangeIdx: 13, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 250, trigger: 42784, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effDummy, basePoints: 42786, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
