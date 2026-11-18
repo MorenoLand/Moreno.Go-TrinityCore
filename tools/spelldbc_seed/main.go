@@ -93,6 +93,7 @@ const (
 	effEnergizePct             = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
 	effApplyAreaAuraOwner      = 143 // SPELL_EFFECT_APPLY_AREA_AURA_OWNER (SharedDefines.h:954)
 	effApplyAreaAuraParty      = 35  // SPELL_EFFECT_APPLY_AREA_AURA_PARTY (SharedDefines.h:846)
+	effApplyAreaAuraPet        = 119 // SPELL_EFFECT_APPLY_AREA_AURA_PET (SharedDefines.h:930)
 	effApplyAreaAuraEnemy      = 129 // SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (SharedDefines.h:940)
 	effApplyAreaAuraFriend     = 128 // SPELL_EFFECT_APPLY_AREA_AURA_FRIEND (SharedDefines.h:939)
 	effCreateItem              = 24  // SPELL_EFFECT_CREATE_ITEM (SharedDefines.h:835)
@@ -223,6 +224,7 @@ const (
 	targetUnitConeEnemy54      = 54  // TARGET_UNIT_CONE_ENEMY_54 (SharedDefines.h:1490)
 	targetUnitConeEntry        = 60  // TARGET_UNIT_CONE_ENTRY (SharedDefines.h:1496)
 	targetUnitMaster           = 27  // TARGET_UNIT_MASTER (SharedDefines.h:1463)
+	targetUnitSummoner         = 92  // TARGET_UNIT_SUMMONER (SharedDefines.h:1528)
 	targetUnitSrcAreaAlly      = 30  // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
 	targetUnitSrcAreaEntry     = 7   // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
 	targetUnitDestAreaEntry    = 8   // TARGET_UNIT_DEST_AREA_ENTRY (SharedDefines.h:1449)
@@ -20128,6 +20130,65 @@ var spells = []spell{
 	// Retry only if a WotLK row surfaces; until then the
 	// gap stays visible here. (This comment block holds the
 	// place; no seed row for 26092 exists.)
+	// 73953 "Motivate" (Wowhead name MATCH; C++
+	// zone_durotar.cpp:349 DoCast(me) TURNIN) — wago row
+	// 975204: eff0 Dummy (3), no Value -> bp -1, die 1,
+	// targetA DEST_CASTER (18) + targetB DEST_AREA_ENTRY
+	// (8), maxTargets 1. Cast Instant idx 1, range3 Short
+	// 20yd (real row), school Physical. NOT carried: the
+	// 0.5yd radius lives in RadiusIndex_1 = 44 (seed
+	// carries _0 only, kri 38718 precedent; radiusIdx 0
+	// here); Attributes (no attributes field).
+	{id: 73953, castTimeIdx: 1, rangeIdx: 3, maxTargets: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: -1, dieSides: 1, targetA: targetDestCaster, targetB: targetUnitDestAreaEntry, chainAmplitude: 1},
+	}},
+	// 74071 "Motivate" (Wowhead name MATCH; C++
+	// zone_durotar.cpp:325 DoCast(me) PETACT_AURA) — wago
+	// row 975408: eff0 Apply Area Aura Pet (119), aura
+	// Dummy (4), no Value -> bp -1, die 1, radiusIdx 22
+	// (200yd real row), targetA CASTER (1). Cast Instant
+	// idx 1, dur21 infinite (real row; Wowhead shows n/a
+	// but wago SpellMisc DurationIndex is 21), range181
+	// 200yd (real row, see ranges table), school Physical.
+	// NOT carried: 3s cooldown is RecoveryTime 3000 (no
+	// cooldown field); Attributes (no attributes field).
+	{id: 74071, castTimeIdx: 1, durIdx: 21, rangeIdx: 181, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAreaAuraPet, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, radiusIdx: 22, chainAmplitude: 1},
+	}},
+	// 75076 "Volunteer" (Wowhead name MATCH; C++
+	// zone_durotar.cpp:323 AddAura VOLUNTEER_AURA) — wago
+	// row 975500: eff0 Apply Aura Dummy (4), no Value ->
+	// bp -1, die 1, targetA CASTER (1). Cast Instant idx
+	// 1, dur347 900000ms 15min (real row), range1 Self,
+	// school Physical. Buff text "Deliver this new recruit
+	// to Champion Uru'zin..." is the aura description (no
+	// text field in the seed).
+	{id: 75076, castTimeIdx: 1, durIdx: 347, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 75106 "[DND] Persuaded" (Wowhead name MATCH; C++
+	// zone_durotar.cpp:350 DoCast(me) QUEST_CREDIT) — wago
+	// row 976150: eff0 Kill Credit (134, effKillCredit2),
+	// no Value -> bp -1, die 1, misc 40260 (Troll
+	// Volunteer credit), targetA SUMMONER (92). Cast
+	// Instant idx 1, range13 Anywhere 50000yd (real row),
+	// school Physical. NOT carried: Speed 15 (no speed
+	// field); Attributes (no attributes field).
+	{id: 75106, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effKillCredit2, basePoints: -1, dieSides: 1, misc: 40260, targetA: targetUnitSummoner, chainAmplitude: 1},
+	}},
+	// 75420 "Mounting Check" (Wowhead name MATCH; C++
+	// zone_durotar.cpp:324 AddAura MOUNTING_CHECK) — wago
+	// row 975601: eff0 Apply Aura Periodic Dummy (226),
+	// Value 1 -> bp 0, die 0, auraPeriod 2000, targetA
+	// CASTER (1). Cast Instant idx 1, dur21 infinite
+	// (real row; Wowhead shows n/a but wago SpellMisc
+	// DurationIndex is 21), range1 Self, school Physical.
+	// The Lua RegisterAuraEvent tick (ev1) mirrors this
+	// 2s periodic dummy.
+	{id: 75420, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDummy, basePoints: 0, dieSides: 0, auraPeriod: 2000, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
@@ -20336,6 +20397,7 @@ func main() {
 		{35, f32(0), f32(0), f32(35), f32(35), 0},       // real SpellRange 35 "Medium-Long Range" for 38739 Acid Geyser (wago.tools 3.4.0.47659 SpellRange row 35, browser 45c90da6)
 		{134, f32(0), f32(0), f32(80), f32(80), 0},      // real SpellRange 134 "Tower 80" for 30967 Fireball (wago.tools 3.4.0.47659 SpellRange row 134, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
 		{14, f32(0), f32(0), f32(60), f32(60), 0},       // real SpellRange 14 "Extra Long Range" for 57942 (wago.tools 3.4.0.47659, 2026-11-16 verdict wago_spells_57941_57942_57949.txt)
+		{181, f32(0), f32(0), f32(200), f32(200), 0},    // real SpellRange 181 for 74071 (wago.tools 3.4.0.47659 SpellMisc RangeIndex 181, 2026-11-18 verdict wago_spells_73953_74071_75076_75106_75420_wago.txt; 0-200yd per Wowhead)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
