@@ -221,6 +221,12 @@ end
 RegisterAuraEvent(SPELL_PRIEST_DIVINE_AEGIS_TALENT, 6, divineAegisProc)
 
 local SPELL_PRIEST_CIRCLE_OF_HEALING = 34861 -- spell_priest.cpp:296 (class spell_pri_circle_of_healing)
+local SPELL_PRIEST_CIRCLE_OF_HEALING_R2 = 34863
+local SPELL_PRIEST_CIRCLE_OF_HEALING_R3 = 34864
+local SPELL_PRIEST_CIRCLE_OF_HEALING_R4 = 34865
+local SPELL_PRIEST_CIRCLE_OF_HEALING_R5 = 34866
+local SPELL_PRIEST_CIRCLE_OF_HEALING_R6 = 48088
+local SPELL_PRIEST_CIRCLE_OF_HEALING_R7 = 48089
 local SPELL_PRIEST_GLYPH_OF_CIRCLE_OF_HEALING = 55675 -- spell_priest.cpp:42
 
 -- C++ spell_pri_circle_of_healing_SpellScript::FilterTargets
@@ -235,7 +241,18 @@ local SPELL_PRIEST_GLYPH_OF_CIRCLE_OF_HEALING = 55675 -- spell_priest.cpp:42
 -- DELTA: Lua table.sort is not stable, so equal-pct targets at the
 -- cut boundary may keep a different one than C++ list::sort; the
 -- kept set is identical whenever no pct ties straddle the cut.
--- DORMANT until Spell.dbc ships the 34861 row.
+-- DORMANT until Spell.dbc ships the 34861 row. All seven ranks share
+-- the filter: TDB binds (-34861, spell_pri_circle_of_healing), the
+-- negative id meaning all ranks (ObjectMgr.cpp:5790-5806), and the
+-- spell_ranks chain is 34863/34864/34865/34866/48088/48089 (R2-R7) —
+-- the SoR precedent (20154/21084 both registered, TDB binds -20154
+-- only).
+-- RANKS: TDB spell_script_names binds (-34861, 'spell_pri_circle_of_healing')
+-- and ObjectMgr.cpp LoadSpellScriptNames expands a negative id to every rank
+-- of the chain (GetNextRankSpell); TDB spell_ranks confirms the chain
+-- 34861/34863/34864/34865/34866/48088/48089 (R1-R7). The Go ev7 fire site
+-- resolves handlers by exact spell id only (lua_spell.go HasHook), so each
+-- rank registers the same handler (the SoR R1/R2 precedent).
 local function circleOfHealingFilterTargets(event, spell, effectIndex, targets)
     if effectIndex ~= 0 then
         return
@@ -262,6 +279,12 @@ local function circleOfHealingFilterTargets(event, spell, effectIndex, targets)
 end
 
 RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING, 7, circleOfHealingFilterTargets)
+RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING_R2, 7, circleOfHealingFilterTargets)
+RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING_R3, 7, circleOfHealingFilterTargets)
+RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING_R4, 7, circleOfHealingFilterTargets)
+RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING_R5, 7, circleOfHealingFilterTargets)
+RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING_R6, 7, circleOfHealingFilterTargets)
+RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING_R7, 7, circleOfHealingFilterTargets)
 
 local SPELL_PRIEST_MIND_SEAR = 49821 -- spell_priest.cpp:889 (class spell_pri_mind_sear)
 
@@ -345,8 +368,10 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   above): RaidCheck via the new IsInRaidWith bridge (both Lua unit
 --   surfaces, Unit.cpp:12155), lowest-health sort + 5/6 glyph cap via
 --   GetTargets/Clear/Add; the "no OnObjectAreaTargetSelect bridge"
---   note is STALE (ev7 landed bf31db6b). DORMANT until Spell.dbc
---   ships the 34861 row.
+--   note is STALE (ev7 landed bf31db6b). R2-R7 registered 2026-11-19
+--   (34863/34864/34865/34866/48088/48089, TDB spell_ranks chain +
+--   negative spell_script_names all-ranks expansion, ObjectMgr.cpp).
+--   DORMANT until Spell.dbc ships the 34861 row.
 --   664 divine_aegis (47509, :336-389): PORTED this tick (ev6, heal
 --   forwarding: pct(heal, amount) + existing-aegis stack +
 --   level*125 cap, holder casts 47753 on the proc target).
