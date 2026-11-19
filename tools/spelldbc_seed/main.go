@@ -102,6 +102,7 @@ const (
 	effSpawn                   = 46  // SPELL_EFFECT_SPAWN (SharedDefines.h:857; clientside-only, spells.go:19747)
 	auraPeriodicDmg            = 3
 	auraPeriodicTriggerSpell   = 23 // SPELL_AURA_PERIODIC_TRIGGER_SPELL (SpellAuraDefines.h:103)
+	auraPeriodicDamagePct      = 89 // SPELL_AURA_PERIODIC_DAMAGE_PERCENT (SpellAuraDefines.h:169)
 	auraPeriodicEnergize       = 24 // SPELL_AURA_PERIODIC_ENERGIZE (SpellAuraDefines.h:104)
 	auraPeriodicHeal           = 8  // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
 	auraDummy                  = 4
@@ -3097,6 +3098,31 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraPeriodicTriggerSpell, basePoints: -1, dieSides: 1, auraPeriod: 1000, trigger: 69585, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 1499, dieSides: 1, auraPeriod: 1000, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraMechanicImmunity, basePoints: 99, dieSides: 1, misc: 16, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 46598 "Ride Vehicle Hardcoded" (boss_lord_marrowgar.cpp:55 enum; Lua boss_lord_marrowgar.lua :155 SPELL_RIDE_VEHICLE) - wago.tools 3.4.5.63697 SpellEffect rows 951479/951480 (DifficultyID 0) + SpellMisc 600209 + SpellCategories 125466 + SpellAuraOptions 189787 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA CONTROL_VEHICLE (236) bp0/die0 tgtA 25; eff1 APPLY_AURA DUMMY (4) bp0/die0 tgtA 1. Cast Instant idx 1, dur21 -1 infinite (real row 0xFFFFFFFF), range152 "Super Long" 150yd (real row), school Physical, dispel 0, mechanic 0. No SpellPower row read - manaCost omitted. NOT carried: Attributes (no field); StartRecoveryCategory 133 (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 46598, castTimeIdx: 1, durIdx: 21, rangeIdx: 152, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraControlVehicle, basePoints: 0, dieSides: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 69055 "Bone Slice" (boss_lord_marrowgar.cpp:47 enum; Lua boss_lord_marrowgar.lua :167 SPELL_BONE_SLICE) - wago.tools 3.4.5.63697 SpellEffect row 971750 (DifficultyID 0) + SpellMisc 615581 + SpellCategories 129985 + SpellAuraOptions 205188 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 WEAPON_PERCENT_DAMAGE (31) bp199/die1 tgtA 53 (TARGET_DEST_TARGET_ENEMY) tgtB 16 (TARGET_UNIT_DEST_AREA_ENEMY) radiusIdx 14 (8yd, real row) = 200% weapon damage. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range2 Combat 5yd (real row, Flags 0x1), school Physical, dispel 0, mechanic 0, maxTargets 2 (Wowhead Default; 72090 precedent). SpellPower rows are zero-cost (PowerType 1) - manaCost omitted. NOT carried: Attributes (no field); SpellCategories DefenseType 2 / PreventionType 0x2 (no fields); SpellAuraOptions ProcChance 101 (no field). FLAG: difficulty variants D2/D4 (bp299 = 300%) - seed carries DifficultyID 0 only.
+	{id: 69055, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, maxTargets: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 199, dieSides: 1, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 69065 "Impaled" (boss_lord_marrowgar.cpp:54 enum; Lua boss_lord_marrowgar.lua :154 SPELL_IMPALED) - wago.tools 3.4.5.63697 SpellEffect rows 971894/971895 (DifficultyID 0) + SpellMisc 615683 + SpellAuraOptions 205254 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA MOD_STUN (12) bp0/die0 tgtA 25; eff1 APPLY_AURA PERIODIC_DAMAGE_PERCENT (89) bp9/die1 auraPeriod 1000 mechanic 15 BLEED tgtA 25 = 10% every 1s. Cast Instant idx 1, dur21 -1 infinite (real row 0xFFFFFFFF), range13 "Anywhere" 50000yd (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellPower rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 69065, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDamagePct, basePoints: 9, dieSides: 1, auraPeriod: 1000, mechanic: 15, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 69076 "Bone Storm" (boss_lord_marrowgar.cpp:48 enum; Lua boss_lord_marrowgar.lua :165 SPELL_BONE_STORM) - wago.tools 3.4.5.63697 SpellEffect rows 972035/972036 (DifficultyID 0) + SpellMisc 615789 + SpellCategories 130156 + SpellPower 250455 + SpellAuraOptions 205360 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL (23) bp-1/die1 auraPeriod 2000 trigger 69075 tgtA 1; eff1 APPLY_AURA MOD_MELEE_HASTE (138) bp-9901/die1 tgtA 1 = -9900% attack speed. Cast 3s idx 14 (real row), dur3 60s (real row), range1 Self (real row), school Physical, dispel 0, mechanic 0. SpellPower row is zero-cost (PowerType 1) - manaCost omitted. NOT carried: Attributes (no field); BonusCoefficient 1 on eff1 (no field); SpellAuraOptions ProcChance 101 (no field). Trigger 69075 NOT seeded (trigger-only).
+	{id: 69076, castTimeIdx: 14, durIdx: 3, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTriggerSpell, basePoints: -1, dieSides: 1, auraPeriod: 2000, trigger: 69075, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -9901, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 69147 "Coldflame" (boss_lord_marrowgar.cpp:59 enum; Lua boss_lord_marrowgar.lua :170 SPELL_COLDFLAME_SUMMON - DB2/Wowhead name is "Coldflame") - wago.tools 3.4.5.63697 SpellEffect rows 972156/972157/972158 (DifficultyID 0) + SpellMisc 615440 + SpellAuraOptions 205011 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 TRIGGER_SPELL (64) trigger 69146 tgtA 1; eff1 TRIGGER_SPELL (64) trigger 33801 tgtA 1; eff2 SCRIPT_EFFECT (77) bp69144/die1 tgtA 1 = 69145. Cast 0.2s idx 209 (NEW aux row), durIdx 0 (no SpellDuration row 0), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellPower row read - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field). Triggers 69146/33801 NOT seeded (trigger-only).
+	{id: 69147, castTimeIdx: 209, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 0, trigger: 69146, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 0, trigger: 33801, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effScriptEffect, basePoints: 69144, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
@@ -21490,6 +21516,7 @@ func main() {
 		{50, 1300, 0},  // real SpellCastTimes 50 for 8399 (wago.tools 3.4.0.47659, 2026-11-17 verdict wago_spells_8399_8734_15587.txt)
 		{28, 3200, 0},  // real SpellCastTimes 28 for 39294 (wago.tools 3.4.0.47659 SpellCastTimes row 28, 2026-11-17 verdict wago_spells_39283_39284_39294.txt)
 		{22, 3500, 0},  // real SpellCastTimes 22 for 18763 Freeze + 71020 Dark Mending (wago.tools 2.5.6.70577 SpellCastTimes row 22, 2026-11-18 verdict wago_spells_18099_18100_18763_21369_26070_wago.txt; retires synthetic 92004)
+		{209, 200, 0},  // real SpellCastTimes 209 for 69147 Coldflame (wago.tools 3.4.5.63697 SpellCastTimes row 209, 2026-11-19 verdict wago_spells_46598_69055_69065_69076_69147_wago.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
 		panic(err)
