@@ -24019,13 +24019,28 @@ func init() {
 	// npc_general_arlos (Borean Tundra, Last Rites quest chain) —
 	// ported arms in lua_scripts/northrend/npc_general_arlos.lua:
 	// MovementInform(POINT_MOTION_TYPE) -> AddUnitState(UNIT_STATE_STUNNED
-	// 0x8) (zone_borean_tundra.cpp:803-814). The whole AI is that one arm:
-	// no combat timers, no UpdateAI. The SPELL_STUN 46957 self-cast leg
-	// stays out (spell unseeded in the Go store; seed axis parked) and
-	// the ENSURE_AI thassarian arlosInPosition latch stays out (no
+	// 0x8) + CastSpell(me, SPELL_STUN 46957, triggered)
+	// (zone_borean_tundra.cpp:803-814). The whole AI is that one arm:
+	// no combat timers, no UpdateAI. The 46957 cast is silent until the
+	// spell is seeded in the Go store (seed axis parked); the
+	// ENSURE_AI thassarian arlosInPosition latch stays out (no
 	// cross-AI bridge). Entry 25250 verifiable from the C++ LastRites
 	// enum (zone_borean_tundra.cpp:415).
 	RegisterLuaBoss("npc_general_arlos", 25250)
+	// npc_leryssa (Borean Tundra, Last Rites quest chain) — ported arms
+	// in lua_scripts/northrend/npc_leryssa.lua: MovementInform
+	// (POINT_MOTION_TYPE), first arrival only -> AddUnitState
+	// (UNIT_STATE_STUNNED 0x8) + CastSpell(me, SPELL_STUN 46957,
+	// triggered), bDone latch per GUID (zone_borean_tundra.cpp:971-988).
+	// The 46957 cast is silent until the spell is seeded in the Go
+	// store (seed axis parked). Ctor RemoveStandFlags(SIT) unbridged;
+	// bCheck / leryssaInPosition cross-AI latches stay out (no
+	// cross-AI bridge; Talbot bCheck consumer unported); second-arrival
+	// phase machine stays out (trigger is unported Talbot JustDied
+	// MovePoint; phase-7 thassarian phase=16 write has no bridge).
+	// Entry 25251 verifiable from the C++ LastRites enum
+	// (zone_borean_tundra.cpp:416).
+	RegisterLuaBoss("npc_leryssa", 25251)
 	// npc_bloodmage_laurith (Borean Tundra, quest 11719) — ported arms in
 	// lua_scripts/northrend/npc_bloodmage_laurith.lua: Reset() (event cancel +
 	// player-GUID clear) and the SetGUID (ev40) / EVENT_TALK (1s, Talk 0 to the

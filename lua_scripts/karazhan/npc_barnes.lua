@@ -52,21 +52,26 @@
 --   the spotlight (GetCreatureByGUID on the wp4-latched GUID) and
 --   unpauses the escort. Pump cancelled on Reset/Died and re-armed
 --   on a repeat wp4.
+-- - The PerformanceReady raid-wipe poll (UpdateAI :312-342):
+--   wp8 arms a CreateLuaEvent pump with the Initialize() WipeTimer
+--   (5000ms); each fire scans the whole map's player list
+--   (creature:GetMap():GetPlayers(), karazhan.lua:208 precedent —
+--   no-arg GetPlayers is whole-map, globals.go:1262) for an alive
+--   non-GM (player:IsAlive() lua_player.go:1418, player:IsGM()
+--   lua_player.go:1411, security>0 = C++ IsGameMaster); an empty
+--   list re-polls after 1000ms (C++ next-tick recheck twin — C++
+--   returns from UpdateAI with WipeTimer still expired, so the
+--   next tick re-checks immediately); all-dead/GM-only enters
+--   EnterEvadeMode (lua_creature_events.go:6050) and stops the
+--   poll (C++ !RaidWiped gate); otherwise WipeTimer = 15000ms.
+--   Pump cancelled on Reset/Died. The 12:56 stay-out grounds are
+--   overturned: GetPlayers() is whole-map, not range-bounded, and
+--   the GM filter is bridged.
 -- Deliberate omissions / unported scope:
 -- - The gossip driver (OnGossipHello menus 8970/8975/8978,
 --   OnGossipSelect StartEvent / GM event override) + StartEvent
 --   (instance SetBossState IN_PROGRESS, OZ-deathcount reset) —
 --   the escort driver, so this handler fires once that lands.
--- - The PerformanceReady raid-wipe poll (UpdateAI :312-342,
---   EnterEvadeMode on wipe) — UpdateAI scope; the wp8 latch is
---   kept per GUID for it. Bridge gap is exact: C++ iterates the
---   whole map's PlayerList, but the only player-list bridge is
---   GetPlayersInGrid(dist) (range-bounded; a dist large enough to
---   cover Karazhan would still miss the whole-map semantic, and a
---   player idling elsewhere in the instance would false-wipe);
---   the IsGameMaster filter is likewise unverified on the player
---   surface. No range approximation ported — a false EnterEvadeMode
---   is worse than a missing one.
 
 local ENTRY_BARNES = 16812
 
@@ -153,6 +158,53 @@ local function cancelDialogue(guid)
     end
 end
 
+local function cancelWipe(guid)
+    local st = barnesState[guid]
+    if st and st.wipeEventId then
+        RemoveEventById(st.wipeEventId)
+        st.wipeEventId = nil
+    end
+end
+
+-- C++ UpdateAI wipe leg (karazhan.cpp:312-342): while PerformanceReady
+-- and not RaidWiped, each WipeTimer expiry scans the map's players;
+-- an empty list returns (next tick re-checks), all-dead/GM-only
+-- evades, otherwise WipeTimer = 15000. The pump is armed at wp8 with
+-- the Initialize() WipeTimer (5000ms) and re-arms itself.
+local WIPE_TIMER_INITIAL = 5000
+local WIPE_TIMER_REARM = 15000
+local WIPE_TIMER_EMPTY_REPOLL = 1000
+
+local function wipeTick(creature, guid)
+    local st = barnesState[guid]
+    if not st then
+        return
+    end
+    st.wipeEventId = nil
+    if not st.performanceReady or st.raidWiped then
+        return
+    end
+    local map = creature:GetMap()
+    local players = map and map:GetPlayers() or nil
+    if not players or #players == 0 then
+        st.wipeEventId = CreateLuaEvent(function() wipeTick(creature, guid) end, WIPE_TIMER_EMPTY_REPOLL)
+        return
+    end
+    local wiped = true
+    for _, player in ipairs(players) do
+        if player:IsAlive() and not player:IsGM() then
+            wiped = false
+            break
+        end
+    end
+    if wiped then
+        st.raidWiped = true
+        creature:EnterEvadeMode()
+        return
+    end
+    st.wipeEventId = CreateLuaEvent(function() wipeTick(creature, guid) end, WIPE_TIMER_REARM)
+end
+
 -- C++ UpdateAI dialogue leg (karazhan.cpp:296-310): while the escort is
 -- paused, each TalkTimer expiry talks the current TalkCount row (or,
 -- once TalkCount > 3, despawns the spotlight and unpauses). The pump
@@ -191,6 +243,7 @@ end
 local function onBarnesReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelDialogue(guid)
+    cancelWipe(guid)
     local key = instanceKey(creature)
     if operaEventByInstance[key] == nil then
         operaEventByInstance[key] = math.random(EVENT_OZ, EVENT_RAJ)
@@ -202,11 +255,14 @@ local function onBarnesReset(event, creature)
         talkEventId = nil,
         performanceReady = false,
         raidWiped = false,
+        wipeEventId = nil,
     }
 end
 
 local function onBarnesDied(event, creature)
-    cancelDialogue(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelDialogue(guid)
+    cancelWipe(guid)
 end
 
 -- C++ PrepareEncounter (karazhan.cpp:241-286).
@@ -259,6 +315,12 @@ local function barnesReachWP(event, creature)
     elseif wp == 8 then
         useDoor(creature, DATA_GO_STAGEDOORLEFT)
         st.performanceReady = true
+        -- C++ WipeTimer (5000ms, Initialize) only ticks while
+        -- PerformanceReady; a single timer, never reset by wp8, so
+        -- arm only when no wipe pump is already running.
+        if not st.wipeEventId then
+            st.wipeEventId = CreateLuaEvent(function() wipeTick(creature, guid) end, WIPE_TIMER_INITIAL)
+        end
     elseif wp == 9 then
         prepareEncounter(creature, st.eventId)
         st.raidWiped = false
