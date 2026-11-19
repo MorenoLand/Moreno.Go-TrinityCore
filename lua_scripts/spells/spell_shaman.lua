@@ -135,7 +135,7 @@
 --   absorb/calc arms (shadow ward twin, rend twin), SpellScript-only
 --   (chain heal, cleansing pulse, earthen power, fire nova,
 --   healing/mana spring totem, heroism, lava lash, stoneclaw,
---   thunderstorm), AfterDispel (flame shock), and the t3 8p
+--   thunderstorm), and the t3 8p
 --   self-remove (family-flag GetAuraEffect overload unbridged).
 --   Astral shift aura is proc, not the visual dummy above; the 51474
 --   absorb leg is Go-ported above.
@@ -222,10 +222,18 @@
 --   fire totem via GetTotem(0) + GetSpellMaxRangeForTarget bridge
 --   (lua_player.go). HandleDummy stays out: it needs spell-side
 --   GetSpellWithRank (aura-side only); player-cast ev5 gap.
---   764 flame_shock — AfterDispel (mode 5) and GetDummyAuraEffect are
---   bridged, but the rank-matched Lava Flows triggered cast is not:
---   aura:GetSpellWithRank keys off the dispelled aura's rank, and the
---   64694-chain rank ids are not named in-tree.
+--   764 flame_shock — PORTED below (mode 5, R1 Lava Flows only);
+--   the tick-295 stay-out is superseded: mode 5 + explicit-rank
+--   GetSpellWithRank are live, and the 64694 chain resolves through
+--   TDB spell_ranks (64694 r1, 65263 r2, 65264 r3). The Lava Flows
+--   rank itself cannot come from the rank bridges — 51480 carries
+--   no spell_ranks row, so GetSpellWithRank with no rank reads 0 —
+--   so the port gates on the exact R1 aura (51480,
+--   spell_shaman.cpp:54) and passes rank 1 explicitly. R2/R3 stay
+--   out: their spell ids are not named anywhere in-tree (no 51481
+--   / 51482 as spells in C++, Go, or either TDB dump), and no rank
+--   map is guessed. Do NOT add a second 8050-chain registration:
+--   one handler already covers all 9 ranks.
 --   765 flametongue_weapon — CheckProc needs GetCastItem + proc type
 --   mask; HandleProc needs attack time / spellpower / aura-modifier
 --   math and SetCastItem, all unbridged.
@@ -991,3 +999,40 @@ local function staticShockProc(event, aura, target, actor, procTarget, damage, p
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_STATIC_SHOCK, 6, staticShockProc)
+
+-- PORTED (this tick, RegisterAuraEvent OnDispel = 5):
+--   spell_sha_flame_shock (8050 chain, spell_shaman.cpp:667-705): AfterDispel.
+--   When Flame Shock is dispelled, if its caster carries the Lava Flows
+--   dummy aura (SPELLFAMILY_SHAMAN, icon 3087, EFFECT_0), the caster
+--   casts the rank-matched Lava Flows triggered spell on itself,
+--   triggered. Rank 1 only (51480): the 64694 chain resolves via
+--   spell_ranks (64694/65263/65264), but the Lava Flows chain has no
+--   spell_ranks rows in either TDB dump, so lava:GetRank() reads 0 and
+--   the default-rank GetSpellWithRank(64694) would return 0; the R2/R3
+--   Lava Flows spell ids are not named anywhere in-tree (no 51481 in
+--   C++ or Go), so no rank map is guessed. The R1 gate is exact:
+--   caster:GetAura(51480) matches only the R1 aura, and the explicit
+--   rank-1 lookup returns the verified 64694 row. All 9 Flame Shock
+--   ranks register (TDB spell_ranks chain for 8050).
+local SPELL_SHAMAN_FLAME_SHOCK_RANKS = { 8050, 8052, 8053, 10447, 10448, 29228, 25457, 49232, 49233 } -- TDB spell_ranks, 8050 chain
+local SPELL_SHAMAN_LAVA_FLOWS_R1 = 51480 -- spell_shaman.cpp:54
+local SPELL_SHAMAN_LAVA_FLOWS_TRIGGERED_R1 = 64694 -- spell_shaman.cpp:55
+
+local function flameShockDispel(event, aura, target, dispeller)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+    local lava = caster:GetAura(SPELL_SHAMAN_LAVA_FLOWS_R1)
+    if lava == nil then
+        return
+    end
+    local triggered = lava:GetSpellWithRank(SPELL_SHAMAN_LAVA_FLOWS_TRIGGERED_R1, 1)
+    if triggered ~= 0 then
+        caster:CastSpell(caster, triggered, true)
+    end
+end
+
+for _, spellId in ipairs(SPELL_SHAMAN_FLAME_SHOCK_RANKS) do
+    RegisterAuraEvent(spellId, 5, flameShockDispel)
+end
