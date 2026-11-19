@@ -386,7 +386,10 @@ local SPELL_DK_BUTCHERY_RUNIC_POWER = 50163 -- spell_dk.cpp:88
 -- (-48979) binding in spell_script_names (TDB 25101 + 26091) expands
 -- via GetNextRankSpell to 49483, so both ranks register. DORMANT
 -- until Spell.dbc ships the 48979/49483 proc entries.
-local function butcheryProc(event, aura, target, actor, procTarget, damage)
+local function butcheryProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
     if actor == nil then
         return true
     end
@@ -441,7 +444,10 @@ local SPELL_DK_NECROSIS_DAMAGE = 51460 -- spell_dk.cpp:93
 -- returns after PreventDefaultAction, so it still vetoes.
 -- DORMANT until Spell.dbc ships the 51459 proc entry. Higher ranks
 -- are not in-tree — not registered until DBC confirms them.
-local function necrosisProc(event, aura, target, actor, procTarget, damage)
+local function necrosisProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
     if actor == nil or procTarget == nil or damage == nil or damage == 0 then
         return true
     end
@@ -465,7 +471,10 @@ local SPELL_CATEGORY_HOWLING_BLAST = 1248 -- spell_dk.cpp:116
 -- PreventDefaultAction: the DBC default trigger still fires after
 -- (the handler returns nothing). DORMANT until Spell.dbc ships the
 -- 49188 proc entry.
-local function rimeProc(event, aura, target, actor, procTarget, damage)
+local function rimeProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 1 then
+        return
+    end
     if target == nil or target:GetTypeId() ~= 4 then
         return
     end
@@ -489,7 +498,10 @@ local SPELL_DK_SCENT_OF_BLOOD_TRIGGER = 49004 -- spell_dk.cpp:2225
 -- registration (:3251) are the port's authority, and the missing row
 -- is a TDB data gap, not a code gap. DORMANT until Spell.dbc ships
 -- the 49004 proc entry.
-local function scentOfBloodTriggerProc(event, aura, target, actor, procTarget, damage)
+local function scentOfBloodTriggerProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
     if aura == nil or target == nil then
         return
     end
@@ -523,7 +535,10 @@ local DEATH_COIL_CHECKCAST_SPELLS = {47541, 49892, 49893, 49894, 49895, 52375, 5
 -- 2398-2422, from 47541); no GetNextRankSpell bridge exists, so the
 -- walk is the hardcoded TDB spell_ranks chain above.
 -- DORMANT until Spell.dbc ships the 49018 proc entry.
-local function suddenDoomProc(event, aura, target, actor, procTarget, damage)
+local function suddenDoomProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
     if actor == nil or procTarget == nil then
         return true
     end
@@ -555,7 +570,10 @@ local SPELL_DK_VENDETTA_HEAL = 50181 -- spell_dk.cpp:92
 -- target falls back to the caster (lua_player.go CastCustomSpell).
 -- DORMANT until Spell.dbc ships the 49015 proc entry. Rank 1 only —
 -- higher-rank IDs are not in the file, never guessed.
-local function vendettaProc(event, aura, target, actor, procTarget, damage)
+local function vendettaProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
     if actor == nil or aura == nil then
         return true
     end
@@ -580,6 +598,9 @@ local SPELL_DK_WANDERING_PLAGUE = 49217 -- spell_dk.cpp:2627
 local SPELL_DK_WANDERING_PLAGUE_DAMAGE = 50526 -- spell_dk.cpp:101
 
 local function wanderingPlagueProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
     if actor == nil or procTarget == nil or aura == nil then
         return true
     end
@@ -715,7 +736,10 @@ local SPELL_SCHOOL_MASK_ARCANE = 64 -- SharedDefines.h:330
 -- school vetoes (true) so the DBC default leg never fires on a failed
 -- gate, matching C++ where a failed CheckProc procs nothing. DORMANT
 -- until Spell.dbc ships the 49200 proc entry.
-local function acclimationProc(event, aura, target, actor, procTarget, damage, procEvent)
+local function acclimationProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
     if procEvent == nil then
         return true
     end

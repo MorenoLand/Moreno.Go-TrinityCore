@@ -475,13 +475,13 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   669 pain_and_suffering_dummy (47580, :916-942): DoCheckEffectProc
 --   returning false (pure proc gate, no arm); ev6 has no CheckProc
 --   model and its hook fires after charge/cooldown consumption.
---   670 penance (47540, :980-1064): HandleDummy PORTED tick 2026-11-12
---   (ev5 below, R1 only: friendly hit -> 47757 heal, hostile -> 47758
---   damage, both triggered; the binding id IS the rank match — no
---   spell-level GetSpellWithRank bridge exists); the CheckCast arm is
---   PORTED (OnCheckCast ev8 above, R1-R4; ev5 stays R1-only, it
---   hardcodes the 47757/47758 heals). The "ev5 player path is
---   dormant" claim is STALE (a910c39d, spells.go:14668-14737).
+--   670 penance (47540, :980-1064): HandleDummy PORTED tick 2026-11-12,
+--   ev5 R2-R4 registered 2026-11-19 (rank table keyed by
+--   spell:GetEntry(); TDB spell_ranks 47757->52986/52987/52988 heal,
+--   47758->53001/53002/53003 damage; C++ GetSpellWithRank(rank)
+--   :1024-1029); the CheckCast arm is PORTED (OnCheckCast ev8 above,
+--   R1-R4). The "ev5 player path is dormant" claim is STALE (a910c39d,
+--   spells.go:14668-14737).
 --   Census hooks wrong on 661/662/664/666/667/668/669/670 (phantom
 --   OnObjectAreaTargetSelect / HandleDummy / OnCheckCast / OnEffectHitTarget;
 --   real hooks are in the notes above).
@@ -572,6 +572,12 @@ local SPELL_PRIEST_PENANCE_R3 = 53006
 local SPELL_PRIEST_PENANCE_R4 = 53007
 local SPELL_PRIEST_PENANCE_R1_HEAL = 47757 -- spell_priest.cpp:51
 local SPELL_PRIEST_PENANCE_R1_DAMAGE = 47758 -- spell_priest.cpp:50
+local SPELL_PRIEST_PENANCE_R2_HEAL = 52986 -- spell_ranks (47757, 52986, 2)
+local SPELL_PRIEST_PENANCE_R2_DAMAGE = 53001 -- spell_ranks (47758, 53001, 2)
+local SPELL_PRIEST_PENANCE_R3_HEAL = 52987 -- spell_ranks (47757, 52987, 3)
+local SPELL_PRIEST_PENANCE_R3_DAMAGE = 53002 -- spell_ranks (47758, 53002, 3)
+local SPELL_PRIEST_PENANCE_R4_HEAL = 52988 -- spell_ranks (47757, 52988, 4)
+local SPELL_PRIEST_PENANCE_R4_DAMAGE = 53003 -- spell_ranks (47758, 53003, 4)
 local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
 local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
 
@@ -610,15 +616,24 @@ RegisterSpellEvent(SPELL_PRIEST_PENANCE_R4, 8, penanceCheckCast)
 -- friendly hit unit gets the rank-matched heal, a hostile one the
 -- rank-matched damage, both TRIGGERED_DISALLOW_PROC_EVENTS (a triggered
 -- cast — the true flag; the player path ignores it, see the quest-file
--- header note). Rank 1 only: the binding is the R1 id itself, so the
--- R1 heal/damage ids ARE the rank match (higher-rank IDs are not in
--- the file, never guessed); no spell-level GetSpellWithRank bridge
--- exists (lua_spell.go has no Rank method — the aura twin does not
--- apply here). The C++ NPCBot caster exception has no Go twin — the
--- Load gate is the player-type check below (ev5 fires on the creature
--- path too, boss_ai.go:3435-3438). RegisterSpellEvent
--- OnEffectHitTarget = 5; the player-path fire site is spells.go:14668-14737
--- (a910c39d, one fire per (effect, live hit target), before the default).
+-- header note). Rank comes from the cast id (GetSpellInfo()->GetRank(),
+-- :1024) via GetSpellWithRank on the 47757 heal / 47758 damage bases;
+-- the Lua twin is the rank table below keyed by spell:GetEntry()
+-- (lua_spell.go:191/:514, both spell-object builders), TDB spell_ranks
+-- chains verified 2026-11-19 (47757->52986/52987/52988,
+-- 47758->53001/53002/53003; (-47540) all-ranks binding). The C++ NPCBot
+-- caster exception has no Go twin — the Load gate is the player-type
+-- check below (ev5 fires on the creature path too, boss_ai.go:3435-3438).
+-- RegisterSpellEvent OnEffectHitTarget = 5; the player-path fire site is
+-- spells.go:14668-14737 (a910c39d, one fire per (effect, live hit target),
+-- before the default).
+local PENANCE_TRIGGERS = {
+    [SPELL_PRIEST_PENANCE_R1] = { heal = SPELL_PRIEST_PENANCE_R1_HEAL, damage = SPELL_PRIEST_PENANCE_R1_DAMAGE },
+    [SPELL_PRIEST_PENANCE_R2] = { heal = SPELL_PRIEST_PENANCE_R2_HEAL, damage = SPELL_PRIEST_PENANCE_R2_DAMAGE },
+    [SPELL_PRIEST_PENANCE_R3] = { heal = SPELL_PRIEST_PENANCE_R3_HEAL, damage = SPELL_PRIEST_PENANCE_R3_DAMAGE },
+    [SPELL_PRIEST_PENANCE_R4] = { heal = SPELL_PRIEST_PENANCE_R4_HEAL, damage = SPELL_PRIEST_PENANCE_R4_DAMAGE },
+}
+
 local function penanceHit(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 then
         return
@@ -630,11 +645,18 @@ local function penanceHit(event, spell, hitTarget, effectIndex)
     if caster == nil or caster:GetTypeId() ~= 4 then
         return
     end
+    local trigger = PENANCE_TRIGGERS[spell:GetEntry()]
+    if trigger == nil then
+        return
+    end
     if caster:IsFriendlyTo(hitTarget) then
-        caster:CastSpell(hitTarget, SPELL_PRIEST_PENANCE_R1_HEAL, true)
+        caster:CastSpell(hitTarget, trigger.heal, true)
     else
-        caster:CastSpell(hitTarget, SPELL_PRIEST_PENANCE_R1_DAMAGE, true)
+        caster:CastSpell(hitTarget, trigger.damage, true)
     end
 end
 
 RegisterSpellEvent(SPELL_PRIEST_PENANCE_R1, 5, penanceHit)
+RegisterSpellEvent(SPELL_PRIEST_PENANCE_R2, 5, penanceHit)
+RegisterSpellEvent(SPELL_PRIEST_PENANCE_R3, 5, penanceHit)
+RegisterSpellEvent(SPELL_PRIEST_PENANCE_R4, 5, penanceHit)

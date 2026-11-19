@@ -1819,6 +1819,13 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// SelectSpellTargets twin. hasDest is false when the spell carries no
 	// dest-family target.
 	var destX, destY, destZ float32
+	// Deferred channel-object stamp inputs (see the note at the
+	// channel block below): computed with the CastingUntil extension
+	// and stamped after the script-hook block, so the ev7/OnCast
+	// hooks fire against the previous channel, as in C++.
+	stampChannel := false
+	var stampChannelObj uint64
+	var stampChannelUntil time.Time
 	var destSnapshots []creatureDestSnapshot
 	hasDest := false
 	var spellInfo wotlk.Spell
@@ -3134,6 +3141,15 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// (Spell.cpp:4669) is sent after the GO packet at the GO site
 		// below (MSG_CHANNEL_START, DBC duration; the -1 arm sends
 		// uint32 max) — only the state stamp skips -1.
+		// Deferred channel-object stamp (Spell.cpp:3493, :3569-3596):
+		// C++ sets UNIT_FIELD_CHANNEL_OBJECT in SendChannelStart,
+		// called from handle_immediate AFTER SelectSpellTargets
+		// (:3410, the ev7 fire site), OnCast (:3432), the launch
+		// phase (:3465) and SendSpellGo (:3468) — so the ev7/OnCast
+		// hooks below read the PREVIOUS channel object, not this
+		// cast's. The stamp inputs are computed here with the
+		// CastingUntil extension; the stamp itself lands after the
+		// script-hook block below, before the GO packet.
 		if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); isChanneledSpell(spellInfo) && s != nil && s.Data != nil {
 			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && dur > 0 {
 				channelMs := castMs + uint32(dur)
@@ -3144,16 +3160,12 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				if channelUntil.After(m.CastingUntil) {
 					m.CastingUntil = channelUntil
 				}
-				// Spell::handle_immediate arms the channel before the
-				// launch legs below (Spell.cpp:3569-3596 precedes
-				// HandleLaunchPhase at 3465 in cast order), so the
-				// stamp lands here, ahead of the GO packet and the
-				// trigger legs: a 76/106 spell triggered by this
-				// channel spell resolves against it. The channel
-				// object follows SendChannelStart (Spell.cpp:4669):
-				// the caster when the channel spell has a
-				// destination, else its object target (the wire
-				// target, post-redirect), else the nearby pick.
+				// The channel object follows SendChannelStart
+				// (Spell.cpp:4669): the caster when the channel
+				// spell has a destination, else its object target
+				// (the wire target, post-redirect), else the nearby
+				// pick. Recorded here, stamped after the script
+				// hooks below (see the deferral note above).
 				channelObj := spellTarget.UnitGUID
 				if channelObj == 0 {
 					channelObj = targetGUID
@@ -3161,7 +3173,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				if hasDest {
 					channelObj = m.GUID
 				}
-				stampCreatureChannel(m, spellInfo.ID, channelObj, hasDest, destX, destY, destZ, channelUntil)
+				stampChannelObj = channelObj
+				stampChannelUntil = channelUntil
+				stampChannel = true
 			}
 		}
 		// Spell::SendSpellGo cast flags (Spell.cpp:4283-4330) for creature
@@ -3219,6 +3233,13 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			bossConePart.filtered = filtered
 		}
 		s.fireSpellCast(ctx, spellID, creatureSpellObj)
+	}
+	// Deferred channel-object stamp (see the note at the channel
+	// block above): the ev7/OnCast hooks just fired against the
+	// previous channel, as in C++; the launch/trigger legs and the
+	// per-hit legs below now see this cast's channel object.
+	if stampChannel {
+		stampCreatureChannel(m, spellInfo.ID, stampChannelObj, hasDest, destX, destY, destZ, stampChannelUntil)
 	}
 	if sendGoPacket {
 		packetHits := hitTargets
