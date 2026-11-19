@@ -1031,3 +1031,108 @@ func (s *Server) fireSpellTargetSelects(ctx context.Context, m *creatureMotion, 
 	}
 	return filtered
 }
+
+// firePlayerSpellTargetSelects is the player-path twin of
+// fireSpellTargetSelects: it dispatches the RegisterSpellEvent
+// OnObjectAreaTargetSelect hook for every selecting effect of one
+// player cast, in effect order (C++ fires per effect inside
+// SelectImplicitAreaTargets, Spell.cpp:1227), and returns the
+// per-effect filtered lists keyed by effect index — nil when no hook
+// is registered for the spell, so callers keep the flat lists
+// untouched. The per-effect list is the finishSpellCast shared
+// derivation (the fireSpellScriptLaunchTarget / ev5-loop switch:
+// friendly-area -> friendlyEffectTargets, ref-centered ->
+// refCenteredFriendlyTargets, cone legs -> the cone partitions,
+// else the merged hitTargets), with the caster removed from the
+// base list unless the effect carries a friendly-area leg (the
+// creature-path rule: C++ enemy/entry/ref-centered/cone lists never
+// contain the caster) and the reflected-ally trips joined after
+// that strip, so a reflected ally's caster entry survives as a
+// genuine post-reflect target. Handlers run in registration order
+// on the same mutable list object per effect, like the creature
+// path. DELTA vs C++: the fire sits after target selection and the
+// aura-scaling arm (the lists are final here, like the creature
+// path) rather than inside selection, so the lists are post-miss-roll
+// — applyEffects drops the missed entries from the stored lists
+// before the arms iterate them, matching the C++ outcome that a
+// missed target takes no effect.
+func (s *session) firePlayerSpellTargetSelects(ctx context.Context, spell wotlk.Spell, spellID uint32, castTimeMs int32, target protocol.SpellTargetData, castItemGUID uint64, hitTargets []uint64, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets, reflectedAllyTrips, refCenteredAllyTrips []uint64) map[int][]uint64 {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil || s.player == nil {
+		return nil
+	}
+	if !s.server.Features.Scripts.HasHook("spell:"+strconv.FormatUint(uint64(spellID), 10), scripting.SpellEventOnObjectAreaTargetSelect) {
+		return nil
+	}
+	spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
+	resolve := func(guid uint64) any { return s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, guid) }
+	var filtered map[int][]uint64
+	for i := range spell.Effects {
+		eff := spell.Effects[i]
+		if !spellEffectHasSelectingLeg(eff) {
+			continue
+		}
+		list := hitTargets
+		switched := friendlyEffectTargets != nil && (effectHasFriendlyAreaLeg(eff) ||
+			(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff)))
+		refCentered := refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff)
+		if refCentered {
+			switched = true
+		}
+		if switched {
+			list = friendlyEffectTargets
+			if refCentered {
+				list = refCenteredFriendlyTargets
+			}
+		}
+		if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) && !switched {
+			list = friendlyConeEffectTargets
+		}
+		if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) && !switched {
+			list = enemyConeEffectTargets
+		}
+		if !effectHasFriendlyAreaLeg(eff) && s.playerGUID != 0 {
+			kept := make([]uint64, 0, len(list))
+			for _, guid := range list {
+				if guid != s.playerGUID {
+					kept = append(kept, guid)
+				}
+			}
+			list = kept
+		}
+		if switched {
+			trips := reflectedAllyTrips
+			if refCentered {
+				trips = refCenteredAllyTrips
+			}
+			if len(trips) > 0 {
+				joined := make([]uint64, len(list), len(list)+len(trips))
+				copy(joined, list)
+				for range trips {
+					joined = append(joined, s.playerGUID)
+				}
+				list = joined
+			}
+		}
+		targetList := &spellTargetList{guids: append([]uint64(nil), list...)}
+		_, _ = s.server.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnObjectAreaTargetSelect, scripting.SpellEventOnObjectAreaTargetSelect, spellObj, i, s.server.spellTargetListObject(targetList, resolve))
+		if filtered == nil {
+			filtered = make(map[int][]uint64)
+		}
+		filtered[i] = targetList.guids
+	}
+	return filtered
+}
+
+// playerSpellTargetSelectFiltered returns the OnObjectAreaTargetSelect
+// hook's rewritten list for effect i when one fired, else the
+// caller-derived list — the player-path twin of
+// bossConeEffectTargetsFiltered. Callers apply it after the base
+// per-effect derivation (switched/cone/trips) and before the
+// caster-target / explicit-rejoin legs, which model separate C++
+// selections the hook never edits.
+func playerSpellTargetSelectFiltered(filtered map[int][]uint64, i int, derived []uint64) []uint64 {
+	if list, ok := filtered[i]; ok {
+		return list
+	}
+	return derived
+}

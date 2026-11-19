@@ -667,10 +667,14 @@ const (
 // (bossConeEffectTargets), i.e. the flat hit list for non-cone
 // spells, minus the caster unless the effect carries a friendly
 // area leg (C++ enemy/entry/ref/cone lists never contain the
-// caster; friendly-area lists do). Creature path only: the player
-// path's per-effect list site (applyEffects) runs after target
-// selection, too late for a selection-time list mutation to reach
-// the arms.
+// caster; friendly-area lists do). Creature path (boss_ai.go, the
+// fire site ahead of the GO packet) and player path
+// (finishSpellCast, the fire site after target selection and the
+// aura-scaling arm, ahead of the GO packet; the rewritten lists
+// reach the launch-target loop, the ev5 loop and the
+// damage/heal/aura arms via playerSpellTargetSelectFiltered, and
+// the other arms still iterate their own derivations). The
+// triggered funnel runs no target-select fire yet.
 // GO-area legs (51/52/108) never fire it — the list holds units
 // only. The deferred-fire call re-runs the cast function, so a
 // cast-time cast fires it once, at fire time, like OnCast.

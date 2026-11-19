@@ -423,6 +423,27 @@ end
 
 RegisterAuraEvent(SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY, 6, seedOfCorruptionDummyProc)
 
+-- C++ spell_warl_seed_of_corruption_SpellScript::FilterTargets
+-- (spell_warlock.cpp:1159-1163): EFFECT_0 TARGET_UNIT_DEST_AREA_ENEMY.
+-- The explicit target is removed from the area list — the seed's own
+-- damage never hits the seeded holder (the detonation casts the same
+-- spell on the holder via the dummy proc instead). Registered
+-- OnObjectAreaTargetSelect EFFECT_0 :1167. Fires on the player path
+-- via firePlayerSpellTargetSelects (finishSpellCast); the damage arm
+-- iterates the rewritten list.
+local function seedOfCorruptionFilterTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local explTarget = spell:GetTarget()
+    if explTarget == nil then
+        return
+    end
+    targets:Remove(explTarget)
+end
+
+RegisterSpellEvent(SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_R1, 7, seedOfCorruptionFilterTargets)
+
 -- C++ spell_warl_haunt_SpellScript::HandleAfterHit
 -- (spell_warlock.cpp:772-778): AfterHit. The hit aura's EFFECT_1
 -- amount becomes pct of the final hit damage. The aura is applied

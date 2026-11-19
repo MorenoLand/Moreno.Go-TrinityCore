@@ -10374,7 +10374,7 @@ func (s *session) fireSpellScriptEffectHitNoTarget(ctx context.Context, spell wo
 // branches. The spell object carries the launch state (one object for
 // the whole loop, like the creature path), so GetEffectValue reads the
 // DBC base on first call per effect and the rewrite after SetEffectValue.
-func (s *session) fireSpellScriptLaunchTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, castTimeMs int32, target protocol.SpellTargetData, castItemGUID uint64, hitTargets []uint64, missStatus []protocol.SpellMissStatus, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets, reflectedAllyTrips, refCenteredAllyTrips []uint64, launch *spellLaunchDamageState) {
+func (s *session) fireSpellScriptLaunchTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, castTimeMs int32, target protocol.SpellTargetData, castItemGUID uint64, hitTargets []uint64, missStatus []protocol.SpellMissStatus, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets, reflectedAllyTrips, refCenteredAllyTrips []uint64, launch *spellLaunchDamageState, filtered map[int][]uint64) {
 	if s == nil || s.server == nil || launch == nil {
 		return
 	}
@@ -10419,6 +10419,7 @@ func (s *session) fireSpellScriptLaunchTarget(ctx context.Context, spell wotlk.S
 		if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) && !effectSwitched {
 			effectList = enemyConeEffectTargets
 		}
+		effectList = playerSpellTargetSelectFiltered(filtered, effectIndex, effectList)
 		for _, guid := range effectList {
 			if guid == 0 || uint16(guid>>48) == 0xF110 {
 				continue
@@ -13793,6 +13794,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// SpellScript OnObjectAreaTargetSelect (Spell.cpp:1227, fired
+	// from SelectImplicitAreaTargets inside SelectTargets at :3410):
+	// the hook fires per selecting effect, and the rewritten lists
+	// are what every effect arm sees — the fire site sits after
+	// target selection and the aura-scaling arm (the lists are final
+	// here, the creature-path position in boss_ai.go) and before the
+	// GO packet (whose flat hit list the per-effect
+	// rewrites intentionally do not narrow: C++ sends the
+	// post-selection target map, and Go has no per-effect packet mask
+	// for it). The returned map is threaded into the launch-target
+	// loop, the ev5 loop and the damage/heal/aura arms below via
+	// playerSpellTargetSelectFiltered; the other arms still iterate
+	// their own derivations (their hooks fire and their lists are
+	// recorded, but no arm consults them yet). The deferred-fire
+	// call re-runs this function, so a cast-time cast fires it once,
+	// at fire time, like OnCast. GO targets never fire (the wire-GO
+	// join below runs after the fire, and the list holds units only).
+	targetSelectFiltered := s.firePlayerSpellTargetSelects(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets, reflectedAllyTrips, refCenteredAllyTrips)
+
 	// Spell::GOTargetInfo (Spell.cpp:2663): the explicit gameobject wire target
 	// joins the GO target container the same way the implicit GO selections
 	// above do (AddGOTarget). Without this, a harmful gameobject-targeted
@@ -14506,6 +14526,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 			hitTargets = liveTargets
+			// The target-select hooks fired on the pre-miss selection
+			// (C++ fires during selection, before the hit rolls), so
+			// the stored lists carry the same missed entries the
+			// merged list just lost — drop them here, the same
+			// filter, so a missed target takes no effect from a
+			// hook-rewritten list either. Clean reflects never land
+			// in missedTargets (the caster entry survives, like the
+			// merged list's), and the launch/ev5 loops skip misses
+			// per target on top of this.
+			for i, list := range targetSelectFiltered {
+				kept := make([]uint64, 0, len(list))
+				for _, guid := range list {
+					if _, missed := missedTargets[guid]; !missed {
+						kept = append(kept, guid)
+					}
+				}
+				targetSelectFiltered[i] = kept
+			}
 		}
 		// Spell::PreprocessSpellHit (Spell.cpp:2743-2744): the
 		// AURA_INTERRUPT_FLAG_HITBYSPELL arm runs per target here, ahead of
@@ -14883,6 +14921,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) && !effectSwitched {
 				effectList = enemyConeEffectTargets
 			}
+			effectList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, effectList)
 			for _, guid := range effectList {
 				if guid == 0 || uint16(guid>>48) == 0xF110 {
 					continue
@@ -15081,6 +15120,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) && !dmgSwitched {
 					dmgList = enemyConeEffectTargets
 				}
+				dmgList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, dmgList)
 				// Caster-targeted damage (TARGET_UNIT_CASTER, Spell.cpp:1500
 				// SelectImplicitCasterObjectTargets with checkIfValid=false):
 				// C++ selects the caster alone for this effect's bit, whatever
@@ -15942,6 +15982,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) && !healSwitched {
 					healList = enemyConeEffectTargets
 				}
+				healList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, healList)
 				// Caster-targeted heal in a mixed spell (Spell.cpp:1500, same
 				// flat-list shape as the damage caster effect): the heal fires
 				// on the caster alone for this effect's bit, not on the spell's
@@ -17246,6 +17287,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if auraEnemyCone && !auraSwitched {
 					auraList = enemyConeEffectTargets
 				}
+				auraList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, auraList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): a self-cast-only spell
 				// (every ImplicitTargetA == TARGET_UNIT_CASTER) whose B slot
@@ -20222,7 +20264,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// is final at this point (the hit/miss lists and the per-effect
 	// partitions are settled above), matching C++'s post-selection
 	// launch phase.
-	s.fireSpellScriptLaunchTarget(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets, reflectedAllyTrips, refCenteredAllyTrips, launch)
+	s.fireSpellScriptLaunchTarget(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets, reflectedAllyTrips, refCenteredAllyTrips, launch, targetSelectFiltered)
 	// Spell::_cast (Spell.cpp:3497-3500): the npcbot hook runs only for
 	// TYPEID_UNIT casters — Creature::OnSpellGo (Creature.cpp:3751) just
 	// forwards to bot_AI/bot_pet_AI. finishSpellCast serves player casts
