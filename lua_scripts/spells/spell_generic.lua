@@ -1157,3 +1157,65 @@ end
 
 RegisterSpellEvent(SPELL_CANNIBALIZE, 8, cannibalizeCheckCast)
 RegisterSpellEvent(SPELL_CANNIBALIZE, 4, cannibalizeDummy)
+
+-- PORTED (tick 2026-11-19, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_5000_gold::HandleScript (spell_generic.cpp:1758-1774):
+--   OnEffectHitTarget, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT. The hit
+--   player gains 5000 gold (ModifyMoney(5000 * GOLD); GOLD = 10000
+--   copper, SharedDefines.h). Single rank (no spell_ranks row for
+--   46642); binding 46642 is the TDB 26091 spell_script_names row
+--   (spell_gen_5000_gold). The effectIndex/effect-type gate is the
+--   despawnSelf precedent (same file): ev5 fires per (effect, target)
+--   pair, so only EFFECT_0 SCRIPT_EFFECT pays out. The player hit
+--   target is the session player object (luaUnitObjectForGUID player
+--   path, pet_combat.go:479-486), which carries ModifyMoney
+--   (lua_player.go:4575).
+local SPELL_GEN_5000_GOLD = 46642 -- spell_generic.cpp:1758
+local COPPER_PER_GOLD = 10000 -- SharedDefines.h GOLD
+
+local function gen5000GoldHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if spell:GetEffectType(effectIndex) ~= SPELL_EFFECT_SCRIPT_EFFECT then
+        return
+    end
+    if hitTarget:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    hitTarget:ModifyMoney(5000 * COPPER_PER_GOLD)
+end
+
+RegisterSpellEvent(SPELL_GEN_5000_GOLD, 5, gen5000GoldHit)
+
+-- PORTED (tick 2026-11-19, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_stand::HandleScript (spell_generic.cpp:3717-3736):
+--   OnEffectHitTarget, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT. The hit
+--   creature stands (SetStandState(UNIT_STAND_STATE_STAND 0,
+--   UnitDefines.h:33)) and clears its emote state
+--   (HandleEmoteCommand(EMOTE_STATE_NONE 30, SharedDefines.h:1965)).
+--   Single rank (no spell_ranks row for 37752); binding 37752 is the
+--   TDB 26091 spell_script_names row (spell_gen_stand). The creature
+--   hit target is the motion creature object (luaUnitObjectForGUID /
+--   luaMotionCreature), which carries SetStandState
+--   (lua_creature_events.go:5346) and PerformEmote, the
+--   HandleEmoteCommand twin (lua_creature_events.go:5063).
+local SPELL_GEN_STAND = 37752 -- spell_generic.cpp:3717
+local UNIT_STAND_STATE_STAND = 0 -- UnitDefines.h:33
+local EMOTE_STATE_NONE = 30 -- SharedDefines.h:1965
+
+local function genStandHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if spell:GetEffectType(effectIndex) ~= SPELL_EFFECT_SCRIPT_EFFECT then
+        return
+    end
+    if hitTarget:GetTypeId() ~= TYPEID_UNIT then
+        return
+    end
+    hitTarget:SetStandState(UNIT_STAND_STATE_STAND)
+    hitTarget:PerformEmote(EMOTE_STATE_NONE)
+end
+
+RegisterSpellEvent(SPELL_GEN_STAND, 5, genStandHit)
