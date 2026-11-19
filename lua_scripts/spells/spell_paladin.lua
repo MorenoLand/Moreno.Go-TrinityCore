@@ -913,9 +913,9 @@ local SPELL_SCHOOL_MASK_HOLY = 2 -- UnitMethods.h:2920
 -- CheckProc requires a proc target; HandleProc calls PreventDefaultAction,
 -- which rides the true return. ap is the holder's total attack power
 -- (BASE_ATTACK) plus the victim's SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS
--- total; sph is the holder's holy SpellBaseDamageBonusDone (GetBaseSpellPower
--- school 1) plus the victim's SPELL_AURA_MOD_DAMAGE_TAKEN total for the holy
--- school mask; mws is the holder's GetAttackTime(BASE_ATTACK) in seconds;
+-- total; sph is the holder's holy SpellBaseDamageBonusDone (the direct
+-- bridge, not GetBaseSpellPower — the POS field, which strips negative
+-- MOD_DAMAGE_DONE amounts); mws is the holder's GetAttackTime(BASE_ATTACK) in seconds;
 -- bp is lround(mws * (0.022 * ap + 0.044 * sph)); the holder casts 25742 on
 -- the victim, triggered, BP0 = bp. DORMANT until Spell.dbc ships the
 -- 20154/21084 proc entries.
@@ -927,7 +927,7 @@ local function sealOfRighteousnessProc(event, aura, target, actor, procTarget, d
         return
     end
     local ap = target:GetTotalAttackPowerValue(0) + procTarget:GetTotalAuraModifier(SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS)
-    local sph = target:GetBaseSpellPower(1) + procTarget:GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, SPELL_SCHOOL_MASK_HOLY)
+    local sph = target:GetSpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_HOLY) + procTarget:GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, SPELL_SCHOOL_MASK_HOLY)
     local mws = target:GetAttackTime(0) / 1000
     local bp = math.floor(mws * (0.022 * ap + 0.044 * sph) + 0.5)
     target:CastCustomSpell(procTarget, SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS, true, bp)

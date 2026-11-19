@@ -269,6 +269,21 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{uint32(base - neg)}, nil
 	}
+	// GetSpellBaseDamageBonusDone is Unit::SpellBaseDamageBonusDone
+	// (Unit.cpp:7134-7166): the school-gated MOD_DAMAGE_DONE total plus
+	// the player-only base-spellpower, of-stat-percent and
+	// of-attack-power legs, via spellBaseDamageBonusDone (spells.go).
+	// Unlike GetBaseSpellPower above — the
+	// PLAYER_FIELD_MOD_DAMAGE_DONE_POS field, which strips negative
+	// MOD_DAMAGE_DONE amounts — this keeps them, matching the C++ call
+	// the Seal of Righteousness arm makes.
+	methods["GetSpellBaseDamageBonusDone"] = func(_ context.Context, args []any) ([]any, error) {
+		schoolMask, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.spellBaseDamageBonusDone(schoolMask)}, nil
+	}
 	methods["IsArmorer"] = luaNoArgs(func() any { return false })
 	methods["IsBanker"] = luaNoArgs(func() any { return false })
 	methods["IsBattleMaster"] = luaNoArgs(func() any { return false })
