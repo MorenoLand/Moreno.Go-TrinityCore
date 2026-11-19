@@ -2801,6 +2801,88 @@ var spells = []spell{
 	{id: 74398, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: -1, dieSides: 1, misc: 39814, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
 	}},
+	// 55096 "Mojo Frenzy" (boss_moorabi.cpp:35 enum; ValidateSpellInfo
+	// :228; Lua boss_moorabi.lua - applied via RegisterAuraEvent, NOT a
+	// direct cast) - wago.tools 3.4.5.63697 SpellEffect row 960693 +
+	// SpellMisc 607110 (ABSENT from 2.5.6.70577 - WotLK-only, same as
+	// Zarithrian f3c3ca3b): eff0 Apply Aura Mod Casting Speed Not Stack
+	// (65) bp0/die1 misc 1 (Physical) tgtA CASTER (1) = 1% haste.
+	// Cast Instant idx 1, dur28 5000ms (real row), range1 Self (real
+	// row), school Physical, dispel 0, mechanic 0 (no SpellCategories
+	// row). No SpellPower row read - manaCost omitted. NOT carried:
+	// RealPointsPerLevel 0.3 (no field); Attributes_0 0x40100 (no
+	// field). FLAG: DB2 name is "Mojo Frenzy", same as 55163 -
+	// distinguished by ID/effects, not name.
+	{id: 55096, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCastingSpeed, basePoints: 0, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 55097 "Summon Phantom" (boss_moorabi.cpp:27 enum, :170 DoCastSelf
+	// triggered; Lua boss_moorabi.lua - transform landing) -
+	// wago.tools 3.4.5.63697 SpellEffect rows 960694/960695 +
+	// SpellMisc 607111 (ABSENT from 2.5.6.70577): eff0 SUMMON (28)
+	// bp0/die1 misc 29748 (Phantom Mammoth entry) miscB 64 tgtA 18
+	// (TARGET_DEST_CASTER) = 1; eff1 Apply Aura Dummy (4) bp0/die0
+	// tgtA CASTER (1). Cast Instant idx 1, dur551 3500ms (real row,
+	// added this tick), range1 Self (real row), school Physical,
+	// dispel 0, mechanic 0 (no SpellCategories row). No SpellPower row
+	// read - manaCost omitted. NOT carried: Attributes_0 0x180 (no
+	// field). FLAG: DB2 name is "Summon Phantom", same as 55205 -
+	// this one carries the extra Dummy aura effect.
+	{id: 55097, castTimeIdx: 1, durIdx: 551, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 29748, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 55098 "Transformation" (boss_moorabi.cpp:36 enum, :169 DoCastSelf;
+	// Lua boss_moorabi.lua - EVENT_TRANFORMATION 12s init, Repeat 10s)
+	// - wago.tools 3.4.5.63697 SpellEffect rows 960763/960764/960765 +
+	// SpellMisc 607160 + SpellCategories 127571 (ABSENT from
+	// 2.5.6.70577): eff0 Apply Aura Transform (56) bp0/die0 misc 29741
+	// (Moorabi Mammoth Visual) tgtA CASTER (1); eff1 Apply Aura
+	// Mechanic Immunity (77) bp0/die0 misc 12 (Stun) tgtA CASTER (1);
+	// eff2 Apply Aura Mod Damage Percent Done (79) bp24/die1 misc 1
+	// (Physical) tgtA CASTER (1) = 25%. Cast 4000ms idx 15 (real row),
+	// dur21 -1 permanent (real row), range1 Self (real row), school
+	// Physical, dispel 0, mechanic 0 (Categories row). No SpellPower
+	// row read - manaCost omitted. NOT carried: BonusCoefficient 1 on
+	// eff0 (no field); Attributes all 0x0.
+	{id: 55098, castTimeIdx: 15, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraTransform, basePoints: 0, dieSides: 0, misc: 29741, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, basePoints: 0, dieSides: 0, misc: 12, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 24, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 55163 "Mojo Frenzy" (boss_moorabi.cpp:34 enum, :92 DoCastSelf
+	// triggered at transform start, :135 RemoveAurasDueToSpell on
+	// SpellHit(55098); Lua boss_moorabi.lua - permanent aura, 3s
+	// periodic dummy tick re-applies 55096) - wago.tools 3.4.5.63697
+	// SpellEffect rows 960840/960841 + SpellMisc 607215 (ABSENT from
+	// 2.5.6.70577): eff0 Apply Aura Periodic Dummy (226) bp-1/die1
+	// period3000 misc 1 tgtA CASTER (1); eff1 HEAL (10) bp4999999/die1
+	// tgtA CASTER (1) = 5000000. Cast Instant idx 1, dur21 -1
+	// permanent (real row), range1 Self (real row), school Physical,
+	// dispel 0, mechanic 0 (no SpellCategories row). No SpellPower row
+	// read - manaCost omitted. NOT carried: RealPointsPerLevel 0.3 on
+	// eff0 (no field); Attributes_0 0x40000 (no field). FLAG: DB2 name
+	// is "Mojo Frenzy", same as 55096 - this is the permanent aura
+	// with the 5,000,000 heal, not the 5s haste aura.
+	{id: 55163, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDummy, basePoints: -1, dieSides: 1, auraPeriod: 3000, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effHeal, basePoints: 4999999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 55205 "Summon Phantom" (boss_moorabi.cpp:26 enum, :174 DoCastSelf
+	// triggered; Lua boss_moorabi.lua - EVENT_PHANTOM 21s init, Repeat
+	// 20-25s) - wago.tools 3.4.5.63697 SpellEffect row 960415 +
+	// SpellMisc 606903 (ABSENT from 2.5.6.70577): eff0 SUMMON (28)
+	// bp0/die1 misc 29748 (Phantom Mammoth entry) miscB 64 tgtA 18
+	// (TARGET_DEST_CASTER) = 1. Cast Instant idx 1, dur551 3500ms
+	// (real row, added this tick), range1 Self (real row), school
+	// Physical, dispel 0, mechanic 0 (no SpellCategories row). No
+	// SpellPower row read - manaCost omitted. NOT carried:
+	// Attributes_0 0x10040180 (no field). FLAG: DB2 name is "Summon
+	// Phantom", same as 55097 - this one has NO Dummy aura effect;
+	// the eff0 row is identical to 55097 eff0.
+	{id: 55205, castTimeIdx: 1, durIdx: 551, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 29748, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
@@ -21108,6 +21190,7 @@ func main() {
 		{347, 900000, 0, 900000},       // real SpellDuration 347 for 12255 Curse of Tuten'kash (wago.tools 3.4.0.47659 SpellDuration row 347, 2026-11-17 verdict wago_spells_8876_12252_12255.txt)
 		{561, 3300000, 0, 3300000},     // real SpellDuration 561 for 39288 (wago.tools 3.4.0.47659 SpellDuration row 561, 2026-11-17 verdict wago_spells_39288_39289_39290.txt)
 		{225, 604800000, 0, 604800000}, // real SpellDuration 225 for 25685 Energize (wago.tools 3.4.0.47659 SpellDuration row 225, 2026-11-18 verdict wago_spells_25672_25681_25682_25683_25685_wago.txt)
+		{551, 3500, 0, 3500},           // real SpellDuration 551 for 55097/55205 Summon Phantom (wago.tools 3.4.5.63697 SpellDuration row 551, 2026-11-18 verdict wago_spells_55096_55097_55098_55163_55205_wago.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
