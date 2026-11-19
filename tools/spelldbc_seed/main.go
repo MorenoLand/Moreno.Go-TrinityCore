@@ -2970,6 +2970,33 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -31, dieSides: 1, mechanic: 12, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModSpeedSlowAll, basePoints: -31, dieSides: 1, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 	}},
+	// 28371 "Enrage" (boss_gluth.cpp:39 enum; :164 DoCast self EVENT_ENRAGE 16-22s init/repeat; Lua boss_gluth.lua :115) - wago.tools 3.4.5.63697 SpellEffect rows 704973/704974/704975 + SpellMisc 335707 + SpellCategories 78280 (ABSENT from 2.5.6.70577 - WotLK-only, same build switch as Krik'thir 344638e3): eff0 APPLY_AURA MOD_MELEE_HASTE (138) bp24/die1 tgtA CASTER (1); eff1 APPLY_AURA MOD_DAMAGE_PERCENT_DONE (79) bp24/die1 misc 127 (all schools) tgtA 1; eff2 APPLY_AURA MOD_SCALE (61) bp24/die1 tgtA 1 = 25% each (engine bp+1..bp+die). Cast Instant idx 1, dur31 8000ms (real row), range1 Self (real row), school Physical, dispel 9 (Enrage), mechanic 0. No SpellPower row read - manaCost omitted. NOT carried: BonusCoefficient 1 on eff0/eff1 (no field); Attributes all 0x0.
+	{id: 28371, dispel: 9, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 24, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 24, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 24, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 28374 "Decimate" (boss_gluth.cpp:40 enum; :175 DoCastAOE EVENT_DECIMATE 110-120s init/repeat; Lua boss_gluth.lua :116) - wago.tools 3.4.5.63697 SpellEffect rows 704976/704977/704978 + SpellMisc 335708 (ABSENT from 2.5.6.70577): eff0 SCRIPT_EFFECT (77) bp0/die0 tgtA 22 (TARGET_SRC_CASTER) tgtB 7 (TARGET_UNIT_SRC_AREA_ENTRY) radiusIdx 22 (200 yd, real row); eff1 APPLY_AURA MOD_STUN (12) bp0/die0 tgtA CASTER (1); eff2 SEND_EVENT (61) bp0/die0 misc 10495 (script-event ID, not a spell) tgtA 0. Cast Instant idx 1, dur27 3000ms (real row), range13 50000yd (real row), school Nature, dispel 0, mechanic 0 (no SpellCategories row). No SpellPower row read - manaCost omitted. NOT carried: Attributes_0 0x20000100, Attributes_1 0x10000088, Attributes_2 0x20000004 (no field). FLAG: 28375 is NOT a trigger - linked only by the Decimate SpellScript (CastCustomSpell); no DB2 link seeded.
+	{id: 28374, castTimeIdx: 1, durIdx: 27, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 0, dieSides: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 22, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effSendEvent, basePoints: 0, dieSides: 0, misc: 10495, chainAmplitude: 1},
+	}},
+	// 28375 "Decimate" (boss_gluth.cpp:41 enum SPELL_DECIMATE_DMG; Lua boss_gluth.lua :118) - wago.tools 3.4.5.63697 SpellEffect row 703563 + SpellMisc 334517 (ABSENT from 2.5.6.70577): eff0 SCHOOL_DAMAGE (2) bp0/die0 tgtA 25 (TARGET_UNIT_TARGET_ANY). Cast Instant idx 1, durIdx 0 (no duration - no SpellDuration row 0), range13 50000yd (real row), school Physical, dispel 0, mechanic 0 (no SpellCategories row). No SpellPower row read - manaCost omitted. NOT carried: Attributes_3 0x30000000, Attributes_4 0x100 (no field). FLAG: the 95%-health reduction is scripted (CastCustomSpell BP0), not a DB2 number - bp0 is verbatim; DB2 name is "Decimate", same as 28374/54426 - distinguished by ID/effects, not name.
+	{id: 28375, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 0, dieSides: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 54378 "Mortal Wound" (boss_gluth.cpp:38 enum; :153 DoCastVictim EVENT_WOUND 10s init; Lua boss_gluth.lua :114) - wago.tools 3.4.5.63697 SpellEffect rows 958982/958983 + SpellMisc 605751 (ABSENT from 2.5.6.70577): eff0 DUMMY (3) bp-1/die1 tgtA 6 (TARGET_UNIT_TARGET_ENEMY); eff1 APPLY_AURA MOD_HEALING_PCT (118) bp-11/die1 misc 127 (all schools) tgtA 6 = -10%. Cast Instant idx 1, dur8 15000ms (real row), range2 5yd Combat (real row, Flags 0x1), school Physical, dispel 0, mechanic 0 (no SpellCategories row). No SpellPower row read - manaCost omitted. NOT carried: BonusCoefficient 1 on eff1 (no field); Attributes_0 0x20000000, Attributes_2 0x4 (no field); CumulativeAura 10 / ProcChance 101 (SpellAuraOptions 195327, no field).
+	{id: 54378, castTimeIdx: 1, durIdx: 8, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: -1, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModHealingPct, basePoints: -11, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 54426 "Decimate" (boss_gluth.cpp:40 enum 25-man twin; Lua boss_gluth.lua :117 SPELL_DECIMATE_HEROIC) - wago.tools 3.4.5.63697 SpellEffect rows 958690/958691/958692 + SpellMisc 605538 (ABSENT from 2.5.6.70577): identical to 28374 - eff0 SCRIPT_EFFECT (77) bp0/die0 tgtA 22 tgtB 7 radiusIdx 22 (200 yd); eff1 APPLY_AURA MOD_STUN (12) bp0/die0 tgtA 1; eff2 SEND_EVENT (61) bp0/die0 misc 10495 tgtA 0. Cast Instant idx 1, dur27 3000ms (real row), range13 50000yd (real row), school Nature, dispel 0, mechanic 0 (no SpellCategories row). No SpellPower row read - manaCost omitted. NOT carried: Attributes (same as 28374); SpellAuraOptions 195114 CumulativeAura 0 / ProcChance 101 (no field). FLAG: twin of 28374 - identical except SpellMisc/SpellEffect row IDs and AuraOptions presence; DB2 name is "Decimate", same as 28374/28375.
+	{id: 54426, castTimeIdx: 1, durIdx: 27, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 0, dieSides: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 22, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effSendEvent, basePoints: 0, dieSides: 0, misc: 10495, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
