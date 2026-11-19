@@ -131,6 +131,7 @@ const (
 	auraModSkill               = 30  // SPELL_AURA_MOD_SKILL (SpellAuraDefines.h:110)
 	auraModIncreaseSpeed       = 31  // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
 	auraModSpeedAlways         = 129 // SPELL_AURA_MOD_SPEED_ALWAYS (SpellAuraDefines.h:209)
+	auraModSpeedSlowAll        = 252 // SPELL_AURA_MOD_SPEED_SLOW_ALL (SpellAuraDefines.h:332)
 	auraDecSpeed               = 33
 	auraModIncreaseHealth      = 34 // SPELL_AURA_MOD_INCREASE_HEALTH (SpellAuraDefines.h:114)
 	auraModShapeshift          = 36 // SPELL_AURA_MOD_SHAPESHIFT (SpellAuraDefines.h:116)
@@ -242,6 +243,7 @@ const (
 	familyHunter               = 9   // SPELLFAMILY_HUNTER (SharedDefines.h:3590)
 	familyDeathKnight          = 15  // SPELLFAMILY_DEATHKNIGHT (SharedDefines.h:3596)
 	familyWarlock              = 5   // SPELLFAMILY_WARLOCK (SharedDefines.h:3586)
+	familyPriest               = 6   // SPELLFAMILY_PRIEST (SharedDefines.h:3587)
 	familyWarrior              = 4   // SPELLFAMILY_WARRIOR (SharedDefines.h:3585)
 )
 
@@ -2882,6 +2884,91 @@ var spells = []spell{
 	// the eff0 row is identical to 55097 eff0.
 	{id: 55205, castTimeIdx: 1, durIdx: 551, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 29748, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
+	// 52343 "Krik'Thir Subboss Aggro Trigger" (boss_krikthir_the_gatewatcher.cpp:67 enum;
+	// Lua boss_krik_thir.lua:162, :219/:348/:363 - ev7/ev14/ev15 gated on spellKnown,
+	// DORMANT until Spell.dbc ships this record) - wago.tools 3.4.5.63697
+	// SpellEffect row 957279 + SpellMisc 604545 (WotLK-only, ABSENT from
+	// 2.5.6.70577 - same build switch as Moorabi e03c5b6f): eff0 DUMMY (3)
+	// bp0/die0 tgtA 22 (TARGET_SRC_CASTER) tgtB 7 (TARGET_UNIT_SRC_AREA_ENTRY)
+	// radiusIdx 28 (50000yd, real row). Cast Instant idx 1, durIdx 0 (no
+	// duration), range1 Self (real row), school Physical, dispel 0,
+	// mechanic 0 (no SpellCategories row). No SpellPower row - manaCost
+	// omitted. NOT carried: Attributes_0 0x100 / Attributes_2 0x4, ProcChance
+	// 101 (no fields).
+	{id: 52343, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 28, chainAmplitude: 1},
+	}},
+	// 52440 "Swarm" (boss_krikthir_the_gatewatcher.cpp:68 enum; Lua
+	// boss_krik_thir.lua:158, EVENT_SWARM DoCastAOE self-cast, 5s init, 70s
+	// repeat) - wago.tools 3.4.5.63697 SpellEffect rows 956632/956633 +
+	// SpellMisc 604040 + SpellCategories 126622 (WotLK-only, ABSENT from
+	// 2.5.6.70577): eff0 APPLY_AURA aura 23 PERIODIC_TRIGGER_SPELL
+	// bp-1/die1 period100 trigger 52438 (Summon Skittering Swarmer) tgtA
+	// CASTER (1); eff1 FORCE_CAST (140) bp0/die0 trigger 52448 (Summon
+	// Skittering Infector Periodic) tgtA CASTER (1). Cast 2500ms idx 19
+	// (real row), dur28 5000ms (real row), range1 Self (real row), school
+	// Physical, dispel 0, mechanic 0. No SpellPower row - manaCost omitted.
+	// NOT carried: 15s category cooldown (SpellCooldowns 73189, no field);
+	// Attributes_0 0x100 / Attributes_1 0x10000000 / Attributes_2 0x4.
+	{id: 52440, castTimeIdx: 19, durIdx: 28, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 100, trigger: 52438, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effForceCast, trigger: 52448, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 52537 "Fixate" (boss_krikthir_the_gatewatcher.cpp:93 enum
+	// SPELL_FIXATE_TRIGGERED; Lua boss_krik_thir.lua:164, :250 - triggered
+	// on the caster by spell_anub_ar_skirmisher_fixate 52536) - wago.tools
+	// 3.4.5.63697 SpellEffect rows 978625/978626/978627 + SpellMisc 620542 +
+	// SpellCategories 131918 (WotLK-only, ABSENT from 2.5.6.70577): eff0
+	// APPLY_AURA aura 11 MOD_TAUNT bp0/die0 tgtA 25 (TARGET_UNIT_TARGET_ANY);
+	// eff1 APPLY_AURA aura 147 MECHANIC_IMMUNITY_MASK bp0/die0 misc 1614
+	// tgtA 25; eff2 APPLY_AURA aura 9 MOD_ATTACKSPEED bp49/die1 tgtA 25
+	// (= 50% haste, engine computes BP+1..BP+Die). Cast Instant idx 1,
+	// dur1 10000ms (real row), range13 Anywhere (real row), school Physical,
+	// dispel 9 Enrage, mechanic 0. No SpellPower row - manaCost omitted.
+	// NOT carried: Attributes_3 0x20000000 / Attributes_4 0x1000 /
+	// Attributes_5 0x1000000 (no fields). FLAG: DB2 name is "Fixate", NOT
+	// "Fixate Triggered" - that is the Lua/C++ constant label only.
+	{id: 52537, castTimeIdx: 1, durIdx: 1, rangeIdx: 13, school: schoolPhysical, dispel: 9, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModTaunt, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunityMask, misc: 1614, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModAttackSpeed, basePoints: 49, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 52586 "Mind Flay" (boss_krikthir_the_gatewatcher.cpp:69 enum; Lua
+	// boss_krik_thir.lua:157, EVENT_MIND_FLAY DoCastVictim, channeled) -
+	// wago.tools 3.4.5.63697 SpellEffect rows 956711/956712 + SpellMisc
+	// 604097 + SpellCategories 126646 + SpellClassOptions 63614 +
+	// SpellPower 238768 (WotLK-only, ABSENT from 2.5.6.70577): eff0
+	// APPLY_AURA aura 3 PERIODIC_DAMAGE bp1884/die231 period1000 tgtA 6
+	// (TARGET_UNIT_TARGET_ENEMY, 1885-2115/tick); eff1 APPLY_AURA aura 33
+	// MOD_DECREASE_SPEED bp-51/die1 tgtA 6. Cast Instant idx 1 (channeled;
+	// channel length is dur27 3000ms, real row), range3 Twenty yards (real
+	// row), school Shadow, manaCost 60, mechanic 11 Snared, dispel 0,
+	// family Priest (6), class mask_0 8388608. NOT carried: BonusCoefficient
+	// 0.3 on eff0 (no field); Attributes_1 0x4004.
+	{id: 52586, castTimeIdx: 1, durIdx: 27, rangeIdx: 3, school: schoolShadow, manaCost: 60, mechanic: 11, family: familyPriest, familyFlags: [3]uint32{8388608, 0, 0}, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 1884, dieSides: 231, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 52592 "Curse of Fatigue" (boss_krikthir_the_gatewatcher.cpp:70 enum;
+	// Lua boss_krik_thir.lua:160, EVENT_CURSE DoCastAOE self-cast, 1s init,
+	// 15s repeat) - wago.tools 3.4.5.63697 SpellEffect rows 979419/979420/
+	// 979421 + SpellMisc 621013 + SpellCategories 132197 + SpellClassOptions
+	// 66092 + SpellPower 255684 (WotLK-only, ABSENT from 2.5.6.70577): eff0
+	// SCHOOL_DAMAGE (2) bp2827/die345 tgtA 53 (TARGET_DEST_TARGET_ENEMY)
+	// tgtB 16 (TARGET_UNIT_DEST_AREA_ENEMY) radiusIdx 8 (5yd, real row,
+	// 2828-3172); eff1 APPLY_AURA aura 33 MOD_DECREASE_SPEED bp-31/die1
+	// mechanic 12 Stunned tgtA 16 radiusIdx 8; eff2 APPLY_AURA aura 252
+	// MOD_SPEED_SLOW_ALL bp-31/die1 tgtA 16 radiusIdx 8. Cast 1000ms idx 4
+	// (real row), dur1 10000ms (real row), range4 Medium (real row), school
+	// Shadow, manaCost 350, dispel 2 Curse, mechanic 0, family Warlock (5),
+	// class mask_1 4096. NOT carried: BonusCoefficient 1 on eff0 (no field);
+	// 1500ms GCD (SpellCooldowns 75378 StartRecoveryTime, no field);
+	// Attributes_0 0x10000 / Attributes_1 0x88.
+	{id: 52592, castTimeIdx: 4, durIdx: 1, rangeIdx: 4, school: schoolShadow, manaCost: 350, dispel: 2, family: familyWarlock, familyFlags: [3]uint32{0, 4096, 0}, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2827, dieSides: 345, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -31, dieSides: 1, mechanic: 12, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModSpeedSlowAll, basePoints: -31, dieSides: 1, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
