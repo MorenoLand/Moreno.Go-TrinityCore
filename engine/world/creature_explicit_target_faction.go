@@ -817,6 +817,64 @@ func (s *Server) creatureInGroupWith(m *creatureMotion, attacker *session, targe
 	return u1Motion != nil && u2Motion != nil && u1Motion.Faction == u2Motion.Faction
 }
 
+// unitIsInRaidWith mirrors Unit::IsInRaidWith (Unit.cpp:12155) for a
+// caster/target GUID pair in one instance: self passes, both sides
+// resolve through charmer-or-owner-or-self (GetCharmerOrOwnerOrSelf,
+// Object.cpp:2218), player-player compares the live group with the raid
+// flag (sameGroupAs, raid=true), a player-creature pair passes on
+// TREAT_AS_RAID_UNIT, and a creature-creature pair on equal faction
+// (UNIT_FIELD_FACTIONTEMPLATE). The npcbot arms have no Go model. A
+// charmed player has no Go charmer record (lua_player.go GetCharmerGUID
+// reads 0), so a player always resolves to itself; an endpoint whose
+// charmer/owner is not live reads as unresolvable and fails.
+func (s *Server) unitIsInRaidWith(mapID uint32, instanceID uint32, casterGUID, targetGUID uint64) bool {
+	if casterGUID == 0 || targetGUID == 0 {
+		return false
+	}
+	if casterGUID == targetGUID {
+		return true
+	}
+	u1, u1Player, u1Motion := s.raidWithEndpoint(mapID, instanceID, casterGUID)
+	u2, u2Player, u2Motion := s.raidWithEndpoint(mapID, instanceID, targetGUID)
+	if u1 == u2 {
+		return true
+	}
+	if u1Player != nil && u2Player != nil {
+		return u1Player.sameGroupAs(u2Player, true)
+	}
+	if u1Player != nil && u2Motion != nil {
+		return u2Motion.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0
+	}
+	if u2Player != nil && u1Motion != nil {
+		return u1Motion.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0
+	}
+	return u1Motion != nil && u2Motion != nil && u1Motion.Faction == u2Motion.Faction
+}
+
+// raidWithEndpoint resolves one side of Unit::IsInRaidWith to its
+// charmer-or-owner-or-self GUID plus its live player session or creature
+// motion, or (guid, nil, nil) when the endpoint itself is not live.
+func (s *Server) raidWithEndpoint(mapID uint32, instanceID uint32, guid uint64) (uint64, *session, *creatureMotion) {
+	if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		return guid, ts, nil
+	}
+	tm := s.findCreatureMotion(mapID, instanceID, guid)
+	if tm == nil {
+		return guid, nil, nil
+	}
+	resolved := creatureCharmerOrOwnerGUID(tm)
+	if resolved == 0 {
+		return guid, nil, tm
+	}
+	if ts := s.findSessionByGUID(resolved); ts != nil && ts.player != nil {
+		return resolved, ts, nil
+	}
+	if om := s.findCreatureMotion(mapID, instanceID, resolved); om != nil {
+		return resolved, nil, om
+	}
+	return resolved, nil, nil
+}
+
 // creatureTargetOnCasterVehicle mirrors the TARGET_FLAG_UNIT_PASSENGER arm
 // (SpellInfo.cpp:1809-1811): unitTarget->IsOnVehicle(unitCaster)
 // (Unit.cpp:12074-12077 — the target's vehicle kit is the caster's kit, so

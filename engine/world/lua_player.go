@@ -1036,6 +1036,22 @@ func (s *session) luaPlayer() *scripting.Object {
 	// IsInGroup is Player::GetGroup() != nullptr; the session group id
 	// is the Go group membership (0 = ungrouped).
 	methods["IsInGroup"] = luaNoArgs(func() any { return s.groupID != 0 })
+	// IsInRaidWith is Unit::IsInRaidWith (Unit.cpp:12155): whether the
+	// other unit is in this unit's raid — same raid group for players,
+	// owner identity for pets, same-faction creatures, and the
+	// TREAT_AS_RAID_UNIT cross arm — via unitIsInRaidWith
+	// (creature_explicit_target_faction.go). Backs the Circle of
+	// Healing target filter (spell_priest.cpp:296-335).
+	methods["IsInRaidWith"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return []any{false}, nil
+		}
+		return []any{s.server.unitIsInRaidWith(s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)}, nil
+	}
 	// GetRestBonus/SetRestBonus are Player::GetRestBonus/SetRestBonus
 	// (PlayerMethods.h:1317-1321, 1810-1816); the setter runs through
 	// setRestBonus, the same clamp + rest-state update as the XP path.
@@ -1708,6 +1724,21 @@ func (s *session) luaPlayer() *scripting.Object {
 			return []any{s.server.playerHostileToUnit(s, ts.effectiveFactionTemplate(ts.player.Race))}, nil
 		}
 		return []any{false}, nil
+	}
+	// IsInRaidWith(target) is Unit::IsInRaidWith (Unit.cpp:12155) from
+	// the player side, via unitIsInRaidWith: self passes, a player
+	// target compares the live group with the raid flag, a creature
+	// target passes on TREAT_AS_RAID_UNIT. Backs the Circle of Healing
+	// ev7 RaidCheck (spell_priest.cpp:310).
+	methods["IsInRaidWith"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 || s.server == nil {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return []any{false}, nil
+		}
+		return []any{s.server.unitIsInRaidWith(state.Map, state.InstanceID, s.playerGUID, targetGUID)}, nil
 	}
 	methods["IsFullHealth"] = luaNoArgs(func() any { return state.MaxHealth > 0 && state.Health >= state.MaxHealth })
 	methods["IsMounted"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })

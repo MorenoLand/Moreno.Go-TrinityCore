@@ -1572,6 +1572,21 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{false}, nil
 	}
+	// IsInRaidWith(target) is Unit::IsInRaidWith (Unit.cpp:12155) from
+	// the handler-creature side, via unitIsInRaidWith: self passes, a
+	// player target passes on TREAT_AS_RAID_UNIT, a creature target on
+	// equal faction. Backs the Circle of Healing ev7 RaidCheck
+	// (spell_priest.cpp:310).
+	methods["IsInRaidWith"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return []any{false}, nil
+		}
+		return []any{s.unitIsInRaidWith(motion.Map, motion.InstanceID, motion.GUID, targetGUID)}, nil
+	}
 	// IsFriendlyTo(target) is WorldObject::IsFriendlyTo (Object.cpp:2847-2850):
 	// GetReactionTo(target) >= REP_FRIENDLY, via the existing
 	// creatureFriendlyToTarget helper (boss_ai.go): player targets resolve
@@ -1665,6 +1680,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.auraMu.Unlock()
 		return []any{found}, nil
+	}
+	// IsInRaidWith is Unit::IsInRaidWith (Unit.cpp:12155): whether the
+	// other unit is in this unit's raid — same raid group for players,
+	// owner identity for pets, same-faction creatures, and the
+	// TREAT_AS_RAID_UNIT cross arm — via unitIsInRaidWith
+	// (creature_explicit_target_faction.go). Backs the Circle of
+	// Healing target filter (spell_priest.cpp:296-335).
+	methods["IsInRaidWith"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return []any{false}, nil
+		}
+		return []any{s.unitIsInRaidWith(motion.Map, motion.InstanceID, motion.GUID, targetGUID)}, nil
 	}
 	// HasAuraType(auraType) is Unit::HasAuraType (Unit.cpp) for handler
 	// creatures: whether the creature carries a live (unstopped) aura of

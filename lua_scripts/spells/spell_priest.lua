@@ -220,6 +220,49 @@ end
 
 RegisterAuraEvent(SPELL_PRIEST_DIVINE_AEGIS_TALENT, 6, divineAegisProc)
 
+local SPELL_PRIEST_CIRCLE_OF_HEALING = 34861 -- spell_priest.cpp:296 (class spell_pri_circle_of_healing)
+local SPELL_PRIEST_GLYPH_OF_CIRCLE_OF_HEALING = 55675 -- spell_priest.cpp:42
+
+-- C++ spell_pri_circle_of_healing_SpellScript::FilterTargets
+-- (spell_priest.cpp:310-320): EFFECT_0 TARGET_UNIT_DEST_AREA_ALLY.
+-- RaidCheck drops every target not in the caster's raid
+-- (caster:IsInRaidWith, Unit.cpp:12155), then the list is sorted
+-- lowest-health-pct first (HealthPctOrderPred, ascending) and cut to
+-- 5, or 6 with the Glyph of Circle of Healing aura (55675). The Lua
+-- list has no sort/resize, so the sort runs in Lua over GetHealthPct
+-- (the HealthPctOrderPred ratio twin: health*100/maxHealth, 0 at
+-- maxHealth 0) and the cut is Clear + Add (murmur precedent).
+-- DELTA: Lua table.sort is not stable, so equal-pct targets at the
+-- cut boundary may keep a different one than C++ list::sort; the
+-- kept set is identical whenever no pct ties straddle the cut.
+-- DORMANT until Spell.dbc ships the 34861 row.
+local function circleOfHealingFilterTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if caster:IsInRaidWith(target) then
+            kept[#kept + 1] = target
+        end
+    end
+    table.sort(kept, function(a, b) return a:GetHealthPct() < b:GetHealthPct() end)
+    local maxTargets = 5
+    if caster:HasAura(SPELL_PRIEST_GLYPH_OF_CIRCLE_OF_HEALING) then
+        maxTargets = 6
+    end
+    targets:Clear()
+    for i = 1, math.min(maxTargets, #kept) do
+        targets:Add(kept[i])
+    end
+end
+
+RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING, 7, circleOfHealingFilterTargets)
+
 local SPELL_PRIEST_IMPROVED_SPIRIT_TAP = 15337 -- spell_priest.cpp:632
 local SPELL_PRIEST_SHADOW_WORD_DEATH_R1 = 32379 -- spell_priest.cpp:69
 local SPELL_PRIEST_MIND_BLAST_R1 = 8092 -- spell_priest.cpp:68
@@ -267,9 +310,12 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   (lua_aura.go:1303, 8th handler arg), so per-effect gating is
 --   possible — but a Lua port would double-fire with the Go legs, so
 --   the arm stays Go-only.
---   663 circle_of_healing (34861, :296-335): SpellScript target filter
---   (raid check, glyph 6 vs 5 targets, lowest-health sort); no
---   OnObjectAreaTargetSelect bridge.
+--   663 circle_of_healing (34861, :296-335): PORTED 2026-11-19 (ev7
+--   above): RaidCheck via the new IsInRaidWith bridge (both Lua unit
+--   surfaces, Unit.cpp:12155), lowest-health sort + 5/6 glyph cap via
+--   GetTargets/Clear/Add; the "no OnObjectAreaTargetSelect bridge"
+--   note is STALE (ev7 landed bf31db6b). DORMANT until Spell.dbc
+--   ships the 34861 row.
 --   664 divine_aegis (47509, :336-389): PORTED this tick (ev6, heal
 --   forwarding: pct(heal, amount) + existing-aegis stack +
 --   level*125 cap, holder casts 47753 on the proc target).
