@@ -561,6 +561,50 @@ end
 
 RegisterAuraEvent(SPELL_SHAMAN_EARTH_SHIELD, 6, earthShieldProc)
 
+local SPELL_SHAMAN_GLYPH_OF_EARTH_SHIELD = 63279 -- spell_shaman.cpp:898 (class spell_sha_glyph_of_earth_shield)
+
+-- C++ spell_sha_glyph_of_earth_shield_AuraScript::HandleProc
+-- (spell_shaman.cpp:911-926): EFFECT_0 DUMMY, OnEffectProc.
+-- PreventDefaultAction (the true return); the proc target's Earth
+-- Shield aura effect (the triggering Earth Shield rank, caster =
+-- the proc actor) gains the glyph aura's EFFECT_0 amount percent.
+-- The caster-GUID match has no Go model (GetAura is keyed by spell
+-- id only) — exact in practice, Earth Shield is exclusive per
+-- target. The rank-1 fallback covers an event spell that reads as
+-- the heal spell rather than the aura. DORMANT until Spell.dbc ships
+-- the 63279 proc entry.
+local function glyphOfEarthShieldProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if procTarget == nil or aura == nil then
+        return true
+    end
+    local pct = aura:GetAmount(0)
+    if pct == nil or pct == 0 then
+        return true
+    end
+    local earthShieldId = 0
+    if procEvent ~= nil then
+        earthShieldId = procEvent:GetSpellId()
+    end
+    local earthShield = nil
+    if earthShieldId ~= nil and earthShieldId ~= 0 then
+        earthShield = procTarget:GetAura(earthShieldId)
+    end
+    if earthShield == nil then
+        earthShield = procTarget:GetAura(SPELL_SHAMAN_EARTH_SHIELD)
+    end
+    if earthShield == nil then
+        return true
+    end
+    local amount = earthShield:GetAmount(0)
+    if amount == nil then
+        return true
+    end
+    earthShield:SetAmount(math.floor(amount * (100 + pct) / 100))
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_GLYPH_OF_EARTH_SHIELD, 6, glyphOfEarthShieldProc)
+
 local SPELL_SHAMAN_EARTHLIVING_WEAPON = 51940 -- spell_shaman.cpp:567 (class spell_sha_earthliving_weapon)
 local SPELL_SHAMAN_BLESSING_OF_THE_ETERNALS_R1 = 51554 -- spell_shaman.cpp:94
 local EARTHLIVING_WEAPON_BASE_CHANCE = 20 -- spell_shaman.cpp:582
