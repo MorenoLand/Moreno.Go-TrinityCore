@@ -287,6 +287,7 @@ RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING_R6, 7, circleOfHealingFilterTa
 RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING_R7, 7, circleOfHealingFilterTargets)
 
 local SPELL_PRIEST_MIND_SEAR = 49821 -- spell_priest.cpp:889 (class spell_pri_mind_sear)
+local SPELL_PRIEST_MIND_SEAR_R2 = 53022
 
 -- C++ spell_pri_mind_sear_SpellScript::FilterTargets
 -- (spell_priest.cpp:898-901): EFFECT_0 TARGET_UNIT_DEST_AREA_ENEMY.
@@ -300,7 +301,9 @@ local SPELL_PRIEST_MIND_SEAR = 49821 -- spell_priest.cpp:889 (class spell_pri_mi
 -- the primary target stays in the area list and takes the periodic
 -- damage. The Go fire site runs at the same point (finishSpellCast,
 -- before startChannel), so GetChannelObject reads the same pre-cast
--- state. DORMANT until Spell.dbc ships the 49821 row.
+-- state. R2 53022 registered (TDB spell_ranks + (-49821) all-ranks
+-- binding; handler is rank-agnostic). DORMANT until Spell.dbc ships
+-- the 49821 row.
 local function mindSearFilterTargets(event, spell, effectIndex, targets)
     if effectIndex ~= 0 then
         return
@@ -316,6 +319,7 @@ local function mindSearFilterTargets(event, spell, effectIndex, targets)
 end
 
 RegisterSpellEvent(SPELL_PRIEST_MIND_SEAR, 7, mindSearFilterTargets)
+RegisterSpellEvent(SPELL_PRIEST_MIND_SEAR_R2, 7, mindSearFilterTargets)
 
 local SPELL_PRIEST_IMPROVED_SPIRIT_TAP = 15337 -- spell_priest.cpp:632
 local SPELL_PRIEST_SHADOW_WORD_DEATH_R1 = 32379 -- spell_priest.cpp:69
@@ -392,7 +396,9 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   drop the caster's channel object from the EFFECT_0 area list via
 --   the new GetChannelObject bridge (both Lua unit surfaces); the
 --   C++ selection-before-channel-start ordering quirk is faithful
---   (fresh casts read an empty field and remove nothing). DORMANT
+--   (fresh casts read an empty field and remove nothing). R2 53022
+--   registered 2026-11-19 (TDB spell_ranks + (-49821) binding;
+--   handler is rank-agnostic). DORMANT
 --   until Spell.dbc ships the 49821 row.
 --   669 pain_and_suffering_dummy (47580, :916-942): DoCheckEffectProc
 --   returning false (pure proc gate, no arm); ev6 has no CheckProc
@@ -401,7 +407,8 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   (ev5 below, R1 only: friendly hit -> 47757 heal, hostile -> 47758
 --   damage, both triggered; the binding id IS the rank match — no
 --   spell-level GetSpellWithRank bridge exists); the CheckCast arm is
---   PORTED (OnCheckCast ev8 above, R1 only). The "ev5 player path is
+--   PORTED (OnCheckCast ev8 above, R1-R4; ev5 stays R1-only, it
+--   hardcodes the 47757/47758 heals). The "ev5 player path is
 --   dormant" claim is STALE (a910c39d, spells.go:14668-14737).
 --   Census hooks wrong on 661/662/664/666/667/668/669/670 (phantom
 --   OnObjectAreaTargetSelect / HandleDummy / OnCheckCast / OnEffectHitTarget;
@@ -482,6 +489,9 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   q14112/q9452 per the quest-file NEXT note.
 
 local SPELL_PRIEST_PENANCE_R1 = 47540 -- spell_priest.cpp:49 (class spell_pri_penance)
+local SPELL_PRIEST_PENANCE_R2 = 53005
+local SPELL_PRIEST_PENANCE_R3 = 53006
+local SPELL_PRIEST_PENANCE_R4 = 53007
 local SPELL_PRIEST_PENANCE_R1_HEAL = 47757 -- spell_priest.cpp:51
 local SPELL_PRIEST_PENANCE_R1_DAMAGE = 47758 -- spell_priest.cpp:50
 local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
@@ -492,8 +502,9 @@ local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
 -- hostile target must pass IsValidAttackTarget (else BAD_TARGETS) and be
 -- in front (else UNIT_NOT_INFRONT); friendly targets pass. Check-only
 -- port: the HandleDummy legs ride ev5 (dormant, no player path) +
--- spell-level GetSpellWithRank (47758/47757). Rank 1 only — higher-rank
--- IDs are not in the file, never guessed. The C++ NPCBot caster
+-- spell-level GetSpellWithRank (47758/47757). R2-R4 53005/53006/53007
+-- registered 2026-11-19 (TDB spell_ranks + (-47540) all-ranks binding;
+-- CheckCast is rank-agnostic, no id-specific logic). The C++ NPCBot caster
 -- exception (caster forced to Player*) has no Go twin — the ev8 fire
 -- site is the player cast path only (spells.go). RegisterSpellEvent
 -- OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
@@ -512,6 +523,9 @@ local function penanceCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_PRIEST_PENANCE_R1, 8, penanceCheckCast)
+RegisterSpellEvent(SPELL_PRIEST_PENANCE_R2, 8, penanceCheckCast)
+RegisterSpellEvent(SPELL_PRIEST_PENANCE_R3, 8, penanceCheckCast)
+RegisterSpellEvent(SPELL_PRIEST_PENANCE_R4, 8, penanceCheckCast)
 
 -- C++ spell_pri_penance_SpellScript::HandleDummy (spell_priest.cpp:1016-1031):
 -- EFFECT_0 DUMMY OnEffectHitTarget. A dead hit unit casts nothing; a
