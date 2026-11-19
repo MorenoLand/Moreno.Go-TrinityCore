@@ -74,6 +74,7 @@ const (
 	effScriptEffect            = 77
 	effActivateObj             = 86
 	effCharge                  = 96
+	effChargeDest              = 149 // SPELL_EFFECT_CHARGE_DEST (SharedDefines.h:960)
 	effPowerBurn               = 62  // SPELL_EFFECT_POWER_BURN (SharedDefines.h:873)
 	effSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
 	effSanctuary               = 79  // SPELL_EFFECT_SANCTUARY (SharedDefines.h:890)
@@ -216,6 +217,7 @@ const (
 	targetUnitCasterAreaParty  = 20  // TARGET_UNIT_CASTER_AREA_PARTY (SharedDefines.h:1456)
 	targetUnitTargetAlly       = 21  // TARGET_UNIT_TARGET_ALLY (SharedDefines.h:1457)
 	targetUnitDestAreaEnemy    = 16  // TARGET_UNIT_DEST_AREA_ENEMY
+	targetUnitDestAreaAlly     = 31  // TARGET_UNIT_DEST_AREA_ALLY (SharedDefines.h:1467)
 	targetDestCasterBackRight  = 42  // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
 	targetDestCasterFrontRight = 41  // TARGET_DEST_CASTER_FRONT_RIGHT (SharedDefines.h:1477)
 	targetDestCasterFront      = 47  // TARGET_DEST_CASTER_FRONT (SharedDefines.h:1483)
@@ -3314,6 +3316,34 @@ var spells = []spell{
 	// 39099 "Master Hammersmith" (npc_professions.cpp:111 enum S_LEARN_HAMMER; Lua npc_prof_blacksmith.lua :46) - wago.tools 3.4.5.63697 SpellEffect row 859247 (DifficultyID 0) + SpellMisc 455456 + SpellAuraOptions 178383 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 LEARN_SPELL (36, effLearnSpell) bp24/die1 tgtA 0 NONE (verified on page - differs from 39097 tgtA 25) trigger 17040. Single effect (no UNLEARN row). Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range6 Vision 100yd (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x100 (no field); SpellAuraOptions ProcChance 101 (no field). Trigger 17040 NOT seeded (held flag).
 	{id: 39099, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
 		{effect: effLearnSpell, basePoints: 24, dieSides: 1, trigger: 17040, chainAmplitude: 1},
+	}},
+	// 43621 "Gust of Wind" (boss_akilzon.cpp:43 enum SPELL_GUST_OF_WIND; Lua boss_akilzon.lua :61) - wago.tools 3.4.5.63697 SpellEffect rows 863274/863275 (DifficultyID 0) + SpellMisc 459291 + SpellAuraOptions 181424 + SpellCategories 117021 + SpellCooldowns 68999 + SpellXSpellVisual 322121 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 KNOCK_BACK (98) bp399/die1 tgtA 6 (value 400); eff1 APPLY_AURA DUMMY (4) bp0/die0 tgtA 6 (value 1). Cast Instant idx 1, dur31 8000ms (real row), range134 Tower 80yd (real row), school Nature, dispel 0, mechanic 0. No SpellInterrupts / SpellLevels / SpellPower rows - manaCost omitted. NOT carried: Attributes (no field); SpellCategories Category 1152 / DefenseType 1 / PreventionType 1 (no fields); SpellCooldowns CategoryRecoveryTime 5000 (no cooldown field in the seed struct, 54517 precedent); SpellAuraOptions ProcChance 101 (no field).
+	{id: 43621, castTimeIdx: 1, durIdx: 31, rangeIdx: 134, school: schoolNature, effects: [3]effect{
+		{effect: effKnockBack, basePoints: 399, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 43622 "Static Disruption" (boss_akilzon.cpp:40 enum SPELL_STATIC_DISRUPTION; Lua boss_akilzon.lua :59) - wago.tools 3.4.5.63697 SpellEffect row 863276 (DifficultyID 0) + SpellMisc 459292 + SpellAuraOptions 181425 + SpellCategories 117022 + SpellXSpellVisual 322122 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 TRIGGER_MISSILE (32, effTriggerMiss) bp0/die0 trigger 44008 tgtA 6. Cast 1s idx 4 (real row), durIdx 0 (no SpellDuration row 0), range13 Unlimited 50000yd (real row), school Nature, dispel 0, mechanic 0. No SpellCooldowns / SpellInterrupts / SpellLevels / SpellPower rows - manaCost omitted. NOT carried: Speed 30 missile (no field); Attributes (no field); SpellCategories Category 0 / DefenseType 1 / PreventionType 0x1 (no fields); SpellAuraOptions CumulativeAura 10 / ProcChance 101 (no fields). Trigger 44008 NOT seeded (trigger-only).
+	{id: 43622, castTimeIdx: 4, durIdx: 0, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effTriggerMiss, basePoints: 0, dieSides: 0, trigger: 44008, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 43648 "Electrical Storm" (boss_akilzon.cpp:44 enum SPELL_ELECTRICAL_STORM; Lua boss_akilzon.lua :62) - wago.tools 3.4.5.63697 SpellEffect rows 865396/865397/865398 (DifficultyID 0) + SpellMisc 461167 + SpellAuraOptions 183046 + SpellCategories 117489 + SpellCooldowns 69126 + SpellXSpellVisual 322909 + SpellInterrupts 164518 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 APPLY_AURA MOD_STUN (12, auraStun) bp0/die0 tgtA 6; eff1 APPLY_AURA PERIODIC_TRIGGER_SPELL (23) bp0/die0 auraPeriod 1000 trigger 43658 tgtA 6; eff2 SCRIPT_EFFECT (77) bp44733/die1 tgtA 6 (value 44734). Cast Instant idx 1, dur31 8000ms (real row), range13 Unlimited (real row), school Nature, dispel 0, mechanic 0. No SpellLevels / SpellPower rows - manaCost omitted. NOT carried: Attributes (no field); SpellCategories Category 0 / DefenseType 1 / PreventionType 0x1 (no fields); SpellCooldowns CategoryRecoveryTime 5000 (no cooldown field, 54517 precedent); SpellAuraOptions ProcChance 101 (no field); SpellInterrupts InterruptFlags 0x8 / ChannelInterruptFlags 0x300c (no fields). Trigger 43658 NOT seeded (trigger-only).
+	{id: 43648, castTimeIdx: 1, durIdx: 31, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTriggerSpell, auraPeriod: 1000, basePoints: 0, dieSides: 0, trigger: 43658, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effScriptEffect, basePoints: 44733, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 43661 "Call Lightning" (boss_akilzon.cpp:42 enum SPELL_CALL_LIGHTNING; Lua boss_akilzon.lua :60) - wago.tools 3.4.5.63697 SpellEffect row 865509 (DifficultyID 0) + SpellMisc 461246 + SpellAuraOptions 183136 + SpellXSpellVisual 322964 + SpellLevels 122954 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 SCHOOL_DAMAGE (2) bp3799/die401 tgtA 6 = 3800-4200 Nature. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range13 Unlimited (real row), school Nature, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellInterrupts / SpellPower rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field); SpellLevels BaseLevel 20 / SpellLevel 20 (no fields).
+	{id: 43661, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3799, dieSides: 401, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 44007 "Electrical Storm" in DB2 (Lua boss_akilzon.lua :64 SPELL_CLOUD_VISUAL / "Cloud Visual" - FLAG: DB2 SpellName and Wowhead both name it "Electrical Storm", NOT "Cloud Visual"; a second, distinct spell of that name, NOT 43648; seeded under its DB2 name) (boss_akilzon.cpp:271 target->CastSpell(target, 44007, true) cloud visual) - wago.tools 3.4.5.63697 SpellEffect row 865322 (DifficultyID 0) + SpellMisc 460195 + SpellAuraOptions 182986 + SpellXSpellVisual 322885 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 PERSISTENT_AREA_AURA (27) DUMMY (4) bp0/die0 radiusIdx 13 (10yd, real row) tgtA 18 tgtB 31 (value 1). Cast Instant idx 1, dur31 8000ms (real row), range13 Unlimited (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellInterrupts / SpellLevels / SpellPower rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field). NOT 44008 (43622's missile) and NOT 43648's trigger (43658).
+	{id: 44007, castTimeIdx: 1, durIdx: 31, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetDestCaster, targetB: targetUnitDestAreaAlly, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 44732 "Eagle Swoop" (boss_akilzon.cpp:47 enum SPELL_EAGLE_SWOOP; Lua boss_akilzon.lua :65) - wago.tools 3.4.5.63697 SpellEffect rows 865956/865957 (DifficultyID 0) + SpellMisc 460302 + SpellXSpellVisual 323176 + SpellInterrupts 164661 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 CHARGE_DEST (149, effChargeDest) bp0/die0 tgtA 63; eff1 SCHOOL_DAMAGE (2) bp1720/die279 tgtA 25 = 1721-1999 Physical. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range135 Tower 100yd (real row), school Physical, dispel 0, mechanic 0. No SpellAuraOptions / SpellCategories / SpellCooldowns / SpellLevels / SpellPower rows - manaCost omitted. NOT carried: Speed 28 charge (no field); Attributes (no field); SpellInterrupts InterruptFlags 0x8 (no field).
+	{id: 44732, castTimeIdx: 1, durIdx: 0, rangeIdx: 135, school: schoolPhysical, effects: [3]effect{
+		{effect: effChargeDest, basePoints: 0, dieSides: 0, targetA: targetDestTargetAny, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 1720, dieSides: 279, targetA: targetUnitTargetAny, chainAmplitude: 1},
 	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
