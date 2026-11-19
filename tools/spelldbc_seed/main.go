@@ -3144,6 +3144,27 @@ var spells = []spell{
 	{id: 69016, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
 		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetDestCaster, targetB: targetUnitDestAreaEntry, radiusIdx: 28, chainAmplitude: 1},
 	}},
+	// 52658 "Static Overload" (boss_ionar.cpp:33 enum; Lua boss_ionar.lua :132 SPELL_STATIC_OVERLOAD) - wago.tools 3.4.5.63697 SpellEffect row 956786 (DifficultyID 0) + SpellMisc 604156 + SpellAuraOptions 193732 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL (23) bp0/die0 auraPeriod 2000 trigger 52659 tgtA 6. Cast Instant idx 1, dur1 10s (real row), range6 Vision 100yd (real row), school Nature, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field). Trigger 52659 NOT seeded (trigger-only); description refs 53337 explosion likewise not seeded.
+	{id: 52658, castTimeIdx: 1, durIdx: 1, rangeIdx: 6, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTriggerSpell, basePoints: 0, dieSides: 0, auraPeriod: 2000, trigger: 52659, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 52667 "Spark of Ionar Visual Trigger" (boss_ionar.cpp:40 enum; Lua boss_ionar.lua :128 SPELL_SPARK_VISUAL_TRIGGER) - wago.tools 3.4.5.63697 SpellEffect rows 956948/956949 (DifficultyID 0) + SpellMisc 604282 + SpellAuraOptions 193858 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL (23) bp0/die0 auraPeriod 1000 trigger 52671 tgtA 1; eff1 APPLY_AURA PERIODIC_TRIGGER_SPELL (23) bp0/die0 auraPeriod 1000 trigger 52662 tgtA 1. Cast Instant idx 1, dur21 -1 infinite (real row 0xFFFFFFFF), range1 Self (real row), school Nature, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field). Triggers 52671/52662 NOT seeded (trigger-only).
+	{id: 52667, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTriggerSpell, basePoints: 0, dieSides: 0, auraPeriod: 1000, trigger: 52671, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTriggerSpell, basePoints: 0, dieSides: 0, auraPeriod: 1000, trigger: 52662, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 52770 "Disperse" (boss_ionar.cpp:35 enum; Lua boss_ionar.lua :127 SPELL_DISPERSE) - wago.tools 3.4.5.63697 SpellEffect row 957534 (DifficultyID 0) + SpellMisc 604731 + SpellAuraOptions 194307 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 DUMMY (3) bp0/die0 tgtA 1. Cast 3s idx 14 (real row), durIdx 0 (no SpellDuration row 0), range1 Self (real row), school Nature, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes all 0x0 (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 52770, castTimeIdx: 14, durIdx: 0, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 52776 "Spark Despawn" (boss_ionar.cpp:37 enum; Lua boss_ionar.lua :129 SPELL_SPARK_DESPAWN) - wago.tools 3.4.5.63697 SpellEffect row 956438 (DifficultyID 0) + SpellMisc 603890 + SpellAuraOptions 193466 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 DUMMY (3) bp0/die0 tgtA 1. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 52776, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 52780 "Ball Lightning" (boss_ionar.cpp:32 enum; Lua boss_ionar.lua :131 SPELL_BALL_LIGHTNING) - wago.tools 3.4.5.63697 SpellEffect row 956502 (DifficultyID 0) + SpellMisc 603942 + SpellAuraOptions 193518 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 TRIGGER_MISSILE (32, effTriggerMiss) bp0/die0 trigger 52779 tgtA 53 (TARGET_DEST_TARGET_ENEMY). Cast 1.5s idx 16 (real row), durIdx 0 (no SpellDuration row 0), range135 Tower 100yd (real row), school Nature, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Speed 7 missile (no field); Attributes (no field); SpellAuraOptions ProcChance 101 (no field). Trigger 52779 NOT seeded (trigger-only).
+	{id: 52780, castTimeIdx: 16, durIdx: 0, rangeIdx: 135, school: schoolNature, effects: [3]effect{
+		{effect: effTriggerMiss, basePoints: 0, dieSides: 0, trigger: 52779, targetA: targetDestTargetEnemy, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
