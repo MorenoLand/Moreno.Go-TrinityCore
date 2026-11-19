@@ -2715,6 +2715,92 @@ var spells = []spell{
 	{id: 16788, castTimeIdx: 14, rangeIdx: 5, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 192, dieSides: 67, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 74367 "Cleave Armor" (boss_general_zarithrian.cpp:37 enum,
+	// :205 DoCastVictim; Lua boss_general_zarithrian.lua - 8s init
+	// then 15s loop) - wago.tools 3.4.5.63697 SpellEffect row 974779 +
+	// SpellMisc 617801 + SpellCategories 130826: eff0 Apply Aura Mod
+	// Resistance % (101) bp-21/die1 misc 1 (Physical) tgtA ENEMY (6)
+	// = -20% armor, stacks to 5 (CumulativeAura 5, no field). Cast
+	// Instant idx 1, dur9 30000ms (real row), range2 Combat 5yd
+	// (real row, Flags 0x1), school Physical, dispel 0, mechanic 0.
+	// BUILD: 3.4.5.63697 - the spell does NOT exist in 2.5.6.70577
+	// (WotLK-only; handoff aa045eef headline). Target DBC is WotLK
+	// (engine/data/wotlk/seeddbc) and 3.4.0.47659 WotLK seeds are
+	// already in-tree, so the WotLK build is the faithful source.
+	// No SpellPower row - manaCost omitted. NOT carried: Category 36
+	// / DefenseType 2 / PreventionType 2 / Attributes_0 2359312 /
+	// Attributes_3 262144 (no fields).
+	{id: 74367, castTimeIdx: 1, durIdx: 9, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModResistPct, basePoints: -21, dieSides: 1, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 74384 "Intimidating Roar" (boss_general_zarithrian.cpp:36 enum,
+	// :223 DoCastSelf; Lua boss_general_zarithrian.lua - 14s init then
+	// Repeat 35-40s) - wago.tools 3.4.5.63697 SpellEffect rows 974781/
+	// 974782 + SpellMisc 617803 + SpellCategories 130827: eff0 Apply
+	// Aura Stun (12) bp-1/die1 tgtA 22/tgtB 15 RadiusIndex_0 0
+	// (RadiusIndex_1 23 = 40yd, recorded not seeded - repo _0-only
+	// convention); eff1 Apply Aura Fear (7) bp0/die0 tgtA 22/tgtB 15
+	// RadiusIndex_0 14 (8yd, real row; _1 23 recorded not seeded).
+	// Cast 1500ms idx 16 (real row), dur35 4000ms (real row), range5
+	// Long 40yd (real row), school Physical, mechanic 5 Fear
+	// (Categories; effect mechanics are 0 - do not conflate), dispel
+	// 0. SpellPower ManaCost 0 - manaCost omitted. BUILD 3.4.5.63697
+	// (does not exist in 2.5.6.70577; see 74367 note). NOT carried:
+	// ProcChance 101 / Attributes_0 327696 (no fields).
+	{id: 74384, mechanic: 5, castTimeIdx: 16, durIdx: 35, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: -1, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModFear, basePoints: 0, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 74392 "Blast Nova" (boss_general_zarithrian.cpp:43 enum;
+	// Onyx Flamecaller spell, NOT Zarithrian's own - Lua
+	// boss_general_zarithrian.lua:451 DoCastAOE, 17s init then
+	// Repeat 15-20s) - wago.tools 3.4.5.63697 SpellEffect row 974844
+	// (DifficultyID 0) + SpellMisc 617850 + SpellCategories 130844 +
+	// SpellPower 252515: eff0 School Damage bp5687/die1625 tgtA 22/
+	// tgtB 15 RadiusIndex_0 9 (20yd, real row; _1 48 = 60yd recorded
+	// not seeded) = 5688-7312. Cast 2500ms idx 20 (real row), durIdx
+	// 0 (no SpellDuration row 0), range5 Long 40yd (real row), school
+	// Fire, manaCost 300, dispel 0, mechanic 0. FLAG: DifficultyID 4
+	// + 2 rows (bp6562/die1875 = 6563-8437) NOT seeded - seed struct
+	// has no difficulty field; heroic/25-player damage under-seeded.
+	// BUILD 3.4.5.63697 (does not exist in 2.5.6.70577; see 74367
+	// note). NOT carried: Attributes_0 65536 / Attributes_1 136 /
+	// ProcChance 101 (no fields).
+	{id: 74392, castTimeIdx: 20, rangeIdx: 5, school: schoolFire, manaCost: 300, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 5687, dieSides: 1625, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 74394 "Lava Gout" (boss_general_zarithrian.cpp:44 enum;
+	// Onyx Flamecaller spell, NOT Zarithrian's own - Lua
+	// boss_general_zarithrian.lua DoCastVictim, 3s init then 3-cast
+	// latch 3s/1s/8s) - wago.tools 3.4.5.63697 SpellEffect row 974846
+	// (DifficultyID 0) + SpellMisc 617852 + SpellCategories 130846:
+	// eff0 School Damage bp8482/die1035 tgtA ENEMY (6) = 8483-9517.
+	// Cast 2000ms idx 5 (real row), durIdx 0 (no SpellDuration row
+	// 0), range5 Long 40yd (real row), school Fire, dispel 0,
+	// mechanic 0. FLAG: DifficultyID 4 + 2 rows (bp9896/die1207 =
+	// 9897-11103) NOT seeded (no difficulty field). StartRecovery-
+	// Category 133 (GCD Normal) not carried (no field). No SpellPower
+	// row - manaCost omitted. BUILD 3.4.5.63697 (does not exist in
+	// 2.5.6.70577; see 74367 note). NOT carried: Attributes_0 65536
+	// / Attributes_6 16384 / ProcChance 101 (no fields).
+	{id: 74394, castTimeIdx: 5, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 8482, dieSides: 1035, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 74398 "Summon Flamecaller" (boss_general_zarithrian.cpp:40
+	// enum, Spawn Stalker; Lua boss_general_zarithrian.lua:243-256 -
+	// stalker CastSpell(triggered)) - wago.tools 3.4.5.63697
+	// SpellEffect row 974917 + SpellMisc 617905: eff0 SUMMON (28)
+	// bp-1/die1 misc 39814 (Onyx Flamecaller entry) miscB 64 tgtA 18
+	// (TARGET_DEST_CASTER). Cast Instant idx 1, dur5 300000ms (real
+	// row), range1 Self (real row), school Physical, dispel 0 /
+	// mechanic 0 (NO SpellCategories row - absent, not 0). FLAG:
+	// Wowhead says 3 flamecallers spawn = 3 casts (1 per cast), not
+	// 3 per cast. No SpellPower row - manaCost omitted. BUILD
+	// 3.4.5.63697 (does not exist in 2.5.6.70577; see 74367 note).
+	// NOT carried: Attributes_0 384 / ProcChance 101 (no fields).
+	{id: 74398, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: -1, dieSides: 1, misc: 39814, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
