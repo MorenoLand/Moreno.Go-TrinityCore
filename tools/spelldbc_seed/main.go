@@ -3124,6 +3124,26 @@ var spells = []spell{
 		{effect: effTriggerSpell, basePoints: 0, dieSides: 0, trigger: 33801, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effScriptEffect, basePoints: 69144, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 51807 "Arthas Portal" (trial_of_the_crusader.h:85 enum; Lua npc_tirion_fordring.lua :161 SPELL_ARTHAS_PORTAL) - wago.tools 3.4.5.63697 SpellEffect row 956511 (DifficultyID 0) + SpellMisc 603950 + SpellAuraOptions 193526 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA DUMMY (4) bp-1/die1 tgtA 1. Cast Instant idx 1, dur21 -1 infinite (real row 0xFFFFFFFF), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 51807, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 67864 "Open Portal" (trial_of_the_crusader.h:82 enum; Lua npc_tirion_fordring.lua :155 SPELL_OPEN_PORTAL) - wago.tools 3.4.5.63697 SpellEffect row 971146 (DifficultyID 0) + SpellMisc 615137 + SpellAuraOptions 204708 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 DUMMY (3) bp0/die0 tgtA 38 (TARGET_UNIT_NEARBY_ENTRY). Cast 5s idx 6 (real row), durIdx 0 (no SpellDuration row 0), range37 Extended 50yd (real row), school Shadow, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Speed 8 (no field); Attributes (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 67864, castTimeIdx: 6, durIdx: 0, rangeIdx: 37, school: schoolShadow, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+	}},
+	// 68193 "Destroy Floor Knockup" (trial_of_the_crusader.h:84 enum; Lua npc_tirion_fordring.lua :160 SPELL_DESTROY_FLOOR_KNOCKUP) - wago.tools 3.4.5.63697 SpellEffect row 972002 (DifficultyID 0) + SpellMisc 615764 + SpellAuraOptions 205335 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 KNOCK_BACK (98) bp149/die1 tgtA 22 (TARGET_SRC_CASTER) tgtB 7 (TARGET_UNIT_SRC_AREA_ENTRY) radiusIdx 28 (50000yd, real row) = 150. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range13 "Anywhere" 50000yd (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field). FLAG: MiscValue 0/0 (no knockback "(N)" parenthetical on Wowhead).
+	{id: 68193, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effKnockBack, basePoints: 149, dieSides: 1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 28, chainAmplitude: 1},
+	}},
+	// 68198 "Frost Nova" (trial_of_the_crusader.h:86 enum; Lua npc_tirion_fordring.lua :158 SPELL_LK_FROST_NOVA) - wago.tools 3.4.5.63697 SpellEffect row 972004 (DifficultyID 0) + SpellMisc 615766 + SpellAuraOptions 205337 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 DUMMY (3) bp0/die0 tgtA 18 (TARGET_DEST_CASTER) tgtB 8 (TARGET_UNIT_DEST_AREA_ENTRY) radiusIdx 28 (50000yd, real row). Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range1 Self (real row), school Frost, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 68198, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetDestCaster, targetB: targetUnitDestAreaEntry, radiusIdx: 28, chainAmplitude: 1},
+	}},
+	// 69016 "Corpse Teleport" (trial_of_the_crusader.h:87 enum; Lua npc_tirion_fordring.lua :159 SPELL_CORPSE_TELEPORT) - wago.tools 3.4.5.63697 SpellEffect row 971423 (DifficultyID 0) + SpellMisc 615333 + SpellAuraOptions 204904 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 DUMMY (3) bp0/die0 tgtA 18 (TARGET_DEST_CASTER) tgtB 8 (TARGET_UNIT_DEST_AREA_ENTRY) radiusIdx 28 (50000yd, real row). Effect-identical to 68198 (differs only in SpellMisc Attributes_3 0x30000 vs 0x30100, not carried). Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range1 Self (real row), school Frost, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 69016, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetDestCaster, targetB: targetUnitDestAreaEntry, radiusIdx: 28, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
