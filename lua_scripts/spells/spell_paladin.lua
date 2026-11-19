@@ -2,7 +2,7 @@
 -- src/server/scripts/Spells/spell_paladin.cpp.
 --
 -- CLOSED (this tick, verified, no code): spell_pal_seals
---   (spell_paladin.cpp:2241; bindings 20375/31801/31892/33127/38008/
+--   (spell_paladin.cpp:2241; bindings 20375/21084/31801/31892/33127/38008/
 --   41459/53720/53736): the class is a veto only — CheckDummyProc
 --   returns false on EFFECT_2 SPELL_AURA_DUMMY "to avoid console
 --   logging of unknown spell trigger". Go needs no twin:
@@ -900,3 +900,39 @@ local function t8TwoPieceBonusProc(event, aura, target, actor, procTarget, damag
 end
 
 RegisterAuraEvent(SPELL_PALADIN_T8_2P_BONUS, 6, t8TwoPieceBonusProc)
+
+local SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS_R1 = 20154 -- spell_paladin.cpp:2082
+local SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS_R2 = 21084
+local SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS = 25742 -- spell_paladin.cpp:84
+local SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS = 165 -- SpellAuraDefines.h:245
+local SPELL_AURA_MOD_DAMAGE_TAKEN = 14 -- SpellAuraDefines.h:94
+local SPELL_SCHOOL_MASK_HOLY = 2 -- UnitMethods.h:2920
+
+-- C++ spell_pal_seal_of_righteousness_AuraScript::CheckProc + HandleProc
+-- (spell_paladin.cpp:2097-2122): DoCheckProc + OnEffectProc EFFECT_0 DUMMY.
+-- CheckProc requires a proc target; HandleProc calls PreventDefaultAction,
+-- which rides the true return. ap is the holder's total attack power
+-- (BASE_ATTACK) plus the victim's SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS
+-- total; sph is the holder's holy SpellBaseDamageBonusDone (GetBaseSpellPower
+-- school 1) plus the victim's SPELL_AURA_MOD_DAMAGE_TAKEN total for the holy
+-- school mask; mws is the holder's GetAttackTime(BASE_ATTACK) in seconds;
+-- bp is lround(mws * (0.022 * ap + 0.044 * sph)); the holder casts 25742 on
+-- the victim, triggered, BP0 = bp. DORMANT until Spell.dbc ships the
+-- 20154/21084 proc entries.
+local function sealOfRighteousnessProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if target == nil or procTarget == nil then
+        return true
+    end
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
+    local ap = target:GetTotalAttackPowerValue(0) + procTarget:GetTotalAuraModifier(SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS)
+    local sph = target:GetBaseSpellPower(1) + procTarget:GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, SPELL_SCHOOL_MASK_HOLY)
+    local mws = target:GetAttackTime(0) / 1000
+    local bp = math.floor(mws * (0.022 * ap + 0.044 * sph) + 0.5)
+    target:CastCustomSpell(procTarget, SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS, true, bp)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS_R1, 6, sealOfRighteousnessProc)
+RegisterAuraEvent(SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS_R2, 6, sealOfRighteousnessProc)

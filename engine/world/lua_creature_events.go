@@ -470,40 +470,6 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		defer s.motionMu.Unlock()
 		return []any{motion.Name}, nil
 	}
-	// GetTotalAuraModifier(auraType) is Unit::GetTotalAuraModifier
-	// (Unit.cpp:4831) for creature victims: the sum of live amounts of
-	// one aura type over the creature's active auras, via
-	// creatureAuraTypeSum (creature_auras.go). DELTA: the creature fold
-	// has no same-effect gate (the session twin gates); same-effect
-	// duplicates on one victim sum where C++ folds once.
-	methods["GetTotalAuraModifier"] = func(_ context.Context, args []any) ([]any, error) {
-		auraType, err := luaUint32Arg(args, 0)
-		if err != nil {
-			return nil, err
-		}
-		return []any{s.creatureAuraTypeSum(creatureAuraKeyForMotion(motion), auraType)}, nil
-	}
-	// GetTotalAuraModifierByMiscMask(auraType, miscMask) is
-	// Unit::GetTotalAuraModifierByMiscMask (Unit.cpp:4937) for creature
-	// victims: the sum of live amounts of one aura type whose effect
-	// MiscValue overlaps miscMask, via
-	// creatureAuraTypeAmountsByMiscMask. Same no-same-effect-gate delta
-	// as GetTotalAuraModifier above.
-	methods["GetTotalAuraModifierByMiscMask"] = func(_ context.Context, args []any) ([]any, error) {
-		auraType, err := luaUint32Arg(args, 0)
-		if err != nil {
-			return nil, err
-		}
-		miscMask, err := luaUint32Arg(args, 1)
-		if err != nil {
-			return nil, err
-		}
-		var total int32
-		for _, amount := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(motion), auraType, miscMask) {
-			total += amount
-		}
-		return []any{total}, nil
-	}
 	// SetName is Unit::SetName (UnitMethods.h:1501, Object.h:338): the
 	// Eluna binding gates empty names (length > 0 only) and the C++
 	// write is memory-only, no DB write, so this writes motion.Name
