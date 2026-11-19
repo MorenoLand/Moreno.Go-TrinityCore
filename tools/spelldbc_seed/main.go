@@ -62,6 +62,7 @@ const (
 	effDispel                  = 38 // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
 	effDualWield               = 40 // SPELL_EFFECT_DUAL_WIELD (SharedDefines.h:851)
 	effJump                    = 41 // SPELL_EFFECT_JUMP (SharedDefines.h:852)
+	effJumpDest                = 42 // SPELL_EFFECT_JUMP_DEST (SharedDefines.h:853)
 	effSummon                  = 28
 	effPersistentAreaAura      = 27 // SPELL_EFFECT_PERSISTENT_AREA_AURA (SharedDefines.h)
 	effEnergize                = 30
@@ -3187,6 +3188,27 @@ var spells = []spell{
 	// 59750 "Ground Spike" (boss_krystallus.cpp:27 enum; Lua boss_krystallus.lua :112 SPELL_GROUND_SPIKE) - wago.tools 3.4.5.63697 SpellEffect row 965245 (DifficultyID 0) + SpellMisc 610671 + SpellCategories 128569 + SpellCooldowns 73958 + SpellAuraOptions 200246 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 SCHOOL_DAMAGE (2) bp5549/die901 tgtA 6. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range13 Anywhere 50000yd (real row), school Nature, dispel 0, mechanic 0. No SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_1 0x88, Attributes_2 0x4 (no field); SpellCategories Category 0 / DefenseType 1 / PreventionType 0x1 (no category field); SpellCooldowns RecoveryTime 1500 (no cooldown field in the seed struct, 54517 precedent); SpellAuraOptions ProcChance 101 (no field).
 	{id: 59750, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolNature, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 5549, dieSides: 901, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 58663 "Stomp" (boss_archavon.cpp:38 enum; Lua boss_archavon.lua :113 SPELL_STOMP) - wago.tools 3.4.5.63697 SpellEffect rows 963887/963888/963889 (DifficultyID 0) + SpellMisc 609641 + SpellCategories 128166 + SpellCooldowns 73805 + SpellAuraOptions 199216 (ABSENT from 2.5.6.70577 - WotLK-only; filter also returns 358663 substring hit, excluded): eff0 FORCE_CAST (140) bp0/die0 trigger 58672 tgtA 6; eff1 APPLY_AURA MOD_STUN (12, auraStun) bp0/die0 radiusIdx 48 (60yd, real row) tgtA 22 tgtB 15; eff2 SCHOOL_DAMAGE (2) bp3769/die461 radiusIdx 48 tgtA 22 tgtB 15. Cast 600ms idx 36 (new real aux row), dur39 2000ms (real row), range2 Combat 5yd (real row, Flags 0x1), school Physical, dispel 0, mechanic 0. No SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes all 0x0 (no field); SpellCategories Category 1152 (no category field); SpellCooldowns CategoryRecoveryTime 5000, RecoveryTime 0 (no cooldown field in the seed struct, 54517 precedent); SpellAuraOptions ProcChance 101 (no field). Trigger 58672 (SpellName "Impale", a different Impale from 58666) NOT seeded (trigger-only).
+	{id: 58663, castTimeIdx: 36, durIdx: 39, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effForceCast, basePoints: 0, dieSides: 0, trigger: 58672, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, radiusIdx: 48, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 3769, dieSides: 461, radiusIdx: 48, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 58666 "Impale" (boss_archavon.cpp:39 enum; Lua boss_archavon.lua :114 SPELL_IMPALE) - wago.tools 3.4.5.63697 SpellEffect rows 963894/963895 (DifficultyID 0) + SpellMisc 609644 + SpellAuraOptions 199219 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 SCHOOL_DAMAGE (2) bp28274/die3451 tgtA 6; eff1 SANCTUARY (79) bp0/die0 tgtA 6 (Wowhead labels it "Abort All Pending Attacks"; no APPLY_AURA stun effect exists - "Stunned." is only AuraDescription_lang). Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range13 Anywhere 50000yd (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x4000000, Attributes_2 0x4, Attributes_3 0x30000000 (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 58666, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 28274, dieSides: 3451, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSanctuary, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 58678 "Rock Shards" (boss_archavon.cpp:32 enum; Lua boss_archavon.lua :111 SPELL_ROCK_SHARDS) - wago.tools 3.4.5.63697 SpellEffect row 964094 (DifficultyID 0) + SpellMisc 609797 + SpellCategories 128229 + SpellCooldowns 73832 + SpellAuraOptions 199372 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL (23) bp-1/die1 auraPeriod 100 trigger 58941 tgtA 6. Cast 500ms idx 3 (real row), dur27 3000ms (real row), range13 Anywhere 50000yd (real row), school Physical, dispel 0, mechanic 0. No SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_1 0x4004, Attributes_4 0x80, Attributes_5 0x10000000 (no field); SpellCategories Category 1152 (no category field); SpellCooldowns CategoryRecoveryTime 4000, RecoveryTime 0 (no cooldown field in the seed struct, 54517 precedent); SpellAuraOptions ProcChance 101 (no field). Trigger 58941 NOT seeded (trigger-only).
+	{id: 58678, castTimeIdx: 3, durIdx: 27, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTriggerSpell, basePoints: -1, dieSides: 1, auraPeriod: 100, trigger: 58941, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 58960 "Crushing Leap" (boss_archavon.cpp:37 enum; Lua boss_archavon.lua :112 SPELL_CRUSHING_LEAP) - wago.tools 3.4.5.63697 SpellEffect rows 978133/978134 (DifficultyID 0) + SpellMisc 620239 + SpellCategories 131754 + SpellCooldowns 75152 + SpellAuraOptions 209812 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 JUMP_DEST (42, effJumpDest) bp0/die0 misc 100 (Wowhead "(100)" = MiscValue_0) tgtA 53; eff1 TRIGGER_MISSILE (32, effTriggerMiss) bp-1/die1 trigger 58963 tgtA 87. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range154 Tower 10-80yd (new real aux row, RangeMin 10, RangeMax 80), school Physical, dispel 0, mechanic 0. No SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Speed 35 missile (no field); Attributes all 0x0 (no field); SpellCategories Category 1152 (no category field); SpellCooldowns CategoryRecoveryTime 3000, RecoveryTime 0 (no cooldown field in the seed struct, 54517 precedent); SpellAuraOptions ProcChance 101 (no field). Trigger 58963 NOT seeded (trigger-only).
+	// FLAG: 68308 SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK (Lua boss_archavon.lua :117) is ABSENT from wago.tools 3.4.5.63697 in every table (Spell/SpellName/SpellMisc/SpellEffect/Categories/Cooldowns/Power/ClassOptions/AuraOptions) with "Use Hotfixes" unchecked, and Wowhead WotLK has no page ("Spell #68308 doesn't exist. It may have been removed from the game.") - NOT seeded; no values invented. Also absent from 2.5.6.70577. It also appears in the boss_emalon head; same flag applies there.
+	{id: 58960, castTimeIdx: 1, durIdx: 0, rangeIdx: 154, school: schoolPhysical, effects: [3]effect{
+		{effect: effJumpDest, basePoints: 0, dieSides: 0, misc: 100, targetA: targetDestTargetEnemy, chainAmplitude: 1},
+		{effect: effTriggerMiss, basePoints: -1, dieSides: 1, trigger: 58963, targetA: targetDestDest, chainAmplitude: 1},
 	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
@@ -21581,6 +21603,7 @@ func main() {
 		{28, 3200, 0},  // real SpellCastTimes 28 for 39294 (wago.tools 3.4.0.47659 SpellCastTimes row 28, 2026-11-17 verdict wago_spells_39283_39284_39294.txt)
 		{22, 3500, 0},  // real SpellCastTimes 22 for 18763 Freeze + 71020 Dark Mending (wago.tools 2.5.6.70577 SpellCastTimes row 22, 2026-11-18 verdict wago_spells_18099_18100_18763_21369_26070_wago.txt; retires synthetic 92004)
 		{209, 200, 0},  // real SpellCastTimes 209 for 69147 Coldflame (wago.tools 3.4.5.63697 SpellCastTimes row 209, 2026-11-19 verdict wago_spells_46598_69055_69065_69076_69147_wago.txt)
+		{36, 600, 0},   // real SpellCastTimes 36 for 58663 Stomp (wago.tools 3.4.5.63697 SpellCastTimes row 36, 2026-11-19 verdict wago_spells_58663_58666_58678_58960_68308_wago.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
 		panic(err)
@@ -21625,6 +21648,7 @@ func main() {
 		{14, f32(0), f32(0), f32(60), f32(60), 0},       // real SpellRange 14 "Extra Long Range" for 57942 (wago.tools 3.4.0.47659, 2026-11-16 verdict wago_spells_57941_57942_57949.txt)
 		{181, f32(0), f32(0), f32(200), f32(200), 0},    // real SpellRange 181 for 74071 (wago.tools 3.4.0.47659 SpellMisc RangeIndex 181, 2026-11-18 verdict wago_spells_73953_74071_75076_75106_75420_wago.txt; 0-200yd per Wowhead)
 		{114, f32(0), f32(0), f32(35), f32(35), 2},      // real SpellRange 114 "Hunter Range" for 27634/44271 (wago.tools 2.5.6.70577 SpellRange row 114 read on-page, 2026-11-18 handoff f94cba5b: Flags 0x2 RANGED, RangeMin 0, RangeMax 35)
+		{154, f32(10), f32(10), f32(80), f32(80), 0},    // real SpellRange 154 "Tower 80, 10" for 58960 Crushing Leap (wago.tools 3.4.5.63697 SpellRange row 154, 2026-11-19 verdict wago_spells_58663_58666_58678_58960_68308_wago.txt; RangeMin 10, RangeMax 80)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
