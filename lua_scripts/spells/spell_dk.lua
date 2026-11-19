@@ -60,8 +60,11 @@
 --   an ev8 port would double-enforce (081a0d1c's port removed
 --   2026-11-19). The ghoul-summon leg stays out (ghoul AI push/pop
 --   unported).
---   spell_dk_death_coil ranks 1-4 (47541/52375/59134/62900): CheckCast
---   arm PORTED this tick (OnCheckCast ev8 below); the Go
+--   spell_dk_death_coil (bindings -47541, 52375, 59134, -62900):
+--   CheckCast arm PORTED this tick (OnCheckCast ev8 below) for the
+--   four binding bases plus every rank of both negative chains
+--   (47541/49892/49893/49894/49895, 62900/62901/62902/62903/62904,
+--   TDB spell_ranks); the Go
 --   finishSpellCast dummy leg stays PORTED (spells.go deathCoilDummyEffect
 --   + boss_ai.go creature twin: 47632 damage / 47633 heal, BP0 = effect
 --   value [*1.5 heal] + sigil 64962 eff1).
@@ -286,6 +289,9 @@ RegisterAuraEvent(SPELL_DK_IMPROVED_UNHOLY_PRESENCE_R1, 2, improvedUnholyPresenc
 RegisterAuraEvent(SPELL_DK_IMPROVED_UNHOLY_PRESENCE_R1, 3, improvedUnholyPresenceRemove)
 
 local SPELL_DK_BLOOD_BOIL = 48721 -- spell_dk.cpp:461
+local SPELL_DK_BLOOD_BOIL_R2 = 49939
+local SPELL_DK_BLOOD_BOIL_R3 = 49940
+local SPELL_DK_BLOOD_BOIL_R4 = 49941
 local SPELL_DK_BLOOD_BOIL_TRIGGERED = 65658 -- spell_dk.cpp:52
 local CLASS_DEATH_KNIGHT = 6
 
@@ -298,8 +304,11 @@ local bloodBoilFired = {}
 -- (caster is a DK player) is the class check below. The ev1
 -- (OnCast, fires once per cast before the effect loop, spells.go)
 -- reset is the per-cast fresh SpellScript instance; a nil hitTarget
--- is the miss leg (C++ GetHitUnit() nil skips). DORMANT until
--- Spell.dbc ships the 48721/65658 records.
+-- is the miss leg (C++ GetHitUnit() nil skips). TDB spell_ranks chain
+-- 48721/49939/49940/49941 (R1-R4) + (-48721) all-ranks binding: all
+-- four ranks registered on the same rank-agnostic handlers (C++
+-- HandleAfterHit casts 65658 triggered, no amounts, no rank ids).
+-- DORMANT until Spell.dbc ships the 48721/49939/49940/49941 records.
 local function bloodBoilReset(event, spell)
     local caster = spell:GetCaster()
     if caster == nil then
@@ -324,8 +333,10 @@ local function bloodBoilAfterHit(event, spell, hitTarget)
     caster:CastSpell(caster, SPELL_DK_BLOOD_BOIL_TRIGGERED, true)
 end
 
-RegisterSpellEvent(SPELL_DK_BLOOD_BOIL, 1, bloodBoilReset)
-RegisterSpellEvent(SPELL_DK_BLOOD_BOIL, 3, bloodBoilAfterHit)
+for _, spellId in ipairs({ SPELL_DK_BLOOD_BOIL, SPELL_DK_BLOOD_BOIL_R2, SPELL_DK_BLOOD_BOIL_R3, SPELL_DK_BLOOD_BOIL_R4 }) do
+    RegisterSpellEvent(spellId, 1, bloodBoilReset)
+    RegisterSpellEvent(spellId, 3, bloodBoilAfterHit)
+end
 
 local SPELL_DK_GHOUL_EXPLODE = 47496 -- spell_dk.cpp:1171
 local SPELL_DK_CORPSE_EXPLOSION_TRIGGERED = 43999 -- spell_dk.cpp:60
@@ -381,7 +392,9 @@ RegisterAuraEvent(SPELL_DK_BUTCHERY_R1, 6, butcheryProc)
 RegisterAuraEvent(SPELL_DK_BUTCHERY_R2, 6, butcheryProc)
 
 local SPELL_DK_DEATH_AND_DECAY_R1 = 43265 -- bot_death_knight_ai.cpp:34
-local SPELL_DK_DEATH_AND_DECAY_R2 = 49938 -- PlayerAI.cpp:247
+local SPELL_DK_DEATH_AND_DECAY_R2 = 49936
+local SPELL_DK_DEATH_AND_DECAY_R3 = 49937
+local SPELL_DK_DEATH_AND_DECAY_R4 = 49938 -- PlayerAI.cpp:247
 local SPELL_DK_DEATH_AND_DECAY_DAMAGE = 52212 -- spell_dk.cpp:57
 
 -- C++ spell_dk_death_and_decay::HandleDummyTick (spell_dk.cpp:819-827):
@@ -389,8 +402,11 @@ local SPELL_DK_DEATH_AND_DECAY_DAMAGE = 52212 -- spell_dk.cpp:57
 -- casts SPELL_DK_DEATH_AND_DECAY_DAMAGE 52212 on the aura holder with
 -- BP0 = the aura EFFECT_0 amount, triggered via the aurEff overload
 -- (TRIGGERED_FULL_MASK, SpellDefines.h:166) — the CastCustomSpell
--- `true` arg is exact. Ranks 3-4 (49939/49940) are consecutive IDs
--- with no in-tree citation — not registered until DBC confirms them.
+-- `true` arg is exact. TDB spell_ranks chain 43265/49936/49937/49938
+-- (R1-R4) + (-43265) all-ranks binding: all four ranks registered on
+-- the same rank-agnostic handler (C++ HandleDummyTick casts 52212
+-- with BP0 = aura EFFECT_0 amount, no rank ids). The old "Ranks 3-4
+-- (49939/49940)" note was wrong — those ids are Blood Boil R2/R3.
 -- DORMANT until Spell.dbc ships the D&D aura records.
 local function deathAndDecayTick(event, aura, target)
     local caster = aura:GetCaster()
@@ -400,8 +416,9 @@ local function deathAndDecayTick(event, aura, target)
     caster:CastCustomSpell(target, SPELL_DK_DEATH_AND_DECAY_DAMAGE, true, aura:GetAmount())
 end
 
-RegisterAuraEvent(SPELL_DK_DEATH_AND_DECAY_R1, 1, deathAndDecayTick)
-RegisterAuraEvent(SPELL_DK_DEATH_AND_DECAY_R2, 1, deathAndDecayTick)
+for _, spellId in ipairs({ SPELL_DK_DEATH_AND_DECAY_R1, SPELL_DK_DEATH_AND_DECAY_R2, SPELL_DK_DEATH_AND_DECAY_R3, SPELL_DK_DEATH_AND_DECAY_R4 }) do
+    RegisterAuraEvent(spellId, 1, deathAndDecayTick)
+end
 
 local SPELL_DK_NECROSIS_R1 = 51459 -- spell_dk.cpp:1735
 local SPELL_DK_NECROSIS_DAMAGE = 51460 -- spell_dk.cpp:93
@@ -473,16 +490,26 @@ end
 RegisterAuraEvent(SPELL_DK_SCENT_OF_BLOOD_TRIGGER, 6, scentOfBloodTriggerProc)
 
 local SPELL_DK_SUDDEN_DOOM = 49018 -- spell_dk.cpp:2382
-local SUDDEN_DOOM_DEATH_COIL_RANKS = {47541, 52375, 59134, 62900} -- spell_dk.cpp:840
+-- C++ sudden-doom rank walk (spell_dk.cpp:2398-2422) starts at
+-- SPELL_DK_DEATH_COIL_R1 47541 and follows GetNextRankSpell: the TDB
+-- spell_ranks chain 47541/49892/49893/49894/49895 (R1-R5). The old
+-- list {47541, 52375, 59134, 62900} was the CheckCast binding bases,
+-- not a rank walk — it never reached the true higher ranks and could
+-- select 52375/59134/62900, which the C++ walk never returns.
+local SUDDEN_DOOM_DEATH_COIL_RANKS = {47541, 49892, 49893, 49894, 49895}
+-- C++ CheckCast bindings (spell_dk.cpp:840): -47541, 52375, 59134,
+-- -62900 — both negative chains expand to all ranks via spell_ranks
+-- (47541 chain above; 62900/62901/62902/62903/62904).
+local DEATH_COIL_CHECKCAST_SPELLS = {47541, 49892, 49893, 49894, 49895, 52375, 59134, 62900, 62901, 62902, 62903, 62904}
 
 -- C++ spell_dk_sudden_doom::HandleProc (spell_dk.cpp:2398-2422):
 -- EFFECT_0 SPELL_AURA_DUMMY OnEffectProc. PreventDefaultAction first
 -- (the ev6 true return on every path, even the no-rank path), then the
 -- actor casts the highest known Death Coil rank on the proc target,
 -- triggered via the aurEff overload (the player CastSpell funnel).
--- The rank walk is GetNextRankSpell + HasSpell in C++; no
--- GetNextRankSpell bridge exists, so the walk is the hardcoded
--- ascending rank list from the death-coil class (spell_dk.cpp:840).
+-- The rank walk is GetNextRankSpell + HasSpell in C++ (spell_dk.cpp:
+-- 2398-2422, from 47541); no GetNextRankSpell bridge exists, so the
+-- walk is the hardcoded TDB spell_ranks chain above.
 -- DORMANT until Spell.dbc ships the 49018 proc entry.
 local function suddenDoomProc(event, aura, target, actor, procTarget, damage)
     if actor == nil or procTarget == nil then
@@ -737,7 +764,7 @@ local function deathCoilCheckCast(event, spell)
     return SPELL_CAST_OK
 end
 
-for _, spellId in ipairs(SUDDEN_DOOM_DEATH_COIL_RANKS) do
+for _, spellId in ipairs(DEATH_COIL_CHECKCAST_SPELLS) do
     RegisterSpellEvent(spellId, 8, deathCoilCheckCast)
 end
 
