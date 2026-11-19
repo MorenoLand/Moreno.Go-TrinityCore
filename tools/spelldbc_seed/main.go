@@ -2645,6 +2645,76 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 329, dieSides: 441, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, basePoints: 2, dieSides: 1, mechanic: 14, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 	}},
+	// 14100 "Terrifying Roar" (boss_the_beast.cpp:31 enum, :183
+	// DoCastVictim; Lua boss_the_beast.lua - 23s init then 20s loop)
+	// - wago.tools 2.5.6.70577 SpellEffect row 690190 + SpellMisc
+	// 323734: eff0 Apply Aura Fear (7) bp0/die0 tgtA 22/tgtB 15
+	// radius13 (10yd). Cast Instant idx 1, dur28 5000ms (real row),
+	// range1 Self (real row), school Physical, dispel 0, mechanic 0
+	// (no SpellCategories row read in the verdict - Wowhead
+	// "Fleeing" is derived from the fear aura, not a mechanic
+	// value). No SpellPower row read - manaCost omitted. NOT
+	// carried: Attributes_0 0x10 (no field).
+	{id: 14100, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: 0, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 15570 "Immolate" (boss_the_beast.cpp:30 enum, :179 DoCast(random
+	// target); Lua boss_the_beast.lua - 3s init then 8s loop) -
+	// wago.tools 2.5.6.70577 SpellEffect rows 691614/691615 +
+	// SpellMisc 324932: eff0 Apply Aura Periodic Damage (3) bp41/die1
+	// period3000 tgtA ENEMY (6) = 42/tick; eff1 School Damage bp143/
+	// die1 tgtA ENEMY (6) = 144. Cast Instant idx 1, dur86 21000ms
+	// (real row), range4 Medium 30yd (real row), school Fire, dispel
+	// 0, mechanic 0 (no SpellCategories row read in the verdict -
+	// Wowhead Dispel type Magic NOT seeded from Wowhead alone). No
+	// SpellPower row read - manaCost omitted. NOT carried:
+	// BonusCoefficient 0.1/0.3 (no field); Attributes_0 0x90000.
+	{id: 15570, castTimeIdx: 1, durIdx: 86, rangeIdx: 4, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 41, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 143, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16144 "Fire Blast" (boss_the_beast.cpp:34 enum, :196
+	// DoCastVictim; Lua boss_the_beast.lua - urand(5s, 8s) init then
+	// 5-8s loop) - wago.tools 2.5.6.70577 SpellEffect row 693780 +
+	// SpellMisc 326730: eff0 School Damage bp359/die1 tgtA ENEMY (6)
+	// = 360. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0),
+	// range3 Short 20yd (real row), school Fire, dispel 0, mechanic 0
+	// (no SpellCategories row read). No SpellPower row read -
+	// manaCost omitted. FLAG: Wowhead Classic presents this as a Mage
+	// player spell (no NPC tab); boss linkage from the C++ enum only.
+	// NOT carried: Attributes_0 0x90000 (no field).
+	{id: 16144, castTimeIdx: 1, rangeIdx: 3, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 359, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16785 "Flamebreak" (boss_the_beast.cpp:28 enum, :174
+	// DoCastVictim; Lua boss_the_beast.lua - 12s init then 10s loop)
+	// - wago.tools 2.5.6.70577 SpellEffect rows 693228/693229 +
+	// SpellMisc 326291: eff0 School Damage bp231/die37 tgtA 22/tgtB
+	// 15 radius13 (10yd) = 232-268; eff1 Knock Back (98) bp99/die1
+	// misc 200 (knockback distance; 31475 "(150)" = MiscValue
+	// precedent) tgtA 22/tgtB 15 radius13 = 100. Cast Instant idx 1,
+	// durIdx 0 (no SpellDuration row 0), range1 Self (real row),
+	// school Fire, dispel 0, mechanic 0 (no SpellCategories row
+	// read). No SpellPower row read - manaCost omitted. FLAG: Wowhead
+	// Classic presents this as a Mage player spell (no NPC tab); boss
+	// linkage from the C++ enum only. NOT carried: Attributes_0
+	// 0x90000 / Attributes_1 0x88 (no fields).
+	{id: 16785, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 231, dieSides: 37, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 99, dieSides: 1, misc: 200, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 16788 "Fireball" (boss_the_beast.cpp:32 enum, :192
+	// DoCastVictim; Lua boss_the_beast.lua - urand(8s, 21s) init then
+	// 8-21s loop) - wago.tools 2.5.6.70577 SpellEffect row 693611 +
+	// SpellMisc 326608: eff0 School Damage bp192/die67 tgtA ENEMY (6)
+	// = 193-259. Cast 3000ms idx 14 (real row), durIdx 0 (no
+	// SpellDuration row 0), range5 Long 40yd (real row), school Fire,
+	// dispel 0, mechanic 0 (no SpellCategories row read). No
+	// SpellPower row read - manaCost omitted. NOT carried: Speed 24
+	// (no field); Attributes_0 0x90000 (no field).
+	{id: 16788, castTimeIdx: 14, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 192, dieSides: 67, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
