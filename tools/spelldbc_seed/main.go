@@ -2330,7 +2330,7 @@ var spells = []spell{
 	// SRC_AREA_ENEMY (15), radiusIdx 13 (10yd, real row). Cast
 	// Instant idx 1, dur0 (no row), range1 Self Only (real row),
 	// school Arcane, mana 330, dispel 1 Magic. FLAG: Wowhead tooltip
-	// 188-200 vs DBC 186-199 (Effect Value 186 = bp+1, consistent).
+	// 188-200 vs DBC 186-198 (Effect Value 186 = bp+1, consistent).
 	// NOT carried: RealPointsPerLevel 0.5 / BonusCoefficient 1 /
 	// Attributes / Category 0 (no fields).
 	{id: 9433, dispel: 1, castTimeIdx: 1, rangeIdx: 1, school: schoolArcane, manaCost: 330, effects: [3]effect{
@@ -2393,6 +2393,77 @@ var spells = []spell{
 	{id: 13323, dispel: 1, mechanic: 17, castTimeIdx: 16, durIdx: 18, rangeIdx: 4, school: schoolPhysical, manaCostPct: 10, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModConfuse, basePoints: -1, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraTransform, basePoints: 0, dieSides: 0, misc: 1933, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 12471 "Shadow Bolt" (boss_priestess_delrissa.cpp:580 enum, :648
+	// DoCastVictim; Lua boss_ellris_duskhallow.lua — 3s init then 5s
+	// loop) — wago.tools 2.5.6.70577 SpellEffect row 689768 + SpellMisc
+	// 323385 + SpellPower 178440 + SpellCategories 73914: eff0 School
+	// Damage bp95/die33 tgtA ENEMY (6) = 96-128. Cast 3000ms idx 14,
+	// dur0 (no row), range5 Long 40yd (real row), school Shadow, mana
+	// 90, dispel 0. FLAG: Wowhead tooltip gives no numeric range; only
+	// the low end 96 matches Wowhead Effect Value 96. NOT carried:
+	// BonusCoefficient 1 / Attributes_0 0x90000 / Category 0 /
+	// StartRecoveryCategory 133 (no fields).
+	{id: 12471, castTimeIdx: 14, rangeIdx: 5, school: schoolShadow, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 95, dieSides: 33, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 14875 "Curse of Agony" (boss_priestess_delrissa.cpp:582 enum,
+	// :663 DoCast(random); Lua — 1s init then 13s loop) — wago.tools
+	// 2.5.6.70577 SpellEffect row 691052 + SpellMisc 324452 + SpellPower
+	// 179507 + SpellCategories 74278: eff0 Apply Aura Periodic Damage
+	// (3) bp33/die1 period3000 tgtA ENEMY (6) = 34/tick. Cast Instant
+	// idx 1, dur9 30000ms (real row), range4 Medium 30yd (real row),
+	// school Shadow, mana 75, dispel 2 Curse. NOT carried:
+	// BonusCoefficient 0.05 / Attributes_0 0x90000 / Category 0 /
+	// StartRecoveryCategory 133 (no fields).
+	{id: 14875, dispel: 2, castTimeIdx: 1, durIdx: 9, rangeIdx: 4, school: schoolShadow, manaCost: 75, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 33, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 38595 "Fear" (boss_priestess_delrissa.cpp:583 enum, :671
+	// DoCast(random); Lua — 10s init then 10s loop) — wago.tools
+	// 2.5.6.70577 SpellEffect row 859497 + SpellMisc 455983 +
+	// SpellCategories 115992: eff0 Apply Aura Fear (7) bp-1/die1 tgtA
+	// ENEMY (6) = 0. Cast 1500ms idx 16, dur35 4000ms (real row),
+	// range3 Short 20yd (real row), school Shadow, dispel 1 Magic,
+	// mechanic 5 Fear (SharedDefines.h:1362). NO SpellPower row
+	// (Wowhead Cost None) — manaCost omitted. NOT carried:
+	// Attributes_0 0x40010000 / Category 0 / StartRecoveryCategory 133
+	// (no fields).
+	{id: 38595, dispel: 1, mechanic: 5, castTimeIdx: 16, durIdx: 35, rangeIdx: 3, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: -1, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 44141 "Seed of Corruption" (boss_priestess_delrissa.cpp:581 enum,
+	// :655 DoCast(random); Lua — 2s init then 10s loop) — wago.tools
+	// 2.5.6.70577 SpellEffect rows 864457/864458 + SpellMisc 459269 +
+	// SpellPower 229626 + SpellCategories 117263: eff0 Apply Aura
+	// Periodic Damage (3) bp249/die1 period3000 tgtA ENEMY (6) =
+	// 250/tick, 1500 over 18s; eff1 Apply Aura Dummy (4) bp2499/die1
+	// tgtA ENEMY (6) = 2500 detonation threshold. Cast 2000ms idx 5,
+	// dur85 18000ms (real row), range4 Medium 30yd (real row), school
+	// Shadow, mana 550, dispel 1 Magic. No trigger links (TriggerSpell
+	// 0; no separate detonation spell — the Dummy threshold drives it).
+	// NOT carried: BonusCoefficient 0.167 / Attributes_0 0x40010 /
+	// Category 0 / StartRecoveryCategory 133 (no fields).
+	{id: 44141, dispel: 1, castTimeIdx: 5, durIdx: 85, rangeIdx: 4, school: schoolShadow, manaCost: 550, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 249, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, basePoints: 2499, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 44267 "Immolate" (boss_priestess_delrissa.cpp:579 enum, :642
+	// DoCastVictim; Lua — 6s init then 6s loop) — wago.tools
+	// 2.5.6.70577 SpellEffect rows 865942/865943 + SpellMisc 460148 +
+	// SpellPower 230788 + SpellCategories 117596: eff0 Apply Aura
+	// Periodic Damage (3) bp184/die1 period3000 tgtA ENEMY (6) =
+	// 185/tick, 925 over 15s; eff1 School Damage bp489/die1 tgtA ENEMY
+	// (6) = 490. Cast 2000ms idx 5, dur8 15000ms (real row), range4
+	// Medium 30yd (real row), school Fire, mana 445, dispel 1 Magic.
+	// FLAG: Wowhead tooltip direct damage 495 at L70 vs DBC 490 —
+	// RealPointsPerLevel 4.3 not carried (no field in the seed struct;
+	// same limitation as 9433). NOT carried: BonusCoefficient
+	// 0.13/0.2 / Attributes_0 0x10000 / Category 0 /
+	// StartRecoveryCategory 133 (no fields).
+	{id: 44267, dispel: 1, castTimeIdx: 5, durIdx: 8, rangeIdx: 4, school: schoolFire, manaCost: 445, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 184, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 489, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
