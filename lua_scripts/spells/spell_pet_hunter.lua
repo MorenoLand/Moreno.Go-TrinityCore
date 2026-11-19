@@ -8,18 +8,46 @@
 -- when the C++ CheckProc FAILS, and the DBC default leg is skipped.
 -- All three are DORMANT until Spell.dbc ships their proc entries.
 --
--- STAY-OUT:
---   spell_pet_guard_dog (53178, pet_hunter.cpp:201-252): the CheckProc
---   (Growl icon 201) is forwardable, but HandleProc adds threat to the
---   proc target (target->GetThreatManager().AddThreat, :237-238) and
---   there is no AddThreat bridge, and the threat amount needs the
---   event spell's EFFECT_0 CalcValue, which the proc-event object
---   does not forward. No partial port: vetoing without the threat leg
---   would drop the talent's whole point.
+-- PORTED: spell_pet_guard_dog (53178) below — the AddThreat and
+--   CalcValue-forwarding bridges the old stay-out note cited are live
+--   (lua_creature_events.go:2590, lua_aura.go:471).
 
 local SPELL_PET_SILVERBACK = 62764 -- pet_hunter.cpp:254
 local SPELL_PET_SILVERBACK_TRIGGER = {62800, 62801} -- pet_hunter.cpp:45-46
 local PET_ICON_ID_GROWL = 201 -- pet_hunter.cpp:51
+
+local SPELL_PET_GUARD_DOG = 53178 -- pet_hunter.cpp:201
+local SPELL_PET_GUARD_DOG_HAPPINESS = 54445 -- pet_hunter.cpp:45
+
+-- C++ spell_pet_guard_dog::CheckProc + HandleProc (pet_hunter.cpp:201-252):
+-- DoCheckProc passes only when the event spell is Growl (SpellIconID
+-- 201). OnEffectProc EFFECT_0 SPELL_AURA_DUMMY: PreventDefaultAction,
+-- then the actor casts the happiness trigger (54445) on itself,
+-- triggered via the aurEff overload; then if the proc target can have
+-- a threat list it gains threat equal to CalculatePct(event spell
+-- EFFECT_0 CalcValue, aurEff amount). The CalcValue bridge is the
+-- no-caster overload (lua_aura.go:471), so no level scaling; the
+-- CanHaveThreatList gate rides GetObjectType() == "Creature" (no Lua
+-- method; the bridge itself no-ops on a nil ThreatMgr). DORMANT until
+-- Spell.dbc ships the 53178 proc entry.
+local function guardDogProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if actor == nil or aura == nil or procEvent == nil then
+        return true
+    end
+    if procEvent:GetSpellIconId() ~= PET_ICON_ID_GROWL then
+        return true
+    end
+    actor:CastSpell(actor, SPELL_PET_GUARD_DOG_HAPPINESS, true)
+    if procTarget == nil or procTarget:GetObjectType() ~= "Creature" then
+        return true
+    end
+    local calcValue = aura:GetSpellEffectCalcValue(procEvent:GetSpellId(), 0)
+    local addThreat = math.floor(calcValue * aura:GetAmount(0) / 100)
+    procTarget:AddThreat(actor, addThreat)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PET_GUARD_DOG, 6, guardDogProc)
 
 -- C++ spell_pet_silverback::CheckProc + HandleProc (pet_hunter.cpp:255-301):
 -- DoCheckProc passes only when the event spell is Growl (SpellIconID
