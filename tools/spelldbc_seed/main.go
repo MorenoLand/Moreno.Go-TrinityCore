@@ -2560,6 +2560,91 @@ var spells = []spell{
 	{id: 26070, dispel: 1, mechanic: 5, castTimeIdx: 16, durIdx: 31, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModFear, basePoints: -1, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
 	}},
+	// 44137 "Rocket Launch" (boss_priestess_delrissa.cpp:1218 enum,
+	// :1280 DoCastVictim; Lua boss_zelfan.lua - 7s init then 9s loop)
+	// - wago.tools 2.5.6.70577 SpellEffect rows 865935/865936 +
+	// SpellMisc 461345 + SpellCategories 117594: eff0 TRIGGER_SPELL
+	// trigger 44138 tgtA ENEMY (6); NO EffectIndex 1 row exists (middle
+	// slot left zero - row() skips effect==0); eff2 TRIGGER_SPELL
+	// trigger 13360 tgtA 0 (NONE, self-stun recoil). Cast 3500ms idx 22
+	// (real row), durIdx 0 (no SpellDuration row 0), range36 45yd (real
+	// row), school Fire, dispel 0, mechanic 0. Cooldown: Category 60000
+	// + GCD 1500 NOT carried (seed struct has no cooldown fields).
+	// FLAG: description tokens $30730s1/$30730d reference spell 30730,
+	// which has NO SpellEffect rows in 2.5.6.70577 - seed the triggers,
+	// not the tooltip. No SpellPower row read in the verdict - manaCost
+	// omitted. NOT carried: Attributes_0 0x410000 / ProcChance 101 /
+	// SpellClassSet 3 Mage (no fields).
+	{id: 44137, castTimeIdx: 22, rangeIdx: 36, school: schoolFire, effects: [3]effect{
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 0, trigger: 44138, targetA: targetEnemy, chainAmplitude: 1},
+		{},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 0, trigger: 13360, chainAmplitude: 1},
+	}},
+	// 44272 "Goblin Dragon Gun" (boss_priestess_delrissa.cpp:1217 enum,
+	// :1274 DoCastVictim; Lua boss_zelfan.lua - 20s init then 10s loop)
+	// - wago.tools 2.5.6.70577 SpellEffect row 864463 + SpellMisc
+	// 459345 + SpellCategories 117267: eff0 Apply Aura Periodic
+	// Trigger Spell (23) bp0/die1 period1000 trigger 44273 tgtA CASTER
+	// (1) = 8s channel, 1s ticks. Cast Instant idx 1, dur31 8000ms
+	// (real row), range1 Self (real row), school Fire, dispel 0,
+	// mechanic 0. FLAG: Wowhead buff text says "every 5 sec" but wago
+	// AuraPeriod 1000 + effect line say every 1s - seed 1000. Tooltip
+	// tokens $27604s1/$27604t1 reference spell 27604 (bp157/die35) -
+	// the live trigger is 44273 (bp427/die95), NOT seeded here (trigger
+	// target only; same treatment as 18101/13360). No SpellPower row
+	// read in the verdict - manaCost omitted. NOT carried:
+	// Attributes_0 0x800 / Attributes_1 0x40 (no fields).
+	{id: 44272, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 44273, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 44274 "Recombobulate" (boss_priestess_delrissa.cpp:1219 enum,
+	// :1298 DoCast(pAdd); Lua boss_zelfan.lua - 4s init then 2s loop,
+	// first polymorphed lackey) - wago.tools 2.5.6.70577 SpellEffect
+	// rows 864465/864466/864467 + SpellMisc 459416: eff0 DISPEL_MECHANIC
+	// (108) bp0/die1 misc 17 (Polymorph) tgtA ALLY (21); eff1 HEAL (10)
+	// bp1124/die751 tgtA ALLY (21) = 1125-1875; eff2 ENERGIZE (30)
+	// bp749/die501 tgtA ALLY (21) = 750-1250 mana. Cast Instant idx 1,
+	// durIdx 0 (no SpellDuration row 0), range4 Medium 30yd (real row),
+	// school Arcane, dispel 0 / mechanic 0 (NO SpellCategories row -
+	// absent, not 0). FLAG: Wowhead "1125 to 1875 health and mana"
+	// reuses the heal numbers ($s2) for both effects. No SpellPower row
+	// read in the verdict - manaCost omitted. NOT carried: BonusCoeff 1
+	// (no field).
+	{id: 44274, castTimeIdx: 1, rangeIdx: 4, school: schoolArcane, effects: [3]effect{
+		{effect: effDispelMechanic, basePoints: 0, dieSides: 1, misc: 17, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effHeal, basePoints: 1124, dieSides: 751, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+		{effect: effEnergize, basePoints: 749, dieSides: 501, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 44276 "High Explosive Sheep" (boss_priestess_delrissa.cpp:1220
+	// enum, :1308 DoCast(me); Lua boss_zelfan.lua - 10s init then 65s
+	// loop) - wago.tools 2.5.6.70577 SpellEffect row 864565 + SpellMisc
+	// 459346: eff0 SUMMON (28) bp0/die1 misc 24715 (Explosive Sheep
+	// entry) miscB 61 tgtA 32 (TARGET_DEST_CASTER_SUMMON). Cast 2000ms
+	// idx 5 (real row), dur3 60000ms (real row), range1 Self (real row),
+	// school Physical, dispel 0 / mechanic 0 (NO SpellCategories row).
+	// FLAG: EffectAmplitude 1000 NOT carried (seed struct has no
+	// amplitude field). No SpellPower row read in the verdict -
+	// manaCost omitted. NOT carried: Attributes_0 0x40010 (no field).
+	{id: 44276, castTimeIdx: 5, durIdx: 3, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 24715, miscB: 61, targetA: targetDestCasterSummon, chainAmplitude: 1},
+	}},
+	// 46024 "Fel Iron Bomb" (boss_priestess_delrissa.cpp:1221 enum,
+	// :1286 DoCastVictim; Lua boss_zelfan.lua - 15s init then 15s loop)
+	// - wago.tools 2.5.6.70577 SpellEffect rows 867326/867327 +
+	// SpellMisc 461812 + SpellCategories 117847: eff0 School Damage
+	// bp329/die441 radius8 (5yd) tgtA 16 (DEST_AREA_ENEMY) = 330-770;
+	// eff1 Apply Aura Stun (12) bp2/die1 mechanic 14 radius8 (5yd)
+	// tgtA 16 = 3s stun. Cast 1000ms idx 4 (real row), dur39 2000ms
+	// (real row), range11 15yd (real row), school Fire, mechanic 12
+	// Stun (Categories), dispel 0. FLAG: spell-level Mechanic 12 vs
+	// eff1 EffectMechanic 14 (Wowhead "Incapacitated") - do not
+	// conflate. No SpellPower row read in the verdict - manaCost
+	// omitted. NOT carried: Speed 14 / Attributes_0 0x10000 (no
+	// fields).
+	{id: 46024, mechanic: 12, castTimeIdx: 4, durIdx: 39, rangeIdx: 11, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 329, dieSides: 441, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 2, dieSides: 1, mechanic: 14, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
