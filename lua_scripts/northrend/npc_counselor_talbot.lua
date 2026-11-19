@@ -32,25 +32,33 @@
 --   only inside area 4125. Talbot is stationary at his summon
 --   coords, so combat-start evaluation is C++-exact; behaviorally
 --   nil in practice (fixed-coords quest summon).
+-- - UpdateAI bCheck leg (:876-886) as a 1000ms poll armed on Reset
+--   (spawn; ev23 pre-fires at spawn, lua_creature_events.go:3690):
+--   on the first tick where Leryssa armed bCheck (TalbotBCheck
+--   global, set by her first arrival :977-979), latch the
+--   leryssa/arlos GUIDs via FindNearestCreature (each independently,
+--   C++-exact) and consume the flag. The poll is NOT in the combat
+--   timers table — the C++ leg runs in UpdateAI regardless of
+--   combat, so EnterCombat must not cancel it.
+-- - JustDied (:920-942): guard on the latched GUIDs, resolve via
+--   GetCreatureByGUID (Barnes idiom), then the tail in C++ order —
+--   Arlos Talk SAY_ARLOS_1/2, Leryssa Talk SAY_LERYSSA_1, Arlos
+--   KillSelf (creature:Kill, lua_creature_events.go:3753),
+--   Leryssa RemoveAura(46957) + ClearUnitState(STUNNED) +
+--   SetWalk(false) + MoveTo(0, 3722.11, 3564.20, 477.44) — the
+--   MovePoint twin (lua_creature_events.go:5791), which fires
+--   Leryssa's second arrival and her phase machine.
 -- Unmodeled (documented-only, no bridges):
--- - bCheck / FindNearestCreature(NPC_LERYSSA 25251, NPC_GENERAL_ARLOS
---   25250, 50.0f) GUID latch (:876-886): FindNearestCreature IS
---   bridged (lua_creature_events.go:1154, alive-only built in —
---   matches the C++ `true` filter), but the latch is armed ONLY by
---   leryssa's MovementInform (no bridge), so in the Go model the
---   C++ JustDied early-return (empty GUIDs) is the faithful
---   behavior — a live-lookup port would fabricate the tail when
---   the scene never armed it.
+-- - JustDied RewardPlayerAndGroupAtEvent (:939-940): no Lua
+--   bridge (zero hits in the engine for the method name; the Go
+--   side only has the kill-rewarder path, kill.go:3074) — the
+--   quest credit leg stays out; the rest of the tail is ported.
 -- - MovementInform(POINT_MOTION_TYPE) -> ENSURE_AI(npc_thassarian)
---   talbotInPosition cross-AI latch (:860-868): no MovementInform /
---   cross-AI-ENSURE bridge.
--- - JustDied (:913-938): the Talk / RemoveAura / ClearUnitState /
---   SetWalk / MovePoint legs are bridgeable now, and arlos KillSelf
---   IS bridged (creature:Kill, the Creature::KillSelf twin,
---   lua_creature_events.go:3447) — but RewardPlayerAndGroupAtEvent
---   has no Lua bridge and the latch above never arms, so the tail
---   stays out on those grounds (not motion/unit-state, as previously
---   claimed).
+--   talbotInPosition cross-AI latch (:860-868): the write target
+--   is Thassarian's AI field on the unported escort/phase machine
+--   — stays with that unit (same standing as the Leryssa
+--   leryssaInPosition write before the ThassarianScene table
+--   existed).
 -- - npc_thassarian escort-scene react arms (zone_borean_tundra.cpp
 --   :509/:566/:604/:667/:675: arthas->SetReactState(PASSIVE) on
 --   WaypointReached(3), talbot->SetReactState(PASSIVE) at scene phase
@@ -69,8 +77,31 @@ local ENTRY_COUNSELOR_TALBOT = 25301
 local SPELL_SHADOW_BOLT = 15537
 local SPELL_DEFLECTION = 51009
 local SPELL_SOUL_BLAST = 50992
+local SPELL_STUN = 46957 -- zone_borean_tundra.cpp:409
+
+local NPC_LERYSSA = 25251 -- :416
+local NPC_GENERAL_ARLOS = 25250 -- :415
+local UNIT_STATE_STUNNED = 8 -- Unit.h:214
+
+local SAY_ARLOS_1 = 0
+local SAY_ARLOS_2 = 1
+local SAY_LERYSSA_1 = 0
+
+-- Talbot JustDied MovePoint dest (:937).
+local LERYSSA_MOVE_X = 3722.114502
+local LERYSSA_MOVE_Y = 3564.201660
+local LERYSSA_MOVE_Z = 477.441437
 
 local timers = {}
+
+-- C++ bCheck flag, set by Leryssa's first arrival (:977-979) and
+-- consumed by the UpdateAI latch leg (:876-886). Talbot-side global
+-- (one shared lua.State, runtime.go; netherspite cross-file
+-- precedent), keyed by Talbot GUIDLow; the latch + poll id are
+-- per-Talbot-GUID locals.
+TalbotBCheck = TalbotBCheck or {}
+local talbotLatch = {}
+local talbotBcheckPoll = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -124,6 +155,38 @@ local function onSoulBlast(creature, guid)
     schedule(guid, "soul_blast", math.random(12000, 18000), function() onSoulBlast(creature, guid) end)
 end
 
+local function cancelBcheckPoll(guid)
+    local id = talbotBcheckPoll[guid]
+    if id then
+        RemoveEventById(id)
+        talbotBcheckPoll[guid] = nil
+    end
+end
+
+-- C++ UpdateAI bCheck leg (:876-886) as a 1000ms poll: on the
+-- first tick where the flag is armed, latch the GUIDs (each
+-- independently, C++-exact) and consume the flag; unarmed ticks
+-- re-arm. FindNearestCreature is the alive-only twin
+-- (lua_creature_events.go:7219).
+local function bcheckTick(creature, guid)
+    talbotBcheckPoll[guid] = nil
+    if not TalbotBCheck[guid] then
+        talbotBcheckPoll[guid] = CreateLuaEvent(function() bcheckTick(creature, guid) end, 1000)
+        return
+    end
+    TalbotBCheck[guid] = false
+    local latch = {}
+    local leryssa = creature:FindNearestCreature(NPC_LERYSSA, 50)
+    if leryssa then
+        latch.leryssaGUID = leryssa:GetGUIDLow()
+    end
+    local arlos = creature:FindNearestCreature(NPC_GENERAL_ARLOS, 50)
+    if arlos then
+        latch.arlosGUID = arlos:GetGUIDLow()
+    end
+    talbotLatch[guid] = latch
+end
+
 -- C++ Initialize()/Reset(): SHADOWBOLT urand(5s,12s), DEFLECTION
 -- urand(20s,25s), SOULBLAST urand(12s,18s). Timers only tick
 -- UpdateVictim-gated in C++, so seeding at combat start is faithful.
@@ -145,12 +208,44 @@ local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+-- C++ JustDied (:920-942): guard on the latched GUIDs, resolve
+-- via GetCreatureByGUID (Barnes idiom), then the tail in C++
+-- order. The MoveTo fires Leryssa's second arrival and her phase
+-- machine; RewardPlayerAndGroupAtEvent stays out (no bridge).
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    cancelBcheckPoll(guid)
+    local latch = talbotLatch[guid]
+    talbotLatch[guid] = nil
+    TalbotBCheck[guid] = nil
+    if not latch or not latch.leryssaGUID or not latch.arlosGUID then
+        return
+    end
+    local leryssa = creature:GetCreatureByGUID(latch.leryssaGUID)
+    local arlos = creature:GetCreatureByGUID(latch.arlosGUID)
+    if not leryssa or not arlos then
+        return
+    end
+    arlos:Talk(SAY_ARLOS_1)
+    arlos:Talk(SAY_ARLOS_2)
+    leryssa:Talk(SAY_LERYSSA_1)
+    arlos:Kill()
+    leryssa:RemoveAura(SPELL_STUN)
+    leryssa:ClearUnitState(UNIT_STATE_STUNNED)
+    leryssa:SetWalk(false)
+    leryssa:MoveTo(0, LERYSSA_MOVE_X, LERYSSA_MOVE_Y, LERYSSA_MOVE_Z)
 end
 
+-- C++ Initialize()/Reset() (:844-851): clear the latch + bCheck,
+-- re-arm the bCheck poll (the C++ UpdateAI leg runs from spawn).
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    cancelBcheckPoll(guid)
+    talbotLatch[guid] = nil
+    TalbotBCheck[guid] = nil
+    talbotBcheckPoll[guid] = CreateLuaEvent(function() bcheckTick(creature, guid) end, 1000)
 end
 
 RegisterCreatureEvent(ENTRY_COUNSELOR_TALBOT, 1, onEnterCombat)

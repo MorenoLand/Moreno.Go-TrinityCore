@@ -21,6 +21,12 @@
 --   user redirect); the state write is the observable half. The
 --   bDone latch is per-GUID (C++ bDone is ctor-initialized false;
 --   Leryssa has no Reset arm).
+-- - First arrival arms Talbot's bCheck (:977-979) via the
+--   TalbotBCheck global (talbot.lua defines it; its poll latches
+--   the GUIDs and its JustDied tail consumes them) — FindNearest-
+--   Creature(28189, 50) is the alive-only twin
+--   (lua_creature_events.go:7219); nil-guarded, inert until that
+--   file loads. Entry 28189 is post-UpdateEntry (:566).
 -- - MovementInform, second arrival (else branch, :989-999):
 --   SetStandState(SIT) on self + summoner (GetSummonerUnit IS
 --   bridged, lua_creature_events.go:6366 — the exact
@@ -51,11 +57,9 @@
 --   for RemoveStandFlags in the engine — no bridge.
 -- - FindNearestCreature(NPC_PRINCE_VALANAR 28189, 50.0f) ->
 --   ENSURE_AI(npc_counselor_talbot) bCheck = true (:977-979):
---   FindNearestCreature IS bridged, but the write target is Talbot's
---   AI field and its only consumer (Talbot UpdateAI bCheck leg,
---   :876-886, which latches the leryssa/arlos GUIDs for JustDied)
---   is unported — the write needs the Talbot-side global + JustDied
---   tail to land with it, so it stays with that unit (NEXT).
+--   PORTED (see Ported arms) via the TalbotBCheck global; the
+--   consumer is Talbot's poll + JustDied tail in
+--   npc_counselor_talbot.lua.
 -- Verifiable numbers (file's own enums): NPC_LERYSSA = 25251
 -- (:416), NPC_PRINCE_VALANAR = 28189 (:414), SPELL_STUN = 46957
 -- (:409), SAY_LERYSSA_1 = 0 / SAY_LERYSSA_2 = 1 / SAY_LERYSSA_3 = 2 /
@@ -68,6 +72,7 @@ local ENTRY_LERYSSA = 25251
 local POINT_MOTION_TYPE = 8 -- karazhan.lua precedent
 local UNIT_STATE_STUNNED = 8 -- Unit.h:214
 local SPELL_STUN = 46957 -- zone_borean_tundra.cpp:409
+local NPC_PRINCE_VALANAR = 28189 -- zone_borean_tundra.cpp:414
 local UNIT_STAND_STATE_SIT = 1 -- UnitDefines.h:34
 
 local SAY_LERYSSA_2 = 1
@@ -166,6 +171,17 @@ local function onMovementInform(event, creature, moveType, pointId)
     local guid = creature:GetGUIDLow()
     if not leryssaDone[guid] then
         leryssaDone[guid] = true
+        -- C++ :977-979: arm Talbot's bCheck via the Talbot-side
+        -- global (talbot.lua defines it); nil-guarded, inert until
+        -- that file loads. Talbot is entry 28189 here — Thassarian
+        -- UpdateEntry'd him at phase 2 (:566; UpdateEntry bridged,
+        -- lua_creature_events.go:5594).
+        if TalbotBCheck then
+            local talbot = creature:FindNearestCreature(NPC_PRINCE_VALANAR, 50)
+            if talbot then
+                TalbotBCheck[talbot:GetGUIDLow()] = true
+            end
+        end
         creature:AddUnitState(UNIT_STATE_STUNNED)
         creature:CastSpell(creature, SPELL_STUN, true)
         -- C++ :985-987 leryssaInPosition = true on the summoner.
