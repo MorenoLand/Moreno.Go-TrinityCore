@@ -395,3 +395,67 @@ RegisterAuraEvent(SPELL_WARRIOR_SWEEPING_STRIKES_R1, 6, sweepingStrikesProc)
 RegisterAuraEvent(SPELL_WARRIOR_SWEEPING_STRIKES_R2, 6, sweepingStrikesProc)
 RegisterAuraEvent(SPELL_WARRIOR_SWEEPING_STRIKES_R3, 6, sweepingStrikesProc)
 
+
+local SPELL_WARRIOR_DEEP_WOUNDS_R1 = 12162 -- spell_warrior.cpp:42 (class spell_warr_deep_wounds)
+local SPELL_WARRIOR_DEEP_WOUNDS_R2 = 12850 -- spell_warrior.cpp:43
+local SPELL_WARRIOR_DEEP_WOUNDS_R3 = 12868 -- spell_warrior.cpp:44
+local SPELL_WARRIOR_DEEP_WOUNDS_PERIODIC = 12721 -- spell_warrior.cpp:45
+
+-- C++ spell_warr_deep_wounds_SpellScript::HandleDummy (spell_warrior.cpp:287-304):
+-- EFFECT_0 DUMMY OnEffectHitTarget. The aura leg passes the average weapon
+-- damage as BP0 (spell_warr_deep_wounds_aura, :348-363); the total bleed is
+-- 16% * rank of it (ApplyPct, :293 — CalculatePct is float-multiply then
+-- truncate, the math.floor twin below), divided by the periodic spell's
+-- tick count (GetMaxTicks, :297-298, ASSERTed > 0), then the caster casts
+-- the periodic (12721) on the hit unit, triggered, BP0 = per-tick damage
+-- (TRIGGERED_FULL_MASK, :300-302). Rank comes from the cast id
+-- (GetSpellInfo()->GetRank(), :293) via the table below keyed by
+-- spell:GetEntry() (the penance precedent, spell_priest.lua); TDB
+-- spell_ranks verified 2026-11-19: (12162,12162,1), (12162,12850,2),
+-- (12162,12868,3). The tick count reads via the new spell:GetSpellMaxTicks
+-- bridge (lua_spell.go, both builders); a 0 read (DBC missing) skips the
+-- cast rather than dividing by zero. A 0 effect value also skips: C++
+-- casts unconditionally but only ever receives positive weapon damage from
+-- its aura leg — a 0 read is the DBC dummy value, since the aura leg
+-- (12834) is a STAY-OUT (no procEvent attack-type bridge for the
+-- off-hand/main-hand weapon-damage leg, census 2026-11-19) and the generic
+-- DBC proc leg casts 12162 with no BP0 (procs.go:5646). DORMANT until
+-- Spell.dbc ships the 12162/12721/12834 rows (all unseeded; seed axis
+-- parked). RegisterSpellEvent OnEffectHitTarget = 5; the player-path fire
+-- site is spells.go:14866-14934 (one fire per (effect, live hit target),
+-- before the default); the creature-path twin is boss_ai.go.
+local DEEP_WOUNDS_RANKS = {
+    [SPELL_WARRIOR_DEEP_WOUNDS_R1] = 1,
+    [SPELL_WARRIOR_DEEP_WOUNDS_R2] = 2,
+    [SPELL_WARRIOR_DEEP_WOUNDS_R3] = 3,
+}
+local function deepWoundsHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or not hitTarget:IsAlive() then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local rank = DEEP_WOUNDS_RANKS[spell:GetEntry()]
+    if rank == nil then
+        return
+    end
+    local damage = spell:GetEffectValue(0)
+    if damage <= 0 then
+        return
+    end
+    local ticks = spell:GetSpellMaxTicks(SPELL_WARRIOR_DEEP_WOUNDS_PERIODIC)
+    if ticks == 0 then
+        return
+    end
+    local bp0 = math.floor(math.floor(damage * 16 * rank / 100) / ticks)
+    caster:CastCustomSpell(hitTarget, SPELL_WARRIOR_DEEP_WOUNDS_PERIODIC, true, bp0)
+end
+
+RegisterSpellEvent(SPELL_WARRIOR_DEEP_WOUNDS_R1, 5, deepWoundsHit)
+RegisterSpellEvent(SPELL_WARRIOR_DEEP_WOUNDS_R2, 5, deepWoundsHit)
+RegisterSpellEvent(SPELL_WARRIOR_DEEP_WOUNDS_R3, 5, deepWoundsHit)

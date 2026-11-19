@@ -494,6 +494,10 @@ end
 RegisterAuraEvent(SPELL_PALADIN_ILLUMINATION, 6, illuminationProc)
 
 local SPELL_PALADIN_LAY_ON_HANDS = 633 -- spell_paladin.cpp:1774 (class spell_pal_lay_on_hands_SpellScript)
+local SPELL_PALADIN_LAY_ON_HANDS_R2 = 2800 -- spell_ranks (633, 2800, 2)
+local SPELL_PALADIN_LAY_ON_HANDS_R3 = 10310 -- spell_ranks (633, 10310, 3)
+local SPELL_PALADIN_LAY_ON_HANDS_R4 = 27154 -- spell_ranks (633, 27154, 4)
+local SPELL_PALADIN_LAY_ON_HANDS_R5 = 48788 -- spell_ranks (633, 48788, 5)
 local SPELL_PALADIN_FORBEARANCE = 25771 -- spell_paladin.cpp:63
 local SPELL_FAILED_TARGET_AURASTATE = 111 -- SharedDefines.h:1093
 local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
@@ -505,7 +509,9 @@ local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to t
 -- GetGUIDLow + GetObjectType (the file's GetGUIDLow convention:
 -- packed GUIDs lose bits through Lua numbers; same-type lows are
 -- unique within a cast). RegisterSpellEvent OnCheckCast = 8
--- (lua_spell.go fireSpellCheckCast).
+-- (lua_spell.go fireSpellCheckCast). TDB spell_script_names carries the
+-- (-633) all-ranks binding, so R2-R5 (2800/10310/27154/48788, spell_ranks
+-- verified 2026-11-19) register the same rank-agnostic handler.
 local function layOnHandsCheckCast(event, spell)
     local caster = spell:GetCaster()
     local target = spell:GetTarget()
@@ -518,6 +524,10 @@ local function layOnHandsCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS, 8, layOnHandsCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS_R2, 8, layOnHandsCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS_R3, 8, layOnHandsCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS_R4, 8, layOnHandsCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS_R5, 8, layOnHandsCheckCast)
 
 -- C++ spell_pal_lay_on_hands_SpellScript::HandleScript
 -- (spell_paladin.cpp:1785-1793): AfterHit, when the caster is the hit
@@ -534,8 +544,18 @@ local function layOnHandsAfterHit(event, spell, hitTarget)
 end
 
 RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS, 3, layOnHandsAfterHit)
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS_R2, 3, layOnHandsAfterHit)
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS_R3, 3, layOnHandsAfterHit)
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS_R4, 3, layOnHandsAfterHit)
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS_R5, 3, layOnHandsAfterHit)
 
 local SPELL_PALADIN_HOLY_SHOCK_R1 = 20473 -- spell_paladin.cpp:41 (class spell_pal_holy_shock)
+local SPELL_PALADIN_HOLY_SHOCK_R2 = 20929 -- spell_ranks (20473, 20929, 2)
+local SPELL_PALADIN_HOLY_SHOCK_R3 = 20930 -- spell_ranks (20473, 20930, 3)
+local SPELL_PALADIN_HOLY_SHOCK_R4 = 27174 -- spell_ranks (20473, 27174, 4)
+local SPELL_PALADIN_HOLY_SHOCK_R5 = 33072 -- spell_ranks (20473, 33072, 5)
+local SPELL_PALADIN_HOLY_SHOCK_R6 = 48824 -- spell_ranks (20473, 48824, 6)
+local SPELL_PALADIN_HOLY_SHOCK_R7 = 48825 -- spell_ranks (20473, 48825, 7)
 local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
 local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
 
@@ -545,12 +565,11 @@ local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
 -- (else SPELL_FAILED_UNIT_NOT_INFRONT); friendly targets pass.
 -- The HandleDummy damage/heal legs are ported below (ev5) — the old
 -- "no player path / no spell-level GetSpellWithRank" stay-out is
--- overturned: ev5 fires on the player path (spells.go:14892) and the
--- binding is R1-only (TDB/AC -20473), so 25914/25912 ARE the rank
--- match for the only bound spell (penance precedent). Rank 1 only —
--- higher-rank IDs are not in the file, never guessed (life_tap
--- precedent). RegisterSpellEvent OnCheckCast = 8 (lua_spell.go
--- fireSpellCheckCast).
+-- overturned: ev5 fires on the player path (spells.go:14892). The old
+-- "binding is R1-only" note was also wrong: TDB spell_script_names
+-- carries the (-20473) all-ranks binding, so R2-R7 register the same
+-- rank-agnostic CheckCast. RegisterSpellEvent OnCheckCast = 8
+-- (lua_spell.go fireSpellCheckCast).
 local function holyShockCheckCast(event, spell)
     local caster = spell:GetCaster()
     local target = spell:GetTarget()
@@ -569,15 +588,45 @@ local function holyShockCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R1, 8, holyShockCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R2, 8, holyShockCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R3, 8, holyShockCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R4, 8, holyShockCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R5, 8, holyShockCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R6, 8, holyShockCheckCast)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R7, 8, holyShockCheckCast)
 
 -- C++ spell_pal_holy_shock_SpellScript::HandleDummy (spell_paladin.cpp:1088-1098):
 -- OnEffectHitTarget EFFECT_0 DUMMY: friendly hit unit -> rank-matched
 -- healing spell, hostile -> rank-matched damage spell, both triggered.
--- No dead-target or caster-type guard in C++, none added. Binding is
--- R1-only (TDB/AC -20473), so the R1 heal/damage IDs below are the
--- rank match (penance precedent). Dormant until Spell.dbc ships 20473.
+-- No dead-target or caster-type guard in C++, none added. Rank comes from
+-- the cast id (GetSpellInfo()->GetRank(), :1092) via the tables below
+-- keyed by spell:GetEntry() (the penance precedent); TDB spell_ranks
+-- verified 2026-11-19 — heal chain (25914 base): R1 25914, R2 25913,
+-- R3 25903, R4 27175, R5 33074, R6 48820, R7 48821; damage chain (25912
+-- base): R1 25912, R2 25911, R3 25902, R4 27176, R5 33073, R6 48822,
+-- R7 48823. Dormant until Spell.dbc ships 20473.
 local SPELL_PALADIN_HOLY_SHOCK_R1_HEALING = 25914 -- spell_paladin.cpp:43
 local SPELL_PALADIN_HOLY_SHOCK_R1_DAMAGE = 25912 -- spell_paladin.cpp:42
+
+local HOLY_SHOCK_HEALING = {
+    [SPELL_PALADIN_HOLY_SHOCK_R1] = SPELL_PALADIN_HOLY_SHOCK_R1_HEALING,
+    [SPELL_PALADIN_HOLY_SHOCK_R2] = 25913,
+    [SPELL_PALADIN_HOLY_SHOCK_R3] = 25903,
+    [SPELL_PALADIN_HOLY_SHOCK_R4] = 27175,
+    [SPELL_PALADIN_HOLY_SHOCK_R5] = 33074,
+    [SPELL_PALADIN_HOLY_SHOCK_R6] = 48820,
+    [SPELL_PALADIN_HOLY_SHOCK_R7] = 48821,
+}
+
+local HOLY_SHOCK_DAMAGE = {
+    [SPELL_PALADIN_HOLY_SHOCK_R1] = SPELL_PALADIN_HOLY_SHOCK_R1_DAMAGE,
+    [SPELL_PALADIN_HOLY_SHOCK_R2] = 25911,
+    [SPELL_PALADIN_HOLY_SHOCK_R3] = 25902,
+    [SPELL_PALADIN_HOLY_SHOCK_R4] = 27176,
+    [SPELL_PALADIN_HOLY_SHOCK_R5] = 33073,
+    [SPELL_PALADIN_HOLY_SHOCK_R6] = 48822,
+    [SPELL_PALADIN_HOLY_SHOCK_R7] = 48823,
+}
 
 local function holyShockHit(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 or hitTarget == nil then
@@ -587,14 +636,27 @@ local function holyShockHit(event, spell, hitTarget, effectIndex)
     if caster == nil then
         return
     end
+    local entry = spell:GetEntry()
     if caster:IsFriendlyTo(hitTarget) then
-        caster:CastSpell(hitTarget, SPELL_PALADIN_HOLY_SHOCK_R1_HEALING, true)
+        local heal = HOLY_SHOCK_HEALING[entry]
+        if heal ~= nil then
+            caster:CastSpell(hitTarget, heal, true)
+        end
     else
-        caster:CastSpell(hitTarget, SPELL_PALADIN_HOLY_SHOCK_R1_DAMAGE, true)
+        local damage = HOLY_SHOCK_DAMAGE[entry]
+        if damage ~= nil then
+            caster:CastSpell(hitTarget, damage, true)
+        end
     end
 end
 
 RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R1, 5, holyShockHit)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R2, 5, holyShockHit)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R3, 5, holyShockHit)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R4, 5, holyShockHit)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R5, 5, holyShockHit)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R6, 5, holyShockHit)
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R7, 5, holyShockHit)
 
 local SPELL_PALADIN_RIGHTEOUS_DEFENSE = 31789 -- spell_paladin.cpp:1888 (class spell_pal_righteous_defense)
 local SPELL_PALADIN_RIGHTEOUS_DEFENSE_TAUNT = 31790 -- spell_paladin.cpp:79

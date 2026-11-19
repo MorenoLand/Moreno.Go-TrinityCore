@@ -344,6 +344,34 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 		}
 		return []any{p.dest.X, p.dest.Y, p.dest.Z}, nil
 	}
+	// GetSpellMaxTicks(spellID) is SpellInfo::GetMaxTicks
+	// (SpellInfo.cpp, duration/amplitude over the periodic effects):
+	// the tick count of the given spell. The spell-object twin of the
+	// aura bridge (lua_aura.go:530) — the deep-wounds leg
+	// (spell_warrior.cpp:295-298) divides the bleed by the periodic
+	// spell's tick count. Reads the loaded Spell.dbc record for the
+	// given spell, not this spell. An unknown spell reads 0, the
+	// GetTriggerSpell convention — the deep-wounds handler skips the
+	// cast on a 0 read rather than dividing by zero. Default this
+	// spell.
+	methods["GetSpellMaxTicks"] = func(_ context.Context, args []any) ([]any, error) {
+		targetSpell := spellID
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			targetSpell = v
+		}
+		if s.server == nil || s.server.Data == nil {
+			return []any{uint32(0)}, nil
+		}
+		sp, found, err := s.server.Data.Spell(targetSpell)
+		if err != nil || !found {
+			return []any{uint32(0)}, nil
+		}
+		return []any{s.server.serverSpellMaxTicks(sp)}, nil
+	}
 	attachSpellHitDamageMethods(methods, p.hitDamage)
 	return &scripting.Object{Type: "Spell", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
@@ -606,6 +634,29 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 			return []any{uint32(0)}, nil
 		}
 		return []any{spell.Effects[index].Effect}, nil
+	}
+	// GetSpellMaxTicks(spellID) is the creature-path twin of the
+	// session builder's method above (same contract: SpellInfo::
+	// GetMaxTicks, the aura bridge at lua_aura.go:530; the deep-
+	// wounds leg, spell_warrior.cpp:295-298, divides the bleed by
+	// the periodic spell's tick count). Default this spell.
+	methods["GetSpellMaxTicks"] = func(_ context.Context, args []any) ([]any, error) {
+		targetSpell := spellID
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			targetSpell = v
+		}
+		if s.Data == nil {
+			return []any{uint32(0)}, nil
+		}
+		sp, found, err := s.Data.Spell(targetSpell)
+		if err != nil || !found {
+			return []any{uint32(0)}, nil
+		}
+		return []any{s.serverSpellMaxTicks(sp)}, nil
 	}
 	// GetExplTargetDest returns the cast's explosion-target destination
 	// (SpellScript::GetExplTargetDest, SpellScript.cpp:466-471:

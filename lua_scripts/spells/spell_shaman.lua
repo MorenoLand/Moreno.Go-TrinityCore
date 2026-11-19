@@ -629,6 +629,11 @@ end
 RegisterAuraEvent(SPELL_SHAMAN_GLYPH_OF_EARTH_SHIELD, 6, glyphOfEarthShieldProc)
 
 local SPELL_SHAMAN_EARTHLIVING_WEAPON = 51940 -- spell_shaman.cpp:567 (class spell_sha_earthliving_weapon)
+local SPELL_SHAMAN_EARTHLIVING_WEAPON_R2 = 51989 -- spell_ranks (51940, 51989, 2)
+local SPELL_SHAMAN_EARTHLIVING_WEAPON_R3 = 52004 -- spell_ranks (51940, 52004, 3)
+local SPELL_SHAMAN_EARTHLIVING_WEAPON_R4 = 52005 -- spell_ranks (51940, 52005, 4)
+local SPELL_SHAMAN_EARTHLIVING_WEAPON_R5 = 52007 -- spell_ranks (51940, 52007, 5)
+local SPELL_SHAMAN_EARTHLIVING_WEAPON_R6 = 52008 -- spell_ranks (51940, 52008, 6)
 local SPELL_SHAMAN_BLESSING_OF_THE_ETERNALS_R1 = 51554 -- spell_shaman.cpp:94
 local EARTHLIVING_WEAPON_BASE_CHANCE = 20 -- spell_shaman.cpp:582
 
@@ -641,7 +646,11 @@ local EARTHLIVING_WEAPON_BASE_CHANCE = 20 -- spell_shaman.cpp:582
 -- CheckProc: return true (PreventDefaultAction) when the gate FAILS,
 -- nil when it passes so the DBC default trigger leg fires.
 -- DORMANT until Spell.dbc ships the 51940 proc entry (and the 51554
--- row for the bonus leg; without it the chance stays 20).
+-- row for the bonus leg; without it the chance stays 20). TDB
+-- spell_script_names carries the (-51940) all-ranks binding, so R2-R6
+-- (51989/52004/52005/52007/52008, spell_ranks verified 2026-11-19)
+-- register the same rank-agnostic handler (CheckProc is rank-free:
+-- the 20 base + Blessing bonus read no rank).
 local function earthlivingWeaponProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
     if actor == nil or procTarget == nil then
         return true
@@ -660,6 +669,11 @@ local function earthlivingWeaponProc(event, aura, target, actor, procTarget, dam
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_EARTHLIVING_WEAPON, 6, earthlivingWeaponProc)
+RegisterAuraEvent(SPELL_SHAMAN_EARTHLIVING_WEAPON_R2, 6, earthlivingWeaponProc)
+RegisterAuraEvent(SPELL_SHAMAN_EARTHLIVING_WEAPON_R3, 6, earthlivingWeaponProc)
+RegisterAuraEvent(SPELL_SHAMAN_EARTHLIVING_WEAPON_R4, 6, earthlivingWeaponProc)
+RegisterAuraEvent(SPELL_SHAMAN_EARTHLIVING_WEAPON_R5, 6, earthlivingWeaponProc)
+RegisterAuraEvent(SPELL_SHAMAN_EARTHLIVING_WEAPON_R6, 6, earthlivingWeaponProc)
 
 local SPELL_SHAMAN_FROZEN_POWER = 63373 -- spell_shaman.cpp:853 (class spell_sha_frozen_power)
 local SPELL_SHAMAN_FREEZE = 63685 -- spell_shaman.cpp:84
@@ -808,6 +822,14 @@ for _, spellId in ipairs(SPELL_SHAMAN_MANA_SPRING_TOTEM_SPELLS) do
 end
 
 local SPELL_SHAMAN_FIRE_NOVA_R1 = 1535 -- spell_shaman.cpp:626 (class spell_sha_fire_nova)
+local SPELL_SHAMAN_FIRE_NOVA_R2 = 8498 -- spell_ranks (1535, 8498, 2)
+local SPELL_SHAMAN_FIRE_NOVA_R3 = 8499 -- spell_ranks (1535, 8499, 3)
+local SPELL_SHAMAN_FIRE_NOVA_R4 = 11314 -- spell_ranks (1535, 11314, 4)
+local SPELL_SHAMAN_FIRE_NOVA_R5 = 11315 -- spell_ranks (1535, 11315, 5)
+local SPELL_SHAMAN_FIRE_NOVA_R6 = 25546 -- spell_ranks (1535, 25546, 6)
+local SPELL_SHAMAN_FIRE_NOVA_R7 = 25547 -- spell_ranks (1535, 25547, 7)
+local SPELL_SHAMAN_FIRE_NOVA_R8 = 61649 -- spell_ranks (1535, 61649, 8)
+local SPELL_SHAMAN_FIRE_NOVA_R9 = 61657 -- spell_ranks (1535, 61657, 9)
 local SPELL_SHAMAN_ANCESTRAL_AWAKENING = 51556 -- spell_shaman.cpp:105 (class spell_sha_ancestral_awakening)
 local SPELL_SHAMAN_ANCESTRAL_AWAKENING_DUMMY = 52759 -- spell_shaman.cpp:37
 local SPELL_FAILED_OUT_OF_RANGE = 97 -- SharedDefines.h:1079
@@ -825,9 +847,13 @@ local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to t
 -- inside GetSpellMaxRangeForTarget's maxRange instead, and the
 -- caster's reach is the residual gap vs C++ IsWithinDistInMap).
 -- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
--- Binding 1535 is the AC spell_script_names row (R1 only). The HandleDummy
--- leg stays out: it casts the rank-matched triggered nova via
--- GetSpellWithRank, which exists only on the aura surface.
+-- TDB spell_script_names carries the (-1535) all-ranks binding, so R2-R9
+-- (8498/8499/11314/11315/25546/25547/61649/61657, spell_ranks verified
+-- 2026-11-19) register the same rank-agnostic handler; the range read
+-- uses the cast id (GetSpellInfo() in C++, :632), identical to R1 for
+-- the R1 cast. The HandleDummy leg stays out: it casts the rank-matched
+-- triggered nova via GetSpellWithRank, which exists only on the aura
+-- surface.
 local function fireNovaCheckCast(event, spell)
     local caster = spell:GetCaster()
     if caster == nil then
@@ -837,7 +863,7 @@ local function fireNovaCheckCast(event, spell)
     if totem == nil then
         return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_MUST_HAVE_FIRE_TOTEM
     end
-    local maxRange = caster:GetSpellMaxRangeForTarget(totem, SPELL_SHAMAN_FIRE_NOVA_R1)
+    local maxRange = caster:GetSpellMaxRangeForTarget(totem, spell:GetEntry())
     if maxRange ~= nil and caster:GetDistance(totem) > maxRange then
         return SPELL_FAILED_OUT_OF_RANGE
     end
@@ -845,6 +871,14 @@ local function fireNovaCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R1, 8, fireNovaCheckCast)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R2, 8, fireNovaCheckCast)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R3, 8, fireNovaCheckCast)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R4, 8, fireNovaCheckCast)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R5, 8, fireNovaCheckCast)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R6, 8, fireNovaCheckCast)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R7, 8, fireNovaCheckCast)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R8, 8, fireNovaCheckCast)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R9, 8, fireNovaCheckCast)
 
 -- C++ spell_sha_ancestral_awakening_AuraScript::HandleProc
 -- (spell_shaman.cpp:110-143): OnEffectProc, EFFECT_0 DUMMY.
