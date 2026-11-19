@@ -3271,6 +3271,27 @@ var spells = []spell{
 	{id: 64100, castTimeIdx: 1, durIdx: 21, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: -31, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 65633 "Arcane Cast Visual" (halls_of_reflection.cpp:229 enum SPELL_CAST_VISUAL - marked "wrong" in C++, confirmed: real name is Arcane Cast Visual; Lua halls_of_reflection_intro.lua :107) - wago.tools 3.4.5.63697 SpellEffect row (DifficultyID 0) + SpellMisc 613615 + SpellAuraOptions 203186 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 DUMMY (3, effDummy) bp0/die0 tgtA 1. Cast 3s idx 14 (real SpellCastTimes 14), durIdx 0 (no SpellDuration row 0), range1 Self (real row), school Nature (0x8), dispel 0, mechanic 0. No SpellCooldowns / SpellPower rows - manaCost omitted. NOT carried: SpellCategories DefenseType 1 (Magic), StartRecoveryCategory 0x1, ChargeCategory 133 + SpellClassOptions Mage set 3 mask 16777216 (no fields); Attributes_0 0x10180 (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 65633, castTimeIdx: 14, durIdx: 0, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 70667 "Frostmourne Spawn Sound" (halls_of_reflection.cpp:224 enum SPELL_FROSTMOURNE_SOUNDS; Lua halls_of_reflection_intro.lua :108) - wago.tools 3.4.5.63697 SpellEffect row (DifficultyID 0) + SpellMisc 616188 + SpellAuraOptions 205759 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA DUMMY (4, auraDummy) bp0/die0 tgtA 1. Cast Instant idx 1, dur21 -1 infinite (real row), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x100, Attributes_1 0x10000000 (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 70667, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 70693 "Uther Despawn" (halls_of_reflection.cpp:226 enum; Lua halls_of_reflection_intro.lua :109 SPELL_UTHER_DESPAWN) - wago.tools 3.4.5.63697 SpellEffect rows (DifficultyID 0) + SpellMisc 616407 + SpellAuraOptions 205978 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 DUMMY (3, effDummy) bp0/die0 tgtA 1; eff1 APPLY_AURA MOD_INVISIBILITY (18, auraModInvisibility) bp999/die1 misc 7 (Wowhead "Invisibility(7)") tgtA 1. Cast Instant idx 1, dur21 -1 infinite (real row), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x800100, Attributes_1 0x10000000, Attributes_3 0x100000, Attributes_6 0x400 (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 70693, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModInvisibility, basePoints: 999, dieSides: 1, misc: 7, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 72729 "Frostmourne Equip" (halls_of_reflection.cpp:221 enum SPELL_TAKE_FROSTMOURNE; Lua halls_of_reflection_intro.lua :110) - wago.tools 3.4.5.63697 SpellEffect row (DifficultyID 0) + SpellMisc 618190 + SpellAuraOptions 207760 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA DUMMY (4, auraDummy) bp0/die0 tgtA 1. Cast 1s idx 4 (real SpellCastTimes 4), dur27 3000ms (real row), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x100, Attributes_1 0x10000000, Attributes_6 0x400 (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 72729, castTimeIdx: 4, durIdx: 27, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 73220 "Emote - Sit (No Sheath)" - FLAG: enum/Lua label SPELL_FROSTMOURNE_VISUAL (halls_of_reflection.cpp:223; Lua halls_of_reflection_intro.lua :111) is WRONG per wago SpellName + Wowhead (both "Emote - Sit (No Sheath)"); DB effect is APPLY_AURA DUMMY, not a visual. Seeded under its REAL DB identity; the true Frostmourne-visual spell ID is unresolved (held flag). wago.tools 3.4.5.63697 SpellEffect row (DifficultyID 0) + SpellMisc 618296 + SpellAuraOptions 207866 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA DUMMY (4, auraDummy) bp0/die0 tgtA 1. Cast Instant idx 1, dur21 -1 infinite (real row), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x40100, Attributes_1 0x10000000 (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 73220, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
