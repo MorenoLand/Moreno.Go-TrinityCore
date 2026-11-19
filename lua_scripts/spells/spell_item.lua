@@ -878,8 +878,9 @@ local SPELL_FAILED_NOT_HERE = 60 -- SharedDefines.h:1042
 -- The 43723 binding is the AC spell_script_names row — the triage's
 -- 43753 is the spell the dummy arm creates, not the checked spell. The
 -- dead-creature search rides the new optional FindNearestCreature
--- alive=false leg (player + creature surfaces). The HandleDummy arm
--- (cast 43753) stays out.
+-- alive=false leg (player + creature surfaces). HandleDummy ported
+-- below (RegisterSpellEvent OnEffectHitTarget = 5, EFFECT_1).
+local SPELL_CREATE_DEMON_BROILED_SURPRISE = 43753 -- spell_item.cpp:2889
 local function demonBroiledSurpriseCheckCast(event, spell)
     local caster = spell:GetCaster()
     if caster == nil then
@@ -897,15 +898,35 @@ end
 
 RegisterSpellEvent(SPELL_DEMON_BROILED_SURPRISE, 8, demonBroiledSurpriseCheckCast)
 
+-- C++ spell_item_demon_broiled_surprise::HandleDummy
+-- (spell_item.cpp:2909-2913, registered OnEffectHitTarget EFFECT_1
+-- SPELL_EFFECT_DUMMY): the caster self-casts 43753, non-triggered.
+-- C++ Load() gates the script to player casters; the handler keeps
+-- that gate via the Player object-type check.
+local function demonBroiledSurpriseHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:GetObjectType() == "Player" then
+        caster:CastSpell(caster, SPELL_CREATE_DEMON_BROILED_SURPRISE, false)
+    end
+end
+
+RegisterSpellEvent(SPELL_DEMON_BROILED_SURPRISE, 5, demonBroiledSurpriseHit)
+
 local SPELL_ROCKET_BOOTS = 51582 -- spell_item.cpp:3174 (class spell_item_rocket_boots; AC spell_script_names row)
+local SPELL_ROCKET_BOOTS_PROC = 30452 -- spell_item.cpp:3171
 local SPELL_FAILED_ONLY_ABOVEWATER = 88 -- SharedDefines.h:1070
 
 -- C++ spell_item_rocket_boots::CheckCast (spell_item.cpp:3198-3203,
 -- registered OnCheckCast): a caster in water fails
 -- SPELL_FAILED_ONLY_ABOVEWATER. RegisterSpellEvent OnCheckCast = 8
 -- (lua_spell.go fireSpellCheckCast). Binding 51582 is the AC
--- spell_script_names row. The HandleDummy arm (flag drop + cooldown
--- reset + proc 30452) stays out.
+-- spell_script_names row. HandleDummy ported below
+-- (RegisterSpellEvent OnEffectHitTarget = 5, EFFECT_0); the
+-- battleground flag-drop leg stays out (no GetBattleground /
+-- EventPlayerDroppedFlag bridge).
 local function rocketBootsCheckCast(event, spell)
     local caster = spell:GetCaster()
     if caster ~= nil and caster:IsInWater() then
@@ -915,6 +936,25 @@ local function rocketBootsCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_ROCKET_BOOTS, 8, rocketBootsCheckCast)
+
+-- C++ spell_item_rocket_boots::HandleDummy
+-- (spell_item.cpp:3188-3196, registered OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY): the proc cooldown resets, then the caster
+-- self-casts 30452, triggered. C++ Load() gates the script to player
+-- casters; the handler keeps that gate via the Player object-type
+-- check (ResetSpellCooldown is player-only).
+local function rocketBootsHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:GetObjectType() == "Player" then
+        caster:ResetSpellCooldown(SPELL_ROCKET_BOOTS_PROC)
+        caster:CastSpell(caster, SPELL_ROCKET_BOOTS_PROC, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_ROCKET_BOOTS, 5, rocketBootsHit)
 
 local SPELL_ITEM_GIFT_OF_THE_HARVESTER = 52481 -- spell_item.cpp:2463 (class spell_item_gift_of_the_harvester; AC spell_script_names row)
 local NPC_GHOUL = 28845 -- spell_item.cpp:2459
