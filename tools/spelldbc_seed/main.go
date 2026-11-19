@@ -139,6 +139,7 @@ const (
 	auraTransform              = 56
 	auraMechanicImmunity       = 77 // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
 	auraModScale               = 61
+	auraFly                    = 201 // SPELL_AURA_FLY (SpellAuraDefines.h:281)
 	auraModPacifySilence       = 60  // SPELL_AURA_MOD_PACIFY_SILENCE (SpellAuraDefines.h:140)
 	auraPacify                 = 25  // SPELL_AURA_MOD_PACIFY (SpellAuraDefines.h:105)
 	auraSchoolImmunity         = 39  // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:119)
@@ -2996,6 +2997,31 @@ var spells = []spell{
 		{effect: effScriptEffect, basePoints: 0, dieSides: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 22, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effSendEvent, basePoints: 0, dieSides: 0, misc: 10495, chainAmplitude: 1},
+	}},
+	// 28622 "Web Wrap" (boss_maexxna.cpp:30 enum; :224 victim->CastSpell(victim, SPELL_WEB_WRAP, me->GetGUID()); Lua boss_maexxna.lua :56 SPELL_WEB_WRAP) - wago.tools 3.4.5.63697 SpellEffect rows 697757/697758/909728 + SpellMisc 329930 (PRESENT in 2.5.6.70577 - vanilla-era ID, unlike the prior batches' WotLK-only pattern): eff0 APPLY_AURA FLY (201) bp0/die0 tgtA CASTER (1); eff1 APPLY_AURA PERIODIC_DAMAGE (3) bp2924/die651 auraPeriod 2000 tgtA 1 = 2925-3575 Nature every 2s; eff2 APPLY_AURA MOD_STUN (12) bp0/die0 tgtA 1. Cast Instant idx 1, dur3 60000ms (real row), range1 Self (real row), school Nature, dispel 0, mechanic 0 (no SpellCategories row). No SpellPower row read - manaCost omitted. NOT carried: Attributes_0 0x24000010, Attributes_1 0x88, Attributes_2 0x4, Attributes_3 0x20000000 (no field). FLAG: Wowhead labels aura 201 "Cannot dodge, block or parry" while wago labels it FLY - value 1 (bp0+1) matches; label difference only.
+	{id: 28622, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraFly, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 2924, dieSides: 651, auraPeriod: 2000, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 29484 "Web Spray" (boss_maexxna.cpp:31 enum; :167 DoCastAOE EVENT_WEB_SPRAY; Lua boss_maexxna.lua :53) - wago.tools 3.4.5.63697 SpellEffect rows 704929/704930 + SpellMisc 335672 (PRESENT in 2.5.6.70577): eff0 APPLY_AURA MOD_STUN (12) bp0/die0 tgtA 22 (TARGET_SRC_CASTER) tgtB 15 (TARGET_UNIT_SRC_AREA_ENEMY) radiusIdx 22 (200 yd, real row); eff1 SCHOOL_DAMAGE (2) bp1749/die501 tgtA 22 tgtB 15 radiusIdx 22 = 1750-2250 Nature. Cast Instant idx 1, dur35 4000ms (real row), range13 50000yd (real row), school Nature, dispel 0, mechanic 0 (no SpellCategories row). No SpellPower row read - manaCost omitted. NOT carried: Speed 40 (no field); Attributes_0 0x20000000, Attributes_1 0x88, Attributes_2 0x4, Attributes_3 0x80000000 (no field).
+	{id: 29484, castTimeIdx: 1, durIdx: 35, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 22, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 1749, dieSides: 501, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 22, chainAmplitude: 1},
+	}},
+	// 28741 "Poison Shock" (boss_maexxna.cpp:32 enum; :171 DoCastAOE EVENT_POISON_SHOCK; Lua boss_maexxna.lua :54) - wago.tools 3.4.5.63697 SpellEffect row 704083 + SpellMisc 334950 + SpellCategories 78064 (PRESENT in 2.5.6.70577): eff0 SCHOOL_DAMAGE (2) bp3499/die1001 tgtA 24 (TARGET_UNIT_CONE_ENEMY_24) radiusIdx 10 (30 yd, real row) = 3500-4500 Nature. Cast Instant idx 1, durIdx 0 (no duration - no SpellDuration row 0), range11 15yd (real row), school Nature, dispel 0 (DispelType 0), mechanic 0 (SpellCategories DefenseType 1, PreventionType 0x1 - no category/defense fields in the seed struct). No SpellPower row read - manaCost omitted. NOT carried: BonusCoefficient 1 (no field); Attributes_0 0x40000, Attributes_1 0x88, Attributes_3 0x100 (no field).
+	{id: 28741, castTimeIdx: 1, durIdx: 0, rangeIdx: 11, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3499, dieSides: 1001, targetA: targetUnitConeEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 28776 "Necrotic Poison" (boss_maexxna.cpp:33 enum; :175 DoCastVictim EVENT_NECROTIC_POISON; Lua boss_maexxna.lua :55) - wago.tools 3.4.5.63697 SpellEffect row 705058 + SpellMisc 335772 + SpellCategories 78310 (PRESENT in 2.5.6.70577): eff0 APPLY_AURA MOD_HEALING_PCT (118) bp-91/die1 misc 127 (all schools) tgtA 6 (TARGET_UNIT_TARGET_ENEMY) = -90%. Cast Instant idx 1, dur9 30000ms (real row), range2 5yd Combat (real row, Flags 0x1), school Nature, dispel 4 (Poison), mechanic 0 (no SpellCategories row beyond dispel - DefenseType 0, PreventionType 0x0). No SpellPower row read - manaCost omitted. NOT carried: Attributes all 0x0.
+	{id: 28776, dispel: 4, castTimeIdx: 1, durIdx: 9, rangeIdx: 2, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModHealingPct, basePoints: -91, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 54123 "Frenzy" (boss_maexxna.cpp:34 enum; :128-130 HealthBelowPct(30) && !HasAura(SPELL_FRENZY_HELPER) -> DoCast(SPELL_FRENZY); RAID_MODE(54123,54124) :36; Lua boss_maexxna.lua :57 SPELL_FRENZY, :58 SPELL_FRENZY_HELPER_25 = 54124) - wago.tools 3.4.5.63697 SpellEffect rows 959394/959395/959396 + SpellMisc 606074 + SpellCategories 127283 + SpellAuraOptions 195650 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_DONE (79) bp49/die1 misc 1 (Physical) tgtA 1 = +50%; eff1 APPLY_AURA MOD_MELEE_HASTE (138) bp49/die1 tgtA 1 = +50%; eff2 APPLY_AURA MOD_SCALE (61) bp14/die1 tgtA 1 = +15%. Cast Instant idx 1, dur6 600000ms (real row), range1 Self (real row), school Physical, dispel 0, mechanic 0 (SpellCategories Category 21 - no category field). No SpellPower row read - manaCost omitted. NOT carried: Attributes_0 0x40010, Attributes_3 0x10000000 (no field); SpellAuraOptions ProcChance 101 (no field). FLAG: 54124 is the 25-man twin (RAID_MODE helper) - NOT seeded here; it is the next exactly-5 head's business only if the live census still lists it unseeded.
+	{id: 54123, castTimeIdx: 1, durIdx: 6, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 49, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 14, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
