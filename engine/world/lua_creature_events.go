@@ -1587,6 +1587,42 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{s.unitIsInRaidWith(motion.Map, motion.InstanceID, motion.GUID, targetGUID)}, nil
 	}
+	// GetChannelObject is Unit::GetChannelObjectGuid (Unit.h:1359) as a
+	// resolved unit object, from the handler-creature side: the motion's
+	// ChannelTargetGUID while a channel is live (creatureChannelLive,
+	// the SendChannelStart stamp twin, creature_dest_targets.go), nil
+	// otherwise. The object twin of the pre-existing GetChannelObjectGuid
+	// below: a GUID never crosses Lua (lua_spell.go target-list
+	// comment), so the filter removes by object. The creature-cast
+	// stamp-before-fire delta in the GetChannelObjectGuid note applies
+	// here too (latent: no Go creature casts 49821). Backs the Mind
+	// Sear filter (spell_priest.cpp:898-901).
+	methods["GetChannelObject"] = luaNoArgs(func() any {
+		if !s.creatureChannelLive(motion) || motion.ChannelTargetGUID == 0 {
+			return nil
+		}
+		return s.luaUnitObjectForGUID(motion.Map, motion.InstanceID, motion.ChannelTargetGUID)
+	})
+	// GetChannelObjectGuid is Unit::GetChannelObjectGuid (Unit.h:1359):
+	// UNIT_FIELD_CHANNEL_OBJECT — the live channel's object GUID, nil
+	// when the creature is not channeling. Go reads motion
+	// .ChannelTargetGUID behind the creatureChannelLive gate
+	// (creature_dest_targets.go: the stamp is cleared on interrupt
+	// and expires at ChannelUntil). DELTA: the creature _cast tail
+	// stamps the channel before the ev7 fire site (boss_ai.go:3164
+	// vs :3218), while C++ sets the field after target selection
+	// (Spell.cpp:3410 vs :3493) — a creature casting Mind Sear
+	// itself would see its own just-stamped channel object here,
+	// where C++ reads empty. No Go creature casts 49821 (the only
+	// other C++ caster is the NPCBot priest, bot_priest_ai.cpp:110,
+	// with no Go path), so the delta is latent. Backs the Mind Sear
+	// ev7 filter (spell_priest.cpp:889-915).
+	methods["GetChannelObjectGuid"] = luaNoArgs(func() any {
+		if !s.creatureChannelLive(motion) || motion.ChannelTargetGUID == 0 {
+			return nil
+		}
+		return motion.ChannelTargetGUID
+	})
 	// IsFriendlyTo(target) is WorldObject::IsFriendlyTo (Object.cpp:2847-2850):
 	// GetReactionTo(target) >= REP_FRIENDLY, via the existing
 	// creatureFriendlyToTarget helper (boss_ai.go): player targets resolve

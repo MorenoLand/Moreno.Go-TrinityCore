@@ -806,7 +806,10 @@ func (s *Server) creatureInGroupWith(m *creatureMotion, attacker *session, targe
 		if u1Player == u2Player {
 			return true
 		}
-		return u1Player.sameGroupAs(u2Player, raid)
+		if raid {
+			return u1Player.sameRaidGroupAs(u2Player)
+		}
+		return u1Player.sameGroupAs(u2Player, false)
 	}
 	if u1Player != nil && u2Motion != nil {
 		return u2Motion.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0
@@ -820,8 +823,9 @@ func (s *Server) creatureInGroupWith(m *creatureMotion, attacker *session, targe
 // unitIsInRaidWith mirrors Unit::IsInRaidWith (Unit.cpp:12155) for a
 // caster/target GUID pair in one instance: self passes, both sides
 // resolve through charmer-or-owner-or-self (GetCharmerOrOwnerOrSelf,
-// Object.cpp:2218), player-player compares the live group with the raid
-// flag (sameGroupAs, raid=true), a player-creature pair passes on
+// Object.cpp:2218), player-player compares the live group with no
+// raid-flag check (sameRaidGroupAs: IsInSameRaidWith is same-group only,
+// Player.cpp:2543), a player-creature pair passes on
 // TREAT_AS_RAID_UNIT, and a creature-creature pair on equal faction
 // (UNIT_FIELD_FACTIONTEMPLATE). The npcbot arms have no Go model. A
 // charmed player has no Go charmer record (lua_player.go GetCharmerGUID
@@ -840,7 +844,7 @@ func (s *Server) unitIsInRaidWith(mapID uint32, instanceID uint32, casterGUID, t
 		return true
 	}
 	if u1Player != nil && u2Player != nil {
-		return u1Player.sameGroupAs(u2Player, true)
+		return u1Player.sameRaidGroupAs(u2Player)
 	}
 	if u1Player != nil && u2Motion != nil {
 		return u2Motion.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0

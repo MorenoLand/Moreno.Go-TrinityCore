@@ -1052,6 +1052,31 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.server.unitIsInRaidWith(s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)}, nil
 	}
+	// GetChannelObject is Unit::GetChannelObjectGuid (Unit.h:1359) as a
+	// resolved unit object: the caster's live channel object
+	// (UNIT_FIELD_CHANNEL_OBJECT), set by SendChannelStart
+	// (Spell.cpp:4669-4690) and cleared at channel end (Spell.cpp:4650).
+	// The Go twin is the session's activeChannel.ChannelObjectGUID
+	// (commands.go builds the same field into update packets). It reads
+	// the pre-cast channel at ev7 fire time — the fire site runs before
+	// startChannel, exactly like C++ selecting targets before
+	// SendChannelStart — so a fresh channeled cast reads nil here. A
+	// GUID never crosses Lua (spellTargetList comment, lua_spell.go), so
+	// the getter returns the resolved unit object (nil when no live
+	// channel object), for targets:Remove. Backs the Mind Sear filter
+	// (spell_priest.cpp:898-901).
+	methods["GetChannelObject"] = luaNoArgs(func() any {
+		s.castMu.Lock()
+		channel := s.activeChannel
+		s.castMu.Unlock()
+		if channel == nil || channel.Stopped || channel.ChannelObjectGUID == 0 {
+			return nil
+		}
+		if s.server == nil {
+			return nil
+		}
+		return s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, channel.ChannelObjectGUID)
+	})
 	// GetRestBonus/SetRestBonus are Player::GetRestBonus/SetRestBonus
 	// (PlayerMethods.h:1317-1321, 1810-1816); the setter runs through
 	// setRestBonus, the same clamp + rest-state update as the XP path.
@@ -1727,7 +1752,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	}
 	// IsInRaidWith(target) is Unit::IsInRaidWith (Unit.cpp:12155) from
 	// the player side, via unitIsInRaidWith: self passes, a player
-	// target compares the live group with the raid flag, a creature
+	// target compares the live group with no raid-flag check, a creature
 	// target passes on TREAT_AS_RAID_UNIT. Backs the Circle of Healing
 	// ev7 RaidCheck (spell_priest.cpp:310).
 	methods["IsInRaidWith"] = func(_ context.Context, args []any) ([]any, error) {
@@ -1740,6 +1765,26 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.server.unitIsInRaidWith(state.Map, state.InstanceID, s.playerGUID, targetGUID)}, nil
 	}
+	// GetChannelObjectGuid is Unit::GetChannelObjectGuid (Unit.h:1359):
+	// UNIT_FIELD_CHANNEL_OBJECT — the live channel's object GUID, nil
+	// when no channel is running. Go reads the session's activeChannel
+	// (the SendChannelStart twin, spells.go startChannel), cleared at
+	// channel end (finishChannel/interrupt), matching C++
+	// SendChannelUpdate(0) (Spell.cpp:4641-4651). The player-path ev7
+	// fire site runs before startChannel (spells.go:13814 vs :14436),
+	// so at filter time this reads the previous channel — empty after
+	// a clean end, exactly like C++, where SelectSpellTargets (:3410)
+	// precedes handle_immediate/SendChannelStart (:3493/:3585). Backs
+	// the Mind Sear ev7 filter (spell_priest.cpp:889-915).
+	methods["GetChannelObjectGuid"] = luaNoArgs(func() any {
+		s.castMu.Lock()
+		channel := s.activeChannel
+		s.castMu.Unlock()
+		if channel == nil || channel.Stopped || channel.ChannelObjectGUID == 0 {
+			return nil
+		}
+		return channel.ChannelObjectGUID
+	})
 	methods["IsFullHealth"] = luaNoArgs(func() any { return state.MaxHealth > 0 && state.Health >= state.MaxHealth })
 	methods["IsMounted"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
 	methods["GetMountId"] = luaNoArgs(func() any { return state.MountDisplayID })

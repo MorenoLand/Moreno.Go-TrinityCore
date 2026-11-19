@@ -683,10 +683,10 @@ func (s *session) explicitTargetFactionBlocked(spell wotlk.Spell, mask uint32, e
 	}
 	if mask&targetFlagUnitRaid != 0 {
 		if ownedCreature {
-			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) && (targetOwner == s || s.sameGroupAs(targetOwner, true)) {
+			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) && (targetOwner == s || s.sameRaidGroupAs(targetOwner)) {
 				return false
 			}
-		} else if targetSess != nil && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, true) {
+		} else if targetSess != nil && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameRaidGroupAs(targetSess) {
 			return false
 		} else if targetSess == nil && wildMotion != nil && wildMotion.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0 && s.explicitWildCreatureAssistPasses(spell, tgt, wildMotion, !hostile) {
 			return false
@@ -1024,6 +1024,19 @@ func (s *session) sameGroupAs(targetSess *session, raid bool) bool {
 	}
 	g := s.server.findGroupByID(s.groupID)
 	return g != nil && g.IsRaid == raid
+}
+
+// sameRaidGroupAs is the player-player half of Unit::IsInRaidWith
+// (Unit.cpp:12155 -> Player::IsInSameRaidWith, Player.cpp:2543): the same
+// nonzero group, with no raid-flag check and no subgroup check — a 5-man
+// party is a raid for this purpose, so sameGroupAs(raid=true) was wrong
+// here: it read every party member as not-in-raid and the Circle of
+// Healing RaidCheck stripped them, leaving only the caster.
+func (s *session) sameRaidGroupAs(targetSess *session) bool {
+	if s == nil || targetSess == nil || s.groupID == 0 || targetSess.groupID == 0 || s.groupID != targetSess.groupID {
+		return false
+	}
+	return s.server.findGroupByID(s.groupID) != nil
 }
 
 // explicitTargetGMBlocked mirrors the GM/invisibility gate in

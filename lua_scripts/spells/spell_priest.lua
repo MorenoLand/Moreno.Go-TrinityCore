@@ -263,6 +263,37 @@ end
 
 RegisterSpellEvent(SPELL_PRIEST_CIRCLE_OF_HEALING, 7, circleOfHealingFilterTargets)
 
+local SPELL_PRIEST_MIND_SEAR = 49821 -- spell_priest.cpp:889 (class spell_pri_mind_sear)
+
+-- C++ spell_pri_mind_sear_SpellScript::FilterTargets
+-- (spell_priest.cpp:898-901): EFFECT_0 TARGET_UNIT_DEST_AREA_ENEMY.
+-- Removes the caster's channel object (GetChannelObjectGuid,
+-- UNIT_FIELD_CHANNEL_OBJECT, Unit.h:1359) from the area list.
+-- ORDERING QUIRK (faithful, not a bug): C++ selects targets in
+-- Spell::_cast (Spell.cpp:3410) before handle_immediate runs
+-- SendChannelStart (Spell.cpp:3585), so the field read here is the
+-- caster's PREVIOUS channel object (cleared at channel end,
+-- Spell.cpp:4650) — a fresh cast reads empty and removes nothing, so
+-- the primary target stays in the area list and takes the periodic
+-- damage. The Go fire site runs at the same point (finishSpellCast,
+-- before startChannel), so GetChannelObject reads the same pre-cast
+-- state. DORMANT until Spell.dbc ships the 49821 row.
+local function mindSearFilterTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local channelObject = caster:GetChannelObject()
+    if channelObject ~= nil then
+        targets:Remove(channelObject)
+    end
+end
+
+RegisterSpellEvent(SPELL_PRIEST_MIND_SEAR, 7, mindSearFilterTargets)
+
 local SPELL_PRIEST_IMPROVED_SPIRIT_TAP = 15337 -- spell_priest.cpp:632
 local SPELL_PRIEST_SHADOW_WORD_DEATH_R1 = 32379 -- spell_priest.cpp:69
 local SPELL_PRIEST_MIND_BLAST_R1 = 8092 -- spell_priest.cpp:68
@@ -332,8 +363,12 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   ships (entry Chance/Charges ride the DBC spell). The
 --   CalculateAmount glyph-bonus arm (55673) stays out: no
 --   DoEffectCalcAmount fire site at the apply paths.
---   668 mind_sear (49821, :889-915): SpellScript target filter (drop
---   the channel object from the area list); no bridge.
+--   668 mind_sear (49821, :889-915): PORTED 2026-11-19 (ev7 above):
+--   drop the caster's channel object from the EFFECT_0 area list via
+--   the new GetChannelObject bridge (both Lua unit surfaces); the
+--   C++ selection-before-channel-start ordering quirk is faithful
+--   (fresh casts read an empty field and remove nothing). DORMANT
+--   until Spell.dbc ships the 49821 row.
 --   669 pain_and_suffering_dummy (47580, :916-942): DoCheckEffectProc
 --   returning false (pure proc gate, no arm); ev6 has no CheckProc
 --   model and its hook fires after charge/cooldown consumption.
