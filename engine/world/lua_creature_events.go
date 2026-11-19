@@ -1993,6 +1993,44 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// GetAuraOfRankedSpell(spellID) is Unit::GetAuraOfRankedSpell
+	// (Unit.cpp:4570-4586) for handler creatures: the live aura object
+	// of any rank of the queried spell, or nil when no rank is present.
+	// The player-surface twin (lua_player.go) backs the Cut to the
+	// Chase refresh arm; the creature side was the gap — the Drain
+	// Soul CheckProc gate (spell_warlock.cpp:517-529, ranked lookup)
+	// and the Haunt AfterHit arm (GetHitAura, any rank) both need it
+	// when the victim is a creature. Auras of one chain never
+	// coexist, so scan order is immaterial (rankedAuraEffectAmount
+	// precedent); the snapshot copy is taken under auraMu.
+	methods["GetAuraOfRankedSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{nil}, nil
+		}
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
+		for _, aura := range s.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.auraMu.Unlock()
+		first := s.spellFirstRank(spell)
+		for _, aura := range auras {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			if s.spellFirstRank(aura.SpellID) != first {
+				continue
+			}
+			ref := &luaAuraRef{server: s, spellID: aura.SpellID, creatureKey: key, mapID: motion.Map, instanceID: motion.InstanceID}
+			return []any{ref.luaAuraObject()}, nil
+		}
+		return []any{nil}, nil
+	}
 	// GetAuraEffectSpellIdByFamily(auraType, familyName, flag0, flag1,
 	// flag2 [, casterGUID]) is the spell-id half of
 	// Unit::GetAuraEffect(auraType, familyName, f0, f1, f2, casterGUID)

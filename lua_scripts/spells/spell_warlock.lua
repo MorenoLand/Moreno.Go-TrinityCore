@@ -12,9 +12,8 @@
 --   MiscValue (DBC, via Aura:GetSpellEffectMiscValue) casts the
 --   glyph proc 58068 on the caster, triggered. No PreventDefaultAction
 --   in C++, so the Go default damage tick still fires (no return).
---   Registered for rank 1 (1120), the only Drain Soul rank ID in the
---   C++ tree; ranks 2-6 are DB-bound via spell_script_names and
---   unestablished (C++ tree + web search exhausted this tick).
+--   Registered for all ranks (1120/8288/8289/11675/27217/47855; TDB
+--   (-1120) NEG all-ranks binding + spell_ranks chain, 26091).
 -- PORTED (tick 196, RegisterAuraEvent OnApply):
 --   spell_warl_health_funnel ApplyEffect (spell_warlock.cpp:838-846):
 --   EFFECT_0 PERIODIC_HEAL. If the caster is missing, nothing
@@ -54,11 +53,13 @@
 --   hook" claim above is retired, not the arms.)
 
 local SPELL_WARLOCK_HEALTH_FUNNEL = 755
+local SPELL_WARLOCK_HEALTH_FUNNEL_RANKS = { 755, 3698, 3699, 3700, 11693, 11694, 11695, 27259, 47856 } -- TDB spell_ranks chain for 755
 local SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_R1 = 18703
 local SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_R2 = 18704
 local SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_BUFF_R1 = 60955
 local SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_BUFF_R2 = 60956
 local SPELL_WARLOCK_DRAIN_SOUL_R1 = 1120
+local SPELL_WARLOCK_DRAIN_SOUL_RANKS = { 1120, 8288, 8289, 11675, 27217, 47855 } -- TDB spell_ranks chain for 1120
 local SPELL_WARLOCK_CREATE_SOULSHARD = 43836
 local SPELL_WARLOCK_GLYPH_OF_DRAIN_SOUL_AURA = 58070
 local SPELL_WARLOCK_GLYPH_OF_DRAIN_SOUL_PROC = 58068
@@ -82,7 +83,9 @@ local function drainSoulTick(event, aura, target)
     end
 end
 
-RegisterAuraEvent(SPELL_WARLOCK_DRAIN_SOUL_R1, 1, drainSoulTick)
+for _, spellId in ipairs(SPELL_WARLOCK_DRAIN_SOUL_RANKS) do
+    RegisterAuraEvent(spellId, 1, drainSoulTick)
+end
 
 -- C++ spell_warl_health_funnel::ApplyEffect (spell_warlock.cpp:838-846).
 local function healthFunnelApply(event, aura, target)
@@ -97,7 +100,9 @@ local function healthFunnelApply(event, aura, target)
     end
 end
 
-RegisterAuraEvent(SPELL_WARLOCK_HEALTH_FUNNEL, 2, healthFunnelApply)
+for _, spellId in ipairs(SPELL_WARLOCK_HEALTH_FUNNEL_RANKS) do
+    RegisterAuraEvent(spellId, 2, healthFunnelApply)
+end
 
 -- C++ spell_warl_health_funnel::RemoveEffect (spell_warlock.cpp:848-853).
 local function healthFunnelRemove(event, aura, target)
@@ -105,7 +110,9 @@ local function healthFunnelRemove(event, aura, target)
     target:RemoveAura(SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_BUFF_R2)
 end
 
-RegisterAuraEvent(SPELL_WARLOCK_HEALTH_FUNNEL, 3, healthFunnelRemove)
+for _, spellId in ipairs(SPELL_WARLOCK_HEALTH_FUNNEL_RANKS) do
+    RegisterAuraEvent(spellId, 3, healthFunnelRemove)
+end
 
 -- C++ spell_warl_haunt::HandleRemove (spell_warlock.cpp:797-806):
 -- EFFECT_1 SPELL_AURA_DUMMY, REAL_OR_REAPPLY. On removal the target
@@ -116,6 +123,7 @@ RegisterAuraEvent(SPELL_WARLOCK_HEALTH_FUNNEL, 3, healthFunnelRemove)
 -- loader's SpellScript side (spell_warl_haunt_SpellScript) is a
 -- separate arm and stays out of this row.
 local SPELL_WARLOCK_HAUNT = 48181 -- spell_warlock.cpp:55
+local SPELL_WARLOCK_HAUNT_RANKS = { 48181, 59161, 59163, 59164 } -- TDB spell_ranks chain for 48181
 local SPELL_WARLOCK_HAUNT_HEAL = 48210 -- spell_warlock.cpp:56
 
 local function hauntRemove(event, aura, target)
@@ -126,7 +134,9 @@ local function hauntRemove(event, aura, target)
     target:CastCustomSpell(caster, SPELL_WARLOCK_HAUNT_HEAL, false, aura:GetAmount(1))
 end
 
-RegisterAuraEvent(SPELL_WARLOCK_HAUNT, 3, hauntRemove)
+for _, spellId in ipairs(SPELL_WARLOCK_HAUNT_RANKS) do
+    RegisterAuraEvent(spellId, 3, hauntRemove)
+end
 
 local SPELL_WARLOCK_DEMONIC_CIRCLE_SUMMON = 48018 -- spell_warlock.cpp:41
 local SPELL_WARLOCK_DEMONIC_CIRCLE_TELEPORT = 48020 -- spell_warlock.cpp:42
@@ -197,9 +207,10 @@ RegisterAuraEvent(SPELL_WARLOCK_DEMONIC_CIRCLE_TELEPORT, 2, demonicCircleTelepor
 --   > 0, a permanent aura reads -1). The C++ Load gate (caster is a
 --   player) rides a handler-side check, and the honor/XP-target gate
 --   rides IsHonorOrXPTarget. The cast is triggered (args(aurEff)
---   sets TRIGGERED_FULL_MASK). Registered for rank 1 (603) only;
---   rank 2 (30910) is not established in the C++ tree.
+--   sets TRIGGERED_FULL_MASK). Registered for all ranks
+--   (603/30910/47867; TDB (-603) NEG all-ranks binding).
 local SPELL_WARLOCK_CURSE_OF_DOOM_R1 = 603 -- spell_warlock.cpp:261 (class spell_warl_curse_of_doom)
+local SPELL_WARLOCK_CURSE_OF_DOOM_RANKS = { 603, 30910, 47867 } -- TDB spell_ranks chain for 603
 local SPELL_WARLOCK_CURSE_OF_DOOM_EFFECT = 18662 -- spell_warlock.cpp:40
 local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:61-69
 
@@ -220,9 +231,12 @@ local function curseOfDoomRemove(event, aura, target)
     caster:CastSpell(target, SPELL_WARLOCK_CURSE_OF_DOOM_EFFECT, true)
 end
 
-RegisterAuraEvent(SPELL_WARLOCK_CURSE_OF_DOOM_R1, 3, curseOfDoomRemove)
+for _, spellId in ipairs(SPELL_WARLOCK_CURSE_OF_DOOM_RANKS) do
+    RegisterAuraEvent(spellId, 3, curseOfDoomRemove)
+end
 
 local SPELL_WARLOCK_BANISH = 710 -- spell_warlock.cpp:141
+local SPELL_WARLOCK_BANISH_RANKS = { 710, 18647 } -- TDB spell_ranks chain for 710
 local SPELL_MISS_IMMUNE = 7 -- SharedDefines.h:1558 (SPELL_MISS_IMMUNE)
 
 -- C++ spell_warl_banish::HandleBanish (spell_warlock.cpp:155-168):
@@ -230,8 +244,10 @@ local SPELL_MISS_IMMUNE = 7 -- SharedDefines.h:1558 (SPELL_MISS_IMMUNE)
 -- target: the target's Banish aura from this caster is removed.
 -- RegisterSpellEvent BeforeHit = 6 (lua_spell.go fireSpellBeforeHit
 -- passes the real miss reason; notification-only, but this arm
--- vetoes nothing). Rank 1 only: rank 2 (18647) has no
--- spell_script_names binding in-tree.
+-- vetoes nothing). Registered for both ranks (710/18647; TDB
+-- (-710) NEG all-ranks binding); the aura lookup keys on the cast
+-- spell's own entry (spell:GetEntry(), the GetSpellInfo()->Id
+-- twin), so a rank-2 cast only ever removes a rank-2 aura.
 local function banishBeforeHit(event, spell, hitTarget, missInfo)
     if missInfo ~= SPELL_MISS_IMMUNE then
         return
@@ -243,7 +259,7 @@ local function banishBeforeHit(event, spell, hitTarget, missInfo)
     if caster == nil then
         return
     end
-    local banish = hitTarget:GetAura(SPELL_WARLOCK_BANISH)
+    local banish = hitTarget:GetAura(spell:GetEntry())
     if banish == nil then
         return
     end
@@ -253,7 +269,9 @@ local function banishBeforeHit(event, spell, hitTarget, missInfo)
     banish:Remove()
 end
 
-RegisterSpellEvent(SPELL_WARLOCK_BANISH, 6, banishBeforeHit)
+for _, spellId in ipairs(SPELL_WARLOCK_BANISH_RANKS) do
+    RegisterSpellEvent(spellId, 6, banishBeforeHit)
+end
 
 local SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_R1 = 18213 -- spell_warlock.cpp:88
 local SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_PROC = 18371 -- spell_warlock.cpp:89
@@ -265,12 +283,11 @@ local POWER_MANA = 0
 -- returning true (PreventDefaultAction, which suppresses the DBC
 -- default leg, like a failed CheckProc); the improved Drain Soul
 -- mana leg casts 18371 on the caster, triggered, BP0 = the
--- EFFECT_2 pct of the caster's max mana. GetAuraOfRankedSpell is
--- player-only, so a non-player actor vetoes after the gate. The
--- CheckProc gate is rank-1-only: procTarget:GetAura(1120) matches
--- the exact spell ID, and GetAuraApplicationOfRankedSpell is
--- unbridged, so higher-rank Drain Soul auras cannot satisfy the
--- gate (consistent with the rank-1-only tick-195 note above).
+-- EFFECT_2 pct of the caster's max mana. The CheckProc gate is
+-- procTarget:GetAuraOfRankedSpell(1120) plus the caster-GUID check,
+-- the exact twin of C++'s GetAuraApplicationOfRankedSpell(1120,
+-- casterGUID) (:521-524); the creature surface gained the bridge
+-- this tick (lua_creature_events.go), the player twin pre-exists.
 -- DORMANT until Spell.dbc ships the 1120 proc entry. Residual:
 -- Go fires ev6 after charge/cooldown consumption, so a vetoed
 -- (failed-gate) proc still spends a charge where C++ would not.
@@ -278,11 +295,8 @@ local function drainSoulProc(event, aura, target, actor, procTarget, damage)
     if actor == nil or procTarget == nil then
         return true
     end
-    local drainSoul = procTarget:GetAura(SPELL_WARLOCK_DRAIN_SOUL_R1)
-    if drainSoul == nil then
-        return true
-    end
-    if drainSoul:GetCasterGUID() ~= actor:GetGUID() then
+    local drainSoul = procTarget:GetAuraOfRankedSpell(SPELL_WARLOCK_DRAIN_SOUL_R1)
+    if drainSoul == nil or drainSoul:GetCasterGUID() ~= actor:GetGUID() then
         return true
     end
     if actor:GetObjectType() ~= "Player" then
@@ -305,7 +319,9 @@ local function drainSoulProc(event, aura, target, actor, procTarget, damage)
     return true
 end
 
-RegisterAuraEvent(SPELL_WARLOCK_DRAIN_SOUL_R1, 6, drainSoulProc)
+for _, spellId in ipairs(SPELL_WARLOCK_DRAIN_SOUL_RANKS) do
+    RegisterAuraEvent(spellId, 6, drainSoulProc)
+end
 
 local SPELL_WARLOCK_SOUL_LEECH = 30293 -- spell_warlock.cpp:1388
 local SPELL_WARLOCK_SOUL_LEECH_HEAL = 30294 -- spell_warlock.cpp:78
@@ -375,7 +391,9 @@ end
 RegisterAuraEvent(SPELL_WARLOCK_T4_2P_BONUS, 6, t4TwoPieceBonusProc)
 
 local SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY = 27243 -- spell_warlock.cpp:1177
+local SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY_RANKS = { 27243, 47835, 47836 } -- TDB spell_ranks chain for 27243
 local SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_R1 = 27285 -- spell_warlock.cpp:75
+local SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_RANKS = { 27285, 47833, 47834 } -- TDB spell_ranks chain for 27285
 
 -- C++ spell_warl_seed_of_corruption_dummy::HandleProc
 -- (spell_warlock.cpp:1202-1227): EFFECT_1 DUMMY. On proc the
@@ -421,7 +439,9 @@ local function seedOfCorruptionDummyProc(event, aura, target, actor, procTarget,
     return true
 end
 
-RegisterAuraEvent(SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY, 6, seedOfCorruptionDummyProc)
+for _, spellId in ipairs(SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY_RANKS) do
+    RegisterAuraEvent(spellId, 6, seedOfCorruptionDummyProc)
+end
 
 -- C++ spell_warl_seed_of_corruption_SpellScript::FilterTargets
 -- (spell_warlock.cpp:1159-1163): EFFECT_0 TARGET_UNIT_DEST_AREA_ENEMY.
@@ -442,7 +462,9 @@ local function seedOfCorruptionFilterTargets(event, spell, effectIndex, targets)
     targets:Remove(explTarget)
 end
 
-RegisterSpellEvent(SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_R1, 7, seedOfCorruptionFilterTargets)
+for _, spellId in ipairs(SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_RANKS) do
+    RegisterSpellEvent(spellId, 7, seedOfCorruptionFilterTargets)
+end
 
 -- C++ spell_warl_haunt_SpellScript::HandleAfterHit
 -- (spell_warlock.cpp:772-778): AfterHit. The hit aura's EFFECT_1
@@ -450,12 +472,14 @@ RegisterSpellEvent(SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_R1, 7, seedOfCorrupti
 -- earlier in the same cast (spells.go applyAuraToTarget), and
 -- GetHitDamage reads the final damage at AfterHit (runtime.go
 -- contract). The GetCasterGUID guard is the GetHitAura twin: only
--- this cast's aura is rescaled, never another caster's Haunt.
+-- this cast's aura is rescaled, never another caster's Haunt. The
+-- lookup is rank-wide (GetAuraOfRankedSpell, any rank of the 48181
+-- chain) — GetHitAura returns this hit's aura at any rank.
 local function hauntAfterHit(event, spell, hitTarget)
     if hitTarget == nil then
         return
     end
-    local aura = hitTarget:GetAura(SPELL_WARLOCK_HAUNT)
+    local aura = hitTarget:GetAuraOfRankedSpell(SPELL_WARLOCK_HAUNT)
     if aura == nil then
         return
     end
@@ -466,7 +490,9 @@ local function hauntAfterHit(event, spell, hitTarget)
     aura:SetAmount(math.floor(spell:GetHitDamage() * aura:GetAmount(1) / 100), 1)
 end
 
-RegisterSpellEvent(SPELL_WARLOCK_HAUNT, 3, hauntAfterHit)
+for _, spellId in ipairs(SPELL_WARLOCK_HAUNT_RANKS) do
+    RegisterSpellEvent(spellId, 3, hauntAfterHit)
+end
 
 local SPELL_WARLOCK_DECIMATION_R1 = 63156 -- ac_spell_script_names.sql: (-63156, 'spell_warl_decimation')
 local SPELL_WARLOCK_DECIMATION_R2 = 63158 -- spell_warlock.cpp:306, bot_warlock_ai.cpp:85
@@ -566,6 +592,7 @@ for _, spellId in ipairs(SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC_AURAS) do
 end
 
 local SPELL_WARLOCK_LIFE_TAP_R1 = 1454 -- spell_warlock.cpp (class spell_warl_life_tap_SpellScript)
+local SPELL_WARLOCK_LIFE_TAP_RANKS = { 1454, 1455, 1456, 11687, 11688, 11689, 27222, 57946 } -- TDB spell_ranks chain for 1454
 local SPELL_FAILED_FIZZLE = 33 -- SharedDefines.h:1015
 local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
 
@@ -574,10 +601,10 @@ local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to t
 -- cost (spell:GetEffectValue(0), the CalcValue twin) or the cast
 -- fizzles. Check-only port: the energize leg still needs
 -- spellpower-coefficient / ModifyHealth bridges (census row 796).
--- Rank 1 only — higher Life Tap ranks are DB-bound via
--- spell_script_names, unestablished in-tree (the drain_soul
--- rank-1-only precedent). RegisterSpellEvent OnCheckCast = 8
--- (lua_spell.go fireSpellCheckCast).
+-- Registered for all ranks (1454/1455/1456/11687/11688/11689/
+-- 27222/57946; TDB (-1454) NEG all-ranks binding); the gate reads
+-- the cast spell's own EFFECT_0 CalcValue, so it is rank-agnostic.
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
 local function lifeTapCheckCast(event, spell)
     local caster = spell:GetCaster()
     if caster ~= nil and caster:GetHealth() > spell:GetEffectValue(0) then
@@ -586,7 +613,9 @@ local function lifeTapCheckCast(event, spell)
     return SPELL_FAILED_FIZZLE
 end
 
-RegisterSpellEvent(SPELL_WARLOCK_LIFE_TAP_R1, 8, lifeTapCheckCast)
+for _, spellId in ipairs(SPELL_WARLOCK_LIFE_TAP_RANKS) do
+    RegisterSpellEvent(spellId, 8, lifeTapCheckCast)
+end
 
 local SPELL_WARLOCK_FEL_SYNERGY = 47230 -- spell_warlock.cpp:617 (class spell_warl_fel_synergy)
 local SPELL_WARLOCK_FEL_SYNERGY_HEAL = 54181 -- spell_warlock.cpp:50
