@@ -2465,6 +2465,101 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 184, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effSchoolDamage, basePoints: 489, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 18099 "Chill Nova" (boss_ras_frostwhisper.cpp:28 enum, :98
+	// DoCastVictim; Lua boss_ras_frostwhisper.lua - 12s init then 14s
+	// loop) - wago.tools 2.5.6.70577 SpellEffect rows 694903/694904/
+	// 694905 + SpellMisc 327616 + SpellPower 182671 + SpellCategories
+	// 75345: eff0 School Damage bp138/die23 tgtA 22/tgtB 15 radius13
+	// (10yd) = 139-161; eff1 Apply Aura Decrease Speed (33) bp-51/die1
+	// = -50%; eff2 Knock Back (98) bp99/die1 misc 400 (knockback
+	// distance; 31475 "(150)" = MiscValue precedent). Cast Instant idx
+	// 1, dur1 10000ms (real row), range1 Self (real row), school
+	// Frost, mana 75, dispel 1 Magic, mechanic 11 Snare (Categories;
+	// Wowhead Spell Details says n/a - flagged, not reconciled).
+	// FLAG: Wowhead shows only the low end 139 (bp+1), not the 139-161
+	// range. NOT carried: BonusCoefficient 1/0/1 / Attributes_0
+	// 0x40090000 / Attributes_1 0x88 / Category 0 /
+	// StartRecoveryCategory 0 (no fields).
+	{id: 18099, dispel: 1, mechanic: 11, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolFrost, manaCost: 75, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 138, dieSides: 23, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 99, dieSides: 1, misc: 400, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 18100 "Frost Armor" (Wowhead Classic name; C++ SPELL_ICE_ARMOR,
+	// boss_ras_frostwhisper.cpp:25 enum, :54 Reset + :81 DoCast(me);
+	// Lua boss_ras_frostwhisper.lua - OnEnterCombat self-cast, 3min
+	// re-arm) - wago.tools 2.5.6.70577 SpellEffect rows 695022/695023
+	// + SpellMisc 327709 + SpellPower 182764 + SpellCategories 75369:
+	// eff0 Apply Aura Mod Resistance (22) bp11/die1 misc 1 (Physical)
+	// tgtA CASTER (1) = 12 armor; eff1 Apply Aura Proc Trigger Spell
+	// (42) bp0/die0 trigger 18101 (Chilled) tgtA CASTER (1). Cast
+	// Instant idx 1, dur30 1800000ms (real row), range1 Self (real
+	// row), school Frost, mana 10, dispel 1 Magic. FLAG: name "Ice
+	// Armor" in the assignment vs "Frost Armor" on Wowhead Classic;
+	// Wowhead lists NO NPC user for 18100 (Ras linkage from the C++
+	// enum only); RealPointsPerLevel 12 + ManaCostPerLevel 5 NOT
+	// carried (no fields in the seed struct; same limitation as 9433/
+	// 44267); cooldown 10s on Wowhead UNKNOWN from wago (no cooldown
+	// field). NOT carried: Attributes_0 0x2010000 / Category 0 /
+	// StartRecoveryCategory 133 (no fields).
+	{id: 18100, dispel: 1, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolFrost, manaCost: 10, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModResistance, basePoints: 11, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 0, trigger: 18101, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 18763 "Freeze" (boss_ras_frostwhisper.cpp:26 enum, :90
+	// DoCastVictim; Lua boss_ras_frostwhisper.lua - 18s init then 24s
+	// loop) - wago.tools 2.5.6.70577 SpellEffect rows 696272/696273 +
+	// SpellMisc 328738 + SpellPower 183793 + SpellCategories 75744:
+	// eff0 Apply Aura Periodic Damage (3) bp138/die23 period3000 tgtA
+	// ENEMY (6) = 139-161/tick; eff1 Apply Aura Stun (12) bp0/die0
+	// tgtA ENEMY (6) = 1. Cast 3500ms idx 22 (real SpellCastTimes row
+	// 22, added this tick - retires synthetic 92004 for 71020),
+	// dur8 15000ms (real row), range4 Medium 30yd (real row), school
+	// Frost, mana 98, dispel 1 Magic, mechanic 12 Stun (Categories;
+	// matches Wowhead "Stunned"). FLAG: Wowhead shows only the low end
+	// 139/tick (bp+1), not the 139-161 range. NOT carried:
+	// BonusCoefficient 0.1 / Attributes_0..16 0x0 / Category 98 /
+	// StartRecoveryCategory 0 (no fields).
+	{id: 18763, dispel: 1, mechanic: 12, castTimeIdx: 22, durIdx: 8, rangeIdx: 4, school: schoolFrost, manaCost: 98, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 138, dieSides: 23, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 21369 "Frostbolt" (boss_ras_frostwhisper.cpp:24 enum, :86
+	// DoCast(random target); Lua boss_ras_frostwhisper.lua - 8s init
+	// then 8s loop) - wago.tools 2.5.6.70577 SpellEffect rows 700250/
+	// 700251 + SpellMisc 331923 + SpellCategories 76961: eff0 School
+	// Damage bp637/die225 tgtA ENEMY (6) = 638-862; eff1 Apply Aura
+	// Decrease Speed (33) bp-51/die1 mechanic 11 Snare tgtA ENEMY (6)
+	// = -50%. Cast 1500ms idx 16, dur35 4000ms (real row), range5 Long
+	// 40yd (real row), school Frost, dispel 1 Magic, mechanic 0
+	// (Categories; EffectMechanic 11 lives on eff1 only). NO SpellPower
+	// row (Wowhead Cost None) - manaCost omitted. FLAG: Wowhead
+	// attributes 21369 to Lokholar the Ice Lord, NOT Ras Frostwhisper
+	// (Ras linkage from the C++ enum only); Wowhead shows only the low
+	// end 638 (bp+1), not the 638-862 range. NOT carried: Speed 24 /
+	// BonusCoefficient 1/0 / Attributes_0 0x10000 / Category 0 /
+	// StartRecoveryCategory 0 (no fields).
+	{id: 21369, dispel: 1, castTimeIdx: 16, durIdx: 35, rangeIdx: 5, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 637, dieSides: 225, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, mechanic: 11, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 26070 "Fear" (boss_ras_frostwhisper.cpp:27 enum, :94
+	// DoCastVictim; Lua boss_ras_frostwhisper.lua - 45s init then 30s
+	// loop) - wago.tools 2.5.6.70577 SpellEffect row 702925 +
+	// SpellMisc 334024 + SpellCategories 77735: eff0 Apply Aura Fear
+	// (7) bp-1/die1 tgtA 22/tgtB 15 radius11 (45yd) = 0. Cast 1500ms
+	// idx 16, dur31 8000ms (real row), range1 Self (real row), school
+	// Shadow, dispel 1 Magic, mechanic 5 Fear (SharedDefines.h:1362).
+	// NO SpellPower row (Wowhead Cost None) - manaCost omitted. FLAG:
+	// wago area targeting (22/15, 45yd) vs Wowhead single-target
+	// wording ("Only 1 target can be feared at a time"); Wowhead
+	// attributes 26070 to Anubisath Warder, NOT Ras Frostwhisper (Ras
+	// linkage from the C++ enum only). NOT carried: Attributes_0
+	// 0x40010000 / Attributes_1 0x80 / Category 0 /
+	// StartRecoveryCategory 133 (no fields).
+	{id: 26070, dispel: 1, mechanic: 5, castTimeIdx: 16, durIdx: 31, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: -1, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
@@ -18773,9 +18868,8 @@ var spells = []spell{
 	// (same verdict file; wago NOT opened — no trigger row):
 	// single effect 10 HEAL Value 74000 — bp 73999/die 1
 	// (flat, no tooltip range), targetA 21 TARGET_ALLY (heals
-	// an ally; the Lua picks the most-damaged ally); cast92004
-	// synthetic 3500ms (3.5s cast — no real 3500ms row in the
-	// table; FLAG: needs a wago SpellCastTimes row check);
+	// an ally; the Lua picks the most-damaged ally); cast22 real
+	// 3500ms (SpellCastTimes row 22, Ras verdict 2026-11-18);
 	// dur0 (Duration n/a); range5 real 40yd Long; school
 	// schoolHolyShadow 34 (Holy 2 + Shadow 32; Frostfire/
 	// Spellfire combined-constant precedent); manaCost 215
@@ -18783,7 +18877,7 @@ var spells = []spell{
 	// FLAG: needs a wago SpellEffect row check (school mask +
 	// target). NOT carried: GCD 1.5s (no field); flags (no
 	// attributes field).
-	{id: 71020, castTimeIdx: 92004, rangeIdx: 5, school: schoolHolyShadow, manaCost: 215, effects: [3]effect{
+	{id: 71020, castTimeIdx: 22, rangeIdx: 5, school: schoolHolyShadow, manaCost: 215, effects: [3]effect{
 		{effect: effHeal, basePoints: 73999, dieSides: 1, targetA: targetUnitTargetAlly, chainAmplitude: 1},
 	}},
 	// 54894 "Icy Imprisonment" (Wowhead name MISMATCH; C++
@@ -20839,8 +20933,6 @@ func main() {
 		{92001, 2000, 0},
 		{92002, 3000, 0},
 		{92003, 600, 0},
-		// synthetic SpellCastTimes 92004 (3500ms) for 71020 Dark Mending — no real 3500ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
-		{92004, 3500, 0},
 		// synthetic SpellCastTimes 92005 (1600ms) for 35158/35159 Reflective shields — no real 1600ms row in the table (FLAG: needs a wago SpellCastTimes row check — the real row ID is unknown)
 		{92005, 1600, 0},
 		{171, 6000, 0}, // real SpellCastTimes 171 for 17274 Pyroblast + 33975 Pyroblast (wago.tools 3.4.0.47659 SpellCastTimes row 171, 2026-11-18 verdict wago_spells_15282_16047_16048_16049_17274_wago.txt; retires synthetic 92006)
@@ -20858,6 +20950,7 @@ func main() {
 		{170, 8000, 0}, // real SpellCastTimes 170 for 51110 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 		{50, 1300, 0},  // real SpellCastTimes 50 for 8399 (wago.tools 3.4.0.47659, 2026-11-17 verdict wago_spells_8399_8734_15587.txt)
 		{28, 3200, 0},  // real SpellCastTimes 28 for 39294 (wago.tools 3.4.0.47659 SpellCastTimes row 28, 2026-11-17 verdict wago_spells_39283_39284_39294.txt)
+		{22, 3500, 0},  // real SpellCastTimes 22 for 18763 Freeze + 71020 Dark Mending (wago.tools 2.5.6.70577 SpellCastTimes row 22, 2026-11-18 verdict wago_spells_18099_18100_18763_21369_26070_wago.txt; retires synthetic 92004)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
 		panic(err)
