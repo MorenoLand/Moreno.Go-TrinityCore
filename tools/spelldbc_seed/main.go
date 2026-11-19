@@ -168,6 +168,7 @@ const (
 	auraForceReaction          = 139 // SPELL_AURA_FORCE_REACTION (SpellAuraDefines.h:219)
 	auraModHealingPct          = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
 	auraModHealingDonePct      = 136 // SPELL_AURA_MOD_HEALING_DONE_PERCENT (SpellAuraDefines.h:216)
+	auraModIncreaseHealthPct   = 133 // SPELL_AURA_MOD_INCREASE_HEALTH_PERCENT (SpellAuraDefines.h:213)
 	auraModHealingReceived     = 283 // SPELL_AURA_MOD_HEALING_RECEIVED (SpellAuraDefines.h:363)
 	auraMeleeSlow              = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
 	auraRangedApAttackerBonus  = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
@@ -3043,6 +3044,29 @@ var spells = []spell{
 	// 75215 "Root" (boss_thaddius.cpp:115 enum; :1194-1195 AddAura hack to stop mmaps pathing tanks off the platform mid-pull; Lua npc_feugen.lua :122 SPELL_ROOT_SELF) - wago.tools 3.4.5.63697 SpellEffect row 975769 + SpellMisc 618504 + SpellAuraOptions 208074 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA MOD_ROOT (26) bp0/die0 tgtA 1 (TARGET_UNIT_CASTER). Cast Instant idx 1, dur35 4000ms (real row), range1 Self (real row), school Physical, dispel 0, mechanic 0 (no SpellCategories row). No SpellPower row read - manaCost omitted. NOT carried: Attributes_0 0x180, Attributes_1 0x10000000, Attributes_6 0x400 (no field); SpellAuraOptions ProcChance 101 (no field).
 	{id: 75215, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraRoot, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 49411 "Arcane Power State" (boss_xt002.cpp:66 enum; Lua boss_xt002.lua :256) - wago.tools 3.4.5.63697 SpellEffect row 866565 + SpellMisc 460178 + SpellAuraOptions 183969 (PRESENT in 2.5.6.70577): eff0 APPLY_AURA DUMMY (4) bp0/die0 tgtA CASTER (1). Cast Instant idx 1, dur21 -1 infinite (real row 0xFFFFFFFF), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellPower row read - manaCost omitted. NOT carried: Attributes_0 0x100, Attributes_1 0x10000000 (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 49411, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 62834 "Boom" (boss_xt002.cpp:77 enum; Lua boss_xt002.lua :555 SPELL_BOOM) - wago.tools 3.4.5.63697 SpellEffect rows 966686/966687 + SpellMisc 611829 + SpellCategories 128863 + SpellAuraOptions 201403 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 WEAPON_PERCENT_DAMAGE (31) bp94/die11 tgtA 18 (TARGET_DEST_CASTER) tgtB 8 (TARGET_UNIT_DEST_AREA_ENTRY) radiusIdx 13 (10 yd, real row) = 95% weapon damage; eff1 INSTAKILL (1) bp0/die0 tgtA 1. Cast Instant idx 1, durIdx 0 (no duration - no SpellDuration row 0), range174 "U L T R A" 1000yd (NEW aux row this tick), school Fire, dispel 0, mechanic 0 (SpellCategories DefenseType 3 Ranged, PreventionType 0x2, StartRecoveryCategory 133 - no fields). No SpellPower row read - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 62834, castTimeIdx: 1, durIdx: 0, rangeIdx: 174, school: schoolFire, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 94, dieSides: 11, targetA: targetDestCaster, targetB: targetUnitDestAreaEntry, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effInstakill, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 64227 "Static Charged" (boss_xt002.cpp:67 enum; Lua boss_xt002.lua :257) - wago.tools 3.4.5.63697 SpellEffect row 967921 + SpellMisc 612753 + SpellAuraOptions 202325 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AREA_AURA_ENEMY (129) PERIODIC_DAMAGE (3) bp799/die1 auraPeriod 3000 tgtA CASTER (1) radiusIdx 30 (500 yd, real row) = 800 Nature every 3s. Cast Instant idx 1, dur21 -1 infinite (real row 0xFFFFFFFF), range1 Self (real row), school Nature, dispel 0, mechanic 0. No SpellPower row read - manaCost omitted. NOT carried: Attributes (no field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 64227, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAreaAuraEnemy, aura: auraPeriodicDmg, basePoints: 799, dieSides: 1, auraPeriod: 3000, targetA: targetCaster, radiusIdx: 30, chainAmplitude: 1},
+	}},
+	// 64230 "Shock" (boss_xt002.cpp:68 enum; Lua boss_xt002.lua :258) - wago.tools 3.4.5.63697 SpellEffect row 967984 (DifficultyID 0) + SpellMisc 612804 + SpellCategories 129133 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 WEAPON_PERCENT_DAMAGE (31) bp99/die1 tgtA 6 (TARGET_UNIT_TARGET_ENEMY) chainTargets 0 = 100% weapon damage. Cast Instant idx 1, durIdx 0 (no duration - no SpellDuration row 0), range2 5yd Combat (real row, Flags 0x1), school Nature, dispel 0, mechanic 0 (SpellCategories DefenseType 1 Magic, PreventionType 0x1 - no fields). No SpellPower row read - manaCost omitted. NOT carried: Attributes_0 0x4, Attributes_1 0x10000088 (no field). FLAG: difficulty variants in SpellEffect only (D175/D176 bp100/die0/chainTargets 3) - seed carries DifficultyID 0 only (no difficulty dimension in the seed struct); Wowhead's "101 - 10/25 Player" values corroborate them.
+	{id: 64230, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolNature, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 99, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 65737 "Heartbreak" (boss_xt002.cpp:40 enum; Lua boss_xt002.lua :267, cast TRIGGERED in script) - wago.tools 3.4.5.63697 SpellEffect rows 979223/979224/979225 (DifficultyID 0) + SpellMisc 620899 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 SCRIPT_EFFECT (77) bp99/die1 tgtA CASTER (1) = 100%; eff1 APPLY_AURA MOD_INCREASE_HEALTH_PERCENT (133) bp49/die1 tgtA 1 = +50% health; eff2 APPLY_AURA MOD_DAMAGE_PERCENT_DONE (79) bp14/die1 misc 95 (school mask: all except Shadow) tgtA 1 = +15% damage. Cast Instant idx 1, dur21 -1 infinite (real row 0xFFFFFFFF), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellPower row read - manaCost omitted. NOT carried: Attributes (no field). FLAG: difficulty variant D175 (bp100/40/40, no D176 row) - seed carries DifficultyID 0 only; the TRIGGERED cast is a script cast flag, not a DB2 trigger field (EffectTriggerSpell 0 everywhere).
+	{id: 65737, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 99, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseHealthPct, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 14, dieSides: 1, misc: 95, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
@@ -21443,16 +21467,17 @@ func main() {
 	// SpellRange.dbc: ID, MinHostile, MinFriendly, MaxHostile,
 	// MaxFriendly, Flags (floats for the ranges).
 	ranges := [][]uint32{
-		{152, f32(0), f32(0), f32(150), f32(150), 0}, // real SpellRange 152 "Super Long" for seat spells (wago.tools 3.4.0.47659, 2026-11-13 23:00 verdict)
-		{4, f32(0), f32(0), f32(30), f32(30), 0},     // real SpellRange 4 "Medium Range" for 54690 (wago.tools 3.4.0.43659)
-		{74, f32(0), f32(0), f32(30), f32(30), 2},    // real SpellRange 74 "Ranged Weapon" for 59335 (wago.tools 3.4.0.43659, Flags 0x2)
-		{5, f32(0), f32(0), f32(40), f32(40), 0},     // real SpellRange 5 "Long Range" for 31263 (wago.tools 3.4.0.43659)
-		{6, f32(0), f32(0), f32(100), f32(100), 0},   // real SpellRange 6 "Vision Range" for Aran bolts 29954/29953/29955 (wago.tools 3.4.0.43659)
-		{135, f32(0), f32(0), f32(100), f32(100), 0}, // real SpellRange 135 "Tower 100" for 53456 (wago.tools 3.4.0.43659); also repairs the dangling 42198/42937 rangeIdx 135 references
-		{1, f32(0), f32(0), f32(0), f32(0), 0},       // real SpellRange 1 "Self Only" for 31308 (wago.tools 3.4.0.43659)
-		{2, f32(0), f32(0), f32(5), f32(5), 1},       // real SpellRange 2 "Combat Range" for interrupt spells (wago.tools 3.4.0.43659, Flags 0x1)
-		{34, f32(0), f32(0), f32(25), f32(25), 0},    // real SpellRange 34 "Twenty-Five yards" for 57994 (wago.tools 3.4.0.43659)
-		{3, f32(0), f32(0), f32(20), f32(20), 0},     // real SpellRange 3 "Twenty yards" for 15574 (wago.tools 3.4.0.47659)
+		{152, f32(0), f32(0), f32(150), f32(150), 0},   // real SpellRange 152 "Super Long" for seat spells (wago.tools 3.4.0.47659, 2026-11-13 23:00 verdict)
+		{4, f32(0), f32(0), f32(30), f32(30), 0},       // real SpellRange 4 "Medium Range" for 54690 (wago.tools 3.4.0.43659)
+		{74, f32(0), f32(0), f32(30), f32(30), 2},      // real SpellRange 74 "Ranged Weapon" for 59335 (wago.tools 3.4.0.43659, Flags 0x2)
+		{5, f32(0), f32(0), f32(40), f32(40), 0},       // real SpellRange 5 "Long Range" for 31263 (wago.tools 3.4.0.43659)
+		{6, f32(0), f32(0), f32(100), f32(100), 0},     // real SpellRange 6 "Vision Range" for Aran bolts 29954/29953/29955 (wago.tools 3.4.0.43659)
+		{135, f32(0), f32(0), f32(100), f32(100), 0},   // real SpellRange 135 "Tower 100" for 53456 (wago.tools 3.4.0.43659); also repairs the dangling 42198/42937 rangeIdx 135 references
+		{174, f32(0), f32(0), f32(1000), f32(1000), 0}, // real SpellRange 174 "U L T R A" for 62834 Boom (wago.tools 3.4.5.63697, 2026-11-18 verdict cff41b03)
+		{1, f32(0), f32(0), f32(0), f32(0), 0},         // real SpellRange 1 "Self Only" for 31308 (wago.tools 3.4.0.43659)
+		{2, f32(0), f32(0), f32(5), f32(5), 1},         // real SpellRange 2 "Combat Range" for interrupt spells (wago.tools 3.4.0.43659, Flags 0x1)
+		{34, f32(0), f32(0), f32(25), f32(25), 0},      // real SpellRange 34 "Twenty-Five yards" for 57994 (wago.tools 3.4.0.43659)
+		{3, f32(0), f32(0), f32(20), f32(20), 0},       // real SpellRange 3 "Twenty yards" for 15574 (wago.tools 3.4.0.47659)
 		{93001, f32(0), f32(0), f32(0), f32(0), 0},
 		{93002, f32(0), f32(0), f32(5), f32(5), 0},
 		{93003, f32(8), f32(8), f32(25), f32(25), 0},
