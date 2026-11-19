@@ -8,7 +8,7 @@
 -- assembly scoped in karazhan.lua (that file's Barnes bullet still
 -- says "awaits the escort-port assembly" — this file is that
 -- assembly's ev6 + Reset landing).
--- Eluna creature events: 6 OnReachWP, 23 OnReset.
+-- Eluna creature events: 4 OnDied, 6 OnReachWP, 23 OnReset.
 -- Ported arms (C++ order):
 -- - Reset (karazhan.cpp:169-173): m_uiEventId = instance
 --   GetData(DATA_OPERA_PERFORMANCE) — the instance ctor rolls it
@@ -44,17 +44,29 @@
 --   UseDoorOrButton (lua_creature_events.go:7593/:4671,
 --   lua_objects.go:4688; legoso precedent): DATA_GO_STAGEDOORLEFT
 --   19, DATA_GO_CURTAINS 18 (karazhan.h:46-47), nil-guarded.
+-- - The TalkCount/TalkTimer dialogue machine (UpdateAI :288-310):
+--   wp4 arms a CreateLuaEvent pump with the Initialize() TalkTimer
+--   (2000ms); each fire Talks the current row's textid (OZ/HOOD/RAJ
+--   tables :89-112; textid 0 talks nothing but still takes the row's
+--   timer) and re-arms with that row's timer; TalkCount > 3 despawns
+--   the spotlight (GetCreatureByGUID on the wp4-latched GUID) and
+--   unpauses the escort. Pump cancelled on Reset/Died and re-armed
+--   on a repeat wp4.
 -- Deliberate omissions / unported scope:
--- - The TalkCount/TalkTimer dialogue machine (UpdateAI
---   :288-310; Oz/Hood/RAJ textids 0-11, timers 5000-18000) — the
---   wp4 pause starts it, but the machine itself is UpdateAI scope.
 -- - The gossip driver (OnGossipHello menus 8970/8975/8978,
 --   OnGossipSelect StartEvent / GM event override) + StartEvent
 --   (instance SetBossState IN_PROGRESS, OZ-deathcount reset) —
 --   the escort driver, so this handler fires once that lands.
 -- - The PerformanceReady raid-wipe poll (UpdateAI :312-342,
 --   EnterEvadeMode on wipe) — UpdateAI scope; the wp8 latch is
---   kept per GUID for it.
+--   kept per GUID for it. Bridge gap is exact: C++ iterates the
+--   whole map's PlayerList, but the only player-list bridge is
+--   GetPlayersInGrid(dist) (range-bounded; a dist large enough to
+--   cover Karazhan would still miss the whole-map semantic, and a
+--   player idling elsewhere in the instance would false-wipe);
+--   the IsGameMaster filter is likewise unverified on the player
+--   surface. No range approximation ported — a false EnterEvadeMode
+--   is worse than a missing one.
 
 local ENTRY_BARNES = 16812
 
@@ -100,6 +112,19 @@ local ENCOUNTER_RANGE = {
     [EVENT_RAJ] = { 6, 1 },
 }
 
+-- Opera dialogue (karazhan.cpp:89-112): {textid, timer} per TalkCount
+-- 0-3. A textid of 0 (OZ row 1) talks nothing — C++ Talk() skips
+-- Talk(0) but still takes that row's timer.
+local DIALOGUE = {
+    [EVENT_OZ] = { { 0, 6000 }, { 1, 18000 }, { 2, 9000 }, { 3, 15000 } },
+    [EVENT_HOOD] = { { 4, 6000 }, { 5, 10000 }, { 6, 14000 }, { 7, 15000 } },
+    [EVENT_RAJ] = { { 8, 5000 }, { 9, 7000 }, { 10, 14000 }, { 11, 14000 } },
+}
+
+-- Initialize() TalkTimer (karazhan.cpp:154-164): first Talk fires
+-- 2000ms after the wp4 pause.
+local TALK_TIMER_INITIAL = 2000
+
 -- Per-instance opera event id (the instance-ctor roll twin) +
 -- per-GUID Barnes state (Initialize() locals).
 local operaEventByInstance = {}
@@ -120,9 +145,52 @@ local function useDoor(creature, dataId)
     end
 end
 
+local function cancelDialogue(guid)
+    local st = barnesState[guid]
+    if st and st.talkEventId then
+        RemoveEventById(st.talkEventId)
+        st.talkEventId = nil
+    end
+end
+
+-- C++ UpdateAI dialogue leg (karazhan.cpp:296-310): while the escort is
+-- paused, each TalkTimer expiry talks the current TalkCount row (or,
+-- once TalkCount > 3, despawns the spotlight and unpauses). The pump
+-- is armed at wp4 with the Initialize() TalkTimer and re-arms itself
+-- with the row's timer after each Talk.
+local function dialogueTick(creature, guid)
+    local st = barnesState[guid]
+    if not st then
+        return
+    end
+    st.talkEventId = nil
+    if st.talkCount > 3 then
+        if st.spotlightGUID then
+            local spotlight = creature:GetCreatureByGUID(st.spotlightGUID)
+            if spotlight then
+                spotlight:Despawn()
+            end
+            st.spotlightGUID = nil
+        end
+        creature:SetEscortPaused(false)
+        return
+    end
+    local rows = DIALOGUE[st.eventId]
+    local row = rows and rows[st.talkCount + 1]
+    if not row then
+        return
+    end
+    if row[1] ~= 0 then
+        creature:Talk(row[1])
+    end
+    st.talkCount = st.talkCount + 1
+    st.talkEventId = CreateLuaEvent(function() dialogueTick(creature, guid) end, row[2])
+end
+
 -- C++ Reset (karazhan.cpp:169-173) + Initialize() (:154-164).
 local function onBarnesReset(event, creature)
     local guid = creature:GetGUIDLow()
+    cancelDialogue(guid)
     local key = instanceKey(creature)
     if operaEventByInstance[key] == nil then
         operaEventByInstance[key] = math.random(EVENT_OZ, EVENT_RAJ)
@@ -130,9 +198,15 @@ local function onBarnesReset(event, creature)
     barnesState[guid] = {
         eventId = operaEventByInstance[key],
         talkCount = 0,
+        spotlightGUID = nil,
+        talkEventId = nil,
         performanceReady = false,
         raidWiped = false,
     }
+end
+
+local function onBarnesDied(event, creature)
+    cancelDialogue(creature:GetGUIDLow())
 end
 
 -- C++ PrepareEncounter (karazhan.cpp:241-286).
@@ -170,6 +244,7 @@ local function barnesReachWP(event, creature)
         creature:CastSpell(creature, SPELL_TUXEDO)
         useDoor(creature, DATA_GO_STAGEDOORLEFT)
     elseif wp == 4 then
+        cancelDialogue(guid)
         st.talkCount = 0
         creature:SetEscortPaused(true)
         local spotlight = creature:SummonCreature(NPC_SPOTLIGHT,
@@ -178,7 +253,9 @@ local function barnesReachWP(event, creature)
         if spotlight then
             spotlight:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             spotlight:CastSpell(spotlight, SPELL_SPOTLIGHT)
+            st.spotlightGUID = spotlight:GetGUIDLow()
         end
+        st.talkEventId = CreateLuaEvent(function() dialogueTick(creature, guid) end, TALK_TIMER_INITIAL)
     elseif wp == 8 then
         useDoor(creature, DATA_GO_STAGEDOORLEFT)
         st.performanceReady = true
@@ -189,5 +266,6 @@ local function barnesReachWP(event, creature)
     end
 end
 
+RegisterCreatureEvent(ENTRY_BARNES, 4, onBarnesDied)
 RegisterCreatureEvent(ENTRY_BARNES, 23, onBarnesReset)
 RegisterCreatureEvent(ENTRY_BARNES, 6, barnesReachWP)

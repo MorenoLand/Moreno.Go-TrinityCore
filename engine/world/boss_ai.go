@@ -24016,6 +24016,16 @@ func init() {
 	// C++ LastRites enum (zone_borean_tundra.cpp:413).
 	RegisterLuaBoss("npc_counselor_talbot", 25301)
 	// Checked-no-gate: zero HasUnitState hits in zone_borean_tundra.cpp — combat-start ShadowBolt/Deflection/SoulBlast pumps stay ungated (UpdateVictim-gated, not cast-gated).
+	// npc_general_arlos (Borean Tundra, Last Rites quest chain) —
+	// ported arms in lua_scripts/northrend/npc_general_arlos.lua:
+	// MovementInform(POINT_MOTION_TYPE) -> AddUnitState(UNIT_STATE_STUNNED
+	// 0x8) (zone_borean_tundra.cpp:803-814). The whole AI is that one arm:
+	// no combat timers, no UpdateAI. The SPELL_STUN 46957 self-cast leg
+	// stays out (spell unseeded in the Go store; seed axis parked) and
+	// the ENSURE_AI thassarian arlosInPosition latch stays out (no
+	// cross-AI bridge). Entry 25250 verifiable from the C++ LastRites
+	// enum (zone_borean_tundra.cpp:415).
+	RegisterLuaBoss("npc_general_arlos", 25250)
 	// npc_bloodmage_laurith (Borean Tundra, quest 11719) — ported arms in
 	// lua_scripts/northrend/npc_bloodmage_laurith.lua: Reset() (event cancel +
 	// player-GUID clear) and the SetGUID (ev40) / EVENT_TALK (1s, Talk 0 to the
