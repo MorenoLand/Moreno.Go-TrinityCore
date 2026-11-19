@@ -101,6 +101,7 @@ const (
 	effSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
 	effSpawn                   = 46  // SPELL_EFFECT_SPAWN (SharedDefines.h:857; clientside-only, spells.go:19747)
 	auraPeriodicDmg            = 3
+	auraPeriodicTriggerSpell   = 23 // SPELL_AURA_PERIODIC_TRIGGER_SPELL (SpellAuraDefines.h:103)
 	auraPeriodicEnergize       = 24 // SPELL_AURA_PERIODIC_ENERGIZE (SpellAuraDefines.h:104)
 	auraPeriodicHeal           = 8  // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
 	auraDummy                  = 4
@@ -207,6 +208,7 @@ const (
 	targetSrcAreaEnemy         = 15
 	targetDestDB               = 17  // TARGET_DEST_DB
 	targetDestCaster           = 18  // TARGET_DEST_CASTER (SharedDefines.h:1455)
+	targetDestTargetBack       = 65  // TARGET_DEST_TARGET_BACK (SharedDefines.h:1501)
 	targetUnitCasterAreaParty  = 20  // TARGET_UNIT_CASTER_AREA_PARTY (SharedDefines.h:1456)
 	targetUnitTargetAlly       = 21  // TARGET_UNIT_TARGET_ALLY (SharedDefines.h:1457)
 	targetUnitDestAreaEnemy    = 16  // TARGET_UNIT_DEST_AREA_ENEMY
@@ -3067,6 +3069,34 @@ var spells = []spell{
 		{effect: effScriptEffect, basePoints: 99, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModIncreaseHealthPct, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 14, dieSides: 1, misc: 95, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 69504 "Leaping Face Maul" (pit_of_saron.cpp:35 enum; Lua pit_of_saron_trash.lua :63 SPELL_LEAPING_FACE_MAUL) - wago.tools 3.4.5.63697 SpellEffect rows 972996/972997 (DifficultyID 0) + SpellMisc 616518 + SpellAuraOptions 206089 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 JUMP (41) bp-1/die1 misc 30/miscB 50 tgtA 25 (TARGET_UNIT_TARGET_ANY) chainAmp 0; eff1 TRIGGER_SPELL (64) bp0/die0 tgtA 25 trigger 69503 (Devour Humanoid) chainAmp 1. Cast Instant idx 1, durIdx 0 (no duration - no SpellDuration row 0), range54 "Monster Shoot" 5-30yd (real row), school Physical, dispel 0, mechanic 0. No SpellPower row read - manaCost omitted. NOT carried: Attributes all 0x0 (no field); SpellAuraOptions ProcChance 101 (no field). FLAG: DifficultyID 0 has NO SCHOOL_DAMAGE row - D0 eff0 is JUMP and eff1 is TRIGGER_SPELL (damage exists only at D2/D4, index 0 there); do not seed a damage effect for 69504. The JUMP row's EffectAmplitude 1 is not carried (no amplitude field in the effect struct, chainAmplitude only); its ChainAmplitude 0 is carried (camp 0). Trigger target 69503 is a separate spell, not seeded here.
+	{id: 69504, castTimeIdx: 1, durIdx: 0, rangeIdx: 54, school: schoolPhysical, effects: [3]effect{
+		{effect: effJump, basePoints: -1, dieSides: 1, misc: 30, miscB: 50, targetA: targetUnitTargetAny},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 0, trigger: 69503, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 69527 "Frost Breath" (pit_of_saron.cpp:34 enum; Lua pit_of_saron_trash.lua :62 SPELL_FROST_BREATH) - wago.tools 3.4.5.63697 SpellEffect rows 978312/978313 (DifficultyID 0) + SpellMisc 620358 + SpellCategories 131815 + SpellAuraOptions 209931 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 SCHOOL_DAMAGE (2) bp5362/die275 tgtA 24 (TARGET_UNIT_CONE_ENEMY_24) radiusIdx 10 (30 yd, real row) = 5363-5637 Frost; eff1 APPLY_AURA MOD_MELEE_HASTE (138) bp-101/die1 tgtA 24 radiusIdx 9 (20 yd, real row) = -100% attack speed. Cast idx 16 (1500 ms, real row), dur32 6000 ms (real row), range2 5yd Combat (real row, Flags 0x1), school Frost, dispel 1 MAGIC (SpellCategories DispelType 1), mechanic 0 (SpellCategories Category 2, DefenseType 1 - no fields). No SpellPower row read - manaCost omitted. NOT carried: EffectAttributes 0x20000 (no field); eff1 BonusCoefficient 1 (no bonusCoeff field); SpellAuraOptions ProcChance 101 (no field).
+	{id: 69527, dispel: 1, castTimeIdx: 16, durIdx: 32, rangeIdx: 2, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 5362, dieSides: 275, targetA: targetUnitConeEnemy, radiusIdx: 10, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -101, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 69583 "Fireball" (pit_of_saron.cpp:31 enum; Lua pit_of_saron_trash.lua :59 SPELL_FIREBALL) - wago.tools 3.4.5.63697 SpellEffect rows 972300/972301 (DifficultyID 0) + SpellMisc 616001 + SpellCategories 130226 + SpellCooldowns 74610 + SpellPower 250667 + SpellAuraOptions 205572 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 SCHOOL_DAMAGE (2) bp4809/die781 tgtA 6 (TARGET_UNIT_TARGET_ENEMY) = 4810-5590 Fire; eff1 ZERO (NO Index 1 row exists); eff2 APPLY_AURA PERIODIC_DAMAGE (3) bp799/die1 auraPeriod 3000 tgtA 6 = 800 Fire every 3s. Cast idx 14 (3000 ms, real row), dur105 9000 ms (real row), range5 40yd Long (real row), school Fire, dispel 1 MAGIC (SpellCategories DispelType 1), mechanic 0, manaCost 90 (SpellPower row, PowerType 0). NOT carried: SpellCooldowns RecoveryTime 0 / CategoryRecoveryTime 0 / StartRecoveryTime 1500 (the 1500 is the GCD; no cooldown field); Speed 28 projectile (no field); SpellCategories PreventionType 0x1 / StartRecoveryCategory 133 (no fields); SpellAuraOptions ProcChance 101 (no field). FLAG: difficulty variants D2/D4 (bp6197/die1005 + periodic bp1799) - seed carries DifficultyID 0 only.
+	{id: 69583, dispel: 1, castTimeIdx: 14, durIdx: 105, rangeIdx: 5, school: schoolFire, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 4809, dieSides: 781, targetA: targetEnemy, chainAmplitude: 1},
+		{},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 799, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 69584 "Tactical Blink" (pit_of_saron.cpp:33 enum; Lua pit_of_saron_trash.lua :61 SPELL_TACTICAL_BLINK) - wago.tools 3.4.5.63697 SpellEffect rows 977587/977588/977589 (DifficultyID 0 only) + SpellMisc 619846 + SpellCategories 131588 + SpellAuraOptions 209418 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 TELEPORT_UNITS bp0/die0 tgtA 1 tgtB 65 (TARGET_DEST_TARGET_BACK) radiusIdx 8 (5 yd, real row); eff1 APPLY_AURA MECHANIC_IMMUNITY (77) bp0/die0 misc 13 (Frozen) tgtA 1; eff2 APPLY_AURA MECHANIC_IMMUNITY (77) bp0/die0 misc 7 (Rooted) tgtA 1. Cast Instant idx 1, dur36 1000 ms (real row), range5 40yd Long (real row), school Fire, dispel 0, mechanic 0 (SpellCategories Category 1162, DefenseType 1 - no fields). No SpellPower row read - manaCost omitted. NOT carried: Attributes_0 0x10000, Attributes_1 0x8000 (no field); SpellAuraOptions ProcChance 101 (no field). FLAG: wago 3.4.5 shows Effect 252 for TELEPORT_UNITS - seed uses effTeleportUnits (5): C++ SharedDefines.h:816 and Go engine/world/spells.go:431 dispatch on 5; the 3.4.5 DB2 renumbered the effect. DifficultyID 0 only everywhere - no variants.
+	{id: 69584, castTimeIdx: 1, durIdx: 36, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effTeleportUnits, basePoints: 0, dieSides: 0, targetA: targetCaster, targetB: targetDestTargetBack, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, basePoints: 0, dieSides: 0, misc: 13, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, basePoints: 0, dieSides: 0, misc: 7, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 69586 "Hellfire" (pit_of_saron.cpp:32 enum; Lua pit_of_saron_trash.lua :60 SPELL_HELLFIRE) - wago.tools 3.4.5.63697 SpellEffect rows 972361/972362/972363 (DifficultyID 0) + SpellMisc 616048 + SpellCategories 130242 + SpellCooldowns 74616 + SpellPower 250714 + SpellAuraOptions 205619 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL (23) bp-1/die1 auraPeriod 1000 tgtA 1 trigger 69585 (Hellfire Effect); eff1 APPLY_AURA PERIODIC_DAMAGE (3) bp1499/die1 auraPeriod 1000 tgtA 1 = 1500 Fire every 1s; eff2 APPLY_AURA MECHANIC_IMMUNITY (77) bp99/die1 misc 16 (Healing) tgtA 1 = 100%. Cast Instant idx 1, dur8 15000 ms channel (real row), range1 Self (real row), school Fire, dispel 0, mechanic 0, manaCostPct 64 (SpellPower PowerCostPct 64, ManaCost 0). NOT carried: SpellCooldowns RecoveryTime 0 / CategoryRecoveryTime 0 / StartRecoveryTime 1500 (the 1500 is the GCD; no cooldown field); eff2 BonusCoefficient 1 (no bonusCoeff field); Attributes (no field); SpellCategories PreventionType 0x1 / StartRecoveryCategory 133 (no fields); SpellAuraOptions ProcChance 101 (no field). FLAG: difficulty variants D2/D4 (periodic bp1999) - seed carries DifficultyID 0 only. Trigger target 69585 is a separate spell, not seeded here.
+	{id: 69586, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolFire, manaCostPct: 64, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTriggerSpell, basePoints: -1, dieSides: 1, auraPeriod: 1000, trigger: 69585, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 1499, dieSides: 1, auraPeriod: 1000, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, basePoints: 99, dieSides: 1, misc: 16, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
