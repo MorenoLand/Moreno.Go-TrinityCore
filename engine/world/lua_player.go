@@ -1407,6 +1407,59 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.totalAttackPowerValue(attackType == 2)}, nil
 	}
+	// GetAttackTime([attackType]) is Unit::GetAttackTime (Unit.cpp:8609):
+	// the stored base delay divided by m_modAttackSpeedPct — the two are
+	// scaled identically by ApplyAttackTimePercentMod, so the result is
+	// the pristine weapon delay, which Go stores unscaled in
+	// state.AttackTime (the swing timer folds haste separately via
+	// getHastedMeleeSpeed). BASE_ATTACK (0, default), OFF_ATTACK (1),
+	// RANGED_ATTACK (2); any other type errors, like
+	// GetTotalAttackPowerValue above.
+	methods["GetAttackTime"] = func(_ context.Context, args []any) ([]any, error) {
+		attackType, err := luaOptionalUint32Arg(args, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		switch attackType {
+		case 0:
+			return []any{state.AttackTime}, nil
+		case 1:
+			return []any{state.OffhandAttackTime}, nil
+		case 2:
+			return []any{state.RangedAttackTime}, nil
+		default:
+			return nil, fmt.Errorf("attack type %d is invalid", attackType)
+		}
+	}
+	// GetTotalAuraModifier(auraType) is Unit::GetTotalAuraModifier
+	// (Unit.cpp:4831): the same-effect-gated sum of live amounts of one
+	// aura type, via getTotalAuraModifier (movement.go).
+	methods["GetTotalAuraModifier"] = func(_ context.Context, args []any) ([]any, error) {
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.getTotalAuraModifier(auraType)}, nil
+	}
+	// GetTotalAuraModifierByMiscMask(auraType, miscMask) is
+	// Unit::GetTotalAuraModifierByMiscMask (Unit.cpp:4937): the
+	// same-effect-gated sum of live amounts of one aura type whose effect
+	// MiscValue overlaps miscMask, via gatedAuraModifierAmountsByMiscMask.
+	methods["GetTotalAuraModifierByMiscMask"] = func(_ context.Context, args []any) ([]any, error) {
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		miscMask, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		var total int32
+		for _, amount := range s.gatedAuraModifierAmountsByMiscMask(auraType, miscMask) {
+			total += amount
+		}
+		return []any{total}, nil
+	}
 	methods["GetGMRank"] = luaNoArgs(func() any { return s.security })
 	methods["IsGM"] = luaNoArgs(func() any { return s.security > 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
@@ -3037,6 +3090,62 @@ func (s *session) luaPlayer() *scripting.Object {
 			return nil, err
 		}
 		return []any{s.hasAuraType(auraType)}, nil
+	}
+	// GetTotalAuraModifier(auraType) is Unit::GetTotalAuraModifier
+	// (Unit.cpp:4917): the same-effect-gated sum of live amounts of the
+	// given SPELL_AURA_* type, via the session twin. Backs proc arms
+	// such as Seal of Righteousness (21084, spell_paladin.cpp:2082-2136),
+	// whose 25742 damage scales off the Holy spellpower modifier.
+	methods["GetTotalAuraModifier"] = func(_ context.Context, args []any) ([]any, error) {
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.getTotalAuraModifier(auraType)}, nil
+	}
+	// GetTotalAuraModifierByMiscMask(auraType, miscMask) is
+	// Unit::GetTotalAuraModifierByMiscMask (Unit.cpp:4937): the same
+	// predicate with the MiscValue-overlap gate, via the session
+	// auraTypeModifiersByMiscMask fold.
+	methods["GetTotalAuraModifierByMiscMask"] = func(_ context.Context, args []any) ([]any, error) {
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		miscMask, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		var total int32
+		for _, amount := range s.auraTypeModifiersByMiscMask(auraType, miscMask) {
+			total += amount
+		}
+		return []any{total}, nil
+	}
+	// GetAttackTime(attackType) is Unit::GetAttackTime (Unit.cpp:8609-8613):
+	// UNIT_FIELD_BASEATTACKTIME[att] / m_modAttackSpeedPct[att]. The
+	// field and the modifier scale together (ApplyAttackTimePercentMod,
+	// Unit.cpp:10847-10864), so the quotient is the pristine base time
+	// the session stores: AttackTime (0, BASE_ATTACK), OffhandAttackTime
+	// (1, OFF_ATTACK), RangedAttackTime (2, RANGED_ATTACK), in ms.
+	methods["GetAttackTime"] = func(_ context.Context, args []any) ([]any, error) {
+		attackType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.player == nil {
+			return []any{uint32(0)}, nil
+		}
+		switch attackType {
+		case 0:
+			return []any{s.player.AttackTime}, nil
+		case 1:
+			return []any{s.player.OffhandAttackTime}, nil
+		case 2:
+			return []any{s.player.RangedAttackTime}, nil
+		default:
+			return nil, fmt.Errorf("GetAttackTime: invalid attack type %d", attackType)
+		}
 	}
 	// HasOffhandWeapon is Unit::haveOffhandWeapon (Unit.cpp): whether
 	// the player has an offhand weapon equipped, the session twin in
