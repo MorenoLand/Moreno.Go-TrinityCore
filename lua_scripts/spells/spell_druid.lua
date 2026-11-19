@@ -28,7 +28,9 @@
 --   PreventDefaultAction (PERIODIC_DUMMY), so the Go default tick
 --   still fires.
 --   spell_dru_lifebloom (spell_druid.cpp:828-883): aura 33763, mode
---   3, PARTIAL. AfterRemove fires only on expire
+--   3, PARTIAL. R2-R3 (48450/48451) ride the same handler — TDB
+--   (-33763) NEG all-ranks binding, chain 33763/48450/48451.
+--   AfterRemove fires only on expire
 --   (GetRemoveMode() == 4, AURA_REMOVE_BY_EXPIRE): the target casts
 --   the final heal 33778 on itself with BP0 = the EFFECT_1 amount
 --   (live, stack-scaled). The mana-energize leg (64372, needs the
@@ -83,6 +85,8 @@ local SPELL_DRUID_ENRAGED_DEFENSE = 70725
 local SPELL_DRUID_FRENZIED_REGENERATION = 22842
 local SPELL_DRUID_FRENZIED_REGENERATION_HEAL = 22845
 local SPELL_DRUID_LIFEBLOOM = 33763
+local SPELL_DRUID_LIFEBLOOM_R2 = 48450
+local SPELL_DRUID_LIFEBLOOM_R3 = 48451
 local SPELL_DRUID_LIFEBLOOM_FINAL_HEAL = 33778
 local SPELL_DRUID_SAVAGE_ROAR = 52610
 local SPELL_DRUID_SAVAGE_ROAR_BUFF = 62071
@@ -148,6 +152,8 @@ local function lifebloomRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_DRUID_LIFEBLOOM, 3, lifebloomRemove)
+RegisterAuraEvent(SPELL_DRUID_LIFEBLOOM_R2, 3, lifebloomRemove)
+RegisterAuraEvent(SPELL_DRUID_LIFEBLOOM_R3, 3, lifebloomRemove)
 
 local function savageRoarApply(event, aura, target)
     target:CastSpell(target, SPELL_DRUID_SAVAGE_ROAR_BUFF, true)

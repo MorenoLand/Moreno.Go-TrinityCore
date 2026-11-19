@@ -588,9 +588,17 @@ RegisterAuraEvent(SPELL_HUNTER_VIPER_ATTACK_SPEED, 3, viperAttackSpeedRemove)
 --   castCreatureSpellInternalWithBasePoints (53478 precedent).
 --   The player-cast leg lives in Go (spells.go): a hunter casting
 --   either spell keeps the caster alone, since a player has no
---   owner (Unit.h:1147). DORMANT until Spell.dbc drives the casts.
+--   owner (Unit.h:1147). Furious Howl R2-R6 (64491-64495) ride the
+--   same handler — TDB (-24604) NEG all-ranks binding, chain
+--   24604/64491/64492/64493/64494/64495; 53434 is single-rank.
+--   DORMANT until Spell.dbc drives the casts.
 local SPELL_HUNTER_CALL_OF_THE_WILD = 53434 -- spell_hunter.cpp:1485
 local SPELL_HUNTER_FURIOUS_HOWL = 24604 -- spell_hunter.cpp:1485
+local SPELL_HUNTER_FURIOUS_HOWL_R2 = 64491
+local SPELL_HUNTER_FURIOUS_HOWL_R3 = 64492
+local SPELL_HUNTER_FURIOUS_HOWL_R4 = 64493
+local SPELL_HUNTER_FURIOUS_HOWL_R5 = 64494
+local SPELL_HUNTER_FURIOUS_HOWL_R6 = 64495
 
 local function targetOnlyPetAndOwnerFilter(event, spell, effectIndex, targets)
     local caster = spell:GetCaster()
@@ -607,6 +615,9 @@ end
 
 RegisterSpellEvent(SPELL_HUNTER_CALL_OF_THE_WILD, 7, targetOnlyPetAndOwnerFilter)
 RegisterSpellEvent(SPELL_HUNTER_FURIOUS_HOWL, 7, targetOnlyPetAndOwnerFilter)
+for _, spellId in ipairs({ SPELL_HUNTER_FURIOUS_HOWL_R2, SPELL_HUNTER_FURIOUS_HOWL_R3, SPELL_HUNTER_FURIOUS_HOWL_R4, SPELL_HUNTER_FURIOUS_HOWL_R5, SPELL_HUNTER_FURIOUS_HOWL_R6 }) do
+    RegisterSpellEvent(spellId, 7, targetOnlyPetAndOwnerFilter)
+end
 
 -- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
 --   spell_hun_rapid_recuperation::HandlePeriodic

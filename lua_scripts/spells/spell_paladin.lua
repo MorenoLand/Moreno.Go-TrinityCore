@@ -731,13 +731,16 @@ RegisterSpellEvent(SPELL_PALADIN_RIGHTEOUS_DEFENSE, 5, righteousDefenseHit)
 local SPELL_PALADIN_DIVINE_PROTECTION = 498 -- spell_paladin.cpp:1190 (class spell_pal_immunities)
 local SPELL_PALADIN_DIVINE_SHIELD = 642 -- spell_paladin.cpp:1191
 local SPELL_PALADIN_HAND_OF_PROTECTION = 1022 -- spell_paladin.cpp:1192
+local SPELL_PALADIN_HAND_OF_PROTECTION_R2 = 5599
+local SPELL_PALADIN_HAND_OF_PROTECTION_R3 = 10278
 
 -- C++ spell_pal_immunities::CheckCast (spell_paladin.cpp:1207-1221):
 -- a nil explicit target defaults to the caster (HoP); a target carrying
 -- Forbearance (25771) or the Avenging Wrath marker (61987) fails with
--- SPELL_FAILED_TARGET_AURASTATE. Base IDs only (the C++ comment's
--- 498/642/1022) — higher ranks are DB-bound via spell_script_names,
--- unestablished in-tree. RegisterSpellEvent OnCheckCast = 8.
+-- SPELL_FAILED_TARGET_AURASTATE. HoP R2-R3 (5599/10278) ride both
+-- handlers — TDB (-1022) NEG all-ranks binding, chain 1022/5599/
+-- 10278; 498/642 are single-rank (POS bindings). RegisterSpellEvent
+-- OnCheckCast = 8.
 local function paladinImmunitiesCheckCast(event, spell)
     local target = spell:GetTarget()
     if target == nil then
@@ -749,7 +752,7 @@ local function paladinImmunitiesCheckCast(event, spell)
     return SPELL_CAST_OK
 end
 
-for _, spellId in ipairs({ SPELL_PALADIN_DIVINE_PROTECTION, SPELL_PALADIN_DIVINE_SHIELD, SPELL_PALADIN_HAND_OF_PROTECTION }) do
+for _, spellId in ipairs({ SPELL_PALADIN_DIVINE_PROTECTION, SPELL_PALADIN_DIVINE_SHIELD, SPELL_PALADIN_HAND_OF_PROTECTION, SPELL_PALADIN_HAND_OF_PROTECTION_R2, SPELL_PALADIN_HAND_OF_PROTECTION_R3 }) do
     RegisterSpellEvent(spellId, 8, paladinImmunitiesCheckCast)
 end
 
@@ -757,9 +760,8 @@ end
 -- AfterHit, the hit unit gains Forbearance (25771) and both markers
 -- (61987, 61988). C++ is GetCaster()->AddAura(id, target); Lua AddAura
 -- is self-only on both surfaces, so the twin is hitTarget:AddAura(id)
--- (slime-puddle ReplaceAura precedent). Base IDs only, same scope as
--- the CheckCast port above (-1022 all-ranks binding: higher HoP rank
--- IDs unestablished in-tree). RegisterSpellEvent AfterHit = 3.
+-- (slime-puddle ReplaceAura precedent). HoP R2-R3 ride the same
+-- handler (see CheckCast note above). RegisterSpellEvent AfterHit = 3.
 local function paladinImmunitiesAfterHit(event, spell, hitTarget)
     if hitTarget == nil then
         return
@@ -769,7 +771,7 @@ local function paladinImmunitiesAfterHit(event, spell, hitTarget)
     hitTarget:AddAura(SPELL_PALADIN_IMMUNE_SHIELD_MARKER)
 end
 
-for _, spellId in ipairs({ SPELL_PALADIN_DIVINE_PROTECTION, SPELL_PALADIN_DIVINE_SHIELD, SPELL_PALADIN_HAND_OF_PROTECTION }) do
+for _, spellId in ipairs({ SPELL_PALADIN_DIVINE_PROTECTION, SPELL_PALADIN_DIVINE_SHIELD, SPELL_PALADIN_HAND_OF_PROTECTION, SPELL_PALADIN_HAND_OF_PROTECTION_R2, SPELL_PALADIN_HAND_OF_PROTECTION_R3 }) do
     RegisterSpellEvent(spellId, 3, paladinImmunitiesAfterHit)
 end
 
