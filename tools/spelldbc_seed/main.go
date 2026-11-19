@@ -82,6 +82,7 @@ const (
 	effAttackMe                = 114 // SPELL_EFFECT_ATTACK_ME (SharedDefines.h:925)
 	effPullTowards             = 124 // SPELL_EFFECT_PULL_TOWARDS (SharedDefines.h:935)
 	effKillCredit2             = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
+	effUnlearnSpecialization   = 133 // SPELL_EFFECT_UNLEARN_SPECIALIZATION (SharedDefines.h:944)
 	effKillCredit              = 90  // SPELL_EFFECT_KILL_CREDIT (SharedDefines.h:901)
 	effWeaponDamage            = 58
 	effWeaponPercentDmg        = 31  // SPELL_EFFECT_WEAPON_PERCENT_DAMAGE (SharedDefines.h:842)
@@ -3291,6 +3292,28 @@ var spells = []spell{
 	// 73220 "Emote - Sit (No Sheath)" - FLAG: enum/Lua label SPELL_FROSTMOURNE_VISUAL (halls_of_reflection.cpp:223; Lua halls_of_reflection_intro.lua :111) is WRONG per wago SpellName + Wowhead (both "Emote - Sit (No Sheath)"); DB effect is APPLY_AURA DUMMY, not a visual. Seeded under its REAL DB identity; the true Frostmourne-visual spell ID is unresolved (held flag). wago.tools 3.4.5.63697 SpellEffect row (DifficultyID 0) + SpellMisc 618296 + SpellAuraOptions 207866 (ABSENT from 2.5.6.70577 - WotLK-only): eff0 APPLY_AURA DUMMY (4, auraDummy) bp0/die0 tgtA 1. Cast Instant idx 1, dur21 -1 infinite (real row), range1 Self (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x40100, Attributes_1 0x10000000 (no field); SpellAuraOptions ProcChance 101 (no field).
 	{id: 73220, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 9789 "Weaponsmith" (npc_professions.cpp:109 enum S_LEARN_WEAPON; Lua npc_prof_blacksmith.lua :44) - wago.tools 3.4.5.63697 SpellEffect rows 688254/909317 (DifficultyID 0) + SpellMisc 322120 (PRESENT in 2.5.6.70577 - Classic spell, added 1.13.0; NOT WotLK-only): eff0 LEARN_SPELL (36, effLearnSpell) bp24/die1 tgtA 25 trigger 9787; eff1 UNLEARN_SPECIALIZATION (133, effUnlearnSpecialization) bp-1/die1 tgtA 25 trigger 9788. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range6 Vision 100yd (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions / SpellAuraOptions rows - manaCost omitted. NOT carried: Attributes_0 0x100 (no field). Triggers 9787/9788 NOT seeded (held flags).
+	{id: 9789, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effLearnSpell, basePoints: 24, dieSides: 1, targetA: targetUnitTargetAny, trigger: 9787, chainAmplitude: 1},
+		{effect: effUnlearnSpecialization, basePoints: -1, dieSides: 1, targetA: targetUnitTargetAny, trigger: 9788, chainAmplitude: 1},
+	}},
+	// 9790 "Armorsmith" (npc_professions.cpp:110 enum S_LEARN_ARMOR; Lua npc_prof_blacksmith.lua :45) - wago.tools 3.4.5.63697 SpellEffect rows 687302/909318 (DifficultyID 0) + SpellMisc 321360 (PRESENT in 2.5.6.70577 - Classic spell, added 1.13.0; NOT WotLK-only): eff0 LEARN_SPELL (36, effLearnSpell) bp24/die1 tgtA 25 trigger 9788; eff1 UNLEARN_SPECIALIZATION (133, effUnlearnSpecialization) bp-1/die1 tgtA 25 trigger 9787. NOTE trigger swap vs 9789: 9790 learns 9788, unlearns 9787. Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range6 Vision 100yd (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions / SpellAuraOptions rows - manaCost omitted. NOT carried: Attributes_0 0x100 (no field). Triggers 9787/9788 NOT seeded (held flags).
+	{id: 9790, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effLearnSpell, basePoints: 24, dieSides: 1, targetA: targetUnitTargetAny, trigger: 9788, chainAmplitude: 1},
+		{effect: effUnlearnSpecialization, basePoints: -1, dieSides: 1, targetA: targetUnitTargetAny, trigger: 9787, chainAmplitude: 1},
+	}},
+	// 39097 "Master Swordsmith" (npc_professions.cpp:113 enum S_LEARN_SWORD; Lua npc_prof_blacksmith.lua :48) - wago.tools 3.4.5.63697 SpellEffect row 859245 (DifficultyID 0) + SpellMisc 455454 + SpellAuraOptions 178381 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 LEARN_SPELL (36, effLearnSpell) bp24/die1 tgtA 25 trigger 17039. Single effect (no UNLEARN row). Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range6 Vision 100yd (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x100 (no field); SpellAuraOptions ProcChance 101 (no field). Trigger 17039 NOT seeded (held flag).
+	{id: 39097, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effLearnSpell, basePoints: 24, dieSides: 1, targetA: targetUnitTargetAny, trigger: 17039, chainAmplitude: 1},
+	}},
+	// 39098 "Master Axesmith" (npc_professions.cpp:112 enum S_LEARN_AXE; Lua npc_prof_blacksmith.lua :47) - wago.tools 3.4.5.63697 SpellEffect row 859246 (DifficultyID 0) + SpellMisc 455455 + SpellAuraOptions 178382 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 LEARN_SPELL (36, effLearnSpell) bp24/die1 tgtA 0 NONE (verified on page - differs from 39097/9789/9790 tgtA 25) trigger 17041. Single effect (no UNLEARN row). Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range6 Vision 100yd (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x100 (no field); SpellAuraOptions ProcChance 101 (no field). Trigger 17041 NOT seeded (held flag).
+	{id: 39098, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effLearnSpell, basePoints: 24, dieSides: 1, trigger: 17041, chainAmplitude: 1},
+	}},
+	// 39099 "Master Hammersmith" (npc_professions.cpp:111 enum S_LEARN_HAMMER; Lua npc_prof_blacksmith.lua :46) - wago.tools 3.4.5.63697 SpellEffect row 859247 (DifficultyID 0) + SpellMisc 455456 + SpellAuraOptions 178383 (PRESENT in 2.5.6.70577 - Classic spell, added 2.5.1; NOT WotLK-only): eff0 LEARN_SPELL (36, effLearnSpell) bp24/die1 tgtA 0 NONE (verified on page - differs from 39097 tgtA 25) trigger 17040. Single effect (no UNLEARN row). Cast Instant idx 1, durIdx 0 (no SpellDuration row 0), range6 Vision 100yd (real row), school Physical, dispel 0, mechanic 0. No SpellCategories / SpellCooldowns / SpellPower / SpellClassOptions rows - manaCost omitted. NOT carried: Attributes_0 0x100 (no field); SpellAuraOptions ProcChance 101 (no field). Trigger 17040 NOT seeded (held flag).
+	{id: 39099, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effLearnSpell, basePoints: 24, dieSides: 1, trigger: 17040, chainAmplitude: 1},
 	}},
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
