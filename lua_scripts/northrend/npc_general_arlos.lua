@@ -20,10 +20,11 @@
 --   Leryssa removes that aura on Talbot's death (:934); Arlos himself
 --   is killed by the KillSelf leg in TALBOT's JustDied (:933), not by
 --   thassarianDied — thassarianDied only despawns Talbot/Arthas.
--- Unmodeled (documented-only, no bridges):
--- - ENSURE_AI(npc_thassarian) arlosInPosition = true (:811): cross-AI
---   latch on the unported npc_thassarian escort/phase machine; no
---   cross-AI-ENSURE bridge (talbot header precedent).
+-- - MovementInform also writes arlosInPosition = true on the
+--   summoner's Thassarian AI (:811), through the shared
+--   ThassarianScene table (zone_borean_tundra.lua), nil-guarded.
+-- Unmodeled (documented-only, no bridges): none — the whole AI is
+-- ported (the MovementInform arm is the entire struct).
 -- Verifiable numbers (file's own enums): NPC_GENERAL_ARLOS = 25250
 -- (:415), SPELL_STUN = 46957 (:409).
 
@@ -34,14 +35,25 @@ local UNIT_STATE_STUNNED = 8 -- Unit.h:214
 local SPELL_STUN = 46957 -- zone_borean_tundra.cpp:409
 
 -- C++ MovementInform (zone_borean_tundra.cpp:803-814): on point-motion
--- arrival, stun self (state write + triggered 46957 self-cast); the
--- thassarian latch leg stays out (see header).
+-- arrival, stun self (state write + triggered 46957 self-cast), then
+-- the summoner's Thassarian AI gets arlosInPosition = true (:811),
+-- written through the shared ThassarianScene table
+-- (zone_borean_tundra.lua), nil-guarded.
 local function onMovementInform(event, creature, moveType, pointId)
     if moveType ~= POINT_MOTION_TYPE then
         return
     end
     creature:AddUnitState(UNIT_STATE_STUNNED)
     creature:CastSpell(creature, SPELL_STUN, true)
+    if creature:IsSummon() then
+        local summoner = creature:GetSummonerUnit()
+        if summoner and ThassarianScene then
+            local scene = ThassarianScene[summoner:GetGUIDLow()]
+            if scene then
+                scene.arlosInPosition = true
+            end
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_GENERAL_ARLOS, 28, onMovementInform)

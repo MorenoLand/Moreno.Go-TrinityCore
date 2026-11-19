@@ -24033,14 +24033,23 @@ func init() {
 	// (UNIT_STATE_STUNNED 0x8) + CastSpell(me, SPELL_STUN 46957,
 	// triggered), bDone latch per GUID (zone_borean_tundra.cpp:971-988).
 	// The 46957 cast is silent until the spell is seeded in the Go
-	// store (seed axis parked). Ctor RemoveStandFlags(SIT) unbridged;
-	// bCheck / leryssaInPosition cross-AI latches stay out (no
-	// cross-AI bridge; Talbot bCheck consumer unported); second-arrival
-	// phase machine stays out (trigger is unported Talbot JustDied
-	// MovePoint; phase-7 thassarian phase=16 write has no bridge).
-	// Entry 25251 verifiable from the C++ LastRites enum
-	// (zone_borean_tundra.cpp:416).
+	// store (seed axis parked). Ctor RemoveStandFlags(SIT) unbridged.
+	// bCheck arm ported (TalbotBCheck global; consumer is Talbot's
+	// poll + JustDied tail); leryssaInPosition write ported via the
+	// shared ThassarianScene table; second-arrival phase machine
+	// ported (trigger is Talbot's JustDied MoveTo; phase-7 write
+	// lands in ThassarianScene for the machine in
+	// zone_borean_tundra.lua). Entry 25251 verifiable from the C++
+	// LastRites enum (zone_borean_tundra.cpp:416).
 	RegisterLuaBoss("npc_leryssa", 25251)
+	// npc_image_lich_king (Borean Tundra, Last Rites quest chain) —
+	// ported arms in lua_scripts/northrend/npc_image_lich_king.lua:
+	// MovementInform (POINT_MOTION_TYPE) -> arthasInPosition = true
+	// on the summoner's Thassarian AI (zone_borean_tundra.cpp:772-780),
+	// via the shared ThassarianScene table. Reset RestoreFaction
+	// unbridged. Entry 26203 verifiable from the C++ LastRites enum
+	// (zone_borean_tundra.cpp:412).
+	RegisterLuaBoss("npc_image_lich_king", 26203)
 	// npc_bloodmage_laurith (Borean Tundra, quest 11719) — ported arms in
 	// lua_scripts/northrend/npc_bloodmage_laurith.lua: Reset() (event cancel +
 	// player-GUID clear) and the SetGUID (ev40) / EVENT_TALK (1s, Talk 0 to the

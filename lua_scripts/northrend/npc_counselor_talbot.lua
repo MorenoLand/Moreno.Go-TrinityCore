@@ -48,17 +48,23 @@
 --   SetWalk(false) + MoveTo(0, 3722.11, 3564.20, 477.44) — the
 --   MovePoint twin (lua_creature_events.go:5791), which fires
 --   Leryssa's second arrival and her phase machine.
+-- - MovementInform(POINT_MOTION_TYPE) -> ENSURE_AI(npc_thassarian)
+--   talbotInPosition cross-AI latch (:866-874): if summoned, the
+--   summoner's Thassarian AI gets talbotInPosition = true, written
+--   through the shared ThassarianScene table (zone_borean_tundra.lua),
+--   nil-guarded — inert until the machine file defines it.
+-- - Dual-entry registration: C++ phase 2 UpdateEntry(NPC_PRINCE_
+--   VALANAR 28189) re-seats Talbot, and entry-keyed triggers then
+--   fire under 28189, not 25301 (dathrohan/balnazzar dual-
+--   registration precedent). Combat only starts post-transform and
+--   he dies as Valanar, so the combat/died/reset legs register
+--   under both entries. MovementInform stays 25301-only (arrival
+--   precedes the transform).
 -- Unmodeled (documented-only, no bridges):
 -- - JustDied RewardPlayerAndGroupAtEvent (:939-940): no Lua
 --   bridge (zero hits in the engine for the method name; the Go
 --   side only has the kill-rewarder path, kill.go:3074) — the
 --   quest credit leg stays out; the rest of the tail is ported.
--- - MovementInform(POINT_MOTION_TYPE) -> ENSURE_AI(npc_thassarian)
---   talbotInPosition cross-AI latch (:860-868): the write target
---   is Thassarian's AI field on the unported escort/phase machine
---   — stays with that unit (same standing as the Leryssa
---   leryssaInPosition write before the ThassarianScene table
---   existed).
 -- - npc_thassarian escort-scene react arms (zone_borean_tundra.cpp
 --   :509/:566/:604/:667/:675: arthas->SetReactState(PASSIVE) on
 --   WaypointReached(3), talbot->SetReactState(PASSIVE) at scene phase
@@ -73,6 +79,7 @@
 -- (:828), NPC_COUNSELOR_TALBOT = 25301 (:413).
 
 local ENTRY_COUNSELOR_TALBOT = 25301
+local ENTRY_PRINCE_VALANAR = 28189 -- zone_borean_tundra.cpp:414
 
 local SPELL_SHADOW_BOLT = 15537
 local SPELL_DEFLECTION = 51009
@@ -86,6 +93,8 @@ local UNIT_STATE_STUNNED = 8 -- Unit.h:214
 local SAY_ARLOS_1 = 0
 local SAY_ARLOS_2 = 1
 local SAY_LERYSSA_1 = 0
+
+local POINT_MOTION_TYPE = 8 -- karazhan.lua precedent
 
 -- Talbot JustDied MovePoint dest (:937).
 local LERYSSA_MOVE_X = 3722.114502
@@ -248,7 +257,36 @@ local function onReset(event, creature)
     talbotBcheckPoll[guid] = CreateLuaEvent(function() bcheckTick(creature, guid) end, 1000)
 end
 
+-- C++ MovementInform (zone_borean_tundra.cpp:866-874): on
+-- point-motion arrival, if summoned, the summoner's Thassarian AI
+-- gets talbotInPosition = true.
+local function onMovementInform(event, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    if not creature:IsSummon() then
+        return
+    end
+    local summoner = creature:GetSummonerUnit()
+    if not summoner then
+        return
+    end
+    if ThassarianScene then
+        local scene = ThassarianScene[summoner:GetGUIDLow()]
+        if scene then
+            scene.talbotInPosition = true
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_COUNSELOR_TALBOT, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_COUNSELOR_TALBOT, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_COUNSELOR_TALBOT, 4, onDied)
 RegisterCreatureEvent(ENTRY_COUNSELOR_TALBOT, 23, onReset)
+RegisterCreatureEvent(ENTRY_COUNSELOR_TALBOT, 28, onMovementInform)
+-- Post-transform entry (see header): combat/died/reset legs under
+-- both entries; the pumps are per-GUID, so no double-seeding.
+RegisterCreatureEvent(ENTRY_PRINCE_VALANAR, 1, onEnterCombat)
+RegisterCreatureEvent(ENTRY_PRINCE_VALANAR, 2, onLeaveCombat)
+RegisterCreatureEvent(ENTRY_PRINCE_VALANAR, 4, onDied)
+RegisterCreatureEvent(ENTRY_PRINCE_VALANAR, 23, onReset)
