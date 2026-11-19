@@ -18,6 +18,19 @@
 --   fungal-decay note), so a reapply casts nothing.
 
 local SPELL_PRIEST_RENEW = 139 -- spell_priest.cpp:1220 (class spell_pri_renew)
+local SPELL_PRIEST_RENEW_R2 = 6074
+local SPELL_PRIEST_RENEW_R3 = 6075
+local SPELL_PRIEST_RENEW_R4 = 6076
+local SPELL_PRIEST_RENEW_R5 = 6077
+local SPELL_PRIEST_RENEW_R6 = 6078
+local SPELL_PRIEST_RENEW_R7 = 10927
+local SPELL_PRIEST_RENEW_R8 = 10928
+local SPELL_PRIEST_RENEW_R9 = 10929
+local SPELL_PRIEST_RENEW_R10 = 25315
+local SPELL_PRIEST_RENEW_R11 = 25221
+local SPELL_PRIEST_RENEW_R12 = 25222
+local SPELL_PRIEST_RENEW_R13 = 48067
+local SPELL_PRIEST_RENEW_R14 = 48068
 local SPELL_PRIEST_EMPOWERED_RENEW = 63544 -- spell_priest.cpp:41
 local SPELLFAMILY_PRIEST = 6 -- spells.go:36319
 local PRIEST_ICON_ID_EMPOWERED_RENEW_TALENT = 3021 -- spell_priest.cpp:83
@@ -37,6 +50,19 @@ local function renewApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_PRIEST_RENEW, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R2, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R3, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R4, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R5, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R6, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R7, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R8, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R9, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R10, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R11, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R12, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R13, 2, renewApply)
+RegisterAuraEvent(SPELL_PRIEST_RENEW_R14, 2, renewApply)
 
 local SPELL_PRIEST_BLESSED_RECOVERY = 27811 -- spell_priest.cpp:188 (class spell_pri_blessed_recovery)
 local SPELL_PRIEST_BLESSED_RECOVERY_R1 = 27813 -- spell_priest.cpp:39
@@ -91,6 +117,11 @@ end
 RegisterAuraEvent(SPELL_PRIEST_IMP_SHADOWFORM, 6, impShadowformProc)
 
 local SPELL_PRIEST_LIGHTWELL_RENEW = 7001 -- spell_priest.cpp:788 (class spell_pri_lightwell_renew)
+local SPELL_PRIEST_LIGHTWELL_RENEW_R2 = 27873
+local SPELL_PRIEST_LIGHTWELL_RENEW_R3 = 27874
+local SPELL_PRIEST_LIGHTWELL_RENEW_R4 = 28276
+local SPELL_PRIEST_LIGHTWELL_RENEW_R5 = 48084
+local SPELL_PRIEST_LIGHTWELL_RENEW_R6 = 48085
 local SPELL_PRIEST_GLYPH_OF_LIGHTWELL = 55673 -- spell_priest.cpp:43
 local AURA_REMOVE_BY_ENEMY_SPELL = 3 -- SpellAuraDefines.h:61-69
 local LIGHTWELL_REMAINING = "remainingAmount"
@@ -111,6 +142,11 @@ local function lightwellRenewApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW, 2, lightwellRenewApply)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R2, 2, lightwellRenewApply)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R3, 2, lightwellRenewApply)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R4, 2, lightwellRenewApply)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R5, 2, lightwellRenewApply)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R6, 2, lightwellRenewApply)
 
 -- C++ spell_pri_lightwell_renew_AuraScript::HandleProc
 -- (spell_priest.cpp:810-826): OnEffectProc, EFFECT_0 PERIODIC_HEAL —
@@ -141,15 +177,36 @@ local function lightwellRenewProc(event, aura, target, actor, procTarget, damage
 end
 
 RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW, 6, lightwellRenewProc)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R2, 6, lightwellRenewProc)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R3, 6, lightwellRenewProc)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R4, 6, lightwellRenewProc)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R5, 6, lightwellRenewProc)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R6, 6, lightwellRenewProc)
 
 local SPELL_PRIEST_POWER_WORD_SHIELD = 17 -- spell_priest.cpp:1064 (class spell_pri_power_word_shield)
+local SPELL_PRIEST_POWER_WORD_SHIELD_R2 = 592
+local SPELL_PRIEST_POWER_WORD_SHIELD_R3 = 600
+local SPELL_PRIEST_POWER_WORD_SHIELD_R4 = 3747
+local SPELL_PRIEST_POWER_WORD_SHIELD_R5 = 6065
+local SPELL_PRIEST_POWER_WORD_SHIELD_R6 = 6066
+local SPELL_PRIEST_POWER_WORD_SHIELD_R7 = 10898
+local SPELL_PRIEST_POWER_WORD_SHIELD_R8 = 10899
+local SPELL_PRIEST_POWER_WORD_SHIELD_R9 = 10900
+local SPELL_PRIEST_POWER_WORD_SHIELD_R10 = 10901
+local SPELL_PRIEST_POWER_WORD_SHIELD_R11 = 25217
+local SPELL_PRIEST_POWER_WORD_SHIELD_R12 = 25218
+local SPELL_PRIEST_POWER_WORD_SHIELD_R13 = 48065
+local SPELL_PRIEST_POWER_WORD_SHIELD_R14 = 48066
 local SPELL_PRIEST_WEAKENED_SOUL = 6788 -- PW:S ExcludeTargetAuraSpell (Unit.cpp:7272 Renewed Hope HasAura gate; spell_stats.go:1563 twin)
 
 -- C++ spell_pri_power_word_shield_SpellScript::WeakenSoul
 -- (spell_priest.cpp:1079-1083): AfterHit, the caster casts the
 -- spell's ExcludeTargetAuraSpell (Weakened Soul) on the hit unit,
--- triggered. Rank 1 only: the C++ loader binds all PW:S ranks, Lua
--- binds per spell id (the renew 139 precedent). A missed hit fires
+-- triggered. All 14 ranks share the arm: TDB binds
+-- (-17, 'spell_pri_power_word_shield'), the negative id meaning all
+-- ranks (ObjectMgr.cpp:5790-5806), and the spell_ranks chain is
+-- 592/600/3747/6065/6066/10898/10899/10900/10901/25217/25218/48065/
+-- 48066 (R2-R14) — the CoH R2-R7 precedent. A missed hit fires
 -- nil and casts nothing, like C++ GetHitUnit() nil.
 local function powerWordShieldAfterHit(event, spell, hitTarget)
     if hitTarget == nil then
@@ -163,6 +220,19 @@ local function powerWordShieldAfterHit(event, spell, hitTarget)
 end
 
 RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R2, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R3, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R4, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R5, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R6, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R7, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R8, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R9, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R10, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R11, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R12, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R13, 3, powerWordShieldAfterHit)
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD_R14, 3, powerWordShieldAfterHit)
 
 local SPELL_PRIEST_POWER_INFUSION = 10060 -- spell_priest.cpp:1586 (class spell_pri_power_infusion)
 local SPELL_MAGE_ARCANE_POWER = 12042 -- spell_priest.cpp:99
@@ -388,7 +458,9 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   lua_aura.go (GetCharges/SetCharges/ModCharges/DropCharge +
 --   GetScriptValue/SetScriptValue, 16bb3d16); the spell_proc-row twin
 --   (procs.go spellProcTableRows, all six ranks) + the melee
---   TAKEN_DAMAGE flag landed this tick. DORMANT until Spell.dbc
+--   TAKEN_DAMAGE flag landed this tick. R2-R6 registered 2026-11-19
+--   (27873/27874/28276/48084/48085, TDB spell_ranks chain + (-7001)
+--   binding; both handlers rank-agnostic). DORMANT until Spell.dbc
 --   ships (entry Chance/Charges ride the DBC spell). The
 --   CalculateAmount glyph-bonus arm (55673) stays out: no
 --   DoEffectCalcAmount fire site at the apply paths.
@@ -414,7 +486,10 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   OnObjectAreaTargetSelect / HandleDummy / OnCheckCast / OnEffectHitTarget;
 --   real hooks are in the notes above).
 --   671 power_word_shield (17, :1065-1182): WeakenSoul PORTED above
---   (AfterHit ev3); CalculateAmount (:1109-1151) has no
+--   (AfterHit ev3); R2-R14 registered 2026-11-19 (592/600/3747/6065/
+--   6066/10898/10899/10900/10901/25217/25218/48065/48066, TDB
+--   spell_ranks chain + (-17) binding; handler rank-agnostic).
+--   CalculateAmount (:1109-1151) has no
 --   DoEffectCalcAmount bridge (spellpower/dampening/ICC math
 --   unbridged) and ReflectDamage (:1153-1169) has no
 --   AfterEffectAbsorb bridge (no absorb event; the DamageInfo
@@ -426,6 +501,9 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   triggered (aurEff args, SpellDefines.h:166), fixed this tick
 --   (CastCustomSpell false -> true; player funnel ignores the flag
 --   but the creature/NPCBot path honors it). Reapply delta stands.
+--   R2-R14 registered 2026-11-19 (6074/6075/6076/6077/6078/10927/
+--   10928/10929/25315/25221/25222/48067/48068, TDB spell_ranks chain
+--   + (-139) binding; handler rank-agnostic).
 
 -- CLOSED IN GO + TRIAGED STAY OUT (tick 2026-11-11 18:46, census rows
 -- 224-229 header-source + 672-673 comment-block; spell_priest.cpp end):
