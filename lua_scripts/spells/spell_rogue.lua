@@ -25,7 +25,8 @@
 --   a reapply does not re-cast 51699 in Go (standing deviation).
 --   The npcbot creature-caster leg casts the same spell on nil, so
 --   one leg covers both player and creature casters.
---   spell_rog_vanish (spell_rogue.cpp:1175-1204): aura 11327, mode 2.
+--   spell_rog_vanish (spell_rogue.cpp:1175-1204): auras
+--   11327/11329/26888 (R1-R3), mode 2.
 --   AfterEffectApply: the target drops all SPELL_AURA_MOD_STALKED
 --   (68) auras; if already stealthed (1784) it stops; if Stealth is
 --   on cooldown the cooldown is reset; then the target casts 1784
@@ -143,6 +144,8 @@ local SPELL_ROGUE_MASTER_OF_SUBTLETY_BUFF = 31665
 local SPELL_ROGUE_HONOR_AMONG_THIEVES_PROC = 52916
 local SPELL_ROGUE_HONOR_AMONG_THIEVES_2 = 51699
 local SPELL_ROGUE_VANISH = 11327
+local SPELL_ROGUE_VANISH_R2 = 11329
+local SPELL_ROGUE_VANISH_R3 = 26888
 local SPELL_ROGUE_STEALTH = 1784
 local SPELL_ROGUE_CUT_TO_THE_CHASE = 51664
 local SPELL_ROGUE_SLICE_AND_DICE_R1 = 5171
@@ -209,7 +212,12 @@ local function vanishApply(event, aura, target)
     target:CastSpell(nil, SPELL_ROGUE_STEALTH, true)
 end
 
+-- TDB spell_ranks chain 11327/11329/26888 (R1-R3) + (-11327)
+-- all-ranks binding: all three ranks on the same rank-agnostic
+-- handler (C++ uses only fixed ids: STALKED type 68, Stealth 1784).
 RegisterAuraEvent(SPELL_ROGUE_VANISH, 2, vanishApply)
+RegisterAuraEvent(SPELL_ROGUE_VANISH_R2, 2, vanishApply)
+RegisterAuraEvent(SPELL_ROGUE_VANISH_R3, 2, vanishApply)
 
 -- PORTED (tick 298, RegisterAuraEvent OnProc = 6):
 --   spell_rog_cut_to_the_chase::HandleProc

@@ -270,14 +270,23 @@ RegisterSpellEvent(SPELL_WARRIOR_SHATTERING_THROW_R1, 5, shatteringThrowScript)
 RegisterSpellEvent(SPELL_WARRIOR_SHATTERING_THROW_R2, 5, shatteringThrowScript)
 
 local SPELL_WARRIOR_SLAM_R1 = 1464 -- spell_warrior.cpp:929
+local SPELL_WARRIOR_SLAM_R2 = 8820
+local SPELL_WARRIOR_SLAM_R3 = 11604
+local SPELL_WARRIOR_SLAM_R4 = 11605
+local SPELL_WARRIOR_SLAM_R5 = 25241
+local SPELL_WARRIOR_SLAM_R6 = 25242
+local SPELL_WARRIOR_SLAM_R7 = 47474
+local SPELL_WARRIOR_SLAM_R8 = 47475
 local SPELL_WARRIOR_SLAM = 50783 -- spell_warrior.cpp:55
 
 -- C++ spell_warr_slam_SpellScript::HandleDummy (spell_warrior.cpp:941-949):
 -- OnEffectHitTarget EFFECT_0 DUMMY — the caster casts Slam (50783) on the
 -- hit unit, triggered, BP0 = effect value. ev5 fires on the player
--- direct-cast path (spells.go:14892). Only the R1 id is established
--- in-tree; higher ranks share the class (extraProc precedent above).
--- DORMANT until Spell.dbc ships the records.
+-- direct-cast path (spells.go:14892). TDB spell_ranks chain
+-- 1464/8820/11604/11605/25241/25242/47474/47475 (R1-R8) + (-1464)
+-- all-ranks binding: all eight ranks registered on the same
+-- rank-agnostic handler (C++ casts fixed 50783 with BP0 = effect
+-- value, no rank ids). DORMANT until Spell.dbc ships the records.
 local function slamDummy(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 or hitTarget == nil then
         return
@@ -289,7 +298,9 @@ local function slamDummy(event, spell, hitTarget, effectIndex)
     caster:CastCustomSpell(hitTarget, SPELL_WARRIOR_SLAM, true, spell:GetEffectValue(0))
 end
 
-RegisterSpellEvent(SPELL_WARRIOR_SLAM_R1, 5, slamDummy)
+for _, spellId in ipairs({ SPELL_WARRIOR_SLAM_R1, SPELL_WARRIOR_SLAM_R2, SPELL_WARRIOR_SLAM_R3, SPELL_WARRIOR_SLAM_R4, SPELL_WARRIOR_SLAM_R5, SPELL_WARRIOR_SLAM_R6, SPELL_WARRIOR_SLAM_R7, SPELL_WARRIOR_SLAM_R8 }) do
+    RegisterSpellEvent(spellId, 5, slamDummy)
+end
 
 local SPELL_WARRIOR_SWORD_AND_BOARD = 46951 -- spell_warrior.cpp:1021
 local SPELL_CATEGORY_SHIELD_SLAM = 1209 -- spell_warrior.cpp:88

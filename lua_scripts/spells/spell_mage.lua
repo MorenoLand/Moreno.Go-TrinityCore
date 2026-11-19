@@ -6,8 +6,8 @@
 -- spell_script_names); the effect spell IDs are the file's enums.
 --
 -- PORTED (tick 294, RegisterAuraEvent):
---   spell_mage_frostfire_bolt (spell_mage.cpp:695-721): aura 44614,
---   modes 2 + 3. Both legs: the aura's caster, when present, casts
+--   spell_mage_frostfire_bolt (spell_mage.cpp:695-721): auras
+--   44614/47610 (R1-R2), modes 2 + 3. Both legs: the aura's caster, when present, casts
 --   68391 (Permafrost) on the target, triggered by the aura effect.
 --   PORTED AS-REGISTERED: C++ binds AfterEffectRemove to
 --   ApplyPermafrost (:718), not to RemovePermafrost (:710-713, dead
@@ -19,8 +19,8 @@
 --   skips the cast) is cast by the target on nil, triggered. No
 --   return true: C++ has no PreventDefaultAction. Inert until
 --   Spell.dbc loads (0-read convention).
---   spell_mage_living_bomb (spell_mage.cpp:1101-1136): aura 44457,
---   mode 3. AfterRemove fires only when the remove mode is
+--   spell_mage_living_bomb (spell_mage.cpp:1101-1136): auras
+--   44457/55359/55360 (R1-R3), mode 3. AfterRemove fires only when the remove mode is
 --   ENEMY_SPELL (3) or EXPIRE (4): the aura's caster, when present,
 --   casts the EFFECT_1 amount as a spell ID on the target,
 --   triggered by the aura effect (0 amount skips the cast — the
@@ -101,9 +101,12 @@
 --   aura:GetRank bridge cover its rank/max-ticks math.)
 
 local SPELL_MAGE_FROSTFIRE_BOLT = 44614
+local SPELL_MAGE_FROSTFIRE_BOLT_R2 = 47610
 local SPELL_MAGE_PERMAFROST_AURA = 68391
 local SPELL_MAGE_MIRROR_IMAGE = 55342
 local SPELL_MAGE_LIVING_BOMB = 44457
+local SPELL_MAGE_LIVING_BOMB_R2 = 55359
+local SPELL_MAGE_LIVING_BOMB_R3 = 55360
 local SPELL_MAGE_COMBUSTION_PROC = 28682
 local SPELL_MAGE_COMBUSTION = 11129
 local SPELL_MAGE_FINGERS_OF_FROST = 74396
@@ -119,8 +122,13 @@ local function frostfireBoltApply(event, aura, target)
     end
 end
 
+-- TDB spell_ranks chain 44614/47610 (R1-R2) + (-44614) all-ranks
+-- binding: both ranks on the same rank-agnostic handler (C++ casts
+-- fixed 68391 Permafrost on apply and on remove).
 RegisterAuraEvent(SPELL_MAGE_FROSTFIRE_BOLT, 2, frostfireBoltApply)
 RegisterAuraEvent(SPELL_MAGE_FROSTFIRE_BOLT, 3, frostfireBoltApply)
+RegisterAuraEvent(SPELL_MAGE_FROSTFIRE_BOLT_R2, 2, frostfireBoltApply)
+RegisterAuraEvent(SPELL_MAGE_FROSTFIRE_BOLT_R2, 3, frostfireBoltApply)
 
 local function mirrorImageTick(event, aura, target)
     local trigger = aura:GetTriggerSpell(2)
@@ -146,7 +154,13 @@ local function livingBombRemove(event, aura, target)
     end
 end
 
+-- TDB spell_ranks chain 44457/55359/55360 (R1-R3) + (-44457)
+-- all-ranks binding: all three ranks on the same rank-agnostic
+-- handler (C++ casts the EFFECT_1 amount as the explosion spell id,
+-- read from DBC per rank, not hardcoded).
 RegisterAuraEvent(SPELL_MAGE_LIVING_BOMB, 3, livingBombRemove)
+RegisterAuraEvent(SPELL_MAGE_LIVING_BOMB_R2, 3, livingBombRemove)
+RegisterAuraEvent(SPELL_MAGE_LIVING_BOMB_R3, 3, livingBombRemove)
 
 local function combustionProcRemove(event, aura, target)
     target:RemoveAura(SPELL_MAGE_COMBUSTION)

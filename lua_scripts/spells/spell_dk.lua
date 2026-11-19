@@ -368,7 +368,7 @@ end
 RegisterSpellEvent(SPELL_DK_GHOUL_EXPLODE, 5, ghoulExplodeSuicide)
 
 local SPELL_DK_BUTCHERY_R1 = 48979 -- spell_dk.cpp:587
-local SPELL_DK_BUTCHERY_R2 = 49483 -- bot_death_knight_ai.cpp:72, rank 2
+local SPELL_DK_BUTCHERY_R2 = 49483 -- bot_death_knight_ai.cpp:72, rank 2 (Talent.dbc chain; NEG -48979 binding)
 local SPELL_DK_BUTCHERY_RUNIC_POWER = 50163 -- spell_dk.cpp:88
 
 -- C++ spell_dk_butchery::HandleProc (spell_dk.cpp:603-609): EFFECT_0
@@ -378,8 +378,14 @@ local SPELL_DK_BUTCHERY_RUNIC_POWER = 50163 -- spell_dk.cpp:88
 -- overload (CastSpellExtraArgs(aurEff) sets TRIGGERED_FULL_MASK,
 -- SpellDefines.h:166) — the CastCustomSpell `true` arg is exact, not
 -- a delta. No CheckProc gate, no proc-spell or school filter, so the
--- ev6 args suffice. DORMANT until Spell.dbc ships the 48979/49483
--- proc entries.
+-- ev6 args suffice. RANK NOTE (2026-11-19): TDB spell_ranks has no
+-- 48979 row, but that is expected — Butchery is a talent, and talent
+-- rank chains come from Talent.dbc via SpellMgr::LoadSpellTalentRanks
+-- (SpellMgr.cpp:799-856), not spell_ranks (a spell_ranks row for a
+-- talent spell would log "already has ChainEntry from dbc"). The NEG
+-- (-48979) binding in spell_script_names (TDB 25101 + 26091) expands
+-- via GetNextRankSpell to 49483, so both ranks register. DORMANT
+-- until Spell.dbc ships the 48979/49483 proc entries.
 local function butcheryProc(event, aura, target, actor, procTarget, damage)
     if actor == nil then
         return true
@@ -476,7 +482,13 @@ local SPELL_DK_SCENT_OF_BLOOD_TRIGGER = 49004 -- spell_dk.cpp:2225
 -- does not stack onto an existing aura. No PreventDefaultAction: the
 -- DBC default trigger still fires after (the handler returns nothing).
 -- Distinct from the talent aura 50421, whose Go leg lives in procs.go.
--- DORMANT until Spell.dbc ships the 49004 proc entry.
+-- BINDING NOTE (2026-11-19): no spell_script_names row for -49004 in
+-- TDB 25101 or 26091 (only 50421 spell_dk_scent_of_blood is bound),
+-- so the C++ script never fires on a stock TDB. Registration KEPT:
+-- the class + //-49004 comment (spell_dk.cpp:2224-2225) + AddSC
+-- registration (:3251) are the port's authority, and the missing row
+-- is a TDB data gap, not a code gap. DORMANT until Spell.dbc ships
+-- the 49004 proc entry.
 local function scentOfBloodTriggerProc(event, aura, target, actor, procTarget, damage)
     if aura == nil or target == nil then
         return
