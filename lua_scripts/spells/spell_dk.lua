@@ -51,11 +51,14 @@
 --   consecutive IDs with no in-tree citation.
 --   spell_dk_blood_tap needs the rune system; spell_dk_hysteria
 --   (49016, ev1 self-damage) and spell_dk_death_grip_initial
---   (49576, ev8 + ev5) are PORTED below — the tick-294
+--   (49576, ev8 only — ev5 dummy leg Go-owned, e40198fa)
+--   are PORTED below — the tick-294
 --   "hysteria needs DealDamage" stay-out is stale, the bridge
---   exists. spell_dk_raise_ally_initial (61999, ev8 CheckCast) is PORTED
---   below; only the HandleDummy resurrect-request + ghoul-summon legs
---   stay out (no Lua resurrect-request bridges; ghoul AI push/pop
+--   exists. spell_dk_raise_ally_initial (61999) is GO-COVERED, not
+--   Lua-ported: the Go gauntlet enforces all three CheckCast arms
+--   (spells.go:4253-4282) and the dummy leg is Go-side (death.go);
+--   an ev8 port would double-enforce (081a0d1c's port removed
+--   2026-11-19). The ghoul-summon leg stays out (ghoul AI push/pop
 --   unported).
 --   spell_dk_death_coil ranks 1-4 (47541/52375/59134/62900): CheckCast
 --   arm PORTED this tick (OnCheckCast ev8 below); the Go
@@ -782,37 +785,14 @@ end
 
 RegisterSpellEvent(SPELL_DK_DEATH_PACT, 8, deathPactCheckCast)
 
-local SPELL_DK_RAISE_ALLY_INITIAL = 61999 -- spell_dk.cpp:2803 (class spell_dk_raise_ally_initial)
-local SPELL_DK_RAISE_ALLY = 46619 -- Player.h:880; Unit::IsGhouled is HasAura of this (Unit.cpp:8896-8899)
-local SPELL_FAILED_NO_VALID_TARGETS = 178 -- SharedDefines.h:1160
-local SPELL_FAILED_TARGET_NOT_DEAD = 119 -- SharedDefines.h:1101
-local SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW = 173 -- SharedDefines.h:1155
-
--- C++ spell_dk_raise_ally_initial_SpellScript::CheckCast
--- (spell_dk.cpp:2823-2833): no explicit target fails NO_VALID_TARGETS;
--- a living target fails TARGET_NOT_DEAD; a target already ghouled
--- (HasAura 46619) fails CANT_DO_THAT_RIGHT_NOW. Check-only port: the
--- HandleDummy resurrect-request leg stays out (no Lua
--- IsResurrectRequested / SetResurrectRequestData / SendResurrectRequest
--- bridge; the ghoul summon itself needs ghoul AI push/pop). The
--- caster-is-player Load() gate is implied: the Go fire site is the
--- player-path cast only (lua_spell.go fireSpellCheckCast).
--- RegisterSpellEvent OnCheckCast = 8.
-local function raiseAllyCheckCast(event, spell)
-    local target = spell:GetTarget()
-    if target == nil then
-        return SPELL_FAILED_NO_VALID_TARGETS
-    end
-    if target:IsAlive() then
-        return SPELL_FAILED_TARGET_NOT_DEAD
-    end
-    if target:HasAura(SPELL_DK_RAISE_ALLY) then
-        return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
-    end
-    return SPELL_CAST_OK
-end
-
-RegisterSpellEvent(SPELL_DK_RAISE_ALLY_INITIAL, 8, raiseAllyCheckCast)
+-- spell_dk_raise_ally_initial (61999, spell_dk.cpp:2803) is NOT
+-- Lua-ported: the Go CheckCast gauntlet enforces all three arms
+-- exactly (spells.go:4253-4282: no target 178, living target 119,
+-- 46619-aura 173, plus the living-creature leg), and the dummy leg
+-- is Go-side (death.go handleRaiseAllyInitial). An ev8 port here
+-- would double-enforce — the Lua hook fires after the Go gate in the
+-- same gauntlet (spells.go:4373) and can never change an outcome.
+-- (081a0d1c's ev8 port removed 2026-11-19; adjudication restored.)
 
 local SPELL_DK_HYSTERIA = 49016 -- spell_dk.cpp:1327 (class spell_dk_hysteria)
 
