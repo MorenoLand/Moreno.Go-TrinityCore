@@ -531,7 +531,21 @@ RegisterAuraEvent(SPELL_SHAMAN_TOTEMIC_MASTERY_AURA, 1, totemicMasteryPeriodic)
 
 local SPELL_SHAMAN_EARTH_SHIELD_HEAL = 379 -- spell_shaman.cpp:42
 local SPELL_SHAMAN_EARTH_SHIELD = 974 -- spell_shaman.cpp:422 (class spell_sha_earth_shield)
+local SPELL_SHAMAN_EARTH_SHIELD_R2 = 32593 -- spell_ranks (974, 32593, 2)
+local SPELL_SHAMAN_EARTH_SHIELD_R3 = 32594 -- spell_ranks (974, 32594, 3)
+local SPELL_SHAMAN_EARTH_SHIELD_R4 = 49283 -- spell_ranks (974, 49283, 4)
+local SPELL_SHAMAN_EARTH_SHIELD_R5 = 49284 -- spell_ranks (974, 49284, 5)
 local SPELL_SHAMAN_LIGHTNING_SHIELD = 324 -- spell_shaman.cpp:1507 (class spell_sha_lightning_shield)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R2 = 325 -- spell_ranks (324, 325, 2)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R3 = 905 -- spell_ranks (324, 905, 3)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R4 = 945 -- spell_ranks (324, 945, 4)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R5 = 8134 -- spell_ranks (324, 8134, 5)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R6 = 10431 -- spell_ranks (324, 10431, 6)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R7 = 10432 -- spell_ranks (324, 10432, 7)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R8 = 25469 -- spell_ranks (324, 25469, 8)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R9 = 25472 -- spell_ranks (324, 25472, 9)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R10 = 49280 -- spell_ranks (324, 49280, 10)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R11 = 49281 -- spell_ranks (324, 49281, 11)
 local SPELL_SHAMAN_LIGHTNING_SHIELD_R1 = 26364 -- spell_shaman.cpp:58 (damage chain first rank)
 local SPELL_SHAMAN_TOTEM_HEALING_STREAM_HEAL = 52042 -- spell_shaman.cpp:66
 local SPELL_SHAMAN_GLYPH_OF_HEALING_STREAM_TOTEM = 55456 -- spell_shaman.cpp:50
@@ -545,9 +559,14 @@ local SPELL_SHAMAN_MANA_SPRING_TOTEM_SPELLS = { 52031, 52033, 52034, 52035, 5203
 -- self-casts Earth Shield Heal (379), triggered, with BP0 = the effect
 -- amount; the OriginalCaster leg (GetCasterGUID) has no Go model.
 -- Returns true (PreventDefaultAction). DORMANT until Spell.dbc ships
--- the 974 aura + proc records. Rank 1 only: ranks 2-5 need the
--- spell_script_names / spell_ranks data (not in-tree) to resolve.
-local function earthShieldProc(event, aura, target, actor, procTarget, damage)
+-- the 974 aura + proc records. R2-R5 registered 2026-11-19 (TDB
+-- spell_ranks chain + (-974) all-ranks binding; handler rank-agnostic,
+-- BP0 = the aura EFFECT_0 amount). EFFECT_0 guard below is the
+-- AuraEffectProcFn registration twin (ev6 fires per eligible effect).
+local function earthShieldProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
     if target == nil then
         return true
     end
@@ -560,6 +579,10 @@ local function earthShieldProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_EARTH_SHIELD, 6, earthShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_EARTH_SHIELD_R2, 6, earthShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_EARTH_SHIELD_R3, 6, earthShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_EARTH_SHIELD_R4, 6, earthShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_EARTH_SHIELD_R5, 6, earthShieldProc)
 
 local SPELL_SHAMAN_GLYPH_OF_EARTH_SHIELD = 63279 -- spell_shaman.cpp:898 (class spell_sha_glyph_of_earth_shield)
 
@@ -687,9 +710,15 @@ RegisterAuraEvent(SPELL_SHAMAN_FROZEN_POWER, 6, frozenPowerProc)
 -- A rank miss also vetoes: C++ PreventDefaultAction()s before the
 -- rank lookup, so the default never fires. Returns true
 -- (PreventDefaultAction). DORMANT until Spell.dbc ships the 324 aura +
--- proc records. Rank 1 only: ranks 2-13 need the spell_script_names /
--- spell_ranks data (not in-tree) to resolve.
-local function lightningShieldProc(event, aura, target, actor, procTarget, damage)
+-- proc records. R2-R11 registered 2026-11-19 (TDB spell_ranks chain +
+-- (-324) all-ranks binding; handler rank-agnostic via
+-- aura:GetSpellWithRank(26364), which defaults to the aura's own
+-- rank). EFFECT_0 guard below is the AuraEffectProcFn registration
+-- twin (ev6 fires per eligible effect).
+local function lightningShieldProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
     if actor == nil or target == nil then
         return true
     end
@@ -702,6 +731,16 @@ local function lightningShieldProc(event, aura, target, actor, procTarget, damag
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R2, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R3, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R4, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R5, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R6, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R7, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R8, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R9, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R10, 6, lightningShieldProc)
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_R11, 6, lightningShieldProc)
 
 -- C++ spell_sha_healing_stream_totem_SpellScript::HandleDummy
 -- (spell_shaman.cpp:1056-1085): EFFECT_0 DUMMY. Each hit unit is healed
@@ -955,6 +994,47 @@ local function lightningOverloadProc(event, aura, target, actor, procTarget, dam
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_OVERLOAD, 6, lightningOverloadProc)
+
+local SPELL_SHAMAN_LIGHTNING_SHIELD_T2_BONUS = 23551 -- spell_shaman.cpp:1256 (class spell_sha_item_lightning_shield)
+local SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD = 23552 -- spell_shaman.cpp:51
+local SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD_DAMAGE = 27635 -- spell_shaman.cpp:52
+
+-- C++ spell_sha_item_lightning_shield_AuraScript::HandleProc
+-- (spell_shaman.cpp:1273-1277): OnEffectProc, EFFECT_0
+-- SPELL_AURA_PROC_TRIGGER_SPELL. PreventDefaultAction; the holder casts
+-- Lightning Shield (23552) on the proc target, triggered by the aura.
+-- DORMANT until Spell.dbc ships the 23551 proc entry.
+local function lightningShieldT2BonusProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
+    if target == nil or procTarget == nil then
+        return true
+    end
+    target:CastSpell(procTarget, SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_T2_BONUS, 6, lightningShieldT2BonusProc)
+
+-- C++ spell_sha_item_lightning_shield_trigger_AuraScript::HandleProc
+-- (spell_shaman.cpp:1302-1311): OnEffectProc, EFFECT_0
+-- SPELL_AURA_PROC_TRIGGER_SPELL. PreventDefaultAction; the holder casts
+-- Lightning Shield T2 damage (27635) on itself, triggered by the aura.
+-- Creature-side twin lives in Go (boss_ai.go:11569); this is the
+-- player-held ev6 twin. DORMANT until Spell.dbc ships the 23552 proc entry.
+local function lightningShieldT2TriggerProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
+    if target == nil then
+        return true
+    end
+    target:CastSpell(target, SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD_DAMAGE, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD, 6, lightningShieldT2TriggerProc)
 
 -- C++ spell_sha_nature_guardian_AuraScript::CheckProc + HandleProc
 -- (spell_shaman.cpp:1733-1753): DoCheckProc + OnEffectProc, EFFECT_0
