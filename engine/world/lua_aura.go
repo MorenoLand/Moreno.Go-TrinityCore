@@ -1213,6 +1213,7 @@ func (s *Server) procEventObject(ev procEventInfo, holderGUID, triggerTargetGUID
 	iconID := uint32(0)
 	var familyFlags [3]uint32
 	rank := uint8(0)
+	var mechanicMask uint32
 	if ev.eventSpell != nil {
 		spellID = ev.eventSpell.ID
 		iconID = ev.eventSpell.SpellIconID
@@ -1220,6 +1221,14 @@ func (s *Server) procEventObject(ev procEventInfo, holderGUID, triggerTargetGUID
 		rank = s.spellRank(spellID)
 		if rank == 0 {
 			rank = 1
+		}
+		if ev.eventSpell.Mechanic != 0 && ev.eventSpell.Mechanic < 32 {
+			mechanicMask |= uint32(1) << ev.eventSpell.Mechanic
+		}
+		for _, eff := range ev.eventSpell.Effects {
+			if eff.Effect != 0 && eff.Mechanic != 0 && eff.Mechanic < 32 {
+				mechanicMask |= uint32(1) << eff.Mechanic
+			}
 		}
 	}
 	actor := s.luaUnitObjectForGUID(mapID, instanceID, ev.actorGUID)
@@ -1233,12 +1242,20 @@ func (s *Server) procEventObject(ev procEventInfo, holderGUID, triggerTargetGUID
 		// (SharedDefines.h SpellFamilyNames; 0 when the event carries
 		// no spell). Backs the black-magic CheckProc gate
 		// (spell_generic.cpp:532-566), which keys on SPELLFAMILY_DRUID.
+		// GetAllEffectsMechanicMask is SpellInfo::
+		// GetAllEffectsMechanicMask (SpellInfo.cpp:1893-1902): the
+		// spell-level mechanic plus every populated effect's mechanic,
+		// ORed as (1 << mechanic) bits; 0 when the event carries no
+		// spell. Backs the Second Wind CheckProc gate
+		// (spell_warrior.cpp:865-872), which keys on MECHANIC_ROOT (7)
+		// or MECHANIC_STUN (12).
 		"GetSpellFamilyName": luaNoArgs(func() any {
 			if ev.eventSpell == nil {
 				return uint32(0)
 			}
 			return ev.eventSpell.SpellFamilyName
 		}),
+		"GetAllEffectsMechanicMask": luaNoArgs(func() any { return mechanicMask }),
 		"GetSpellFamilyFlags": func(_ context.Context, args []any) ([]any, error) {
 			index := uint32(0)
 			if len(args) > 0 && args[0] != nil {

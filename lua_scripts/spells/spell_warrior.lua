@@ -395,6 +395,54 @@ RegisterAuraEvent(SPELL_WARRIOR_SWEEPING_STRIKES_R1, 6, sweepingStrikesProc)
 RegisterAuraEvent(SPELL_WARRIOR_SWEEPING_STRIKES_R2, 6, sweepingStrikesProc)
 RegisterAuraEvent(SPELL_WARRIOR_SWEEPING_STRIKES_R3, 6, sweepingStrikesProc)
 
+local SPELL_WARRIOR_SECOND_WIND_R1 = 29834 -- spell_warrior.cpp:846 (class spell_warr_second_wind)
+local SPELL_WARRIOR_SECOND_WIND_R2 = 29838 -- bot_warrior_ai.cpp:108, rank 2 (talent chain via Talent.dbc; no spell_ranks row, Butchery precedent)
+local SPELL_WARRIOR_SECOND_WIND_TRIGGER_1 = 29841 -- spell_warrior.cpp:69
+local SPELL_WARRIOR_SECOND_WIND_TRIGGER_2 = 29842 -- spell_warrior.cpp:70
+local SECOND_WIND_TRIGGERS = {
+    [SPELL_WARRIOR_SECOND_WIND_R1] = SPELL_WARRIOR_SECOND_WIND_TRIGGER_1,
+    [SPELL_WARRIOR_SECOND_WIND_R2] = SPELL_WARRIOR_SECOND_WIND_TRIGGER_2,
+}
+local SECOND_WIND_ROOT_STUN_MASK = 4224 -- (1 << MECHANIC_ROOT (7)) | (1 << MECHANIC_STUN (12)), SharedDefines.h:1364,1369
+
+-- C++ spell_warr_second_wind_AuraScript::CheckProc + HandleProc
+-- (spell_warrior.cpp:865-882): DoCheckProc + OnEffectProc EFFECT_0 DUMMY.
+-- CheckProc reads the triggering spell's GetAllEffectsMechanicMask and
+-- only procs on a root- or stun-mechanic spell (no triggering spell means
+-- no proc); a failed gate vetoes like sweepingStrikes (return true -- the
+-- C++ proc never fires, default leg included). HandleProc calls
+-- PreventDefaultAction (the ev6 true return), then the action target
+-- (the holder on the taken event) self-casts triggeredSpells[rank - 1]
+-- triggered via the aurEff overload (TRIGGERED_FULL_MASK,
+-- SpellDefines.h:166) -- the CastSpell `true` arg is exact. The rank
+-- reads via aura:GetAuraId (aura:GetRank is 0 here -- the talent chain
+-- has no spell_ranks row). TDB (-29834) all-ranks binding. DORMANT
+-- until Spell.dbc ships the 29834/29838 proc entries.
+local function secondWindProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
+    if procEvent == nil then
+        return true
+    end
+    if bit32.band(procEvent:GetAllEffectsMechanicMask(), SECOND_WIND_ROOT_STUN_MASK) == 0 then
+        return true
+    end
+    local trigger = SECOND_WIND_TRIGGERS[aura:GetAuraId()]
+    if trigger == nil then
+        return true
+    end
+    local caster = procEvent:GetActionTarget()
+    if caster == nil then
+        return true
+    end
+    caster:CastSpell(caster, trigger, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARRIOR_SECOND_WIND_R1, 6, secondWindProc)
+RegisterAuraEvent(SPELL_WARRIOR_SECOND_WIND_R2, 6, secondWindProc)
+
 
 local SPELL_WARRIOR_DEEP_WOUNDS_R1 = 12162 -- spell_warrior.cpp:42 (class spell_warr_deep_wounds)
 local SPELL_WARRIOR_DEEP_WOUNDS_R2 = 12850 -- spell_warrior.cpp:43
