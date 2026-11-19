@@ -313,3 +313,74 @@ end
 
 RegisterAuraEvent(SPELL_WARRIOR_SWORD_AND_BOARD, 6, swordAndBoardProc)
 
+local SPELL_WARRIOR_SWEEPING_STRIKES_R1 = 12328 -- spell_warrior.cpp:965
+local SPELL_WARRIOR_SWEEPING_STRIKES_R2 = 18765
+local SPELL_WARRIOR_SWEEPING_STRIKES_R3 = 35429
+local SPELL_WARRIOR_SWEEPING_STRIKES_EXTRA_ATTACK_1 = 12723 -- spell_warrior.cpp:59
+local SPELL_WARRIOR_SWEEPING_STRIKES_EXTRA_ATTACK_2 = 26654 -- spell_warrior.cpp:60
+local SPELL_WARRIOR_BLADESTORM_PERIODIC_WHIRLWIND = 50622 -- spell_warrior.cpp:36
+local SPELL_WARRIOR_EXECUTE = 20647 -- spell_warrior.cpp:46
+
+-- C++ spell_warr_sweeping_strikes_AuraScript::CheckProc + HandleProc
+-- (spell_warrior.cpp:979-1004): DoCheckProc + OnEffectProc EFFECT_0 DUMMY.
+-- CheckProc picks a nearby target via SelectNearbyTarget(procTarget) and
+-- vetoes when none; HandleProc calls PreventDefaultAction, which rides
+-- the true return. SelectNearbyTarget (Unit.cpp:10811, dist
+-- NOMINAL_MELEE_RANGE 5.0f, ObjectDefines.h:42): unfriendly units in
+-- range, minus the victim and the exclude (proc target), minus non-LoS /
+-- totems / spirit services / critters, random pick. The Go twin is
+-- GetUnfriendlyUnitsInRange(5) (alive, unfriendly, self excluded) with
+-- the victim, proc-target, LoS and totem/critter (GetCreatureType 11/8)
+-- filters applied in Lua; spirit-service exclusion has no bridge
+-- (negligible). If the proc spell is Bladestorm periodic whirlwind
+-- (50622) or Execute (20647) while the second target is not under 20%
+-- HP, the holder casts extra attack 2 (26654) on it, triggered; else
+-- extra attack 1 (12723), triggered, BP0 = proc damage. The <20% gate
+-- is the AURA_STATE_HEALTHLESS_20_PERCENT twin via GetHealthPct.
+-- DORMANT until Spell.dbc ships the 35429 proc entry.
+local function sweepingStrikesProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if target == nil or procTarget == nil then
+        return true
+    end
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
+    if damage == nil or damage <= 0 then
+        return true
+    end
+    local victimGuid = 0
+    local victim = target:GetVictim()
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+    local procGuid = procTarget:GetGUID()
+    local picks = {}
+    for _, cand in ipairs(target:GetUnfriendlyUnitsInRange(5)) do
+        local guid = cand:GetGUID()
+        if guid ~= procGuid and guid ~= victimGuid
+            and cand:GetCreatureType() ~= 11 and cand:GetCreatureType() ~= 8
+            and target:IsWithinLoS(cand) then
+            picks[#picks + 1] = cand
+        end
+    end
+    if #picks == 0 then
+        return true
+    end
+    local second = picks[math.random(#picks)]
+    local procSpell = 0
+    if procEvent ~= nil then
+        procSpell = procEvent:GetSpellId()
+    end
+    if procSpell == SPELL_WARRIOR_BLADESTORM_PERIODIC_WHIRLWIND
+        or (procSpell == SPELL_WARRIOR_EXECUTE and second:GetHealthPct() >= 20) then
+        target:CastSpell(second, SPELL_WARRIOR_SWEEPING_STRIKES_EXTRA_ATTACK_2, true)
+    else
+        target:CastCustomSpell(second, SPELL_WARRIOR_SWEEPING_STRIKES_EXTRA_ATTACK_1, true, damage)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARRIOR_SWEEPING_STRIKES_R1, 6, sweepingStrikesProc)
+RegisterAuraEvent(SPELL_WARRIOR_SWEEPING_STRIKES_R2, 6, sweepingStrikesProc)
+RegisterAuraEvent(SPELL_WARRIOR_SWEEPING_STRIKES_R3, 6, sweepingStrikesProc)
+
