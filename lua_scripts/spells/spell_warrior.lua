@@ -21,7 +21,7 @@
 --   the DBC trigger leg does not also fire (procs.go:3919,
 --   boss_ai.go:10852). HandleRemove's UnregisterRedirectThreat
 --   (59665, caster GUID) leg (:1128) is Go-covered
---   (spells.go:36257). Glyph of Vigilance (63326) folds in Go
+--   (spells.go:36962). Glyph of Vigilance (63326) folds in Go
 --   (spell_threat.go handleEffectRedirectThreat).
 
 local SPELL_WARRIOR_VIGILANCE = 50720 -- spell_warrior.cpp:87
@@ -90,8 +90,9 @@ RegisterSpellEvent(SPELL_WARRIOR_VIGILANCE_PROC, 5, vigilanceTrigger)
 --   (spell_warrior.cpp:625-628, 632-633): EFFECT_1 and EFFECT_2,
 --   TARGET_UNIT_SRC_AREA_ENEMY — the explicit target drops out of
 --   both area lists (its own EFFECT_0 cower leg still hits it).
---   ev7 fires on the creature-cast path only (boss_ai.go:3151); the
---   player-cast legs live in Go (spells.go area filters). The spell
+--   ev7 fires on both paths (creature boss_ai.go, player
+--   lua_spell.go firePlayerSpellTargetSelects); the Go player legs
+--   already filtered the flat list, so the Lua Remove is a no-op there. The spell
 --   object's GetTarget is the explicit unit target (the C++
 --   GetExplTargetWorldObject). DORMANT until Spell.dbc drives the cast.
 local SPELL_WARRIOR_INTIMIDATING_SHOUT = 5246 -- spell_warrior.cpp:615
@@ -129,7 +130,11 @@ end
 RegisterAuraEvent(SPELL_WARRIOR_DAMAGE_SHIELD, 6, damageShieldProc)
 
 local SPELL_WARRIOR_SUDDEN_DEATH_R1 = 29723 -- spell_warrior.cpp:57
+local SPELL_WARRIOR_SUDDEN_DEATH_R2 = 29724
+local SPELL_WARRIOR_SUDDEN_DEATH_R3 = 29725
 local SPELL_WARRIOR_BLOODSURGE_R1 = 46913 -- spell_warrior.cpp:39
+local SPELL_WARRIOR_BLOODSURGE_R2 = 46914
+local SPELL_WARRIOR_BLOODSURGE_R3 = 46915
 local SPELL_WARRIOR_T10_MELEE_4P_BONUS = 70847 -- spell_warrior.cpp:77
 local SPELL_WARRIOR_EXTRA_CHARGE = 70849 -- spell_warrior.cpp:48
 local SPELL_WARRIOR_SLAM_GCD_REDUCED = 71072 -- spell_warrior.cpp:61
@@ -142,12 +147,17 @@ local SPELL_WARRIOR_EXECUTE_GCD_REDUCED = 71069 -- spell_warrior.cpp:47
 -- self, then the talent's GCD-reduced spell on self (71072 Bloodsurge /
 -- 71069 Sudden Death), both triggered (CastSpell with the triggering
 -- aura effect). The IsRankOf branch is decided by which spell id the
--- handler is registered for. Higher ranks share the class; only the R1
--- ids are established in-tree. DORMANT until Spell.dbc ships the
--- 29723/46913 proc entries.
+-- handler is registered for. TDB binds all ranks (-29723, -46913), so
+-- R2/R3 register the same factory: Sudden Death 29724/29725, Bloodsurge
+-- 46914/46915 (sequential ranks; 46915 corroborated as R3 by
+-- bot_warrior_ai.cpp:117 — its 29724-is-R3 label is wrong). DORMANT
+-- until Spell.dbc ships the proc entries.
 local function extraProc(gcdReduced)
-    return function(event, aura, target, actor, procTarget, damage)
+    return function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
         if target == nil then
+            return
+        end
+        if effectIndex ~= nil and effectIndex ~= 0 then
             return
         end
         local bonus = target:GetAuraEffect(SPELL_WARRIOR_T10_MELEE_4P_BONUS, 0)
@@ -163,7 +173,11 @@ local function extraProc(gcdReduced)
 end
 
 RegisterAuraEvent(SPELL_WARRIOR_SUDDEN_DEATH_R1, 6, extraProc(SPELL_WARRIOR_EXECUTE_GCD_REDUCED))
+RegisterAuraEvent(SPELL_WARRIOR_SUDDEN_DEATH_R2, 6, extraProc(SPELL_WARRIOR_EXECUTE_GCD_REDUCED))
+RegisterAuraEvent(SPELL_WARRIOR_SUDDEN_DEATH_R3, 6, extraProc(SPELL_WARRIOR_EXECUTE_GCD_REDUCED))
 RegisterAuraEvent(SPELL_WARRIOR_BLOODSURGE_R1, 6, extraProc(SPELL_WARRIOR_SLAM_GCD_REDUCED))
+RegisterAuraEvent(SPELL_WARRIOR_BLOODSURGE_R2, 6, extraProc(SPELL_WARRIOR_SLAM_GCD_REDUCED))
+RegisterAuraEvent(SPELL_WARRIOR_BLOODSURGE_R3, 6, extraProc(SPELL_WARRIOR_SLAM_GCD_REDUCED))
 
 local SPELL_WARRIOR_EXECUTE_R1 = 5308 -- spell_warrior.cpp:378
 local SPELL_WARRIOR_EXECUTE_R2 = 20658
@@ -279,11 +293,12 @@ local SPELL_WARRIOR_UNRELENTING_ASSAULT_TRIGGER_2 = 64850 -- spell_warrior.cpp:6
 -- R1/R2 and the hit target is a player currently casting a non-melee
 -- spell, the target casts 64849/64850 on itself, triggered.
 -- IsNonMeleeSpellCast(false, false, true) (Unit.cpp:3182): withDelayed=false,
--- skipChanneled=false, skipAutorepeat=true; skipInstant defaults false, so
--- ANY live non-delayed generic cast counts (instant included) plus any live
--- channeled cast; autorepeat is skipped. The Go twin is the live-slot read:
--- GetCurrentSpell(1) is non-nil only while a cast is unfinished (spells.go
--- clears activeCast on completion), GetCurrentSpell(2) while channeling.
+-- skipChanneled=false, skipAutorepeat=true; skipInstant defaults TRUE
+-- (Unit.h:1369), so instant generic casts do NOT count — only a live
+-- non-delayed cast with a cast time, plus any live channeled cast;
+-- autorepeat is skipped. The Go twin matches: activeCast is armed only
+-- inside `if castTime > 0` (spells.go:4505), so GetCurrentSpell(1) is nil
+-- for instants; GetCurrentSpell(2) reads the channel.
 -- The GetObjectType() gate is the GetHitPlayer() twin (vigilanceTrigger
 -- precedent above). ev5 fires on the player direct-cast path
 -- (spells.go:14892). DORMANT until Spell.dbc ships the records.
@@ -375,6 +390,8 @@ for _, spellId in ipairs({ SPELL_WARRIOR_SLAM_R1, SPELL_WARRIOR_SLAM_R2, SPELL_W
 end
 
 local SPELL_WARRIOR_SWORD_AND_BOARD = 46951 -- spell_warrior.cpp:1021
+local SPELL_WARRIOR_SWORD_AND_BOARD_R2 = 46952
+local SPELL_WARRIOR_SWORD_AND_BOARD_R3 = 46953
 local SPELL_CATEGORY_SHIELD_SLAM = 1209 -- spell_warrior.cpp:88
 
 -- C++ spell_warr_sword_and_board_AuraScript::HandleProc
@@ -383,7 +400,8 @@ local SPELL_CATEGORY_SHIELD_SLAM = 1209 -- spell_warrior.cpp:88
 -- category is Shield Slam (1209). ResetTypeCooldowns is the
 -- SpellHistory::ResetCooldowns predicate bridge (lua_player.go:1962);
 -- the update=true second arg is the vigilanceTrigger precedent above.
--- DORMANT until Spell.dbc ships the 46951 proc entry.
+-- TDB binds all ranks (-46951); R2/R3 register the same handler.
+-- DORMANT until Spell.dbc ships the proc entries.
 local function swordAndBoardProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
     if target == nil then
         return
@@ -395,6 +413,8 @@ local function swordAndBoardProc(event, aura, target, actor, procTarget, damage,
 end
 
 RegisterAuraEvent(SPELL_WARRIOR_SWORD_AND_BOARD, 6, swordAndBoardProc)
+RegisterAuraEvent(SPELL_WARRIOR_SWORD_AND_BOARD_R2, 6, swordAndBoardProc)
+RegisterAuraEvent(SPELL_WARRIOR_SWORD_AND_BOARD_R3, 6, swordAndBoardProc)
 
 local SPELL_WARRIOR_SWEEPING_STRIKES_R1 = 12328 -- spell_warrior.cpp:965
 local SPELL_WARRIOR_SWEEPING_STRIKES_R2 = 18765
@@ -412,7 +432,8 @@ local SPELL_WARRIOR_EXECUTE = 20647 -- spell_warrior.cpp:46
 -- NOMINAL_MELEE_RANGE 5.0f, ObjectDefines.h:42): unfriendly units in
 -- range, minus the victim and the exclude (proc target), minus non-LoS /
 -- totems / spirit services / critters, random pick. The Go twin is
--- GetUnfriendlyUnitsInRange(5) (alive, unfriendly, self excluded) with
+-- GetUnfriendlyUnitsInRange(5) (unfriendly, self excluded; its alive
+-- filter only runs when dead != 0, so IsAlive is applied in Lua) with
 -- the victim, proc-target, LoS and totem/critter (GetCreatureType 11/8)
 -- filters applied in Lua; spirit-service exclusion has no bridge
 -- (negligible). If the proc spell is Bladestorm periodic whirlwind
@@ -420,6 +441,10 @@ local SPELL_WARRIOR_EXECUTE = 20647 -- spell_warrior.cpp:46
 -- HP, the holder casts extra attack 2 (26654) on it, triggered; else
 -- extra attack 1 (12723), triggered, BP0 = proc damage. The <20% gate
 -- is the AURA_STATE_HEALTHLESS_20_PERCENT twin via GetHealthPct.
+-- Zero-damage guard is deliberate: the Lua surface cannot see whether
+-- DamageInfo exists (damage arrives as a bare uint32), so a 0-damage
+-- fully-absorbed hit's BP0-0 cast is skipped rather than misfiring on
+-- no-damage procs.
 -- DORMANT until Spell.dbc ships the 35429 proc entry.
 local function sweepingStrikesProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
     if target == nil or procTarget == nil then
@@ -441,6 +466,7 @@ local function sweepingStrikesProc(event, aura, target, actor, procTarget, damag
     for _, cand in ipairs(target:GetUnfriendlyUnitsInRange(5)) do
         local guid = cand:GetGUID()
         if guid ~= procGuid and guid ~= victimGuid
+            and cand:IsAlive()
             and cand:GetCreatureType() ~= 11 and cand:GetCreatureType() ~= 8
             and target:IsWithinLoS(cand) then
             picks[#picks + 1] = cand
