@@ -1556,3 +1556,162 @@ local function makeDecayOverTimeProc(spellId)
 end
 
 RegisterAuraEvent(SPELL_DECAY_OVER_TIME_FUNGAL_DECAY, 6, makeDecayOverTimeProc(SPELL_DECAY_OVER_TIME_FUNGAL_DECAY))
+
+-- PORTED (this tick): seven spell_generic.cpp classes, each
+-- verified name-by-name vs C++ + bridges (per-port comments
+-- below). All twelve IDs are TDB-bound in 26091; all seven are
+-- DORMANT until Spell.dbc ships the rows. The IDs live in one
+-- table local: the file sits at 193/200 main-chunk locals, so
+-- new consts are grouped and handlers are inline (function-scope
+-- locals do not count toward the 200).
+local SPELL_GEN_STRIP7 = {
+    removeImpairingAuras = { 20589, 30918 }, -- spell_generic.cpp:2866
+    removeFlightAuras = 58601, -- spell_generic.cpp:2845
+    procChargeDropOnly = { 32216, 45092, 56817 }, -- spell_generic.cpp:2691
+    throwShield = { 41213, 43416, 73076 }, -- spell_generic.cpp:3228
+    teleporting = 59317, -- spell_generic.cpp:3316
+    spectatorCheerTrigger = 55945, -- spell_generic.cpp:3108
+    whisperGulch = 27769, -- spell_generic.cpp:3594
+}
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_remove_impairing_auras::HandleScriptEffect
+--   (spell_generic.cpp:2870-2882): 20589 Escape Artist /
+--   30918 Improved Sprint, EFFECT_0 SCRIPT_EFFECT. The hit unit
+--   removes its movement-impairing auras (root included). No
+--   PreventHitDefaultEffect in C++; the Go SCRIPT_EFFECT default
+--   has no case for either ID, so the veto is vacuous. Bridge:
+--   RemoveMovementImpairingAuras on both unit surfaces
+--   (lua_player.go:4720, lua_creature_events.go:2190).
+for _, spellId in ipairs(SPELL_GEN_STRIP7.removeImpairingAuras) do
+    RegisterSpellEvent(spellId, 5, function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 0 or hitTarget == nil then
+            return
+        end
+        hitTarget:RemoveMovementImpairingAuras(true)
+    end)
+end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_remove_flight_auras::HandleScript
+--   (spell_generic.cpp:2851-2865): 58601, EFFECT_1
+--   SCRIPT_EFFECT. The hit unit loses its FLY aura and its
+--   mounted-flight-speed aura. No PreventHitDefaultEffect in
+--   C++; the Go SCRIPT_EFFECT default has no case for 58601.
+--   Aura-type constants: SPELL_AURA_FLY = 201 and
+--   SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED = 207
+--   (SpellAuraDefines.h:281/287). Bridge: RemoveAurasByType on
+--   both unit surfaces (lua_player.go:4707,
+--   lua_creature_events.go:2286).
+RegisterSpellEvent(SPELL_GEN_STRIP7.removeFlightAuras, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 or hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAurasByType(201)
+    hitTarget:RemoveAurasByType(207)
+end)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_gen_proc_charge_drop_only::HandleChargeDrop
+--   (spell_generic.cpp:2696-2712): 32216 / 45092 / 56817,
+--   OnProc only, PreventDefaultAction and nothing else. The
+--   handler is just return true, the ev6 PreventDefaultAction
+--   twin (procs.go:4018-4031). Exact, not a delta: Go consumes
+--   the charge before the ev6 hook fires, and the charge drop
+--   is the C++ behavior the class name prescribes — only the
+--   DBC trigger leg is suppressed, on both sides.
+for _, spellId in ipairs(SPELL_GEN_STRIP7.procChargeDropOnly) do
+    RegisterAuraEvent(spellId, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+        return true
+    end)
+end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_throw_shield::HandleScriptEffect
+--   (spell_generic.cpp:3234-3249): 41213 / 43416 / 73076,
+--   EFFECT_1 SCRIPT_EFFECT. The caster casts the effect's value
+--   (DBC CalcValue, the thrown-shield spell) on the hit unit,
+--   triggered. 69222 is NOT ported: it is GO-covered
+--   (boss_ai.go:8282) and a Lua port would double-fire.
+--   PreventHitDefaultEffect is deliberately NOT called: it lives
+--   only on the creature spell builder (lua_spell.go:716) and the
+--   player path never consults the veto record (no
+--   defaultPrevented in spells.go), while the Go SCRIPT_EFFECT
+--   default has no case for any of the three IDs on any path —
+--   so the veto is vacuous on both (spells.go:55342 precedent).
+--   GetEffectValue is bridged on both spell builders
+--   (lua_spell.go:217/572); the cloneHit precedent above is the
+--   same shape.
+for _, spellId in ipairs(SPELL_GEN_STRIP7.throwShield) do
+    RegisterSpellEvent(spellId, 5, function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 1 or hitTarget == nil then
+            return
+        end
+        local caster = spell:GetCaster()
+        if caster == nil then
+            return
+        end
+        caster:CastSpell(hitTarget, spell:GetEffectValue(1), true)
+    end)
+end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_teleporting::HandleScript (spell_generic.cpp:
+--   3322-3346): 59317, EFFECT_0 SCRIPT_EFFECT. The hit unit
+--   must be a player; in area 4637 (Violet Citadel Spire) it
+--   self-casts 59316 (down), else 59314 (up), triggered. No
+--   PreventHitDefaultEffect in C++; the Go SCRIPT_EFFECT
+--   default has no case for 59317. Bridges: hitTarget
+--   GetTypeId (generic object fallback), player GetAreaId
+--   (lua_player.go:180), player self-targeted triggered
+--   CastSpell (lua_player.go:3805).
+RegisterSpellEvent(SPELL_GEN_STRIP7.teleporting, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil or hitTarget:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    if hitTarget:GetAreaId() == 4637 then
+        hitTarget:CastSpell(hitTarget, 59316, true)
+    else
+        hitTarget:CastSpell(hitTarget, 59314, true)
+    end
+end)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_spectator_cheer_trigger::HandleDummy
+--   (spell_generic.cpp:3112-3123): 55945, EFFECT_0 DUMMY.
+--   40% roll (roll_chance_i: pass while math.random(0, 99) <
+--   40); the caster performs a random emote of cheer (4),
+--   exclamation (5), applaud (21) — SharedDefines.h:1941/1942/
+--   1956. No PreventHitDefaultEffect in C++; the Go DUMMY
+--   default has no case for 55945. Bridge: PerformEmote on both
+--   unit surfaces (lua_player.go:6580,
+--   lua_creature_events.go:5108).
+RegisterSpellEvent(SPELL_GEN_STRIP7.spectatorCheerTrigger, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if math.random(0, 99) >= 40 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local emotes = { 4, 5, 21 }
+    caster:PerformEmote(emotes[math.random(3)])
+end)
+
+-- PORTED (this tick, RegisterAuraEvent OnEffectPeriodic = 1):
+--   spell_gen_whisper_gulch_yogg_saron_whisper::
+--   HandleEffectPeriodic (spell_generic.cpp:3603-3614): 27769,
+--   EFFECT_0 PERIODIC_DUMMY. PreventDefaultAction (return
+--   true, the auraOfFear precedent above); the aura target
+--   casts the dummy 29072 (SPELL_YOGG_SARON_WHISPER_DUMMY,
+--   spell_generic.cpp:3591) triggered on nil.
+RegisterAuraEvent(SPELL_GEN_STRIP7.whisperGulch, 1, function(event, aura, target)
+    if target == nil then
+        return true
+    end
+    target:CastSpell(nil, 29072, true)
+    return true
+end)
