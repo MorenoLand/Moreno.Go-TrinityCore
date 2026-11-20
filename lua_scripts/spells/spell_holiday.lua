@@ -1171,8 +1171,9 @@ RegisterSpellEvent(SPELL_FLING_TORCH, 4, flingTorchHit)
 --   no bridge, so the count reads via GetAura(45693):GetStackAmount()
 --   (nil aura = 0, zuldrak-rat precedent); GetFirstCollisionPosition
 --   has no Go model, so the re-fling dest is the plain trig point at
---   the player's Z (felmyst precedent); the 45676 missed sibling
---   stays out (OnObjectAreaTargetSelect has no bridge). Binding 45671
+--   the player's Z (felmyst precedent); the 45676 missed sibling is
+--   PORTED below (ev7; player twin firePlayerSpellTargetSelects).
+--   Binding 45671
 --   (TDB 26091:1109 'spell_midsummer_fling_torch_catch').
 local SPELL_FLING_TORCH_CATCH = 45671 -- spell_holiday.cpp:1837 (class), :1975 (register)
 local SPELL_TORCHES_CAUGHT = 45693 -- spell_holiday.cpp:1778
@@ -1183,6 +1184,10 @@ local QUEST_TORCH_CATCHING_A = 11657 -- spell_holiday.cpp:1684
 local QUEST_TORCH_CATCHING_H = 11923 -- spell_holiday.cpp:1685
 local QUEST_MORE_TORCH_CATCHING_A = 11924 -- spell_holiday.cpp:1686
 local QUEST_MORE_TORCH_CATCHING_H = 11925 -- spell_holiday.cpp:1687
+local SPELL_JUGGLE_TORCH_CATCH = 45644 -- spell_holiday.cpp:1748 (class), :1972 (register)
+local SPELL_GIVE_TORCH = 45280 -- spell_holiday.cpp:1683
+local SPELL_JUGGLE_TORCH_MISSED = 45676 -- spell_holiday.cpp:1898 (class), :1976 (register)
+local QUEST_STATUS_REWARDED = 6 -- quests.go:21
 
 local function flingTorchCatchHit(event, spell, target, effectIndex)
     if effectIndex ~= 0 or target == nil then
@@ -1236,6 +1241,50 @@ end
 RegisterSpellEvent(SPELL_FLING_TORCH_CATCH, 5, flingTorchCatchHit)
 
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_midsummer_torch_catch (45644, spell_holiday.cpp:1748-1771):
+--   EFFECT_0 DUMMY. Hit player with quest 11657 (A) or 11923 (H)
+--   REWARDED self-casts 45280 (Give Torch), non-triggered. Binding
+--   45644 (AC + TDB agree 'spell_midsummer_torch_catch'). DORMANT
+--   until Spell.dbc ships the 45644/45280 rows.
+local function juggleTorchCatchHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    if target:GetQuestStatus(QUEST_TORCH_CATCHING_A) == QUEST_STATUS_REWARDED
+        or target:GetQuestStatus(QUEST_TORCH_CATCHING_H) == QUEST_STATUS_REWARDED then
+        target:CastSpell(target, SPELL_GIVE_TORCH)
+    end
+end
+
+RegisterSpellEvent(SPELL_JUGGLE_TORCH_CATCH, 5, juggleTorchCatchHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnObjectAreaTargetSelect = 7):
+--   spell_midsummer_fling_torch_missed (45676, spell_holiday.cpp:1898-1916):
+--   EFFECT_0 + EFFECT_2, TARGET_UNIT_DEST_AREA_ENTRY. C++ keeps only
+--   the caster in the target list. Go pre-strips the caster from
+--   entry lists before the hook (lua_spell.go player twin), so the
+--   list is rebuilt with the caster alone (hunter ev7 precedent) --
+--   the C++-exact outcome. Overturns the stay-out note below (the
+--   player ev7 twin now exists). Binding 45676 (TDB-only).
+--   DORMANT until Spell.dbc ships the 45676 row.
+local function flingTorchMissedFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 and effectIndex ~= 2 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    targets:Clear()
+    targets:Add(caster)
+end
+
+RegisterSpellEvent(SPELL_JUGGLE_TORCH_MISSED, 7, flingTorchMissedFilter)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_midsummer_torch_target_picker (45907, spell_holiday.cpp:1544-1565):
 --   EFFECT_0 DUMMY. The hit unit self-casts the target-indicator
 --   spells 46901 (cosmetic) + 45723, triggered. Binding 45907 (TDB
@@ -1267,10 +1316,8 @@ RegisterSpellEvent(SPELL_FLING_TORCH_CATCH, 5, flingTorchCatchHit)
 --   (lua_spell.go session builder; the live TriggerMissile arm in
 --   spells.go:16365 would still fire, so an ev4 port would double
 --   the missile + 45676). No GetHitDest bridge either (GetExplTargetDest
---   is the cast-level twin). 45676 fling_torch_missed — ev7
---   OnObjectAreaTargetSelect exists but is creature-path-only
---   (runtime.go), and 45676's only caster is the player (fling
---   triggered :1827), so the filter can never reach it.
+--   is the cast-level twin). 45676 fling_torch_missed is PORTED above
+--   (ev7; the player twin firePlayerSpellTargetSelects now exists).
 local MIDSUMMER_TORCH = {
     TARGET_INDICATOR_COSMETIC = 46901, -- spell_holiday.cpp:1500
     TARGET_INDICATOR = 45723, -- spell_holiday.cpp:1501
