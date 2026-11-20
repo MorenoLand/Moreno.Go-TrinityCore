@@ -1292,6 +1292,37 @@ local EV5_ITEM = {
     PYGMY_OIL = 53808,
     PYGMY_OIL_PYGMY_AURA = 53806,
     PYGMY_OIL_SMALLER_AURA = 53805,
+    UNUSUAL_COMPASS = 64385,
+    CHICKEN_COVER = 51961,
+    CHICKEN_NET = 51959,
+    CAPTURE_CHICKEN_ESCAPE = 51037,
+    QUEST_CHICKEN_PARTY = 12702,
+    QUEST_FLOWN_THE_COOP = 12532,
+    REFOCUS = 24531,
+    AIMED_SHOT = 19434,
+    MULTISHOT = 2643,
+    VOLLEY = 42243,
+    MUISEK_VESSEL = { 11885, 11886, 11887, 11888, 11889 },
+    GREATMOTHERS_SOULCATCHER = 46485,
+    FORCE_CAST_SUMMON_GNOME_SOUL = 46486,
+    RED_RIDER_AIR_RIFLE = 67533,
+    AIR_RIFLE_HOLD_VISUAL = 65582,
+    AIR_RIFLE_SHOOT = 67532,
+    AIR_RIFLE_SHOOT_SELF = 65577,
+    PICCOLO_OF_THE_FLAMING_FIRE = 17512,
+    ASHBRINGER = 28441,
+    ASHBRINGER_SOUNDS = { 8906, 8907, 8908, 8920, 8921, 8922, 8923, 8924, 8925, 8926, 8927, 8928 },
+    ULTRASAFE_TRANSPORTER = 36941,
+    DIMENSIONAL_RIPPER_AREA52 = 36890,
+    TRANSPORTER_MALFUNCTION_SMALLER = 36893,
+    TRANSPORTER_MALFUNCTION_BIGGER = 36895,
+    TRANSPORTER_MALFUNCTION_CHICKEN = 36940,
+    TRANSFORM_HORDE = 36897,
+    TRANSFORM_ALLIANCE = 36899,
+    SOUL_SPLIT_EVIL = 36900,
+    SOUL_SPLIT_GOOD = 36901,
+    CLASS_HUNTER = 3, -- SharedDefines.h:131
+    EMOTE_STATE_DANCE = 10, -- SharedDefines.h:1945
 }
 
 local function brittleArmorHit(event, spell, hitTarget, effectIndex)
@@ -1553,3 +1584,416 @@ local function pygmyOilHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(EV5_ITEM.PYGMY_OIL, 5, pygmyOilHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5 unless noted):
+--   spell_item_unusual_compass::HandleDummy (spell_item.cpp:3283-3287): EFFECT_0 DUMMY.
+--   Caster faces a random angle 0..2pi (frand twin).
+--   spell_item_chicken_cover::HandleDummy (:3313-3326): EFFECT_0 DUMMY. C++ Load gate
+--   (caster TYPEID_PLAYER) folded into the handler. No 51959 aura on the hit unit and
+--   quest 12702 or 12532 incomplete -> caster casts 51037 on self, hit unit Kill()
+--   (KillSelf twin).
+--   spell_item_refocus::HandleDummy (:3353-3365): EFFECT_0 DUMMY. Hunter only;
+--   ResetSpellCooldown 19434/2643/42243 when each holds a cooldown.
+--   spell_item_muisek_vessel::HandleDummy (:3378-3383): EFFECT_0 DUMMY. Dead hit
+--   creature despawns. One handler, five bindings 11885-11889.
+--   spell_item_greatmothers_soulcatcher::HandleDummy (:3403-3407): EFFECT_0 DUMMY.
+--   Hit unit present -> caster self-casts 46486, non-triggered.
+--   spell_item_red_rider_air_rifle::HandleScript (:2354-2378): EFFECT_0 SCRIPT_EFFECT.
+--   PreventHitDefaultEffect; hold visual 65582 triggered, then urand(0,4): nonzero
+--   shoots 67532 at the target, zero shoots 65577 at self, both non-triggered.
+--   The GCD-cancel leg is moot in Go (direct-cast path never consults GCD).
+--   spell_item_piccolo_of_the_flaming_fire::HandleScript (:1609-1614): EFFECT_0
+--   SCRIPT_EFFECT. PreventHitDefaultEffect; hit player performs EMOTE_STATE_DANCE (10).
+--   spell_item_ashbringer::OnDummyEffect (:2584-2596): EFFECT_0 DUMMY, registered
+--   OnEffectHit (event 4, not ev5 — C++ uses OnEffectHit +=). PreventHitDefaultEffect;
+--   1/61 PlayDirectSound of one of the 12 sounds (one-arg bridge, illidan precedent).
+--   spell_item_ultrasafe_transporter::HandleScript (:1843-1877) and
+--   spell_item_dimensional_ripper_area52::HandleScript (:1911-1944): EFFECT_0
+--   TELEPORT_UNITS. 50% roll, then urand pick (0-6 ultrasafe / 0-3 area52); no veto
+--   in C++ so the teleport proceeds on malfunction paths, matching the everlook port.
+--   Bindings 64385/51961/24531/11885-11889/46485/67533/17512/28441/36941/36890
+--   (AC spell_script_names; red_rider 67533 is TDB). DORMANT until Spell.dbc ships
+--   the binding rows.
+--   NOTE: handlers are inline anonymous functions (skadi precedent) — the file sits
+--   at 189 top-level locals and the Lua main-chunk limit is 200, so no new named
+--   local functions were added this tick.
+RegisterSpellEvent(EV5_ITEM.UNUSUAL_COMPASS, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:SetFacingTo(math.random() * 2 * math.pi)
+end)
+
+RegisterSpellEvent(EV5_ITEM.CHICKEN_COVER, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    if not hitTarget:HasAura(EV5_ITEM.CHICKEN_NET)
+        and (caster:GetQuestStatus(EV5_ITEM.QUEST_CHICKEN_PARTY) == QUEST_STATUS_INCOMPLETE
+            or caster:GetQuestStatus(EV5_ITEM.QUEST_FLOWN_THE_COOP) == QUEST_STATUS_INCOMPLETE) then
+        caster:CastSpell(caster, EV5_ITEM.CAPTURE_CHICKEN_ESCAPE, true)
+        hitTarget:Kill()
+    end
+end)
+
+RegisterSpellEvent(EV5_ITEM.REFOCUS, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    if caster:GetClass() ~= EV5_ITEM.CLASS_HUNTER then
+        return
+    end
+    if caster:HasSpellCooldown(EV5_ITEM.AIMED_SHOT) then
+        caster:ResetSpellCooldown(EV5_ITEM.AIMED_SHOT)
+    end
+    if caster:HasSpellCooldown(EV5_ITEM.MULTISHOT) then
+        caster:ResetSpellCooldown(EV5_ITEM.MULTISHOT)
+    end
+    if caster:HasSpellCooldown(EV5_ITEM.VOLLEY) then
+        caster:ResetSpellCooldown(EV5_ITEM.VOLLEY)
+    end
+end)
+
+for _, spellId in ipairs(EV5_ITEM.MUISEK_VESSEL) do
+    RegisterSpellEvent(spellId, 5, function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 0 or hitTarget == nil then
+            return
+        end
+        if hitTarget:GetObjectType() == "Creature" and hitTarget:IsDead() then
+            hitTarget:DespawnOrUnsummon()
+        end
+    end)
+end
+
+RegisterSpellEvent(EV5_ITEM.GREATMOTHERS_SOULCATCHER, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, EV5_ITEM.FORCE_CAST_SUMMON_GNOME_SOUL, false)
+end)
+
+RegisterSpellEvent(EV5_ITEM.RED_RIDER_AIR_RIFLE, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    spell:PreventHitDefaultEffect(effectIndex)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, EV5_ITEM.AIR_RIFLE_HOLD_VISUAL, true)
+    if math.random(0, 4) ~= 0 then
+        caster:CastSpell(hitTarget, EV5_ITEM.AIR_RIFLE_SHOOT, false)
+    else
+        caster:CastSpell(caster, EV5_ITEM.AIR_RIFLE_SHOOT_SELF, false)
+    end
+end)
+
+RegisterSpellEvent(EV5_ITEM.PICCOLO_OF_THE_FLAMING_FIRE, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    spell:PreventHitDefaultEffect(effectIndex)
+    if hitTarget:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    hitTarget:PerformEmote(EV5_ITEM.EMOTE_STATE_DANCE)
+end)
+
+RegisterSpellEvent(EV5_ITEM.ASHBRINGER, 4, function(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    spell:PreventHitDefaultEffect(effectIndex)
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    if math.random(0, 60) < 1 then
+        caster:PlayDirectSound(EV5_ITEM.ASHBRINGER_SOUNDS[math.random(1, 12)])
+    end
+end)
+
+RegisterSpellEvent(EV5_ITEM.ULTRASAFE_TRANSPORTER, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if math.random(1, 100) > 50 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    local spellId
+    local roll = math.random(0, 6)
+    if roll == 0 then
+        spellId = EV5_ITEM.TRANSPORTER_MALFUNCTION_SMALLER
+    elseif roll == 1 then
+        spellId = EV5_ITEM.TRANSPORTER_MALFUNCTION_BIGGER
+    elseif roll == 2 then
+        spellId = EV5_ITEM.SOUL_SPLIT_EVIL
+    elseif roll == 3 then
+        spellId = EV5_ITEM.SOUL_SPLIT_GOOD
+    elseif roll == 4 then
+        if caster:GetTeam() == TEAM_ALLIANCE then
+            spellId = EV5_ITEM.TRANSFORM_HORDE
+        else
+            spellId = EV5_ITEM.TRANSFORM_ALLIANCE
+        end
+    elseif roll == 5 then
+        spellId = EV5_ITEM.TRANSPORTER_MALFUNCTION_CHICKEN
+    else
+        spellId = SPELL_EVIL_TWIN
+    end
+    caster:CastSpell(caster, spellId, true)
+end)
+
+RegisterSpellEvent(EV5_ITEM.DIMENSIONAL_RIPPER_AREA52, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if math.random(1, 100) > 50 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    local spellId
+    local roll = math.random(0, 3)
+    if roll == 0 then
+        spellId = EV5_ITEM.TRANSPORTER_MALFUNCTION_BIGGER
+    elseif roll == 1 then
+        spellId = EV5_ITEM.SOUL_SPLIT_EVIL
+    elseif roll == 2 then
+        spellId = EV5_ITEM.SOUL_SPLIT_GOOD
+    else
+        if caster:GetTeam() == TEAM_ALLIANCE then
+            spellId = EV5_ITEM.TRANSFORM_HORDE
+        else
+            spellId = EV5_ITEM.TRANSFORM_ALLIANCE
+        end
+    end
+    caster:CastSpell(caster, spellId, true)
+end)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6; handler returns true = PreventDefaultAction):
+--   spell_item_aegis_of_preservation::HandleProc (spell_item.cpp:102-106): EFFECT_1
+--   PROC_TRIGGER_SPELL. Target self-casts 23781, triggered.
+--   spell_item_desperate_defense::HandleProc (:774-778): EFFECT_2. Target self-casts 33898.
+--   spell_item_fate_rune_of_unsurpassed_vigor::HandleProc (:920-924): EFFECT_0 DUMMY.
+--   Target self-casts 25733, triggered.
+--   spell_item_discerning_eye_beast_dummy::HandleProc (:840-844): EFFECT_0 DUMMY.
+--   Actor casts 59914 on self (nullptr-target twin, heartpierce precedent).
+--   spell_item_healing_touch_refund::HandleProc (:1102-1106): EFFECT_0 DUMMY.
+--   Actor casts 28848 on self.
+--   spell_item_totem_of_flowing_water::HandleProc (:2221-2225): EFFECT_0 DUMMY.
+--   Actor casts 28850 on self.
+--   spell_item_soul_preserver::HandleProc (:3480-3506): EFFECT_0 PROC_TRIGGER_SPELL.
+--   Actor casts the class spell 60512/60513/60514/60515.
+--   spell_item_death_choice::HandleProc (:3643-3673): EFFECT_0 PROC_TRIGGER_SPELL.
+--   STR > AGI picks the strength buff, else agility; per-aura registration reproduces
+--   the C++ aurEff->GetId() switch (67702 -> 67708/67703, 67771 -> 67773/67772).
+--   spell_item_darkmoon_card_greatness::HandleProc (:3788-3824): EFFECT_0
+--   PROC_TRIGGER_SPELL. Highest of STR/AGI/INT/SPI picks 60229/60233/60234/60235
+--   (sequential strict-> comparisons, default strength on ties).
+--   spell_item_mana_drain::HandleProc (:3890-3907): EFFECT_0 PROC_TRIGGER_SPELL.
+--   Alive actor casts 29471 on self; alive proc target (GetActionTarget twin)
+--   gets 27526 from the actor.
+--   Effect-index guards follow the C++ AuraEffectProcFn effect (fireAuraProc dispatches
+--   per eligible effect; a mismatched index returns false so the other effect's
+--   default leg is not vetoed). Bindings per AC spell_script_names.
+--   DORMANT until Spell.dbc ships the proc entries.
+--   Handlers are inline anonymous functions (skadi precedent) — the file sits at the
+--   200-local main-chunk limit, so no new named locals were added.
+local EV6_ITEM = {
+    AEGIS_OF_PRESERVATION = 23780,
+    AEGIS_HEAL = 23781,
+    DESPERATE_DEFENSE = 33896,
+    DESPERATE_RAGE = 33898,
+    FATE_RUNE = 7434,
+    UNSURPASSED_VIGOR = 25733,
+    DISCERNING_EYE_BEAST_DUMMY = 59915,
+    DISCERNING_EYE_BEAST = 59914,
+    HEALING_TOUCH_REFUND = 28847,
+    HEALING_TOUCH_MANA = 28848,
+    TOTEM_OF_FLOWING_WATER = 28849,
+    LESSER_HEALING_WAVE_MANA = 28850,
+    SOUL_PRESERVER = 60510,
+    SOUL_PRESERVER_BY_CLASS = { [11] = 60512, [2] = 60513, [5] = 60514, [7] = 60515 },
+    DEATH_CHOICE_NORMAL = 67702,
+    DEATH_CHOICE_HEROIC = 67771,
+    DEATH_CHOICE_NORMAL_AGILITY = 67703,
+    DEATH_CHOICE_NORMAL_STRENGTH = 67708,
+    DEATH_CHOICE_HEROIC_AGILITY = 67772,
+    DEATH_CHOICE_HEROIC_STRENGTH = 67773,
+    DARKMOON_CARD_GREATNESS = 57345,
+    DARKMOON_CARD_STRENGTH = 60229,
+    DARKMOON_CARD_AGILITY = 60233,
+    DARKMOON_CARD_INTELLECT = 60234,
+    DARKMOON_CARD_SPIRIT = 60235,
+    MANA_DRAIN = 27522,
+    MANA_DRAIN_2 = 40336,
+    MANA_DRAIN_ENERGIZE = 29471,
+    MANA_DRAIN_LEECH = 27526,
+    STAT_STRENGTH = 0,
+    STAT_AGILITY = 1,
+    STAT_INTELLECT = 3,
+    STAT_SPIRIT = 4,
+}
+
+RegisterAuraEvent(EV6_ITEM.AEGIS_OF_PRESERVATION, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 1 or target == nil then
+        return effectIndex == 1
+    end
+    target:CastSpell(target, EV6_ITEM.AEGIS_HEAL, true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.DESPERATE_DEFENSE, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 2 or target == nil then
+        return effectIndex == 2
+    end
+    target:CastSpell(target, EV6_ITEM.DESPERATE_RAGE, true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.FATE_RUNE, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return effectIndex == 0
+    end
+    target:CastSpell(target, EV6_ITEM.UNSURPASSED_VIGOR, true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.DISCERNING_EYE_BEAST_DUMMY, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    actor:CastSpell(actor, EV6_ITEM.DISCERNING_EYE_BEAST, true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.HEALING_TOUCH_REFUND, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    actor:CastSpell(actor, EV6_ITEM.HEALING_TOUCH_MANA, true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.TOTEM_OF_FLOWING_WATER, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    actor:CastSpell(actor, EV6_ITEM.LESSER_HEALING_WAVE_MANA, true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.SOUL_PRESERVER, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    local spellId = EV6_ITEM.SOUL_PRESERVER_BY_CLASS[actor:GetClass()]
+    if spellId ~= nil then
+        actor:CastSpell(actor, spellId, true)
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.DEATH_CHOICE_NORMAL, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    if actor:GetStat(EV6_ITEM.STAT_STRENGTH) > actor:GetStat(EV6_ITEM.STAT_AGILITY) then
+        actor:CastSpell(actor, EV6_ITEM.DEATH_CHOICE_NORMAL_STRENGTH, true)
+    else
+        actor:CastSpell(actor, EV6_ITEM.DEATH_CHOICE_NORMAL_AGILITY, true)
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.DEATH_CHOICE_HEROIC, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    if actor:GetStat(EV6_ITEM.STAT_STRENGTH) > actor:GetStat(EV6_ITEM.STAT_AGILITY) then
+        actor:CastSpell(actor, EV6_ITEM.DEATH_CHOICE_HEROIC_STRENGTH, true)
+    else
+        actor:CastSpell(actor, EV6_ITEM.DEATH_CHOICE_HEROIC_AGILITY, true)
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.DARKMOON_CARD_GREATNESS, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    local str = actor:GetStat(EV6_ITEM.STAT_STRENGTH)
+    local agi = actor:GetStat(EV6_ITEM.STAT_AGILITY)
+    local intl = actor:GetStat(EV6_ITEM.STAT_INTELLECT)
+    local spi = actor:GetStat(EV6_ITEM.STAT_SPIRIT)
+    local stat = 0
+    local spellId = EV6_ITEM.DARKMOON_CARD_STRENGTH
+    if str > stat then
+        spellId = EV6_ITEM.DARKMOON_CARD_STRENGTH
+        stat = str
+    end
+    if agi > stat then
+        spellId = EV6_ITEM.DARKMOON_CARD_AGILITY
+        stat = agi
+    end
+    if intl > stat then
+        spellId = EV6_ITEM.DARKMOON_CARD_INTELLECT
+        stat = intl
+    end
+    if spi > stat then
+        spellId = EV6_ITEM.DARKMOON_CARD_SPIRIT
+        stat = spi
+    end
+    actor:CastSpell(actor, spellId, true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.MANA_DRAIN, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    if actor:IsAlive() then
+        actor:CastSpell(actor, EV6_ITEM.MANA_DRAIN_ENERGIZE, true)
+    end
+    if procTarget ~= nil and procTarget:IsAlive() then
+        actor:CastSpell(procTarget, EV6_ITEM.MANA_DRAIN_LEECH, true)
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.MANA_DRAIN_2, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    if actor:IsAlive() then
+        actor:CastSpell(actor, EV6_ITEM.MANA_DRAIN_ENERGIZE, true)
+    end
+    if procTarget ~= nil and procTarget:IsAlive() then
+        actor:CastSpell(procTarget, EV6_ITEM.MANA_DRAIN_LEECH, true)
+    end
+    return true
+end)
