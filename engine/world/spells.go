@@ -36090,6 +36090,14 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 			return protocol.SpellMissResist
 		}
 	}
+	// WorldObject::MagicSpellHitResult (Object.cpp:2597-2604): the
+	// SPELL_AURA_DEFLECT_SPELLS (287) arm, MAGIC only — after the resist
+	// rolls, like the triggered table's twin (triggeredSpellTableResult).
+	// Chain jumps and nearby picks previously never deflected: a victim
+	// with the caster in its front arc (or carrying 288) keeps the spell.
+	if spell.DefenseType == spellDamageClassMagic && s.spellDeflectedByVictim(ctx, targetGUID, targetSess, s.player.X, s.player.Y) {
+		return protocol.SpellMissDeflect
+	}
 	return protocol.SpellMissNone
 }
 
@@ -37644,6 +37652,22 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				}
 				s.schedulePlayerPeriodicTickInitial(aura, period, initialDelay)
 			}
+		}
+	}
+	// Aura constructor (SpellAuras.cpp:436-437): spells with
+	// ManaPerSecond start the 1s power-upkeep timer (m_timeCla) — the
+	// applyAuraToTarget fresh-apply twin (spells.go:42078). This funnel
+	// armed the periodic tick but never the upkeep, so a creature-cast
+	// ManaPerSecond aura on a player never drained its caster (and a
+	// dynobj patch never died from upkeep failure). The DurationMs==0
+	// gate inside scheduleAuraUpkeepLocked covers permanent/mounted
+	// auras. Dynobj holders pay per holder here; C++ drains once per
+	// DynObjAura (one aura per object), so a shared object-level timer
+	// is the remaining refinement — latent, zero seeded spells carry
+	// ManaPerSecond.
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found && auraUpkeepNeeded(sp) {
+			s.scheduleAuraUpkeep(aura)
 		}
 	}
 }
