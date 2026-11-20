@@ -1463,6 +1463,25 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.totalAttackPowerValue(attackType == 2)}, nil
 	}
+	// GetMinDamage / GetMaxDamage / GetMinOffhandDamage /
+	// GetMaxOffhandDamage are Unit::GetFloatValue(UNIT_FIELD_MINDAMAGE /
+	// MAXDAMAGE / MINOFFHANDDAMAGE / MAXOFFHANDDAMAGE) (player_state.go
+	// fields 70-73): the live weapon damage bounds the weapon-damage
+	// legs read (player_state.go recomputes them from equipped weapons
+	// on every gear/stat change). Backs the Deep Wounds average-weapon-
+	// damage leg (spell_warrior.cpp:353-357), which reads the actor's
+	// off-hand pair on OFF_ATTACK and the main-hand pair otherwise.
+	methods["GetMinDamage"] = luaNoArgs(func() any { return state.MinDamage })
+	methods["GetMaxDamage"] = luaNoArgs(func() any { return state.MaxDamage })
+	methods["GetMinOffhandDamage"] = luaNoArgs(func() any { return state.MinOffhandDamage })
+	methods["GetMaxOffhandDamage"] = luaNoArgs(func() any { return state.MaxOffhandDamage })
+	// GetShieldBlockValue is Player::GetShieldBlockValue
+	// (Player.cpp:5426-5430) via getShieldBlockValue
+	// (aura_shieldblock.go): gear/enchant block value plus the
+	// strength/20 fold and the aura-69/122 legs. Backs the Damage
+	// Shield proc leg (spell_warrior.cpp:246-253), which takes a
+	// percentage of the blocked amount.
+	methods["GetShieldBlockValue"] = luaNoArgs(func() any { return s.getShieldBlockValue() })
 	methods["GetGMRank"] = luaNoArgs(func() any { return s.security })
 	methods["IsGM"] = luaNoArgs(func() any { return s.security > 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })

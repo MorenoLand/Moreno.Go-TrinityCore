@@ -1218,7 +1218,10 @@ func (s *Server) hasAuraProcHook(spellID uint32) bool {
 // GetHitMask read the raw proc masks; GetDamage / GetHeal /
 // GetEffectiveHeal read the event's damage and heal amounts (the
 // DamageInfo/HealInfo twins — absorb/resist/block/overkill have no Go
-// model, proc events carry no DamageInfo breakdown); GetActor /
+// model, proc events carry no DamageInfo breakdown); GetAttackType
+// reads ev.attackType, the DamageInfo weapon attack type (BASE_ATTACK
+// 0 / OFF_ATTACK 1 / RANGED_ATTACK 2 — only the melee done-side site
+// threads it, other events read BASE_ATTACK); GetActor /
 // GetActionTarget / GetProcTarget read the resolved unit objects (the
 // action target via procActionTargetGUID, procs.go); IsTriggered reads
 // ev.triggered. The object is a snapshot: the unit objects resolve
@@ -1302,6 +1305,7 @@ func (s *Server) procEventObject(ev procEventInfo, holderGUID, triggerTargetGUID
 		"GetSpellPhaseMask": luaNoArgs(func() any { return ev.spellPhaseMask }),
 		"GetHitMask":        luaNoArgs(func() any { return ev.hitMask }),
 		"GetDamage":         luaNoArgs(func() any { return ev.damage }),
+		"GetAttackType":     luaNoArgs(func() any { return uint32(ev.attackType) }),
 		"GetHeal":           luaNoArgs(func() any { return ev.heal }),
 		"GetEffectiveHeal":  luaNoArgs(func() any { return ev.effectiveHeal }),
 		"GetActor":          luaNoArgs(func() any { return actor }),

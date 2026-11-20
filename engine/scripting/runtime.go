@@ -525,9 +525,11 @@ const (
 // it by returning true (PreventDefaultAction, skipping the default
 // leg) when the gate FAILS — the inverted veto, e.g. decimation
 // (spell_warlock.lua) and culling the herd (spell_pet_hunter.lua).
-// Absorb/resist/block/overkill and the weapon attack type are not
-// forwarded (Go proc events carry no DamageInfo breakdown or
-// WeaponAttackType). A handler
+// Absorb/resist/block/overkill are not forwarded (Go proc events
+// carry no DamageInfo breakdown). The weapon attack type IS
+// forwarded as procEvent:GetAttackType (lua_aura.go): the melee
+// done-side site threads it, other events read BASE_ATTACK (0).
+// A handler
 // returning boolean true is PreventDefaultAction(): the default leg
 // for that effect is skipped, matching C++ where the script handler
 // replaces the trigger cast. Both proc loops fire it: the session

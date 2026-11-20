@@ -1943,6 +1943,13 @@ type procEventInfo struct {
 	eventSpell      *wotlk.Spell
 	actorGUID       uint64
 	damage          uint32
+	// attackType is DamageInfo::GetAttackType (Unit.h:465-500): the
+	// weapon attack type of the event's damage. Only the melee
+	// done-side site threads it (procAuraTriggers); every other
+	// construction site reads BASE_ATTACK (0), the C++ DamageInfo
+	// default for spell, kill, and creature damage. Backs the Deep
+	// Wounds main/off-hand weapon-damage leg (spell_warrior.cpp:353-357).
+	attackType protocol.WeaponAttackType
 	// heal / effectiveHeal carry HealInfo::GetHeal / GetEffectiveHeal
 	// (Spell.cpp:2512) on heal proc events: the pre-absorb, pre-overheal
 	// heal and the health actually gained. Zero on every non-heal event
@@ -3484,6 +3491,7 @@ func (s *session) procAuraTriggers(ctx context.Context, target combatTarget, att
 		hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
 		actorGUID:      s.playerGUID,
 		damage:         damage,
+		attackType:     attType,
 	})
 }
 

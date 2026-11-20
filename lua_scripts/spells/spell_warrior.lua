@@ -113,7 +113,10 @@ local SPELL_WARRIOR_DAMAGE_SHIELD_DAMAGE = 59653 -- spell_warrior.cpp:41
 -- the EFFECT_0 amount (CalculatePct truncation); the holder casts 59653 on
 -- the proc target, triggered (CastSpellExtraArgs(aurEff) sets
 -- TRIGGERED_FULL_MASK, SpellDefines.h:166), BP0. DORMANT until Spell.dbc
--- ships the 58872 proc entry.
+-- ships the 58872 proc entry. GetShieldBlockValue bridge landed
+-- 2026-11-19 (lua_player.go): the port's target:GetShieldBlockValue()
+-- call previously read a missing method. TDB spell_proc holds no row
+-- for 58872 (dump-verified 2026-11-19); the generated DBC entry governs.
 local function damageShieldProc(event, aura, target, actor, procTarget, damage)
     if target == nil or procTarget == nil then
         return true
@@ -500,8 +503,8 @@ local SPELL_WARRIOR_DEEP_WOUNDS_PERIODIC = 12721 -- spell_warrior.cpp:45
 -- cast rather than dividing by zero. A 0 effect value also skips: C++
 -- casts unconditionally but only ever receives positive weapon damage from
 -- its aura leg — a 0 read is the DBC dummy value, since the aura leg
--- (12834) is a STAY-OUT (no procEvent attack-type bridge for the
--- off-hand/main-hand weapon-damage leg, census 2026-11-19) and the generic
+-- (12834/12849/12867) is ported below (the new procEvent:GetAttackType
+-- and player weapon-damage bridges) and the generic
 -- DBC proc leg casts 12162 with no BP0 (procs.go:5646). DORMANT until
 -- Spell.dbc ships the 12162/12721/12834 rows (all unseeded; seed axis
 -- parked). RegisterSpellEvent OnEffectHitTarget = 5; the player-path fire
@@ -542,3 +545,86 @@ end
 RegisterSpellEvent(SPELL_WARRIOR_DEEP_WOUNDS_R1, 5, deepWoundsHit)
 RegisterSpellEvent(SPELL_WARRIOR_DEEP_WOUNDS_R2, 5, deepWoundsHit)
 RegisterSpellEvent(SPELL_WARRIOR_DEEP_WOUNDS_R3, 5, deepWoundsHit)
+
+
+local SPELL_WARRIOR_DEEP_WOUNDS_AURA_R1 = 12834 -- spell_warrior.cpp:319 (class spell_warr_deep_wounds_aura); bot_warrior_ai.cpp:81-83 ranks 12834/12849/12867
+local SPELL_WARRIOR_DEEP_WOUNDS_AURA_R2 = 12849
+local SPELL_WARRIOR_DEEP_WOUNDS_AURA_R3 = 12867
+local TYPEID_PLAYER = 4
+
+-- C++ spell_warr_deep_wounds_aura_AuraScript (spell_warrior.cpp:324-370):
+-- DoCheckProc (CheckProc, :331-345): the event must carry damage info
+-- and the actor must be a player (the NPCBot arm is a bot-only fork,
+-- not in this tree). DoCheckProc has no separate hook (runtime.go):
+-- the port expresses it by returning true (the inverted veto) when
+-- the gate fails. The damage-info leg rides the proc entry: the
+-- generated entry (procs.go) gates on the DBC melee proc flags, and
+-- every event reaching the hook carries damage info, so only the
+-- actor-type gate is expressed here. OnEffectProc (OnProc, :348-363)
+-- EFFECT_0 PROC_TRIGGER_SPELL: PreventDefaultAction (the ev6 true
+-- return); the average weapon damage is the actor's off-hand
+-- (min+max)/2 on OFF_ATTACK (procEvent:GetAttackType, 1) else the
+-- main-hand pair (the new bridges: procEventInfo.attackType threaded
+-- at the melee done-side site, procs.go; player GetMin/MaxDamage +
+-- GetMin/MaxOffhandDamage, lua_player.go); the actor casts the rank's
+-- trigger spell (12162/12850/12868, the spell_ranks chain of the
+-- trigger, TDB verified 2026-11-19) on the proc target, triggered,
+-- BP0 = the average weapon damage truncated to int32 (C++ AddSpellBP0
+-- takes int32, :360-362). The aura ranks pair R1/R2/R3 with the
+-- trigger ranks (12849/12850 and 12867/12868 are adjacent DBC ids).
+-- DORMANT until Spell.dbc ships the 12834/12849/12867 rows (all
+-- unseeded; seed axis parked).
+local function makeDeepWoundsAuraProc(triggerSpell)
+    return function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+        if effectIndex ~= nil and effectIndex ~= 0 then
+            return
+        end
+        if actor == nil or actor:GetTypeId() ~= TYPEID_PLAYER then
+            return true
+        end
+        if procTarget == nil or procEvent == nil then
+            return true
+        end
+        local minDamage, maxDamage
+        if procEvent:GetAttackType() == 1 then
+            minDamage, maxDamage = actor:GetMinOffhandDamage(), actor:GetMaxOffhandDamage()
+        else
+            minDamage, maxDamage = actor:GetMinDamage(), actor:GetMaxDamage()
+        end
+        actor:CastCustomSpell(procTarget, triggerSpell, true, math.floor((minDamage + maxDamage) / 2))
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_WARRIOR_DEEP_WOUNDS_AURA_R1, 6, makeDeepWoundsAuraProc(SPELL_WARRIOR_DEEP_WOUNDS_R1))
+RegisterAuraEvent(SPELL_WARRIOR_DEEP_WOUNDS_AURA_R2, 6, makeDeepWoundsAuraProc(SPELL_WARRIOR_DEEP_WOUNDS_R2))
+RegisterAuraEvent(SPELL_WARRIOR_DEEP_WOUNDS_AURA_R3, 6, makeDeepWoundsAuraProc(SPELL_WARRIOR_DEEP_WOUNDS_R3))
+
+
+local SPELL_WARRIOR_CONCUSSION_BLOW = 12809 -- spell_warrior.cpp:200 (class spell_warr_concussion_blow)
+
+-- C++ spell_warr_concussion_blow_SpellScript::HandleDummy
+-- (spell_warrior.cpp:212-216): OnEffectLaunchTarget EFFECT_1
+-- SCHOOL_DAMAGE. SetEffectValue(CalculatePct(GetCaster()->
+-- GetTotalAttackPowerValue(BASE_ATTACK), EFFECT_2 CalcValue)) — the
+-- launch damage is a percentage of total attack power, the percentage
+-- read from the DBC effect-2 value via spell:GetEffectValue(2) (the
+-- CalcValueForLevel twin, lua_spell.go); the rewrite rides
+-- spell:SetEffectValue (event 10, runtime.go). DORMANT until Spell.dbc
+-- ships the 12809 row (unseeded; seed axis parked).
+local function concussionBlowLaunch(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local pct = spell:GetEffectValue(2)
+    if pct <= 0 then
+        return
+    end
+    spell:SetEffectValue(math.floor(caster:GetTotalAttackPowerValue(0) * pct / 100))
+end
+
+RegisterSpellEvent(SPELL_WARRIOR_CONCUSSION_BLOW, 10, concussionBlowLaunch)
