@@ -3765,6 +3765,31 @@ func petEnemyConeKeeps(guid uint64, eff wotlk.SpellEffect, part bossConePartitio
 	return ok
 }
 
+// petSpellTargetTimeDelayMs mirrors Spell::AddUnitTarget's TimeDelay arm
+// (Spell.cpp:2157-2184) for a pet caster: floor(dist / Speed * 1000) from
+// the pet's own position, 5yd minimum, 0 for a self-cast (m_caster ==
+// target skips the distance leg). spellTargetTimeDelayMs measures from the
+// owner's position; a pet stands elsewhere, so the pet path needs its own
+// origin.
+func (s *session) petSpellTargetTimeDelayMs(ctx context.Context, spell wotlk.Spell, motion *creatureMotion, targetGUID uint64) int {
+	if targetGUID == motion.GUID {
+		return 0
+	}
+	dist := float32(20.0)
+	if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+		dx := target.X - motion.X
+		dy := target.Y - motion.Y
+		dz := target.Z - motion.Z
+		computedDist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+		if computedDist > 5.0 {
+			dist = computedDist
+		} else {
+			dist = 5.0
+		}
+	}
+	return int(math.Floor(float64(dist) / float64(spell.Speed) * 1000.0))
+}
+
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
@@ -5315,1004 +5340,145 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// reflected map mirrors the launch map (reflectedSet keys at None,
 	// trip statuses overriding); placed outside the packet if above so
 	// an invisible triggered cast still credits.
-	s.server.maybeCreditDungeonEncounterSpellCast(ctx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
-	// Spell::EffectActivateObject (SpellEffects.cpp:3938) +
-	// EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) +
-	// EffectGameObjectSetDestructionState (:5450) on the pet path, same
-	// dispatch-ahead-of-damage position as the twin and inline blocks:
-	// the GO arms over the GO GUIDs in hitTargets (the nearby-entry pick
-	// plus the GO-area/cone legs above join hitTargets ahead of dispatch;
-	// a wire GO GUID rides the same filter). Unit GUIDs in hitTargets
-	// take no leg in the twins. None of the four gates on a player caster
-	// in C++ — unlike open-lock 33, which returns on a non-player caster
-	// (SpellEffects.cpp:1953-1957) and stays out on this path.
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectActivateObject:
-			s.server.creatureEffectActivateObjectMasked(ctx, motion, target, spell.Effects[i], i, hitTargets, goEffectMasks)
-		case spellEffectGameObjectDamage:
-			s.server.creatureEffectGameObjectDamageMasked(ctx, motion, spell, spell.ID, target, spell.Effects[i], i, hitTargets, goEffectMasks)
-		case spellEffectGameObjectRepair:
-			s.server.creatureEffectGameObjectRepairMasked(ctx, motion, spell, spell.ID, target, spell.Effects[i], i, hitTargets, goEffectMasks)
-		case spellEffectGameObjectSetDestructionState:
-			s.server.creatureEffectGameObjectSetDestructionStateMasked(ctx, motion, target, spell.Effects[i], i, hitTargets, goEffectMasks)
+	// Spell::_cast (Spell.cpp:3473-3500): the delayed-vs-immediate branch.
+	// (Speed > 0 && !channeled) takes the delayed path — the missile flies
+	// and handle_delayed runs the HIT phase at arrival — so the effect
+	// section below runs as runPetEffects, now or at the GetDelayMoment
+	// (Spell.cpp:2167-2168) arrival tick. The _cast tail after it
+	// (cooldown, spell_linked, modOwner, cast-phase procs) runs at cast
+	// time on both branches, like the player twin.
+	runPetEffects := func(effCtx context.Context) {
+		s.server.maybeCreditDungeonEncounterSpellCast(effCtx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		// Spell::EffectActivateObject (SpellEffects.cpp:3938) +
+		// EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) +
+		// EffectGameObjectSetDestructionState (:5450) on the pet path, same
+		// dispatch-ahead-of-damage position as the twin and inline blocks:
+		// the GO arms over the GO GUIDs in hitTargets (the nearby-entry pick
+		// plus the GO-area/cone legs above join hitTargets ahead of dispatch;
+		// a wire GO GUID rides the same filter). Unit GUIDs in hitTargets
+		// take no leg in the twins. None of the four gates on a player caster
+		// in C++ — unlike open-lock 33, which returns on a non-player caster
+		// (SpellEffects.cpp:1953-1957) and stays out on this path.
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectActivateObject:
+				s.server.creatureEffectActivateObjectMasked(effCtx, motion, target, spell.Effects[i], i, hitTargets, goEffectMasks)
+			case spellEffectGameObjectDamage:
+				s.server.creatureEffectGameObjectDamageMasked(effCtx, motion, spell, spell.ID, target, spell.Effects[i], i, hitTargets, goEffectMasks)
+			case spellEffectGameObjectRepair:
+				s.server.creatureEffectGameObjectRepairMasked(effCtx, motion, spell, spell.ID, target, spell.Effects[i], i, hitTargets, goEffectMasks)
+			case spellEffectGameObjectSetDestructionState:
+				s.server.creatureEffectGameObjectSetDestructionStateMasked(effCtx, motion, target, spell.Effects[i], i, hitTargets, goEffectMasks)
+			}
 		}
-	}
-	// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject
-	// (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927)
-	// on the pet path, same dispatch-ahead-of-damage position as the
-	// inline block: all four are SPELL_EFFECT_HANDLE_HIT arms, once per
-	// cast on the caster, not per hit target (the summon-type helper
-	// itself keeps only the 28 effect). Previously a pet-cast spell
-	// carrying any of these effects summoned or transmitted nothing
-	// server-side (non-pet creature casts ride the twin).
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectTransmitted:
-			s.server.creatureEffectTransmitted(ctx, motion, creatureEffectDestTarget(target, motion, i, destSnapshots), spell, spell.Effects[i])
+		// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject
+		// (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927)
+		// on the pet path, same dispatch-ahead-of-damage position as the
+		// inline block: all four are SPELL_EFFECT_HANDLE_HIT arms, once per
+		// cast on the caster, not per hit target (the summon-type helper
+		// itself keeps only the 28 effect). Previously a pet-cast spell
+		// carrying any of these effects summoned or transmitted nothing
+		// server-side (non-pet creature casts ride the twin).
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectTransmitted:
+				s.server.creatureEffectTransmitted(effCtx, motion, creatureEffectDestTarget(target, motion, i, destSnapshots), spell, spell.Effects[i])
+			}
 		}
-	}
-	s.server.creatureEffectSummonType(ctx, motion, spell, destSnapshots)
-	// Spell::EffectSummonPet (SpellEffects.cpp:3017) on the pet path,
-	// same dispatch-ahead-of-damage position as the summon-type block:
-	// the HIT arm, once per cast on the caster — a pet caster is never
-	// a player, so C++ always takes the ownerless SummonGuardian leg
-	// (properties 67) via the shared helper; the totem owner-player leg
-	// stays out inside it. Previously a pet-cast spell carrying effect
-	// 56 summoned nothing server-side.
-	s.server.creatureEffectSummonPet(ctx, motion, spell, hasDest, dx, dy, dz)
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
-			s.server.creatureEffectSummonObject(ctx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
-		case spellEffectSummonObjectWild:
-			s.server.creatureEffectSummonObjectWild(ctx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
+		s.server.creatureEffectSummonType(effCtx, motion, spell, destSnapshots)
+		// Spell::EffectSummonPet (SpellEffects.cpp:3017) on the pet path,
+		// same dispatch-ahead-of-damage position as the summon-type block:
+		// the HIT arm, once per cast on the caster — a pet caster is never
+		// a player, so C++ always takes the ownerless SummonGuardian leg
+		// (properties 67) via the shared helper; the totem owner-player leg
+		// stays out inside it. Previously a pet-cast spell carrying effect
+		// 56 summoned nothing server-side.
+		s.server.creatureEffectSummonPet(effCtx, motion, spell, hasDest, dx, dy, dz)
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
+				s.server.creatureEffectSummonObject(effCtx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
+			case spellEffectSummonObjectWild:
+				s.server.creatureEffectSummonObjectWild(effCtx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
+			}
 		}
-	}
-	// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) on the pet
-	// path, same dispatch-ahead-of-damage position as the summon-type
-	// block: the HIT_TARGET arm, once per hit target — the unit target
-	// must be a hunter player with no current pet, and the pet is
-	// created from the effect's MiscValue entry at the target's level
-	// (Unit::CreateTamedPetFrom, Unit.cpp:11103, takes the target's
-	// level). Delegation goes to the TARGET's session, not the caster's
-	// owner session: handleCreateTamedPet gates on target == session
-	// player, so routing through the owner session would fail every
-	// real case (the owner already holds the casting pet) and could
-	// never reach another hunter target. Missed, evaded, immune and
-	// reflected targets take no leg — a reflected tame retargets to
-	// the casting pet, which fails the player gate in C++ anyway.
-	// Previously a pet-cast spell carrying effect 153 created nothing
-	// server-side.
-	for i := range spell.Effects {
-		if spell.Effects[i].Effect != spellEffectCreateTamedPet {
-			continue
-		}
-		for _, guid := range bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart) {
-			if guid == 0 || immuneSet[guid] || evadedSet[guid] || reflectedSet[guid] || missedTarget(guid) {
+		// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) on the pet
+		// path, same dispatch-ahead-of-damage position as the summon-type
+		// block: the HIT_TARGET arm, once per hit target — the unit target
+		// must be a hunter player with no current pet, and the pet is
+		// created from the effect's MiscValue entry at the target's level
+		// (Unit::CreateTamedPetFrom, Unit.cpp:11103, takes the target's
+		// level). Delegation goes to the TARGET's session, not the caster's
+		// owner session: handleCreateTamedPet gates on target == session
+		// player, so routing through the owner session would fail every
+		// real case (the owner already holds the casting pet) and could
+		// never reach another hunter target. Missed, evaded, immune and
+		// reflected targets take no leg — a reflected tame retargets to
+		// the casting pet, which fails the player gate in C++ anyway.
+		// Previously a pet-cast spell carrying effect 153 created nothing
+		// server-side.
+		for i := range spell.Effects {
+			if spell.Effects[i].Effect != spellEffectCreateTamedPet {
 				continue
 			}
-			if ts := s.server.findSessionByGUID(guid); ts != nil {
-				ts.handleCreateTamedPet(ctx, spell.ID, guid, spell.Effects[i])
+			for _, guid := range bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart) {
+				if guid == 0 || immuneSet[guid] || evadedSet[guid] || reflectedSet[guid] || missedTarget(guid) {
+					continue
+				}
+				if ts := s.server.findSessionByGUID(guid); ts != nil {
+					ts.handleCreateTamedPet(effCtx, spell.ID, guid, spell.Effects[i])
+				}
 			}
 		}
-	}
-	// Spell::EffectPersistentAreaAura (SpellEffects.cpp:1738) on the
-	// pet path, same dispatch-ahead-of-damage position as the twin and
-	// inline blocks: the HIT arm, once per cast — the helper itself
-	// keeps only the last 27 effect, matching C++'s early return on
-	// earlier ones. Previously a pet-cast spell carrying effect 27
-	// spawned no dynobj server-side (non-pet creature casts ride the
-	// twin). The center reads back out of the resolved destination
-	// above (caster position when the spell carries no dest-family
-	// target, like the twin).
-	// The DynObj centers on the 27 effect's own m_destTargets slot
-	// (Spell.cpp:789, 5159), not the spell-final destination: a
-	// dest-family effect after the 27 effect must not move it.
-	dynHasDest, dynX, dynY, dynZ := persistentAreaAuraDest(spell, destSnapshots)
-	s.server.creatureEffectPersistentAreaAura(ctx, motion, spell, dynHasDest, dynX, dynY, dynZ)
+		// Spell::EffectPersistentAreaAura (SpellEffects.cpp:1738) on the
+		// pet path, same dispatch-ahead-of-damage position as the twin and
+		// inline blocks: the HIT arm, once per cast — the helper itself
+		// keeps only the last 27 effect, matching C++'s early return on
+		// earlier ones. Previously a pet-cast spell carrying effect 27
+		// spawned no dynobj server-side (non-pet creature casts ride the
+		// twin). The center reads back out of the resolved destination
+		// above (caster position when the spell carries no dest-family
+		// target, like the twin).
+		// The DynObj centers on the 27 effect's own m_destTargets slot
+		// (Spell.cpp:789, 5159), not the spell-final destination: a
+		// dest-family effect after the 27 effect must not move it.
+		dynHasDest, dynX, dynY, dynZ := persistentAreaAuraDest(spell, destSnapshots)
+		s.server.creatureEffectPersistentAreaAura(effCtx, motion, spell, dynHasDest, dynX, dynY, dynZ)
 
-	// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996) on the pet
-	// path, same dispatch-ahead-of-damage position as the twin and
-	// inline blocks: the HIT_TARGET per-target leg fires only when the
-	// triggered spell needs to be triggered by the caster, over
-	// hitTargets (wire + area + chain + GO picks, like the twin's list);
-	// the once-per-cast HIT leg fires unless the triggered spell needs
-	// the caster AND the effect provides a unit target. Both legs cast
-	// natively via executePetSpellWithOptions — a twin call would switch
-	// the triggered spell's execution path. The self-trigger guard
-	// matches the trigger-spell arm. The 148 with-value base-point
-	// override patches the local triggered-spell copy (Data.Spell
-	// builds a fresh Spell per lookup, like the twin's WithBasePoints
-	// variant, so no pet WithBasePoints entry point is needed): flat
-	// effects take the value, rolled effects take value-1 so the nested
-	// CalcValue re-roll lands on it. The explicit-dest leg rides the
-	// recursion's internal dest resolution for dest-family triggered
-	// spells, and the caster-unit leg is the launchTarget fallback
-	// below. Previously a pet-cast spell carrying effect 32/148
-	// triggered nothing server-side.
-	for i := range spell.Effects {
-		effect := spell.Effects[i]
-		if effect.Effect != spellEffectTriggerMissile && effect.Effect != spellEffectTriggerMissileWithValue {
-			continue
-		}
-		if effect.TriggerSpell == 0 || effect.TriggerSpell == spell.ID {
-			continue
-		}
-		triggered, found, err := s.server.Data.Spell(effect.TriggerSpell)
-		if err != nil || !found {
-			continue
-		}
-		needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
-		castTriggered := func(triggerTarget protocol.SpellTargetData) {
-			if effect.Effect == spellEffectTriggerMissileWithValue {
-				damage := effect.CalcValueForLevel(spell, uint32(motion.Level))
-				for j, bp := range []int32{damage, damage, damage} {
-					if j < len(triggered.Effects) {
-						if triggered.Effects[j].DieSides == 0 {
-							triggered.Effects[j].BasePoints = bp
-						} else {
-							triggered.Effects[j].BasePoints = bp - 1
-						}
-					}
-				}
-			}
-			s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
-		}
-		if needsCaster {
-			for _, guid := range bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart) {
-				if rt := resolveReflectTarget(guid); rt != 0 && !immuneSet[guid] && !missedTarget(guid) {
-					triggerTarget := target
-					triggerTarget.UnitGUID = rt
-					castTriggered(triggerTarget)
-				}
-			}
-		}
-		if needsCaster && spellEffectProvidedTargetMask(effect)&targetFlagUnitMask != 0 {
-			continue
-		}
-		launchTarget := target
-		if launchTarget.UnitGUID == 0 {
-			launchTarget.UnitGUID = motion.GUID
-		}
-		castTriggered(launchTarget)
-	}
-	// Spell::EffectTriggerRitualOfSummoning (SpellEffects.cpp:1106) on the pet
-	// path, same dispatch-ahead-of-damage position as the twin and inline
-	// blocks: the HIT arm, once per cast — finish() the parent spell, then
-	// cast the effect's TriggerSpell non-triggered with no target. Go has
-	// no in-flight pet spell object to finish (pet casts resolve
-	// instantly), and the zero target is the null-target stand-in: a
-	// UnitGUID of 0 defaults to the caster with explicitUnitTarget false,
-	// so the explicit-target gates are skipped, per the player path's
-	// effect-initiated-cast convention (handleEffectTriggerRitualOfSummoning).
-	// The cast rides the pet path natively — a twin call would switch the
-	// triggered spell's execution path, like the trigger-missile arm
-	// above. The self-trigger guard matches the trigger-spell arms.
-	// Previously a pet-cast spell carrying effect 151 triggered nothing
-	// server-side.
-	for i := range spell.Effects {
-		effect := spell.Effects[i]
-		if effect.Effect != spellEffectTriggerRitualOfSummoning {
-			continue
-		}
-		if effect.TriggerSpell == 0 || effect.TriggerSpell == spell.ID {
-			continue
-		}
-		triggered, found, err := s.server.Data.Spell(effect.TriggerSpell)
-		if err != nil || !found {
-			continue
-		}
-		s.executePetSpellWithOptions(ctx, motion, triggered, 0, protocol.SpellTargetData{}, false)
-	}
-	// Spell::EffectForceCast (SpellEffects.cpp:1048) on the pet path,
-	// same dispatch-ahead-of-damage position as the twin and inline
-	// blocks: the HIT_TARGET arm, one force-cast per hit target — the
-	// hit TARGET casts the triggered spell on the pet (unitTarget->
-	// CastSpell(m_caster, ...)), via the twin, which carries the 140
-	// damage specials, the 72298 self-cast, the 141 base-point
-	// override and the 52463/52349 self-cast legs. The reflected map
-	// mirrors the insta-kill arm below (trips only: every reflected
-	// GUID rides a trip, so the map covers reflectedSet). A pet target
-	// rides the twin's creature-motion leg (castCreatureSpellInternal)
-	// — the same routing a wild caster force-casting a pet takes;
-	// re-routing a forced pet cast onto the pet path is out of this
-	// strip's scope. Previously a pet-cast spell carrying effect
-	// 140/141/160 force-cast nothing server-side.
-	forceReflected := make(map[uint64]uint8, len(reflectTrips))
-	for _, trip := range reflectTrips {
-		forceReflected[trip.victimGUID] = trip.status
-	}
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2:
-			s.server.creatureEffectForceCast(ctx, motion, spell, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), forceReflected, evadedSet, immuneSet, petMissVerdicts)
-		}
-	}
-	// Spell::EffectThreat (SpellEffects.cpp:3470) + EffectTaunt (:3131) +
-	// EffectTeleportUnits (:1199) + EffectKnockBack (:4552) +
-	// EffectResurrect (:4270) + EffectResurrectNew (:246) + EffectLeap
-	// (:4334) + EffectTeleUnitsFaceCaster (:2618) + EffectPullTowards
-	// (:4667) + EffectPullTowardsDest (:4697) + EffectDistract (:2547)
-	// + EffectSanctuary (:3757) on the pet path, same
-	// dispatch-ahead-of-damage position as the twin and inline blocks:
-	// all twelve are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their
-	// twins, with the launch reflected map (reflectedSet keys at None,
-	// trip statuses overriding — every reflected GUID rides a trip, so
-	// it matches the force-cast map). Previously a pet-cast spell
-	// carrying any of these effects added no threat, taunted,
-	// teleported, knocked back, resurrected, leapt, pulled, distracted
-	// or sanctuaried nothing server-side (non-pet creature casts ride
-	// the twin). Self-resurrect 94 and resurrect-pet 109 stay out:
-	// player-caster-only in C++, like the twin.
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectThreat:
-			s.server.creatureEffectThreat(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectAttackMe:
-			s.server.creatureEffectTaunt(ctx, motion, spell.ID, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectTeleportUnits:
-			s.server.creatureEffectTeleportUnits(ctx, motion, hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectKnockBack, spellEffectKnockBackDest:
-			s.server.creatureEffectKnockBack(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectResurrect:
-			s.server.creatureEffectResurrect(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectResurrectNew:
-			s.server.creatureEffectResurrectNew(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectLeap:
-			s.server.creatureEffectLeap(ctx, motion, hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectTeleportUnitsFaceCaster:
-			s.server.creatureEffectTeleUnitsFaceCaster(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectPullTowards:
-			s.server.creatureEffectPullTowards(ctx, motion, spell.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectPullTowardsDest:
-			s.server.creatureEffectPullTowardsDest(ctx, motion, hasDest, dx, dy, dz, spell.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectDistract:
-			s.server.creatureEffectDistract(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectSanctuary:
-			s.server.creatureEffectSanctuary(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		}
-	}
-	// Spell::EffectQuestComplete (SpellEffects.cpp:4371) +
-	// EffectQuestClear (:4611) + EffectQuestFail (:5283) +
-	// EffectQuestStart (:5294) + EffectReputation (:4349) +
-	// EffectAddHonor (:2661) + EffectKillCreditPersonal (:5253) +
-	// EffectKillCredit (:5264) + EffectSkillStep (:2637) +
-	// EffectEnvironmentalDMG (:306) on the pet path, same
-	// dispatch-ahead-of-damage position as the twin and inline blocks:
-	// all are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their twins,
-	// with the launch reflected map. The quest/reputation/kill-credit/
-	// skill-step legs run on the player hit target's own session via
-	// the helpers. Previously a pet-cast spell carrying any of these
-	// effects completed, failed, started, credited, honored or
-	// skilled nothing server-side (non-pet creature casts ride the
-	// twin).
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectQuestComplete, spellEffectQuestClear, spellEffectQuestFail, spellEffectQuestStart:
-			s.server.creatureEffectQuest(ctx, motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectReputation:
-			s.server.creatureEffectReputation(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectAddHonor:
-			s.server.creatureEffectAddHonor(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectKillCredit, spellEffectKillCreditGroup:
-			s.server.creatureEffectKillCredit(ctx, motion, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectSkillStep:
-			s.server.creatureEffectSkillStep(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectEnvironmentalDamage:
-			s.server.creatureEffectEnvironmentalDamage(ctx, motion, spell, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		}
-	}
-	// Spell::EffectCreateItem (SpellEffects.cpp:1679) + EffectCreateItem2
-	// (:1688) + EffectLearnSpell (:2406) + EffectPlaySound (:5578) +
-	// EffectPlayMusic (:5537) + EffectSendTaxi (:4656) +
-	// EffectDiscoverTaxi (:5390) on the pet path, same
-	// dispatch-ahead-of-damage position as the twin and inline blocks:
-	// all are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their twins,
-	// with the launch reflected map. Previously a pet-cast spell
-	// carrying any of these effects created, taught, sounded or
-	// taxied nothing server-side (non-pet creature casts ride the
-	// twin).
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectCreateItem, spellEffectCreateItem2:
-			s.server.creatureEffectCreateItem(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectLearnSpell:
-			s.server.creatureEffectLearnSpell(ctx, motion, spell.ID, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectPlaySound, spellEffectPlayMusic:
-			s.server.creatureEffectPlaySoundMusic(motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectSendTaxi, spellEffectDiscoverTaxi:
-			s.server.creatureEffectTaxi(ctx, motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		}
-	}
-	// Spell::EffectLearnPetSpell (SpellEffects.cpp:3105) +
-	// EffectDismissPet (:4201) + EffectInebriate (:4143) +
-	// EffectRenamePet (:5525) + EffectActivateSpec (:5567) +
-	// EffectDurabilityDamage (:4857) + EffectDurabilityDamagePCT
-	// (:4886) + EffectBind + EffectEnchantHeldItem +
-	// EffectUnlearnSpecialization + EffectCreateRandomItem +
-	// EffectUntrainTalents + EffectTalentSpecCount on the pet path,
-	// same dispatch-ahead-of-damage position as the twin and inline
-	// blocks: all are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their
-	// twins, with the launch reflected map; force-deselect 93 rides
-	// the caster leg in the same loop (HANDLE_HIT, once per effect),
-	// like the twin. Previously a pet-cast spell carrying any of these
-	// effects dismissed, inebriated, renamed, specced, bound,
-	// enchanted, untrained or deselected nothing server-side
-	// (non-pet creature casts ride the twin).
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectLearnPetSpell:
-			s.server.creatureEffectLearnPetSpell(ctx, motion, spell.ID, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectDismissPet:
-			s.server.creatureEffectDismissPet(ctx, motion, spell.ID, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectInebriate:
-			s.server.creatureEffectInebriate(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectAllowRenamePet:
-			s.server.creatureEffectAllowRenamePet(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectTalentSpecSelect:
-			s.server.creatureEffectTalentSpecSelect(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct:
-			s.server.creatureEffectDurabilityDamage(ctx, motion, spell, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectBind:
-			s.server.creatureEffectBind(ctx, motion, spell.Effects[i], hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectEnchantHeldItem:
-			s.server.creatureEffectEnchantHeldItem(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectUnlearnSpecialization:
-			s.server.creatureEffectUnlearnSpecialization(ctx, motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectCreateRandomItem:
-			s.server.creatureEffectCreateRandomItem(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectUntrainTalents:
-			s.server.creatureEffectUntrainTalents(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectTalentSpecCount:
-			s.server.creatureEffectTalentSpecCount(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectForceDeselect:
-			s.server.creatureEffectForceDeselect(ctx, motion)
-		}
-	}
-	// Spell::EffectScriptEffect (SpellEffects.cpp:3604) on the pet
-	// path, same dispatch-ahead-of-damage position as the twin and
-	// inline blocks: the HIT_TARGET arm riding its twin, with the
-	// launch reflected map. Expected inert for real pet casts: the
-	// twin's three arms are spell-ID-gated to boss/NPC spells
-	// (Onyxia 22539-series, Brutallus 45141/45151, Coyote/Blood
-	// Parrot 52173/60243) no pet spellbook carries, and the
-	// ScriptsStart tail has no Go SpellScript bridge — the call is
-	// the harmless mirror of the twin, covering only the
-	// pathological case of a pet somehow carrying one of these IDs.
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectScriptEffect:
-			s.server.creatureEffectScriptEffect(ctx, motion, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		}
-	}
-	// Spell::EffectDummy (SpellEffects.cpp:792) on the pet path, same
-	// dispatch-ahead-of-damage position as the twin and inline blocks:
-	// the HIT_TARGET arm riding its twin, with the launch reflected
-	// map. The twin fires the Eluna dummy hooks here; the pet path
-	// carries no Eluna dummy dispatch, so this loop is the Go
-	// SpellScript home for pet-cast dummy spells only — 54044 Carrion
-	// Feeder and 53478 Last Stand (pet), whose ev4 Lua ports can never
-	// fire (executePetSpellWithOptions has no fireSpellEffectHit site;
-	// the 53478 Lua handler is removed with this tick). Per hit target
-	// like C++ (each invocation casts on the caster, so a multi-target
-	// dummy would cast once per hit target); the 54044 corpse gate
-	// already ran at CheckCast above.
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectDummy:
-			for _, guid := range bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart) {
-				if guid == 0 || evadedSet[guid] || immuneSet[guid] || petMissVerdicts[guid] != protocol.SpellMissNone {
-					continue
-				}
-				if status, isReflected := launchReflected[guid]; isReflected {
-					if status != protocol.SpellMissNone {
-						continue
-					}
-					guid = motion.GUID
-				}
-				switch spell.ID {
-				case 54044:
-					// spell_hun_pet_carrion_feeder::HandleDummy
-					// (spell_hunter.cpp:1003-1007): EFFECT_0 DUMMY —
-					// the pet casts the triggered meal 54045 on
-					// itself, non-triggered in C++ (the false arg).
-					if i == 0 {
-						s.server.castCreatureSpellInternal(ctx, motion, 54045, motion.GUID, false)
-					}
-				case 53478:
-					// spell_hun_last_stand_pet::HandleDummy
-					// (spell_hunter.cpp:720-726): EFFECT_0 DUMMY —
-					// the pet casts the triggered heal 53479 on
-					// itself with BP0 = 30% of its max health
-					// (CountPctFromMaxHealth).
-					if i == 0 {
-						bp0 := int32(motion.MaxHealth) * 30 / 100
-						s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, 53479, motion.GUID, true, map[int]int32{0: bp0}, nil, false, 0, 0)
-					}
-				}
-			}
-		}
-	}
-	// Spell::EffectHealMaxHealth (SpellEffects.cpp:3488) + EffectEnergize
-	// (:1775) + EffectEnergizePct (:1847) + EffectPowerDrain (:1265) +
-	// EffectPowerBurn (:1352) + EffectRemoveAura (:5611) +
-	// EffectModifyThreatPercent (:4915) on the pet path, same
-	// dispatch-ahead-of-damage position as the twin and inline blocks:
-	// the HIT_TARGET arms riding their twins, with the launch
-	// reflected map. The twin/inline vs pet parity census this tick
-	// found these seven handled on both other paths and nowhere on
-	// the pet path (the pet post-damage loop covers heal 10/75/136
-	// but not 67, and no pet file calls the energize, power-take,
-	// remove-aura or modify-threat helpers). None of the seven C++
-	// arms gates on a player caster (target-alive/power gates ride
-	// the twins). The burn damage leg stays out like the twin's:
-	// drained x value multiplier into TargetInfo.Damage has no
-	// amount-based damage applier on this path — the damage arms
-	// are effect-value-driven — so only the power take, the Mana
-	// Burn cap, the caster gain and the take-target-power log land.
-	for i := range spell.Effects {
-		switch spell.Effects[i].Effect {
-		case spellEffectHealMaxHealth:
-			s.server.creatureEffectHealMaxHealth(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectEnergize:
-			s.server.creatureEffectEnergize(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectEnergizePct:
-			s.server.creatureEffectEnergizePct(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectPowerDrain:
-			s.server.creatureEffectPowerDrain(ctx, motion, spell, spell.Effects[i], i, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectPowerBurn:
-			s.server.creatureEffectPowerBurn(ctx, motion, spell, spell.Effects[i], i, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectRemoveAura:
-			s.server.creatureEffectRemoveAura(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		case spellEffectModifyThreatPercent:
-			s.server.creatureEffectModifyThreatPercent(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
-		}
-	}
-	// petObjectWireLeg returns the explicit wire target for a
-	// TARGET-object effect (6/21/25/35/45/57/90/95,
-	// SelectImplicitTargetObjectTargets, Spell.cpp:1558-1580) when the
-	// nearby block moved the wire leg to its pick: the plain-primary
-	// rejoin above puts the wire target in hitTargets (packet, verdicts,
-	// threat, strip, assist and the hitTargets-riding legs), but the
-	// pet-native legs below key their wire leg on targetGUID — the
-	// nearby pick after the nearby block — so a nearby+TARGET-object
-	// spell's wire target took no damage/heal/dispel/aura leg at all.
-	// The gate is exactly the divergence: without a nearby leg
-	// targetGUID still is the wire target (or the caster fallback on a
-	// wire-0 cast, where target.UnitGUID is 0), and a pick equal to
-	// the wire needs no second leg. A GO wire takes no unit leg.
-	petObjectWireLeg := func(eff wotlk.SpellEffect) uint64 {
-		if wire := target.UnitGUID; wire != 0 && uint16(wire>>48) != 0xF110 && wire != targetGUID && (targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB)) {
-			return wire
-		}
-		return 0
-	}
-	// The damage leg below is cast-wide (one creatureSpellDamage value),
-	// not per effect, so its object-wire leg is resolved once here: any
-	// damage effect carrying a TARGET-object leg earns the wire a hit.
-	damageObjectWire := uint64(0)
-	for _, eff := range spell.Effects {
-		switch eff.Effect {
-		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
-			if wire := petObjectWireLeg(eff); wire != 0 {
-				damageObjectWire = wire
-			}
-		}
-	}
-	// The damage leg is cast-wide, so its caster-object legs resolve once
-	// here like damageObjectWire: any damage effect carrying a
-	// caster-reference leg earns its resolved unit a hit. Deduped across
-	// effects (AddUnitTarget, Spell.cpp:2152) and against the wire hit
-	// and the object wire above, so no target takes the damage twice.
-	var damageCasterWires []uint64
-	for i, eff := range spell.Effects {
-		switch eff.Effect {
-		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
-			for _, casterGUID := range petCasterObjectTargets[i] {
-				if casterGUID == targetGUID || casterGUID == damageObjectWire {
-					continue
-				}
-				dup := false
-				for _, g := range damageCasterWires {
-					if g == casterGUID {
-						dup = true
-						break
-					}
-				}
-				if !dup {
-					damageCasterWires = append(damageCasterWires, casterGUID)
-				}
-			}
-		}
-	}
-	damage, _, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true, nil, motion)
-	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
-	// an area-selected target takes only the effects that selected it, so
-	// the damage leg fans out to the area hits only when a damage effect
-	// itself selects the area — a single-target damage effect on a spell
-	// whose aura or heal effect sweeps the area must not damage the
-	// whole area. The wire target always takes the leg, like before.
-	damageAreaEnemy := false
-	for _, eff := range spell.Effects {
-		if eff.Effect == 0 {
-			continue
-		}
-		switch eff.Effect {
-		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
-			if isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) {
-				damageAreaEnemy = true
-			}
-		}
-	}
-	// Whole-spell damage union (bossConeKindSet precedent): when every
-	// damage effect carries a cone leg of the active family, the grouped
-	// damage fan-out below hits cone members only; otherwise it keeps
-	// the flat area list.
-	damageConeSet := bossConeKindSet(spell, bossConeDamageEffect, petConePart)
-	if hasDamage {
-		// Unit::SpellDamageBonusDone (Unit.cpp:6681-6683, 6725-6731): the
-		// guardian's GetBonusDamage() rides the advertised benefit into the
-		// per-effect DoneTotal.
-		if bonus := s.petGuardianDoneDamageBonus(motion, spell); bonus != 0 {
-			if adjusted := int32(damage) + bonus; adjusted > 0 {
-				damage = uint32(adjusted)
-			} else {
-				damage = 0
-			}
-		}
-		// Unit::SpellDamageBonusDone (Unit.cpp:6617-6637): the flat
-		// done-scripted-mod arm — the owner's OVERRIDE_CLASS_SCRIPTS set —
-		// rides DoneTotal flat, victim-independent like the advertised fold
-		// above. (The per-victim 180 arm folds inside petDamageFor.)
-		if flat := s.petDoneFlatClassScripts(spell); flat != 0 {
-			if adjusted := int32(damage) + flat; adjusted > 0 {
-				damage = uint32(adjusted)
-			} else {
-				damage = 0
-			}
-		}
-		schoolMask := uint8(spell.SchoolMask)
-		if schoolMask == 0 {
-			schoolMask = 1
-		}
-		// Unit::SpellDamagePctDone (Unit.cpp:6738-7050): the done percent
-		// multiplier is per victim in C++ (the versus and class-script arms
-		// read the victim), so the pet's school/versus arms plus the
-		// owner-scoped class-script table fold per target here, after the
-		// flat DoneTotal above (C++ order: (pdamage + DoneTotal) * DoneTotalMod).
-		petDamageFor := func(victimGUID uint64) uint32 {
-			d := damage
-			if target, ok := s.getCombatTarget(ctx, victimGUID); ok {
-				// Unit::SpellDamageBonusDone (Unit.cpp:6682): the victim's
-				// SPELL_AURA_MOD_DAMAGE_TAKEN (14, Amplify/Dampen Magic) arm
-				// rides the advertised benefit ahead of the pct leg — the
-				// weapon-damage gate inside victimDamageTakenFlat keeps it
-				// off the melee-taken side (Unit.cpp:7996).
-				if v14 := s.victimDamageTakenFlat(spell, victimGUID, target); v14 != 0 {
-					if adjusted := int32(d) + s.petDamageEffectBonus(spell, motion, v14); adjusted > 0 {
-						d = uint32(adjusted)
-					} else {
-						d = 0
-					}
-				}
-				// Unit::SpellDamageBonusDone (Unit.cpp:6646-6647): the pet's
-				// own MOD_FLAT_SPELL_DAMAGE_VERSUS (180) arm by the victim's
-				// creature-type mask rides DoneTotal flat per victim, ahead
-				// of the pct leg like the aura-14 arm.
-				if v180 := s.petDoneFlatVersus(ctx, motion, spell, victimGUID); v180 != 0 {
-					if adjusted := int32(d) + v180; adjusted > 0 {
-						d = uint32(adjusted)
-					} else {
-						d = 0
-					}
-				}
-				// Unit::SpellDamageBonusDone (Unit.cpp:6684-6706): the
-				// ap_bonus arm rides DoneTotal flat per victim, ahead of
-				// the pct leg; the direct cast path carries stack 1.
-				if ap := s.petApBonusDoneFlat(ctx, motion, spell, victimGUID, target, false, 1); ap != 0 {
-					if adjusted := int32(d) + ap; adjusted > 0 {
-						d = uint32(adjusted)
-					} else {
-						d = 0
-					}
-				}
-				if pct := s.petDamagePctDone(ctx, motion, spell, victimGUID, target); pct != 1.0 {
-					d = uint32(float64(d) * pct)
-				}
-			}
-			// Unit::SpellDamageBonusDone (Unit.cpp:6731-6734): the mod-owner's
-			// SPELLMOD_DAMAGE / SPELLMOD_DOT fold applies to the damage total
-			// after the pct leg — the cast loop carries direct damage effects
-			// only, so the op is SPELLMOD_DAMAGE (the DoT tick path is the
-			// dot twin).
-			if out := petModOwner.applySpellMod(spell, spellModDamage, int32(d)); out < 0 {
-				d = 0
-			} else {
-				d = uint32(out)
-			}
-			return d
-		}
-		if rt := resolveReflectTarget(targetGUID); rt != 0 {
-			reflectorGUID := uint64(0)
-			if reflectedSet[targetGUID] {
-				reflectorGUID = targetGUID
-			}
-			missVerdict, hasMissVerdict := petMissVerdicts[targetGUID]
-			s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
-		}
-		// The 77 channel target takes its own damage hit on the same
-		// shape: the wire leg above covers targetGUID only and the area
-		// legs below cover area-selected enemies only, so a channel
-		// target that is neither would otherwise take the dispatch legs
-		// (hitTargets) but no damage. Already in hitTargets, so its
-		// verdicts ran with the rest.
-		if petChannelHitGUID != 0 {
-			if rt := resolveReflectTarget(petChannelHitGUID); rt != 0 {
-				reflectorGUID := uint64(0)
-				if reflectedSet[petChannelHitGUID] {
-					reflectorGUID = petChannelHitGUID
-				}
-				missVerdict, hasMissVerdict := petMissVerdicts[petChannelHitGUID]
-				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
-			}
-		}
-		// The TARGET-object wire leg on the channel leg's shape: a
-		// nearby+TARGET-object damage spell's wire target rides
-		// hitTargets (packet, verdicts) but the wire leg above hits
-		// the nearby pick, so without this the wire took no damage.
-		if damageObjectWire != 0 {
-			if rt := resolveReflectTarget(damageObjectWire); rt != 0 {
-				reflectorGUID := uint64(0)
-				if reflectedSet[damageObjectWire] {
-					reflectorGUID = damageObjectWire
-				}
-				missVerdict, hasMissVerdict := petMissVerdicts[damageObjectWire]
-				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
-			}
-		}
-		// The caster-object legs on the wire leg's shape: each resolved
-		// caster unit of a damage effect takes its own hit, with its own
-		// reflect/miss verdicts (already rolled through hitTargets).
-		for _, casterGUID := range damageCasterWires {
-			if rt := resolveReflectTarget(casterGUID); rt != 0 {
-				reflectorGUID := uint64(0)
-				if reflectedSet[casterGUID] {
-					reflectorGUID = casterGUID
-				}
-				missVerdict, hasMissVerdict := petMissVerdicts[casterGUID]
-				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
-			}
-		}
-		// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
-		// enemy takes its own hit — the per-target miss roll, resistance,
-		// absorb and kill legs run per target inside
-		// executePetSpellDamage, matching DoTargetSpellHit per target.
-		if damageAreaEnemy {
-			for _, areaHit := range areaHits {
-				if damageConeSet != nil {
-					if _, ok := damageConeSet[areaHit.GUID]; !ok {
-						continue
-					}
-				}
-				if rt := resolveReflectTarget(areaHit.GUID); rt != 0 {
-					reflectorGUID := uint64(0)
-					if reflectedSet[areaHit.GUID] {
-						reflectorGUID = areaHit.GUID
-					}
-					missVerdict, hasMissVerdict := petMissVerdicts[areaHit.GUID]
-					s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
-				}
-			}
-		}
-		// SelectImplicitAreaTargets (Spell.cpp:1227): the area-selected
-		// enemy creatures take their own hits too — executePetSpellDamage
-		// is GUID-generic (getCombatTarget resolves motions; the taken
-		// side runs the creature twin), and the reflect/evade verdicts
-		// above already ran for these GUIDs through hitTargets, so a
-		// reflected creature hit lands on the pet and an evaded one
-		// resolves to 0 and skips, exactly like the player area hits.
-		if damageAreaEnemy {
-			for _, areaCreatureGUID := range areaCreatureHits {
-				if damageConeSet != nil {
-					if _, ok := damageConeSet[areaCreatureGUID]; !ok {
-						continue
-					}
-				}
-				if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 {
-					reflectorGUID := uint64(0)
-					if reflectedSet[areaCreatureGUID] {
-						reflectorGUID = areaCreatureGUID
-					}
-					missVerdict, hasMissVerdict := petMissVerdicts[areaCreatureGUID]
-					s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
-				}
-			}
-		}
-		// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624): a chain
-		// damage effect jumps to each chain target with the per-jump falloff
-		// (DoEffectOnLaunchTarget, Spell.cpp:7771-7774; CalcDamageMultiplier,
-		// SpellInfo.cpp:537-544). The grouped damage leg above only fans out to
-		// area-selected targets, so chain jumps take no damage without this leg.
-		for ei, eff := range spell.Effects {
-			chainJumps := chainHitsForEffect(ei)
-			if len(chainJumps) == 0 {
+		// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996) on the pet
+		// path, same dispatch-ahead-of-damage position as the twin and
+		// inline blocks: the HIT_TARGET per-target leg fires only when the
+		// triggered spell needs to be triggered by the caster, over
+		// hitTargets (wire + area + chain + GO picks, like the twin's list);
+		// the once-per-cast HIT leg fires unless the triggered spell needs
+		// the caster AND the effect provides a unit target. Both legs cast
+		// natively via executePetSpellWithOptions — a twin call would switch
+		// the triggered spell's execution path. The self-trigger guard
+		// matches the trigger-spell arm. The 148 with-value base-point
+		// override patches the local triggered-spell copy (Data.Spell
+		// builds a fresh Spell per lookup, like the twin's WithBasePoints
+		// variant, so no pet WithBasePoints entry point is needed): flat
+		// effects take the value, rolled effects take value-1 so the nested
+		// CalcValue re-roll lands on it. The explicit-dest leg rides the
+		// recursion's internal dest resolution for dest-family triggered
+		// spells, and the caster-unit leg is the launchTarget fallback
+		// below. Previously a pet-cast spell carrying effect 32/148
+		// triggered nothing server-side.
+		for i := range spell.Effects {
+			effect := spell.Effects[i]
+			if effect.Effect != spellEffectTriggerMissile && effect.Effect != spellEffectTriggerMissileWithValue {
 				continue
 			}
-			switch eff.Effect {
-			case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
-			default:
+			if effect.TriggerSpell == 0 || effect.TriggerSpell == spell.ID {
 				continue
 			}
-			chainMult := petModOwner.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
-			for jumpIdx, chainGUID := range chainJumps {
-				if rt := resolveReflectTarget(chainGUID); rt != 0 {
-					reflectorGUID := uint64(0)
-					if reflectedSet[chainGUID] {
-						reflectorGUID = chainGUID
-					}
-					missVerdict, hasMissVerdict := petMissVerdicts[chainGUID]
-					s.executePetSpellDamage(ctx, motion, rt, spell.ID, chainScaledAmount(petDamageFor(rt), chainMult, jumpIdx+1), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
-				}
-			}
-		}
-	}
-	if !hasDamage {
-		// Reflect return trip for a spell with no damage effect: the
-		// damage leg never runs, but DoDamageAndTriggers still runs its
-		// tail per TargetInfo (Spell.cpp:2565-2575 !hasDamage branch,
-		// 2609-2652) — NODAMAGE procs, the reflector stand-up, the
-		// SpellHitTarget hook with the pet as _spellHitTarget, and the
-		// per-hit trigger consumer. The proc mask is REFLECT alone:
-		// the return trip's MissCondition stays REFLECT into the no-damage
-		// arm (Spell.cpp:2565-2575, createProcHitMask Unit.cpp:10179-10247),
-		// matching the inline twin. Only clean (NONE) reflects: a nulled
-		// trip resolves no _spellHitTarget (Spell.cpp:2350) and runs
-		// nothing. The leech leg needs no arm here — a zero-damage trip
-		// has a zero leech basis.
-		zeroSchoolMask := uint8(spell.SchoolMask)
-		if zeroSchoolMask == 0 {
-			zeroSchoolMask = 1
-		}
-		for _, trip := range reflectTrips {
-			if reflectNulled[trip.victimGUID] {
+			triggered, found, err := s.server.Data.Spell(effect.TriggerSpell)
+			if err != nil || !found {
 				continue
 			}
-			if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
-				typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell)
-				if typeMask != 0 {
-					spellCopy := spell
-					reflEv := procEventInfo{
-						typeMask:       typeMask,
-						schoolMask:     uint32(zeroSchoolMask),
-						spellTypeMask:  procSpellTypeNoDmgHeal,
-						spellPhaseMask: procSpellPhaseHit,
-						hitMask:        procHitReflect,
-						triggered:      triggered,
-						eventSpell:     &spellCopy,
-						actorGUID:      motion.GUID,
-						damage:         0,
-					}
-					s.server.fireCreatureAuraProcLoop(ctx, motion, motion.GUID, reflEv)
-					// The reflected trip shares the original cast's Spell
-					// object in C++, so its m_appliedMods are this cast's
-					// registry — the mod-owner arm runs here too.
-					s.server.firePetModOwnerAuraProcs(ctx, motion, motion.GUID, reflEv, petTaking)
-				}
-			}
-			s.server.standPetReflectReflectorUp(motion, trip.victimGUID, spell)
-			s.server.fireCreatureSpellHitTarget(ctx, motion, motion.GUID, spell.ID)
-			s.server.fireCreatureHitTriggers(ctx, motion, spell, spell.ID, []uint64{motion.GUID})
-		}
-	}
-	// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) HITBYSPELL arm for a
-	// pet caster, ahead of the assist loop below and the HIT_TARGET effect
-	// loop: a valid-attack-target hit strips the victim's pre-existing
-	// HITBYSPELL-flagged auras at hit time, before any effect — the
-	// boss_ai twin's position. The damage arms' strip (excepting the
-	// hitting spell) stays as damage-time coverage for standalone
-	// funnels, but on this path it now only sees auras applied by
-	// earlier effects of the same cast. Verdict gates mirror the assist
-	// loop, plus the reflect legs: a clean reflect retargets to the pet
-	// (dropped by the helper's self gate, but the original victim must
-	// not be stripped, so reflected GUIDs skip outright like the
-	// boss_ai twin) and a nulled reflect has no _spellHitTarget at all.
-	// No exception: C++ strips pre-existing auras of every spell here,
-	// including the hitting spell's own.
-	stripSeen := make(map[uint64]bool, len(hitTargets))
-	for _, hitGUID := range hitTargets {
-		if hitGUID == 0 || stripSeen[hitGUID] || immuneSet[hitGUID] || evadedSet[hitGUID] || reflectedSet[hitGUID] || reflectNulled[hitGUID] || missedTarget(hitGUID) {
-			continue
-		}
-		stripSeen[hitGUID] = true
-		s.server.stripHitBySpellAurasForCreatureCaster(motion, hitGUID)
-	}
-	// Spell::PreprocessSpellHit friendly-assist arms (Spell.cpp:2752-2765),
-	// per hit target ahead of the HIT_TARGET effect loop below: the
-	// contested-PvP leg runs first (C++ order), flagging the owner
-	// contested when the friendly target carries ATTACK_PLAYER, then the
-	// 2761 forward runs for a friendly in-combat target by a spell with
-	// initial aggro, forwarding 0.0 threat from the original caster (the
-	// pet motion here) and, for a player-controlled caster, inheriting
-	// the target's combat states. The verdict gates mirror
-	// PreprocessTarget (Spell.cpp:2347-2351): missed, immune and evaded
-	// targets have no _spellHitTarget, and a clean reflect retargets the
-	// arms to the pet itself, which the caster!=target gates inside both
-	// helpers then drop. Dedupe mirrors C++'s m_UniqueTargetInfo
-	// iteration; GO targets fail the friendly gate inside the helpers.
-	// Heal-effect targets ride this loop too (hitTargets includes the
-	// friendly picks), so the contested leg covers pet heals with no
-	// second call site; the standalone Devour Magic heal (dispel.go) is a
-	// direct heal application, not a spell hit, so it takes none.
-	assistSeen := make(map[uint64]bool, len(hitTargets))
-	for _, hitGUID := range hitTargets {
-		if hitGUID == 0 || assistSeen[hitGUID] || immuneSet[hitGUID] || evadedSet[hitGUID] || missedTarget(hitGUID) {
-			continue
-		}
-		assistSeen[hitGUID] = true
-		if armTarget := resolveReflectTarget(hitGUID); armTarget != 0 {
-			s.server.flagPetAssistContestedPvP(s, motion, armTarget)
-			s.server.forwardPetAssistThreat(motion, armTarget, spell)
-		}
-	}
-	// Spell::HandleThreatSpells (Spell.cpp:5096-5151) for a pet caster: the
-	// _handle_immediate head (Spell.cpp:3718) runs before the HIT_TARGET
-	// effect loop below, over ALL unique targets — hits and misses alike
-	// (Spell.cpp:5123). Missed, immune, evaded and reflected targets take
-	// the zero leg (reflect trips ride MissStatus with REFLECT, so the
-	// reflector keeps the entry). The AP twin is the guardian leg for true
-	// pets and the classlevelstats leg for possessed wild casters
-	// (spell_threat.go); the spellmod owner is the petModOwner resolved at
-	// the cast head.
-	{
-		attackPower := func() float64 {
-			if motion.PetID != 0 && motion.OwnerGUID != 0 {
-				total, _, _, _ := s.server.petGuardianAttackPower(s, motion)
-				return total
-			}
-			return s.server.creatureBaseAttackPower(ctx, motion)
-		}
-		s.server.handleCreatureSpellInitialThreat(ctx, motion, spell, attackPower, petModOwner, hitTargets, func(guid uint64) bool {
-			return immuneSet[guid] || evadedSet[guid] || reflectedSet[guid] || petMissVerdicts[guid] != protocol.SpellMissNone
-		})
-	}
-	for i, effect := range spell.Effects {
-		if effect.Effect == spellEffectHeal || effect.Effect == spellEffectHealMechanical || effect.Effect == spellEffectHealPct {
-			// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
-			// ReflectResult nulls _spellHitTarget, so the heal leg never
-			// runs for the nulled victim (resolveReflectTarget returns 0).
-			// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405),
-			// so the wire target below plus the area-selected targets take
-			// it when this heal effect itself selects the area (same
-			// effect-mask rule as the aura leg below).
-			applyHeal := func(origGUID uint64, chainJump int) {
-				victimGUID := resolveReflectTarget(origGUID)
-				if victimGUID == 0 {
-					return
-				}
-				if immuneSet[origGUID] {
-					return
-				}
-				if missedTarget(origGUID) {
-					return
-				}
-				// Spell::EffectHeal / EffectHealMechanical / EffectHealPct
-				// (SpellEffects.cpp:1393/1495/1513): damage < 0 heals nothing —
-				// the uint32 wrap must never turn a negative rolled value into
-				// a huge heal. The old raw 105 here was
-				// SPELL_EFFECT_SUMMON_OBJECT_SLOT2 (SharedDefines.h:916), not
-				// SPELL_EFFECT_HEAL_MECHANICAL (75) — summon-object spells were
-				// being healed.
-				healValue := effect.CalcValueForLevel(spell, uint32(motion.Level))
-				if healValue > 0 {
-					heal := uint32(healValue)
-					if effect.Effect == spellEffectHealPct {
-						// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
-						// the effect value is a percentage of the TARGET's max
-						// health (Unit::CountPctFromMaxHealth), not a flat
-						// amount — like the player path at spells.go:10110.
-						healTarget, ok := s.getCombatTarget(ctx, victimGUID)
-						if !ok || healTarget.MaxHealth == 0 {
-							return
-						}
-						heal = uint32(uint64(healTarget.MaxHealth) * uint64(healValue) / 100)
-					}
-					// Unit::SpellHealingBonusDone (Unit.cpp:7558-7561, 7599-7605):
-					// the guardian's GetBonusDamage() rides the heal advertised
-					// benefit into the per-effect DoneTotal. Direct heal effects:
-					// the direct coefficient and a stack of 1.
-					if bonus := s.petGuardianDoneHealingBonus(ctx, motion, spell, i, victimGUID, false, 1); bonus != 0 {
-						if adjusted := int32(heal) + bonus; adjusted > 0 {
-							heal = uint32(adjusted)
-						} else {
-							heal = 0
-						}
-					}
-					// Unit::SpellHealingPctDone (Unit.cpp:7634-7711): the done
-					// percent leg is per victim in C++ and multiplies after the
-					// flat DoneTotal — heal = (healamount + DoneTotal) *
-					// DoneTotalMod (Unit.cpp:7612). The leech/funnel zeroing kills
-					// only the flat leg, so this fold runs even when the bonus
-					// above was 0.
-					if pct := s.petHealingPctDone(ctx, motion, spell, victimGUID); pct != 1.0 {
-						tmp := float64(int32(heal)) * pct
-						if tmp < 0 {
-							tmp = 0
-						}
-						heal = uint32(tmp)
-					}
-					// Unit::SpellHealingBonusDone (Unit.cpp:7614-7616): the
-					// SPELLMOD_DAMAGE / SPELLMOD_DOT spellmod applies to the heal
-					// total via GetSpellModOwner — the pet's mod owner (petModOwner). The pet
-					// cast loop carries direct heal effects only, so the op is
-					// SPELLMOD_DAMAGE (the HoT tick path is the dot twin).
-					if out := petModOwner.applySpellMod(spell, spellModDamage, int32(heal)); out < 0 {
-						heal = 0
-					} else {
-						heal = uint32(out)
-					}
-					if chainJump >= 0 {
-						chainMult := petModOwner.applySpellModFloat(spell, spellModDamageMultiplier, float64(effect.ChainAmplitude)*100.0) / 100.0
-						heal = chainScaledAmount(heal, chainMult, chainJump)
-					}
-					s.executePetSpellHeal(ctx, motion, victimGUID, spell.ID, heal, triggered, petTaking)
-				}
-			}
-			applyHeal(targetGUID, -1)
-			if wire := petObjectWireLeg(effect); wire != 0 {
-				applyHeal(wire, -1)
-			}
-			for _, casterGUID := range petCasterObjectTargets[i] {
-				if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
-					applyHeal(casterGUID, -1)
-				}
-			}
-			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
-				for _, areaHit := range areaHits {
-					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
-						continue
-					}
-					applyHeal(areaHit.GUID, -1)
-				}
-				for _, areaCreatureGUID := range areaCreatureHits {
-					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
-						continue
-					}
-					applyHeal(areaCreatureGUID, -1)
-				}
-			}
-			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
-				for _, areaHit := range areaAllyHits {
-					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
-						applyHeal(areaHit.GUID, -1)
-					}
-				}
-				for _, areaCreatureGUID := range areaAllyCreatureHits {
-					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
-						applyHeal(areaCreatureGUID, -1)
-					}
-				}
-			}
-			if chainJumps := chainHitsForEffect(i); len(chainJumps) > 0 {
-				for jumpIdx, chainGUID := range chainJumps {
-					applyHeal(chainGUID, jumpIdx+1)
-				}
-			}
-		}
-		if (effect.Effect == spellEffectTriggerSpell || effect.Effect == spellEffectTriggerSpellWithValue) && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
-			if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
-				// SpellEffects.cpp:989-992 — the 142 with-value arm passes the
-				// 142 effect's CalcValue as every triggered effect's base
-				// point (twin convention via WithBasePoints); the 148 pet
-				// precedent patches the local triggered copy the same way
-				// (Data.Spell builds a fresh Spell per lookup, so the patch
-				// touches no shared record): flat effects take the value,
-				// rolled effects take value-1 so the nested CalcValue
-				// re-roll lands on it. The C++ special-cases switch is
-				// 64-only, so 142 rides the plain legs below like 64, and
-				// each 64 leg below consults petTriggerSpellSpecialCase
-				// before the plain cast.
-				if effect.Effect == spellEffectTriggerSpellWithValue {
+			needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
+			castTriggered := func(triggerTarget protocol.SpellTargetData) {
+				if effect.Effect == spellEffectTriggerMissileWithValue {
 					damage := effect.CalcValueForLevel(spell, uint32(motion.Level))
 					for j, bp := range []int32{damage, damage, damage} {
 						if j < len(triggered.Effects) {
@@ -6324,48 +5490,1003 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 					}
 				}
-				// Spell::EffectTriggerSpell LAUNCH_TARGET/LAUNCH split (SpellEffects.cpp:823, Spell.cpp:7687): the per-target legs below are the LAUNCH_TARGET arm, so their plain cast runs only when the triggered spell needs to be triggered by the caster (SpellInfo.cpp:1052); the once-per-cast LAUNCH leg after them covers the rest. The 64-only special-cases switch still runs per target above the needsCaster gate, like C++ (the switch precedes the LAUNCH_TARGET needsCaster return).
-				needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
-				// Spell.cpp:2350 — a nulled reflect victim or an evaded wire
-				// target resolves no _spellHitTarget, so the trigger leg
-				// does not fire for it; immune and missed wire targets
-				// likewise take no leg (PreprocessTarget, Spell.cpp:2347-2351).
-				// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405),
-				// so the area-selected targets take it too when this trigger
-				// effect itself selects the area (effect-mask merge rule,
-				// Spell.cpp:866-897). The wire gates are a condition, not a
-				// continue, so a gated wire target never skips the area legs.
-				if !reflectNulled[target.UnitGUID] && !evadedSet[target.UnitGUID] && !immuneSet[target.UnitGUID] && !missedTarget(target.UnitGUID) {
-					triggerTarget := target
-					if reflectedSet[target.UnitGUID] {
-						triggerTarget.UnitGUID = motion.GUID
+				s.executePetSpellWithOptions(effCtx, motion, triggered, 0, triggerTarget, true)
+			}
+			if needsCaster {
+				for _, guid := range bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart) {
+					if rt := resolveReflectTarget(guid); rt != 0 && !immuneSet[guid] && !missedTarget(guid) {
+						triggerTarget := target
+						triggerTarget.UnitGUID = rt
+						castTriggered(triggerTarget)
 					}
-					if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
-						// handled by the 64-only special-cases switch; no plain leg for this target
-					} else if needsCaster {
-						s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+				}
+			}
+			if needsCaster && spellEffectProvidedTargetMask(effect)&targetFlagUnitMask != 0 {
+				continue
+			}
+			launchTarget := target
+			if launchTarget.UnitGUID == 0 {
+				launchTarget.UnitGUID = motion.GUID
+			}
+			castTriggered(launchTarget)
+		}
+		// Spell::EffectTriggerRitualOfSummoning (SpellEffects.cpp:1106) on the pet
+		// path, same dispatch-ahead-of-damage position as the twin and inline
+		// blocks: the HIT arm, once per cast — finish() the parent spell, then
+		// cast the effect's TriggerSpell non-triggered with no target. Go has
+		// no in-flight pet spell object to finish (pet casts resolve
+		// instantly), and the zero target is the null-target stand-in: a
+		// UnitGUID of 0 defaults to the caster with explicitUnitTarget false,
+		// so the explicit-target gates are skipped, per the player path's
+		// effect-initiated-cast convention (handleEffectTriggerRitualOfSummoning).
+		// The cast rides the pet path natively — a twin call would switch the
+		// triggered spell's execution path, like the trigger-missile arm
+		// above. The self-trigger guard matches the trigger-spell arms.
+		// Previously a pet-cast spell carrying effect 151 triggered nothing
+		// server-side.
+		for i := range spell.Effects {
+			effect := spell.Effects[i]
+			if effect.Effect != spellEffectTriggerRitualOfSummoning {
+				continue
+			}
+			if effect.TriggerSpell == 0 || effect.TriggerSpell == spell.ID {
+				continue
+			}
+			triggered, found, err := s.server.Data.Spell(effect.TriggerSpell)
+			if err != nil || !found {
+				continue
+			}
+			s.executePetSpellWithOptions(effCtx, motion, triggered, 0, protocol.SpellTargetData{}, false)
+		}
+		// Spell::EffectForceCast (SpellEffects.cpp:1048) on the pet path,
+		// same dispatch-ahead-of-damage position as the twin and inline
+		// blocks: the HIT_TARGET arm, one force-cast per hit target — the
+		// hit TARGET casts the triggered spell on the pet (unitTarget->
+		// CastSpell(m_caster, ...)), via the twin, which carries the 140
+		// damage specials, the 72298 self-cast, the 141 base-point
+		// override and the 52463/52349 self-cast legs. The reflected map
+		// mirrors the insta-kill arm below (trips only: every reflected
+		// GUID rides a trip, so the map covers reflectedSet). A pet target
+		// rides the twin's creature-motion leg (castCreatureSpellInternal)
+		// — the same routing a wild caster force-casting a pet takes;
+		// re-routing a forced pet cast onto the pet path is out of this
+		// strip's scope. Previously a pet-cast spell carrying effect
+		// 140/141/160 force-cast nothing server-side.
+		forceReflected := make(map[uint64]uint8, len(reflectTrips))
+		for _, trip := range reflectTrips {
+			forceReflected[trip.victimGUID] = trip.status
+		}
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2:
+				s.server.creatureEffectForceCast(effCtx, motion, spell, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), forceReflected, evadedSet, immuneSet, petMissVerdicts)
+			}
+		}
+		// Spell::EffectThreat (SpellEffects.cpp:3470) + EffectTaunt (:3131) +
+		// EffectTeleportUnits (:1199) + EffectKnockBack (:4552) +
+		// EffectResurrect (:4270) + EffectResurrectNew (:246) + EffectLeap
+		// (:4334) + EffectTeleUnitsFaceCaster (:2618) + EffectPullTowards
+		// (:4667) + EffectPullTowardsDest (:4697) + EffectDistract (:2547)
+		// + EffectSanctuary (:3757) on the pet path, same
+		// dispatch-ahead-of-damage position as the twin and inline blocks:
+		// all twelve are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their
+		// twins, with the launch reflected map (reflectedSet keys at None,
+		// trip statuses overriding — every reflected GUID rides a trip, so
+		// it matches the force-cast map). Previously a pet-cast spell
+		// carrying any of these effects added no threat, taunted,
+		// teleported, knocked back, resurrected, leapt, pulled, distracted
+		// or sanctuaried nothing server-side (non-pet creature casts ride
+		// the twin). Self-resurrect 94 and resurrect-pet 109 stay out:
+		// player-caster-only in C++, like the twin.
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectThreat:
+				s.server.creatureEffectThreat(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectAttackMe:
+				s.server.creatureEffectTaunt(effCtx, motion, spell.ID, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectTeleportUnits:
+				s.server.creatureEffectTeleportUnits(effCtx, motion, hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectKnockBack, spellEffectKnockBackDest:
+				s.server.creatureEffectKnockBack(effCtx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectResurrect:
+				s.server.creatureEffectResurrect(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectResurrectNew:
+				s.server.creatureEffectResurrectNew(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectLeap:
+				s.server.creatureEffectLeap(effCtx, motion, hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectTeleportUnitsFaceCaster:
+				s.server.creatureEffectTeleUnitsFaceCaster(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectPullTowards:
+				s.server.creatureEffectPullTowards(effCtx, motion, spell.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectPullTowardsDest:
+				s.server.creatureEffectPullTowardsDest(effCtx, motion, hasDest, dx, dy, dz, spell.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectDistract:
+				s.server.creatureEffectDistract(effCtx, motion, spell, spell.Effects[i], hasDest, dx, dy, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectSanctuary:
+				s.server.creatureEffectSanctuary(effCtx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			}
+		}
+		// Spell::EffectQuestComplete (SpellEffects.cpp:4371) +
+		// EffectQuestClear (:4611) + EffectQuestFail (:5283) +
+		// EffectQuestStart (:5294) + EffectReputation (:4349) +
+		// EffectAddHonor (:2661) + EffectKillCreditPersonal (:5253) +
+		// EffectKillCredit (:5264) + EffectSkillStep (:2637) +
+		// EffectEnvironmentalDMG (:306) on the pet path, same
+		// dispatch-ahead-of-damage position as the twin and inline blocks:
+		// all are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their twins,
+		// with the launch reflected map. The quest/reputation/kill-credit/
+		// skill-step legs run on the player hit target's own session via
+		// the helpers. Previously a pet-cast spell carrying any of these
+		// effects completed, failed, started, credited, honored or
+		// skilled nothing server-side (non-pet creature casts ride the
+		// twin).
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectQuestComplete, spellEffectQuestClear, spellEffectQuestFail, spellEffectQuestStart:
+				s.server.creatureEffectQuest(effCtx, motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectReputation:
+				s.server.creatureEffectReputation(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectAddHonor:
+				s.server.creatureEffectAddHonor(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectKillCredit, spellEffectKillCreditGroup:
+				s.server.creatureEffectKillCredit(effCtx, motion, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectSkillStep:
+				s.server.creatureEffectSkillStep(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectEnvironmentalDamage:
+				s.server.creatureEffectEnvironmentalDamage(effCtx, motion, spell, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			}
+		}
+		// Spell::EffectCreateItem (SpellEffects.cpp:1679) + EffectCreateItem2
+		// (:1688) + EffectLearnSpell (:2406) + EffectPlaySound (:5578) +
+		// EffectPlayMusic (:5537) + EffectSendTaxi (:4656) +
+		// EffectDiscoverTaxi (:5390) on the pet path, same
+		// dispatch-ahead-of-damage position as the twin and inline blocks:
+		// all are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their twins,
+		// with the launch reflected map. Previously a pet-cast spell
+		// carrying any of these effects created, taught, sounded or
+		// taxied nothing server-side (non-pet creature casts ride the
+		// twin).
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectCreateItem, spellEffectCreateItem2:
+				s.server.creatureEffectCreateItem(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectLearnSpell:
+				s.server.creatureEffectLearnSpell(effCtx, motion, spell.ID, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectPlaySound, spellEffectPlayMusic:
+				s.server.creatureEffectPlaySoundMusic(motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectSendTaxi, spellEffectDiscoverTaxi:
+				s.server.creatureEffectTaxi(effCtx, motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			}
+		}
+		// Spell::EffectLearnPetSpell (SpellEffects.cpp:3105) +
+		// EffectDismissPet (:4201) + EffectInebriate (:4143) +
+		// EffectRenamePet (:5525) + EffectActivateSpec (:5567) +
+		// EffectDurabilityDamage (:4857) + EffectDurabilityDamagePCT
+		// (:4886) + EffectBind + EffectEnchantHeldItem +
+		// EffectUnlearnSpecialization + EffectCreateRandomItem +
+		// EffectUntrainTalents + EffectTalentSpecCount on the pet path,
+		// same dispatch-ahead-of-damage position as the twin and inline
+		// blocks: all are SPELL_EFFECT_HANDLE_HIT_TARGET arms riding their
+		// twins, with the launch reflected map; force-deselect 93 rides
+		// the caster leg in the same loop (HANDLE_HIT, once per effect),
+		// like the twin. Previously a pet-cast spell carrying any of these
+		// effects dismissed, inebriated, renamed, specced, bound,
+		// enchanted, untrained or deselected nothing server-side
+		// (non-pet creature casts ride the twin).
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectLearnPetSpell:
+				s.server.creatureEffectLearnPetSpell(effCtx, motion, spell.ID, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectDismissPet:
+				s.server.creatureEffectDismissPet(effCtx, motion, spell.ID, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectInebriate:
+				s.server.creatureEffectInebriate(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectAllowRenamePet:
+				s.server.creatureEffectAllowRenamePet(effCtx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectTalentSpecSelect:
+				s.server.creatureEffectTalentSpecSelect(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct:
+				s.server.creatureEffectDurabilityDamage(effCtx, motion, spell, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectBind:
+				s.server.creatureEffectBind(effCtx, motion, spell.Effects[i], hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectEnchantHeldItem:
+				s.server.creatureEffectEnchantHeldItem(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectUnlearnSpecialization:
+				s.server.creatureEffectUnlearnSpecialization(effCtx, motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectCreateRandomItem:
+				s.server.creatureEffectCreateRandomItem(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectUntrainTalents:
+				s.server.creatureEffectUntrainTalents(effCtx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectTalentSpecCount:
+				s.server.creatureEffectTalentSpecCount(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectForceDeselect:
+				s.server.creatureEffectForceDeselect(effCtx, motion)
+			}
+		}
+		// Spell::EffectScriptEffect (SpellEffects.cpp:3604) on the pet
+		// path, same dispatch-ahead-of-damage position as the twin and
+		// inline blocks: the HIT_TARGET arm riding its twin, with the
+		// launch reflected map. Expected inert for real pet casts: the
+		// twin's three arms are spell-ID-gated to boss/NPC spells
+		// (Onyxia 22539-series, Brutallus 45141/45151, Coyote/Blood
+		// Parrot 52173/60243) no pet spellbook carries, and the
+		// ScriptsStart tail has no Go SpellScript bridge — the call is
+		// the harmless mirror of the twin, covering only the
+		// pathological case of a pet somehow carrying one of these IDs.
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectScriptEffect:
+				s.server.creatureEffectScriptEffect(effCtx, motion, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			}
+		}
+		// Spell::EffectDummy (SpellEffects.cpp:792) on the pet path, same
+		// dispatch-ahead-of-damage position as the twin and inline blocks:
+		// the HIT_TARGET arm riding its twin, with the launch reflected
+		// map. The twin fires the Eluna dummy hooks here; the pet path
+		// carries no Eluna dummy dispatch, so this loop is the Go
+		// SpellScript home for pet-cast dummy spells only — 54044 Carrion
+		// Feeder and 53478 Last Stand (pet), whose ev4 Lua ports can never
+		// fire (executePetSpellWithOptions has no fireSpellEffectHit site;
+		// the 53478 Lua handler is removed with this tick). Per hit target
+		// like C++ (each invocation casts on the caster, so a multi-target
+		// dummy would cast once per hit target); the 54044 corpse gate
+		// already ran at CheckCast above.
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectDummy:
+				for _, guid := range bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart) {
+					if guid == 0 || evadedSet[guid] || immuneSet[guid] || petMissVerdicts[guid] != protocol.SpellMissNone {
+						continue
+					}
+					if status, isReflected := launchReflected[guid]; isReflected {
+						if status != protocol.SpellMissNone {
+							continue
+						}
+						guid = motion.GUID
+					}
+					switch spell.ID {
+					case 54044:
+						// spell_hun_pet_carrion_feeder::HandleDummy
+						// (spell_hunter.cpp:1003-1007): EFFECT_0 DUMMY —
+						// the pet casts the triggered meal 54045 on
+						// itself, non-triggered in C++ (the false arg).
+						if i == 0 {
+							s.server.castCreatureSpellInternal(effCtx, motion, 54045, motion.GUID, false)
+						}
+					case 53478:
+						// spell_hun_last_stand_pet::HandleDummy
+						// (spell_hunter.cpp:720-726): EFFECT_0 DUMMY —
+						// the pet casts the triggered heal 53479 on
+						// itself with BP0 = 30% of its max health
+						// (CountPctFromMaxHealth).
+						if i == 0 {
+							bp0 := int32(motion.MaxHealth) * 30 / 100
+							s.server.castCreatureSpellInternalWithBasePoints(effCtx, motion, 53479, motion.GUID, true, map[int]int32{0: bp0}, nil, false, 0, 0)
+						}
+					}
+				}
+			}
+		}
+		// Spell::EffectHealMaxHealth (SpellEffects.cpp:3488) + EffectEnergize
+		// (:1775) + EffectEnergizePct (:1847) + EffectPowerDrain (:1265) +
+		// EffectPowerBurn (:1352) + EffectRemoveAura (:5611) +
+		// EffectModifyThreatPercent (:4915) on the pet path, same
+		// dispatch-ahead-of-damage position as the twin and inline blocks:
+		// the HIT_TARGET arms riding their twins, with the launch
+		// reflected map. The twin/inline vs pet parity census this tick
+		// found these seven handled on both other paths and nowhere on
+		// the pet path (the pet post-damage loop covers heal 10/75/136
+		// but not 67, and no pet file calls the energize, power-take,
+		// remove-aura or modify-threat helpers). None of the seven C++
+		// arms gates on a player caster (target-alive/power gates ride
+		// the twins). The burn damage leg stays out like the twin's:
+		// drained x value multiplier into TargetInfo.Damage has no
+		// amount-based damage applier on this path — the damage arms
+		// are effect-value-driven — so only the power take, the Mana
+		// Burn cap, the caster gain and the take-target-power log land.
+		for i := range spell.Effects {
+			switch spell.Effects[i].Effect {
+			case spellEffectHealMaxHealth:
+				s.server.creatureEffectHealMaxHealth(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectEnergize:
+				s.server.creatureEffectEnergize(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectEnergizePct:
+				s.server.creatureEffectEnergizePct(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectPowerDrain:
+				s.server.creatureEffectPowerDrain(effCtx, motion, spell, spell.Effects[i], i, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectPowerBurn:
+				s.server.creatureEffectPowerBurn(effCtx, motion, spell, spell.Effects[i], i, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectRemoveAura:
+				s.server.creatureEffectRemoveAura(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			case spellEffectModifyThreatPercent:
+				s.server.creatureEffectModifyThreatPercent(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			}
+		}
+		// petObjectWireLeg returns the explicit wire target for a
+		// TARGET-object effect (6/21/25/35/45/57/90/95,
+		// SelectImplicitTargetObjectTargets, Spell.cpp:1558-1580) when the
+		// nearby block moved the wire leg to its pick: the plain-primary
+		// rejoin above puts the wire target in hitTargets (packet, verdicts,
+		// threat, strip, assist and the hitTargets-riding legs), but the
+		// pet-native legs below key their wire leg on targetGUID — the
+		// nearby pick after the nearby block — so a nearby+TARGET-object
+		// spell's wire target took no damage/heal/dispel/aura leg at all.
+		// The gate is exactly the divergence: without a nearby leg
+		// targetGUID still is the wire target (or the caster fallback on a
+		// wire-0 cast, where target.UnitGUID is 0), and a pick equal to
+		// the wire needs no second leg. A GO wire takes no unit leg.
+		petObjectWireLeg := func(eff wotlk.SpellEffect) uint64 {
+			if wire := target.UnitGUID; wire != 0 && uint16(wire>>48) != 0xF110 && wire != targetGUID && (targetObjectTarget(eff.ImplicitTargetA) || targetObjectTarget(eff.ImplicitTargetB)) {
+				return wire
+			}
+			return 0
+		}
+		// The damage leg below is cast-wide (one creatureSpellDamage value),
+		// not per effect, so its object-wire leg is resolved once here: any
+		// damage effect carrying a TARGET-object leg earns the wire a hit.
+		damageObjectWire := uint64(0)
+		for _, eff := range spell.Effects {
+			switch eff.Effect {
+			case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+				if wire := petObjectWireLeg(eff); wire != 0 {
+					damageObjectWire = wire
+				}
+			}
+		}
+		// The damage leg is cast-wide, so its caster-object legs resolve once
+		// here like damageObjectWire: any damage effect carrying a
+		// caster-reference leg earns its resolved unit a hit. Deduped across
+		// effects (AddUnitTarget, Spell.cpp:2152) and against the wire hit
+		// and the object wire above, so no target takes the damage twice.
+		var damageCasterWires []uint64
+		for i, eff := range spell.Effects {
+			switch eff.Effect {
+			case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+				for _, casterGUID := range petCasterObjectTargets[i] {
+					if casterGUID == targetGUID || casterGUID == damageObjectWire {
+						continue
+					}
+					dup := false
+					for _, g := range damageCasterWires {
+						if g == casterGUID {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						damageCasterWires = append(damageCasterWires, casterGUID)
+					}
+				}
+			}
+		}
+		damage, _, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true, nil, motion)
+		// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
+		// an area-selected target takes only the effects that selected it, so
+		// the damage leg fans out to the area hits only when a damage effect
+		// itself selects the area — a single-target damage effect on a spell
+		// whose aura or heal effect sweeps the area must not damage the
+		// whole area. The wire target always takes the leg, like before.
+		damageAreaEnemy := false
+		for _, eff := range spell.Effects {
+			if eff.Effect == 0 {
+				continue
+			}
+			switch eff.Effect {
+			case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+				if isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) {
+					damageAreaEnemy = true
+				}
+			}
+		}
+		// Whole-spell damage union (bossConeKindSet precedent): when every
+		// damage effect carries a cone leg of the active family, the grouped
+		// damage fan-out below hits cone members only; otherwise it keeps
+		// the flat area list.
+		damageConeSet := bossConeKindSet(spell, bossConeDamageEffect, petConePart)
+		if hasDamage {
+			// Unit::SpellDamageBonusDone (Unit.cpp:6681-6683, 6725-6731): the
+			// guardian's GetBonusDamage() rides the advertised benefit into the
+			// per-effect DoneTotal.
+			if bonus := s.petGuardianDoneDamageBonus(motion, spell); bonus != 0 {
+				if adjusted := int32(damage) + bonus; adjusted > 0 {
+					damage = uint32(adjusted)
+				} else {
+					damage = 0
+				}
+			}
+			// Unit::SpellDamageBonusDone (Unit.cpp:6617-6637): the flat
+			// done-scripted-mod arm — the owner's OVERRIDE_CLASS_SCRIPTS set —
+			// rides DoneTotal flat, victim-independent like the advertised fold
+			// above. (The per-victim 180 arm folds inside petDamageFor.)
+			if flat := s.petDoneFlatClassScripts(spell); flat != 0 {
+				if adjusted := int32(damage) + flat; adjusted > 0 {
+					damage = uint32(adjusted)
+				} else {
+					damage = 0
+				}
+			}
+			schoolMask := uint8(spell.SchoolMask)
+			if schoolMask == 0 {
+				schoolMask = 1
+			}
+			// Unit::SpellDamagePctDone (Unit.cpp:6738-7050): the done percent
+			// multiplier is per victim in C++ (the versus and class-script arms
+			// read the victim), so the pet's school/versus arms plus the
+			// owner-scoped class-script table fold per target here, after the
+			// flat DoneTotal above (C++ order: (pdamage + DoneTotal) * DoneTotalMod).
+			petDamageFor := func(victimGUID uint64) uint32 {
+				d := damage
+				if target, ok := s.getCombatTarget(effCtx, victimGUID); ok {
+					// Unit::SpellDamageBonusDone (Unit.cpp:6682): the victim's
+					// SPELL_AURA_MOD_DAMAGE_TAKEN (14, Amplify/Dampen Magic) arm
+					// rides the advertised benefit ahead of the pct leg — the
+					// weapon-damage gate inside victimDamageTakenFlat keeps it
+					// off the melee-taken side (Unit.cpp:7996).
+					if v14 := s.victimDamageTakenFlat(spell, victimGUID, target); v14 != 0 {
+						if adjusted := int32(d) + s.petDamageEffectBonus(spell, motion, v14); adjusted > 0 {
+							d = uint32(adjusted)
+						} else {
+							d = 0
+						}
+					}
+					// Unit::SpellDamageBonusDone (Unit.cpp:6646-6647): the pet's
+					// own MOD_FLAT_SPELL_DAMAGE_VERSUS (180) arm by the victim's
+					// creature-type mask rides DoneTotal flat per victim, ahead
+					// of the pct leg like the aura-14 arm.
+					if v180 := s.petDoneFlatVersus(effCtx, motion, spell, victimGUID); v180 != 0 {
+						if adjusted := int32(d) + v180; adjusted > 0 {
+							d = uint32(adjusted)
+						} else {
+							d = 0
+						}
+					}
+					// Unit::SpellDamageBonusDone (Unit.cpp:6684-6706): the
+					// ap_bonus arm rides DoneTotal flat per victim, ahead of
+					// the pct leg; the direct cast path carries stack 1.
+					if ap := s.petApBonusDoneFlat(effCtx, motion, spell, victimGUID, target, false, 1); ap != 0 {
+						if adjusted := int32(d) + ap; adjusted > 0 {
+							d = uint32(adjusted)
+						} else {
+							d = 0
+						}
+					}
+					if pct := s.petDamagePctDone(effCtx, motion, spell, victimGUID, target); pct != 1.0 {
+						d = uint32(float64(d) * pct)
+					}
+				}
+				// Unit::SpellDamageBonusDone (Unit.cpp:6731-6734): the mod-owner's
+				// SPELLMOD_DAMAGE / SPELLMOD_DOT fold applies to the damage total
+				// after the pct leg — the cast loop carries direct damage effects
+				// only, so the op is SPELLMOD_DAMAGE (the DoT tick path is the
+				// dot twin).
+				if out := petModOwner.applySpellMod(spell, spellModDamage, int32(d)); out < 0 {
+					d = 0
+				} else {
+					d = uint32(out)
+				}
+				return d
+			}
+			if rt := resolveReflectTarget(targetGUID); rt != 0 {
+				reflectorGUID := uint64(0)
+				if reflectedSet[targetGUID] {
+					reflectorGUID = targetGUID
+				}
+				missVerdict, hasMissVerdict := petMissVerdicts[targetGUID]
+				s.executePetSpellDamage(effCtx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
+			}
+			// The 77 channel target takes its own damage hit on the same
+			// shape: the wire leg above covers targetGUID only and the area
+			// legs below cover area-selected enemies only, so a channel
+			// target that is neither would otherwise take the dispatch legs
+			// (hitTargets) but no damage. Already in hitTargets, so its
+			// verdicts ran with the rest.
+			if petChannelHitGUID != 0 {
+				if rt := resolveReflectTarget(petChannelHitGUID); rt != 0 {
+					reflectorGUID := uint64(0)
+					if reflectedSet[petChannelHitGUID] {
+						reflectorGUID = petChannelHitGUID
+					}
+					missVerdict, hasMissVerdict := petMissVerdicts[petChannelHitGUID]
+					s.executePetSpellDamage(effCtx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
+				}
+			}
+			// The TARGET-object wire leg on the channel leg's shape: a
+			// nearby+TARGET-object damage spell's wire target rides
+			// hitTargets (packet, verdicts) but the wire leg above hits
+			// the nearby pick, so without this the wire took no damage.
+			if damageObjectWire != 0 {
+				if rt := resolveReflectTarget(damageObjectWire); rt != 0 {
+					reflectorGUID := uint64(0)
+					if reflectedSet[damageObjectWire] {
+						reflectorGUID = damageObjectWire
+					}
+					missVerdict, hasMissVerdict := petMissVerdicts[damageObjectWire]
+					s.executePetSpellDamage(effCtx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
+				}
+			}
+			// The caster-object legs on the wire leg's shape: each resolved
+			// caster unit of a damage effect takes its own hit, with its own
+			// reflect/miss verdicts (already rolled through hitTargets).
+			for _, casterGUID := range damageCasterWires {
+				if rt := resolveReflectTarget(casterGUID); rt != 0 {
+					reflectorGUID := uint64(0)
+					if reflectedSet[casterGUID] {
+						reflectorGUID = casterGUID
+					}
+					missVerdict, hasMissVerdict := petMissVerdicts[casterGUID]
+					s.executePetSpellDamage(effCtx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
+				}
+			}
+			// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
+			// enemy takes its own hit — the per-target miss roll, resistance,
+			// absorb and kill legs run per target inside
+			// executePetSpellDamage, matching DoTargetSpellHit per target.
+			if damageAreaEnemy {
+				for _, areaHit := range areaHits {
+					if damageConeSet != nil {
+						if _, ok := damageConeSet[areaHit.GUID]; !ok {
+							continue
+						}
+					}
+					if rt := resolveReflectTarget(areaHit.GUID); rt != 0 {
+						reflectorGUID := uint64(0)
+						if reflectedSet[areaHit.GUID] {
+							reflectorGUID = areaHit.GUID
+						}
+						missVerdict, hasMissVerdict := petMissVerdicts[areaHit.GUID]
+						s.executePetSpellDamage(effCtx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
+					}
+				}
+			}
+			// SelectImplicitAreaTargets (Spell.cpp:1227): the area-selected
+			// enemy creatures take their own hits too — executePetSpellDamage
+			// is GUID-generic (getCombatTarget resolves motions; the taken
+			// side runs the creature twin), and the reflect/evade verdicts
+			// above already ran for these GUIDs through hitTargets, so a
+			// reflected creature hit lands on the pet and an evaded one
+			// resolves to 0 and skips, exactly like the player area hits.
+			if damageAreaEnemy {
+				for _, areaCreatureGUID := range areaCreatureHits {
+					if damageConeSet != nil {
+						if _, ok := damageConeSet[areaCreatureGUID]; !ok {
+							continue
+						}
+					}
+					if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 {
+						reflectorGUID := uint64(0)
+						if reflectedSet[areaCreatureGUID] {
+							reflectorGUID = areaCreatureGUID
+						}
+						missVerdict, hasMissVerdict := petMissVerdicts[areaCreatureGUID]
+						s.executePetSpellDamage(effCtx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
+					}
+				}
+			}
+			// Spell::SelectImplicitChainTargets (Spell.cpp:1582-1624): a chain
+			// damage effect jumps to each chain target with the per-jump falloff
+			// (DoEffectOnLaunchTarget, Spell.cpp:7771-7774; CalcDamageMultiplier,
+			// SpellInfo.cpp:537-544). The grouped damage leg above only fans out to
+			// area-selected targets, so chain jumps take no damage without this leg.
+			for ei, eff := range spell.Effects {
+				chainJumps := chainHitsForEffect(ei)
+				if len(chainJumps) == 0 {
+					continue
+				}
+				switch eff.Effect {
+				case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+				default:
+					continue
+				}
+				chainMult := petModOwner.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
+				for jumpIdx, chainGUID := range chainJumps {
+					if rt := resolveReflectTarget(chainGUID); rt != 0 {
+						reflectorGUID := uint64(0)
+						if reflectedSet[chainGUID] {
+							reflectorGUID = chainGUID
+						}
+						missVerdict, hasMissVerdict := petMissVerdicts[chainGUID]
+						s.executePetSpellDamage(effCtx, motion, rt, spell.ID, chainScaledAmount(petDamageFor(rt), chainMult, jumpIdx+1), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
+					}
+				}
+			}
+		}
+		if !hasDamage {
+			// Reflect return trip for a spell with no damage effect: the
+			// damage leg never runs, but DoDamageAndTriggers still runs its
+			// tail per TargetInfo (Spell.cpp:2565-2575 !hasDamage branch,
+			// 2609-2652) — NODAMAGE procs, the reflector stand-up, the
+			// SpellHitTarget hook with the pet as _spellHitTarget, and the
+			// per-hit trigger consumer. The proc mask is REFLECT alone:
+			// the return trip's MissCondition stays REFLECT into the no-damage
+			// arm (Spell.cpp:2565-2575, createProcHitMask Unit.cpp:10179-10247),
+			// matching the inline twin. Only clean (NONE) reflects: a nulled
+			// trip resolves no _spellHitTarget (Spell.cpp:2350) and runs
+			// nothing. The leech leg needs no arm here — a zero-damage trip
+			// has a zero leech basis.
+			zeroSchoolMask := uint8(spell.SchoolMask)
+			if zeroSchoolMask == 0 {
+				zeroSchoolMask = 1
+			}
+			for _, trip := range reflectTrips {
+				if reflectNulled[trip.victimGUID] {
+					continue
+				}
+				if spell.AttributesEx3&spellAttr3CantTriggerProc == 0 {
+					typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell)
+					if typeMask != 0 {
+						spellCopy := spell
+						reflEv := procEventInfo{
+							typeMask:       typeMask,
+							schoolMask:     uint32(zeroSchoolMask),
+							spellTypeMask:  procSpellTypeNoDmgHeal,
+							spellPhaseMask: procSpellPhaseHit,
+							hitMask:        procHitReflect,
+							triggered:      triggered,
+							eventSpell:     &spellCopy,
+							actorGUID:      motion.GUID,
+							damage:         0,
+						}
+						s.server.fireCreatureAuraProcLoop(effCtx, motion, motion.GUID, reflEv)
+						// The reflected trip shares the original cast's Spell
+						// object in C++, so its m_appliedMods are this cast's
+						// registry — the mod-owner arm runs here too.
+						s.server.firePetModOwnerAuraProcs(effCtx, motion, motion.GUID, reflEv, petTaking)
+					}
+				}
+				s.server.standPetReflectReflectorUp(motion, trip.victimGUID, spell)
+				s.server.fireCreatureSpellHitTarget(effCtx, motion, motion.GUID, spell.ID)
+				s.server.fireCreatureHitTriggers(effCtx, motion, spell, spell.ID, []uint64{motion.GUID})
+			}
+		}
+		// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) HITBYSPELL arm for a
+		// pet caster, ahead of the assist loop below and the HIT_TARGET effect
+		// loop: a valid-attack-target hit strips the victim's pre-existing
+		// HITBYSPELL-flagged auras at hit time, before any effect — the
+		// boss_ai twin's position. The damage arms' strip (excepting the
+		// hitting spell) stays as damage-time coverage for standalone
+		// funnels, but on this path it now only sees auras applied by
+		// earlier effects of the same cast. Verdict gates mirror the assist
+		// loop, plus the reflect legs: a clean reflect retargets to the pet
+		// (dropped by the helper's self gate, but the original victim must
+		// not be stripped, so reflected GUIDs skip outright like the
+		// boss_ai twin) and a nulled reflect has no _spellHitTarget at all.
+		// No exception: C++ strips pre-existing auras of every spell here,
+		// including the hitting spell's own.
+		stripSeen := make(map[uint64]bool, len(hitTargets))
+		for _, hitGUID := range hitTargets {
+			if hitGUID == 0 || stripSeen[hitGUID] || immuneSet[hitGUID] || evadedSet[hitGUID] || reflectedSet[hitGUID] || reflectNulled[hitGUID] || missedTarget(hitGUID) {
+				continue
+			}
+			stripSeen[hitGUID] = true
+			s.server.stripHitBySpellAurasForCreatureCaster(motion, hitGUID)
+		}
+		// Spell::PreprocessSpellHit friendly-assist arms (Spell.cpp:2752-2765),
+		// per hit target ahead of the HIT_TARGET effect loop below: the
+		// contested-PvP leg runs first (C++ order), flagging the owner
+		// contested when the friendly target carries ATTACK_PLAYER, then the
+		// 2761 forward runs for a friendly in-combat target by a spell with
+		// initial aggro, forwarding 0.0 threat from the original caster (the
+		// pet motion here) and, for a player-controlled caster, inheriting
+		// the target's combat states. The verdict gates mirror
+		// PreprocessTarget (Spell.cpp:2347-2351): missed, immune and evaded
+		// targets have no _spellHitTarget, and a clean reflect retargets the
+		// arms to the pet itself, which the caster!=target gates inside both
+		// helpers then drop. Dedupe mirrors C++'s m_UniqueTargetInfo
+		// iteration; GO targets fail the friendly gate inside the helpers.
+		// Heal-effect targets ride this loop too (hitTargets includes the
+		// friendly picks), so the contested leg covers pet heals with no
+		// second call site; the standalone Devour Magic heal (dispel.go) is a
+		// direct heal application, not a spell hit, so it takes none.
+		assistSeen := make(map[uint64]bool, len(hitTargets))
+		for _, hitGUID := range hitTargets {
+			if hitGUID == 0 || assistSeen[hitGUID] || immuneSet[hitGUID] || evadedSet[hitGUID] || missedTarget(hitGUID) {
+				continue
+			}
+			assistSeen[hitGUID] = true
+			if armTarget := resolveReflectTarget(hitGUID); armTarget != 0 {
+				s.server.flagPetAssistContestedPvP(s, motion, armTarget)
+				s.server.forwardPetAssistThreat(motion, armTarget, spell)
+			}
+		}
+		// Spell::HandleThreatSpells (Spell.cpp:5096-5151) for a pet caster: the
+		// _handle_immediate head (Spell.cpp:3718) runs before the HIT_TARGET
+		// effect loop below, over ALL unique targets — hits and misses alike
+		// (Spell.cpp:5123). Missed, immune, evaded and reflected targets take
+		// the zero leg (reflect trips ride MissStatus with REFLECT, so the
+		// reflector keeps the entry). The AP twin is the guardian leg for true
+		// pets and the classlevelstats leg for possessed wild casters
+		// (spell_threat.go); the spellmod owner is the petModOwner resolved at
+		// the cast head.
+		{
+			attackPower := func() float64 {
+				if motion.PetID != 0 && motion.OwnerGUID != 0 {
+					total, _, _, _ := s.server.petGuardianAttackPower(s, motion)
+					return total
+				}
+				return s.server.creatureBaseAttackPower(effCtx, motion)
+			}
+			s.server.handleCreatureSpellInitialThreat(effCtx, motion, spell, attackPower, petModOwner, hitTargets, func(guid uint64) bool {
+				return immuneSet[guid] || evadedSet[guid] || reflectedSet[guid] || petMissVerdicts[guid] != protocol.SpellMissNone
+			})
+		}
+		for i, effect := range spell.Effects {
+			if effect.Effect == spellEffectHeal || effect.Effect == spellEffectHealMechanical || effect.Effect == spellEffectHealPct {
+				// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
+				// ReflectResult nulls _spellHitTarget, so the heal leg never
+				// runs for the nulled victim (resolveReflectTarget returns 0).
+				// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405),
+				// so the wire target below plus the area-selected targets take
+				// it when this heal effect itself selects the area (same
+				// effect-mask rule as the aura leg below).
+				applyHeal := func(origGUID uint64, chainJump int) {
+					victimGUID := resolveReflectTarget(origGUID)
+					if victimGUID == 0 {
+						return
+					}
+					if immuneSet[origGUID] {
+						return
+					}
+					if missedTarget(origGUID) {
+						return
+					}
+					// Spell::EffectHeal / EffectHealMechanical / EffectHealPct
+					// (SpellEffects.cpp:1393/1495/1513): damage < 0 heals nothing —
+					// the uint32 wrap must never turn a negative rolled value into
+					// a huge heal. The old raw 105 here was
+					// SPELL_EFFECT_SUMMON_OBJECT_SLOT2 (SharedDefines.h:916), not
+					// SPELL_EFFECT_HEAL_MECHANICAL (75) — summon-object spells were
+					// being healed.
+					healValue := effect.CalcValueForLevel(spell, uint32(motion.Level))
+					if healValue > 0 {
+						heal := uint32(healValue)
+						if effect.Effect == spellEffectHealPct {
+							// Spell::EffectHealPct (SpellEffects.cpp:1477-1492):
+							// the effect value is a percentage of the TARGET's max
+							// health (Unit::CountPctFromMaxHealth), not a flat
+							// amount — like the player path at spells.go:10110.
+							healTarget, ok := s.getCombatTarget(effCtx, victimGUID)
+							if !ok || healTarget.MaxHealth == 0 {
+								return
+							}
+							heal = uint32(uint64(healTarget.MaxHealth) * uint64(healValue) / 100)
+						}
+						// Unit::SpellHealingBonusDone (Unit.cpp:7558-7561, 7599-7605):
+						// the guardian's GetBonusDamage() rides the heal advertised
+						// benefit into the per-effect DoneTotal. Direct heal effects:
+						// the direct coefficient and a stack of 1.
+						if bonus := s.petGuardianDoneHealingBonus(effCtx, motion, spell, i, victimGUID, false, 1); bonus != 0 {
+							if adjusted := int32(heal) + bonus; adjusted > 0 {
+								heal = uint32(adjusted)
+							} else {
+								heal = 0
+							}
+						}
+						// Unit::SpellHealingPctDone (Unit.cpp:7634-7711): the done
+						// percent leg is per victim in C++ and multiplies after the
+						// flat DoneTotal — heal = (healamount + DoneTotal) *
+						// DoneTotalMod (Unit.cpp:7612). The leech/funnel zeroing kills
+						// only the flat leg, so this fold runs even when the bonus
+						// above was 0.
+						if pct := s.petHealingPctDone(effCtx, motion, spell, victimGUID); pct != 1.0 {
+							tmp := float64(int32(heal)) * pct
+							if tmp < 0 {
+								tmp = 0
+							}
+							heal = uint32(tmp)
+						}
+						// Unit::SpellHealingBonusDone (Unit.cpp:7614-7616): the
+						// SPELLMOD_DAMAGE / SPELLMOD_DOT spellmod applies to the heal
+						// total via GetSpellModOwner — the pet's mod owner (petModOwner). The pet
+						// cast loop carries direct heal effects only, so the op is
+						// SPELLMOD_DAMAGE (the HoT tick path is the dot twin).
+						if out := petModOwner.applySpellMod(spell, spellModDamage, int32(heal)); out < 0 {
+							heal = 0
+						} else {
+							heal = uint32(out)
+						}
+						if chainJump >= 0 {
+							chainMult := petModOwner.applySpellModFloat(spell, spellModDamageMultiplier, float64(effect.ChainAmplitude)*100.0) / 100.0
+							heal = chainScaledAmount(heal, chainMult, chainJump)
+						}
+						s.executePetSpellHeal(effCtx, motion, victimGUID, spell.ID, heal, triggered, petTaking)
+					}
+				}
+				applyHeal(targetGUID, -1)
+				if wire := petObjectWireLeg(effect); wire != 0 {
+					applyHeal(wire, -1)
+				}
+				for _, casterGUID := range petCasterObjectTargets[i] {
+					if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
+						applyHeal(casterGUID, -1)
 					}
 				}
 				if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
-					areaTrigger := func(origGUID uint64) {
-						if rt := resolveReflectTarget(origGUID); rt != 0 && !immuneSet[origGUID] && !missedTarget(origGUID) {
-							triggerTarget := target
-							triggerTarget.UnitGUID = rt
-							if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
-								// handled by the 64-only special-cases switch; no plain leg for this target
-							} else if needsCaster {
-								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+					for _, areaHit := range areaHits {
+						if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+							continue
+						}
+						applyHeal(areaHit.GUID, -1)
+					}
+					for _, areaCreatureGUID := range areaCreatureHits {
+						if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+							continue
+						}
+						applyHeal(areaCreatureGUID, -1)
+					}
+				}
+				if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+					for _, areaHit := range areaAllyHits {
+						if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+							applyHeal(areaHit.GUID, -1)
+						}
+					}
+					for _, areaCreatureGUID := range areaAllyCreatureHits {
+						if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+							applyHeal(areaCreatureGUID, -1)
+						}
+					}
+				}
+				if chainJumps := chainHitsForEffect(i); len(chainJumps) > 0 {
+					for jumpIdx, chainGUID := range chainJumps {
+						applyHeal(chainGUID, jumpIdx+1)
+					}
+				}
+			}
+			if (effect.Effect == spellEffectTriggerSpell || effect.Effect == spellEffectTriggerSpellWithValue) && effect.TriggerSpell != 0 && effect.TriggerSpell != spell.ID {
+				if triggered, found, err := s.server.Data.Spell(effect.TriggerSpell); err == nil && found {
+					// SpellEffects.cpp:989-992 — the 142 with-value arm passes the
+					// 142 effect's CalcValue as every triggered effect's base
+					// point (twin convention via WithBasePoints); the 148 pet
+					// precedent patches the local triggered copy the same way
+					// (Data.Spell builds a fresh Spell per lookup, so the patch
+					// touches no shared record): flat effects take the value,
+					// rolled effects take value-1 so the nested CalcValue
+					// re-roll lands on it. The C++ special-cases switch is
+					// 64-only, so 142 rides the plain legs below like 64, and
+					// each 64 leg below consults petTriggerSpellSpecialCase
+					// before the plain cast.
+					if effect.Effect == spellEffectTriggerSpellWithValue {
+						damage := effect.CalcValueForLevel(spell, uint32(motion.Level))
+						for j, bp := range []int32{damage, damage, damage} {
+							if j < len(triggered.Effects) {
+								if triggered.Effects[j].DieSides == 0 {
+									triggered.Effects[j].BasePoints = bp
+								} else {
+									triggered.Effects[j].BasePoints = bp - 1
+								}
 							}
 						}
 					}
+					// Spell::EffectTriggerSpell LAUNCH_TARGET/LAUNCH split (SpellEffects.cpp:823, Spell.cpp:7687): the per-target legs below are the LAUNCH_TARGET arm, so their plain cast runs only when the triggered spell needs to be triggered by the caster (SpellInfo.cpp:1052); the once-per-cast LAUNCH leg after them covers the rest. The 64-only special-cases switch still runs per target above the needsCaster gate, like C++ (the switch precedes the LAUNCH_TARGET needsCaster return).
+					needsCaster := spellNeedsToBeTriggeredByCaster(triggered, spell)
+					// Spell.cpp:2350 — a nulled reflect victim or an evaded wire
+					// target resolves no _spellHitTarget, so the trigger leg
+					// does not fire for it; immune and missed wire targets
+					// likewise take no leg (PreprocessTarget, Spell.cpp:2347-2351).
+					// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405),
+					// so the area-selected targets take it too when this trigger
+					// effect itself selects the area (effect-mask merge rule,
+					// Spell.cpp:866-897). The wire gates are a condition, not a
+					// continue, so a gated wire target never skips the area legs.
+					if !reflectNulled[target.UnitGUID] && !evadedSet[target.UnitGUID] && !immuneSet[target.UnitGUID] && !missedTarget(target.UnitGUID) {
+						triggerTarget := target
+						if reflectedSet[target.UnitGUID] {
+							triggerTarget.UnitGUID = motion.GUID
+						}
+						if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(effCtx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+							// handled by the 64-only special-cases switch; no plain leg for this target
+						} else if needsCaster {
+							s.executePetSpellWithOptions(effCtx, motion, triggered, 0, triggerTarget, true)
+						}
+					}
+					if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
+						areaTrigger := func(origGUID uint64) {
+							if rt := resolveReflectTarget(origGUID); rt != 0 && !immuneSet[origGUID] && !missedTarget(origGUID) {
+								triggerTarget := target
+								triggerTarget.UnitGUID = rt
+								if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(effCtx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+									// handled by the 64-only special-cases switch; no plain leg for this target
+								} else if needsCaster {
+									s.executePetSpellWithOptions(effCtx, motion, triggered, 0, triggerTarget, true)
+								}
+							}
+						}
+						for _, areaHit := range areaHits {
+							if petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+								areaTrigger(areaHit.GUID)
+							}
+						}
+						for _, areaCreatureGUID := range areaCreatureHits {
+							if petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+								areaTrigger(areaCreatureGUID)
+							}
+						}
+					}
+					if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+						for _, areaHit := range areaAllyHits {
+							if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+								if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
+									triggerTarget := target
+									triggerTarget.UnitGUID = rt
+									if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(effCtx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+										// handled by the 64-only special-cases switch; no plain leg for this target
+									} else if needsCaster {
+										s.executePetSpellWithOptions(effCtx, motion, triggered, 0, triggerTarget, true)
+									}
+								}
+							}
+						}
+						for _, areaCreatureGUID := range areaAllyCreatureHits {
+							if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+								if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
+									triggerTarget := target
+									triggerTarget.UnitGUID = rt
+									if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(effCtx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+										// handled by the 64-only special-cases switch; no plain leg for this target
+									} else if needsCaster {
+										s.executePetSpellWithOptions(effCtx, motion, triggered, 0, triggerTarget, true)
+									}
+								}
+							}
+						}
+					}
+					if chainJumps := chainHitsForEffect(i); len(chainJumps) > 0 {
+						for _, chainGUID := range chainJumps {
+							if rt := resolveReflectTarget(chainGUID); rt != 0 && !immuneSet[chainGUID] && !missedTarget(chainGUID) {
+								triggerTarget := target
+								triggerTarget.UnitGUID = rt
+								if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(effCtx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
+									// handled by the 64-only special-cases switch; no plain leg for this target
+								} else if needsCaster {
+									s.executePetSpellWithOptions(effCtx, motion, triggered, 0, triggerTarget, true)
+								}
+							}
+						}
+					}
+					// Spell::EffectTriggerSpell LAUNCH arm (SpellEffects.cpp:823, HandleLaunchPhase Spell.cpp:7687) on the pet path, mirroring the twin's once-per-cast leg: fires unless the per-target arm owns the effect (needs-caster plus a unit target on this effect). The LAUNCH arm never runs the 64-only special-cases switch, so this is a plain cast, and it is verdict-independent (the launch phase runs ahead of hit resolution) on the raw cast target, falling back to the caster like the twin's launchTarget; the 142 base-point patch above already landed on the local triggered copy.
+					if !(needsCaster && spellEffectProvidedTargetMask(effect)&targetFlagUnitMask != 0) {
+						launchTarget := target
+						if launchTarget.UnitGUID == 0 {
+							launchTarget.UnitGUID = motion.GUID
+						}
+						s.executePetSpellWithOptions(effCtx, motion, triggered, 0, launchTarget, true)
+					}
+				}
+			}
+			if effect.Effect == spellEffectDispel {
+				if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
+					s.executePetSpellDispel(effCtx, motion, rt, spell, effect, reflectedSet[targetGUID])
+				}
+				if wire := petObjectWireLeg(effect); wire != 0 {
+					if rt := resolveReflectTarget(wire); rt != 0 && !immuneSet[wire] && !missedTarget(wire) {
+						s.executePetSpellDispel(effCtx, motion, rt, spell, effect, reflectedSet[wire])
+					}
+				}
+				for _, casterGUID := range petCasterObjectTargets[i] {
+					if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
+						if rt := resolveReflectTarget(casterGUID); rt != 0 && !immuneSet[casterGUID] && !missedTarget(casterGUID) {
+							s.executePetSpellDispel(effCtx, motion, rt, spell, effect, reflectedSet[casterGUID])
+						}
+					}
+				}
+				if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
+					// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405);
+					// the area legs run only when this dispel effect itself selects
+					// the area (effect-mask merge rule, Spell.cpp:866-897).
 					for _, areaHit := range areaHits {
-						if petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
-							areaTrigger(areaHit.GUID)
+						if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+							continue
+						}
+						if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
+							s.executePetSpellDispel(effCtx, motion, rt, spell, effect, reflectedSet[areaHit.GUID])
 						}
 					}
 					for _, areaCreatureGUID := range areaCreatureHits {
-						if petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
-							areaTrigger(areaCreatureGUID)
+						if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+							continue
+						}
+						if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
+							s.executePetSpellDispel(effCtx, motion, rt, spell, effect, reflectedSet[areaCreatureGUID])
 						}
 					}
 				}
@@ -6373,26 +6494,14 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					for _, areaHit := range areaAllyHits {
 						if areaAllyChecks[areaHit.GUID]&wanted != 0 {
 							if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
-								triggerTarget := target
-								triggerTarget.UnitGUID = rt
-								if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
-									// handled by the 64-only special-cases switch; no plain leg for this target
-								} else if needsCaster {
-									s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
-								}
+								s.executePetSpellDispel(effCtx, motion, rt, spell, effect, reflectedSet[areaHit.GUID])
 							}
 						}
 					}
 					for _, areaCreatureGUID := range areaAllyCreatureHits {
 						if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
 							if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
-								triggerTarget := target
-								triggerTarget.UnitGUID = rt
-								if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
-									// handled by the 64-only special-cases switch; no plain leg for this target
-								} else if needsCaster {
-									s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
-								}
+								s.executePetSpellDispel(effCtx, motion, rt, spell, effect, reflectedSet[areaCreatureGUID])
 							}
 						}
 					}
@@ -6400,401 +6509,363 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				if chainJumps := chainHitsForEffect(i); len(chainJumps) > 0 {
 					for _, chainGUID := range chainJumps {
 						if rt := resolveReflectTarget(chainGUID); rt != 0 && !immuneSet[chainGUID] && !missedTarget(chainGUID) {
-							triggerTarget := target
-							triggerTarget.UnitGUID = rt
-							if effect.Effect == spellEffectTriggerSpell && s.petTriggerSpellSpecialCase(ctx, motion, spell.ID, effect, triggerTarget.UnitGUID) {
-								// handled by the 64-only special-cases switch; no plain leg for this target
-							} else if needsCaster {
-								s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
+							s.executePetSpellDispel(effCtx, motion, rt, spell, effect, reflectedSet[chainGUID])
+						}
+					}
+				}
+			}
+			if effect.Effect == spellEffectDispelMechanic {
+				// Spell::EffectDispelMechanic (SpellEffects.cpp:4733-4756):
+				// the pet path's dispel arm handled only effect 38 — 108
+				// fell to the unhandled arm and did nothing, while C++
+				// dispatches it per unit target (SpellEffects.cpp:177) and the
+				// player path bridges it (spells.go case 108). Reflection
+				// maps the victim to the pet like the 38 arm above
+				// (Spell.cpp:2350, 7740-7743); a nulled victim skips it.
+				if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
+					s.handleEffectDispelMechanic(effCtx, rt, spell, effect)
+				}
+				if wire := petObjectWireLeg(effect); wire != 0 {
+					if rt := resolveReflectTarget(wire); rt != 0 && !immuneSet[wire] && !missedTarget(wire) {
+						s.handleEffectDispelMechanic(effCtx, rt, spell, effect)
+					}
+				}
+				for _, casterGUID := range petCasterObjectTargets[i] {
+					if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
+						if rt := resolveReflectTarget(casterGUID); rt != 0 && !immuneSet[casterGUID] && !missedTarget(casterGUID) {
+							s.handleEffectDispelMechanic(effCtx, rt, spell, effect)
+						}
+					}
+				}
+				if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
+					for _, areaHit := range areaHits {
+						if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+							continue
+						}
+						if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
+							s.handleEffectDispelMechanic(effCtx, rt, spell, effect)
+						}
+					}
+					for _, areaCreatureGUID := range areaCreatureHits {
+						if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+							continue
+						}
+						if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
+							s.handleEffectDispelMechanic(effCtx, rt, spell, effect)
+						}
+					}
+				}
+				if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+					for _, areaHit := range areaAllyHits {
+						if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+							if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
+								s.handleEffectDispelMechanic(effCtx, rt, spell, effect)
+							}
+						}
+					}
+					for _, areaCreatureGUID := range areaAllyCreatureHits {
+						if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+							if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
+								s.handleEffectDispelMechanic(effCtx, rt, spell, effect)
 							}
 						}
 					}
 				}
-				// Spell::EffectTriggerSpell LAUNCH arm (SpellEffects.cpp:823, HandleLaunchPhase Spell.cpp:7687) on the pet path, mirroring the twin's once-per-cast leg: fires unless the per-target arm owns the effect (needs-caster plus a unit target on this effect). The LAUNCH arm never runs the 64-only special-cases switch, so this is a plain cast, and it is verdict-independent (the launch phase runs ahead of hit resolution) on the raw cast target, falling back to the caster like the twin's launchTarget; the 142 base-point patch above already landed on the local triggered copy.
-				if !(needsCaster && spellEffectProvidedTargetMask(effect)&targetFlagUnitMask != 0) {
-					launchTarget := target
-					if launchTarget.UnitGUID == 0 {
-						launchTarget.UnitGUID = motion.GUID
-					}
-					s.executePetSpellWithOptions(ctx, motion, triggered, 0, launchTarget, true)
-				}
-			}
-		}
-		if effect.Effect == spellEffectDispel {
-			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
-				s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[targetGUID])
-			}
-			if wire := petObjectWireLeg(effect); wire != 0 {
-				if rt := resolveReflectTarget(wire); rt != 0 && !immuneSet[wire] && !missedTarget(wire) {
-					s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[wire])
-				}
-			}
-			for _, casterGUID := range petCasterObjectTargets[i] {
-				if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
-					if rt := resolveReflectTarget(casterGUID); rt != 0 && !immuneSet[casterGUID] && !missedTarget(casterGUID) {
-						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[casterGUID])
-					}
-				}
-			}
-			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
-				// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405);
-				// the area legs run only when this dispel effect itself selects
-				// the area (effect-mask merge rule, Spell.cpp:866-897).
-				for _, areaHit := range areaHits {
-					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
-						continue
-					}
-					if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
-						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaHit.GUID])
-					}
-				}
-				for _, areaCreatureGUID := range areaCreatureHits {
-					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
-						continue
-					}
-					if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
-						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaCreatureGUID])
-					}
-				}
-			}
-			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
-				for _, areaHit := range areaAllyHits {
-					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
-						if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
-							s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaHit.GUID])
-						}
-					}
-				}
-				for _, areaCreatureGUID := range areaAllyCreatureHits {
-					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
-						if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
-							s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaCreatureGUID])
+				if chainJumps := chainHitsForEffect(i); len(chainJumps) > 0 {
+					for _, chainGUID := range chainJumps {
+						if rt := resolveReflectTarget(chainGUID); rt != 0 && !immuneSet[chainGUID] && !missedTarget(chainGUID) {
+							s.handleEffectDispelMechanic(effCtx, rt, spell, effect)
 						}
 					}
 				}
 			}
-			if chainJumps := chainHitsForEffect(i); len(chainJumps) > 0 {
-				for _, chainGUID := range chainJumps {
-					if rt := resolveReflectTarget(chainGUID); rt != 0 && !immuneSet[chainGUID] && !missedTarget(chainGUID) {
-						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[chainGUID])
+			if effect.Effect == spellEffectInstaKill {
+				// Spell::EffectInstaKill (SpellEffects.cpp:274-296) for a pet
+				// caster: the HIT_TARGET arm, previously missing on this path
+				// entirely — an effect-1 pet spell killed nothing. C++ runs it
+				// per hit target (DoProcessTargetContainer, Spell.cpp:3555-
+				// 3566), so the wire victim plus the area-selected victims
+				// all take it, unlike the heal/dispel/aura arms above which
+				// only model the wire target. The shared creature-caster twin
+				// (boss_ai.go) carries the gates, the INSTAKILLLOG fan-out
+				// and the kill funnels; its reflected map retargets landed
+				// reflects to the pet (Spell.cpp:2350) and skips bounced
+				// and evaded victims, matching the damage leg's
+				// resolveReflectTarget. Runs after the damage leg above —
+				// the pet path's grouped-effect approximation, like the
+				// other arms in this loop.
+				reflected := make(map[uint64]uint8, len(reflectTrips))
+				for _, trip := range reflectTrips {
+					reflected[trip.victimGUID] = trip.status
+				}
+				evaded := make(map[uint64]bool, len(evadedSet))
+				for guid := range evadedSet {
+					evaded[guid] = true
+				}
+				// Spell::SelectImplicitAreaTargets effect-mask rule
+				// (Spell.cpp:866-897): the insta-kill applies to the wire target
+				// plus only the area targets this effect itself selects —
+				// the old hitTargets pass killed every area target of every
+				// other effect too, including the new ally area hits.
+				instaTargets := []uint64{targetGUID}
+				if wire := petObjectWireLeg(effect); wire != 0 {
+					instaTargets = append(instaTargets, wire)
+				}
+				for _, casterGUID := range petCasterObjectTargets[i] {
+					if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
+						instaTargets = append(instaTargets, casterGUID)
 					}
 				}
-			}
-		}
-		if effect.Effect == spellEffectDispelMechanic {
-			// Spell::EffectDispelMechanic (SpellEffects.cpp:4733-4756):
-			// the pet path's dispel arm handled only effect 38 — 108
-			// fell to the unhandled arm and did nothing, while C++
-			// dispatches it per unit target (SpellEffects.cpp:177) and the
-			// player path bridges it (spells.go case 108). Reflection
-			// maps the victim to the pet like the 38 arm above
-			// (Spell.cpp:2350, 7740-7743); a nulled victim skips it.
-			if rt := resolveReflectTarget(targetGUID); rt != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
-				s.handleEffectDispelMechanic(ctx, rt, spell, effect)
-			}
-			if wire := petObjectWireLeg(effect); wire != 0 {
-				if rt := resolveReflectTarget(wire); rt != 0 && !immuneSet[wire] && !missedTarget(wire) {
-					s.handleEffectDispelMechanic(ctx, rt, spell, effect)
-				}
-			}
-			for _, casterGUID := range petCasterObjectTargets[i] {
-				if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
-					if rt := resolveReflectTarget(casterGUID); rt != 0 && !immuneSet[casterGUID] && !missedTarget(casterGUID) {
-						s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+				if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
+					for _, areaHit := range areaHits {
+						if petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+							instaTargets = append(instaTargets, areaHit.GUID)
+						}
 					}
-				}
-			}
-			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
-				for _, areaHit := range areaHits {
-					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
-						continue
-					}
-					if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
-						s.handleEffectDispelMechanic(ctx, rt, spell, effect)
-					}
-				}
-				for _, areaCreatureGUID := range areaCreatureHits {
-					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
-						continue
-					}
-					if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
-						s.handleEffectDispelMechanic(ctx, rt, spell, effect)
-					}
-				}
-			}
-			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
-				for _, areaHit := range areaAllyHits {
-					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
-						if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
-							s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+					for _, areaCreatureGUID := range areaCreatureHits {
+						if petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+							instaTargets = append(instaTargets, areaCreatureGUID)
 						}
 					}
 				}
-				for _, areaCreatureGUID := range areaAllyCreatureHits {
-					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
-						if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
-							s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+				if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+					for _, areaHit := range areaAllyHits {
+						if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+							instaTargets = append(instaTargets, areaHit.GUID)
+						}
+					}
+					for _, areaCreatureGUID := range areaAllyCreatureHits {
+						if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+							instaTargets = append(instaTargets, areaCreatureGUID)
 						}
 					}
 				}
+				instaTargets = append(instaTargets, chainHitsForEffect(i)...)
+				s.server.creatureEffectInstaKill(effCtx, motion, spell.ID, instaTargets, reflected, evaded, immuneSet, petMissVerdicts)
 			}
-			if chainJumps := chainHitsForEffect(i); len(chainJumps) > 0 {
-				for _, chainGUID := range chainJumps {
-					if rt := resolveReflectTarget(chainGUID); rt != 0 && !immuneSet[chainGUID] && !missedTarget(chainGUID) {
-						s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+			if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
+				// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
+				// a target whose aura scales takes the aura from the
+				// rank-appropriate row — duration entry, basepoints and effect
+				// row all come from it, like hitInfo.AuraBasePoints.
+				auraSpell, auraEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, targetGUID)
+				durationMs := petAuraDuration(s.server, auraSpell, motion)
+				// OnObjectAreaTargetSelect gate (Spell.cpp:1227): when a hook
+				// rewrote this effect's target list, only the hook's targets
+				// take the aura — the area-ally fan-out below would otherwise
+				// buff the whole party (53434/24604 keep caster+owner only,
+				// spell_hunter.cpp:1505-1506). Nil when no hook fired, so the
+				// leg keeps its flat lists untouched.
+				var auraAllowed map[uint64]struct{}
+				if list, ok := petConePart.filtered[i]; ok {
+					auraAllowed = make(map[uint64]struct{}, len(list))
+					for _, guid := range list {
+						auraAllowed[guid] = struct{}{}
 					}
 				}
-			}
-		}
-		if effect.Effect == spellEffectInstaKill {
-			// Spell::EffectInstaKill (SpellEffects.cpp:274-296) for a pet
-			// caster: the HIT_TARGET arm, previously missing on this path
-			// entirely — an effect-1 pet spell killed nothing. C++ runs it
-			// per hit target (DoProcessTargetContainer, Spell.cpp:3555-
-			// 3566), so the wire victim plus the area-selected victims
-			// all take it, unlike the heal/dispel/aura arms above which
-			// only model the wire target. The shared creature-caster twin
-			// (boss_ai.go) carries the gates, the INSTAKILLLOG fan-out
-			// and the kill funnels; its reflected map retargets landed
-			// reflects to the pet (Spell.cpp:2350) and skips bounced
-			// and evaded victims, matching the damage leg's
-			// resolveReflectTarget. Runs after the damage leg above —
-			// the pet path's grouped-effect approximation, like the
-			// other arms in this loop.
-			reflected := make(map[uint64]uint8, len(reflectTrips))
-			for _, trip := range reflectTrips {
-				reflected[trip.victimGUID] = trip.status
-			}
-			evaded := make(map[uint64]bool, len(evadedSet))
-			for guid := range evadedSet {
-				evaded[guid] = true
-			}
-			// Spell::SelectImplicitAreaTargets effect-mask rule
-			// (Spell.cpp:866-897): the insta-kill applies to the wire target
-			// plus only the area targets this effect itself selects —
-			// the old hitTargets pass killed every area target of every
-			// other effect too, including the new ally area hits.
-			instaTargets := []uint64{targetGUID}
-			if wire := petObjectWireLeg(effect); wire != 0 {
-				instaTargets = append(instaTargets, wire)
-			}
-			for _, casterGUID := range petCasterObjectTargets[i] {
-				if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
-					instaTargets = append(instaTargets, casterGUID)
+				auraTargetKept := func(guid uint64) bool {
+					if auraAllowed == nil {
+						return true
+					}
+					_, ok := auraAllowed[guid]
+					return ok
 				}
-			}
-			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
-				for _, areaHit := range areaHits {
-					if petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
-						instaTargets = append(instaTargets, areaHit.GUID)
+				// Spell.cpp:2350 — a nulled reflect victim, an immune wire
+				// target, or a missed wire target takes no wire leg, but the
+				// gates are a condition, not a continue: each area target is
+				// its own TargetInfo (Spell.cpp:2405) and still takes the
+				// area legs below.
+				if victimGUID := resolveReflectTarget(targetGUID); victimGUID != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) && auraTargetKept(targetGUID) {
+					var victim combatTarget
+					if ct, ok := s.getCombatTarget(effCtx, victimGUID); ok {
+						victim = ct
+					}
+					amount := uint32(auraEffect.CalcValueForLevel(auraSpell, uint32(motion.Level)))
+					// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:505-518):
+					// the periodic done leg bakes at apply for unit auras.
+					amount = s.petPeriodicApplyDoneLegs(effCtx, motion, auraSpell, i, victimGUID, victim, amount)
+					if s.applyPetAura(effCtx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount) {
+						s.server.recordCreatureChannelHitTarget(motion, spell, victimGUID)
 					}
 				}
-				for _, areaCreatureGUID := range areaCreatureHits {
-					if petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
-						instaTargets = append(instaTargets, areaCreatureGUID)
+				if wire := petObjectWireLeg(effect); wire != 0 && auraTargetKept(wire) {
+					wSpell, wEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, wire)
+					wDurationMs := petAuraDuration(s.server, wSpell, motion)
+					if wVictimGUID := resolveReflectTarget(wire); wVictimGUID != 0 && !immuneSet[wire] && !missedTarget(wire) {
+						var wVictim combatTarget
+						if ct, ok := s.getCombatTarget(effCtx, wVictimGUID); ok {
+							wVictim = ct
+						}
+						wAmount := uint32(wEffect.CalcValueForLevel(wSpell, uint32(motion.Level)))
+						wAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, wSpell, i, wVictimGUID, wVictim, wAmount)
+						if s.applyPetAura(effCtx, motion, wSpell, wEffect, wVictimGUID, wDurationMs, wAmount) {
+							s.server.recordCreatureChannelHitTarget(motion, spell, wVictimGUID)
+						}
 					}
 				}
-			}
-			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
-				for _, areaHit := range areaAllyHits {
-					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
-						instaTargets = append(instaTargets, areaHit.GUID)
-					}
-				}
-				for _, areaCreatureGUID := range areaAllyCreatureHits {
-					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
-						instaTargets = append(instaTargets, areaCreatureGUID)
-					}
-				}
-			}
-			instaTargets = append(instaTargets, chainHitsForEffect(i)...)
-			s.server.creatureEffectInstaKill(ctx, motion, spell.ID, instaTargets, reflected, evaded, immuneSet, petMissVerdicts)
-		}
-		if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
-			// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
-			// a target whose aura scales takes the aura from the
-			// rank-appropriate row — duration entry, basepoints and effect
-			// row all come from it, like hitInfo.AuraBasePoints.
-			auraSpell, auraEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, targetGUID)
-			durationMs := petAuraDuration(s.server, auraSpell, motion)
-			// OnObjectAreaTargetSelect gate (Spell.cpp:1227): when a hook
-			// rewrote this effect's target list, only the hook's targets
-			// take the aura — the area-ally fan-out below would otherwise
-			// buff the whole party (53434/24604 keep caster+owner only,
-			// spell_hunter.cpp:1505-1506). Nil when no hook fired, so the
-			// leg keeps its flat lists untouched.
-			var auraAllowed map[uint64]struct{}
-			if list, ok := petConePart.filtered[i]; ok {
-				auraAllowed = make(map[uint64]struct{}, len(list))
-				for _, guid := range list {
-					auraAllowed[guid] = struct{}{}
-				}
-			}
-			auraTargetKept := func(guid uint64) bool {
-				if auraAllowed == nil {
-					return true
-				}
-				_, ok := auraAllowed[guid]
-				return ok
-			}
-			// Spell.cpp:2350 — a nulled reflect victim, an immune wire
-			// target, or a missed wire target takes no wire leg, but the
-			// gates are a condition, not a continue: each area target is
-			// its own TargetInfo (Spell.cpp:2405) and still takes the
-			// area legs below.
-			if victimGUID := resolveReflectTarget(targetGUID); victimGUID != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) && auraTargetKept(targetGUID) {
-				var victim combatTarget
-				if ct, ok := s.getCombatTarget(ctx, victimGUID); ok {
-					victim = ct
-				}
-				amount := uint32(auraEffect.CalcValueForLevel(auraSpell, uint32(motion.Level)))
-				// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:505-518):
-				// the periodic done leg bakes at apply for unit auras.
-				amount = s.petPeriodicApplyDoneLegs(ctx, motion, auraSpell, i, victimGUID, victim, amount)
-				if s.applyPetAura(ctx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount) {
-					s.server.recordCreatureChannelHitTarget(motion, spell, victimGUID)
-				}
-			}
-			if wire := petObjectWireLeg(effect); wire != 0 && auraTargetKept(wire) {
-				wSpell, wEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, wire)
-				wDurationMs := petAuraDuration(s.server, wSpell, motion)
-				if wVictimGUID := resolveReflectTarget(wire); wVictimGUID != 0 && !immuneSet[wire] && !missedTarget(wire) {
-					var wVictim combatTarget
-					if ct, ok := s.getCombatTarget(ctx, wVictimGUID); ok {
-						wVictim = ct
-					}
-					wAmount := uint32(wEffect.CalcValueForLevel(wSpell, uint32(motion.Level)))
-					wAmount = s.petPeriodicApplyDoneLegs(ctx, motion, wSpell, i, wVictimGUID, wVictim, wAmount)
-					if s.applyPetAura(ctx, motion, wSpell, wEffect, wVictimGUID, wDurationMs, wAmount) {
-						s.server.recordCreatureChannelHitTarget(motion, spell, wVictimGUID)
-					}
-				}
-			}
-			for _, casterGUID := range petCasterObjectTargets[i] {
-				if casterGUID == targetGUID || casterGUID == petObjectWireLeg(effect) || !auraTargetKept(casterGUID) {
-					continue
-				}
-				cSpell, cEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, casterGUID)
-				cDurationMs := petAuraDuration(s.server, cSpell, motion)
-				if cVictimGUID := resolveReflectTarget(casterGUID); cVictimGUID != 0 && !immuneSet[casterGUID] && !missedTarget(casterGUID) {
-					var cVictim combatTarget
-					if ct, ok := s.getCombatTarget(ctx, cVictimGUID); ok {
-						cVictim = ct
-					}
-					cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
-					cAmount = s.petPeriodicApplyDoneLegs(ctx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
-					if s.applyPetAura(ctx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount) {
-						s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
-					}
-				}
-			}
-			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (129, SharedDefines.h:940):
-			// an enemy area aura applies to every unit the area selection
-			// picked — the wire target above plus the extra area hits. The
-			// old raw 27 was SPELL_EFFECT_PERSISTENT_AREA_AURA, which C++
-			// routes through DynamicObject (no pet-path bridge), never
-			// per-target application.
-			// A plain ApplyAura effect with an area-enemy target selects the same area (Spell.cpp:1227).
-			if (effect.Effect == spellEffectApplyAreaAuraEnemy || effect.Effect == spellEffectApplyAura) && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
-				for _, areaHit := range areaHits {
-					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) || !auraTargetKept(areaHit.GUID) {
+				for _, casterGUID := range petCasterObjectTargets[i] {
+					if casterGUID == targetGUID || casterGUID == petObjectWireLeg(effect) || !auraTargetKept(casterGUID) {
 						continue
 					}
-					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
-					aDurationMs := petAuraDuration(s.server, aSpell, motion)
-					aVictimGUID := resolveReflectTarget(areaHit.GUID)
-					if aVictimGUID == 0 || immuneSet[areaHit.GUID] || missedTarget(areaHit.GUID) {
-						continue
-					}
-					var aVictim combatTarget
-					if ct, ok := s.getCombatTarget(ctx, aVictimGUID); ok {
-						aVictim = ct
-					}
-					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
-					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-					if s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
-						s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
-					}
-				}
-				// SelectImplicitAreaTargets (Spell.cpp:1227): the
-				// area-selected enemy creatures take the area aura
-				// too — applyPetAura is GUID-generic (creature
-				// targets land in the creature aura store), and the
-				// downrank map above already covers these GUIDs
-				// through hitTargets.
-				for _, areaCreatureGUID := range areaCreatureHits {
-					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) || !auraTargetKept(areaCreatureGUID) {
-						continue
-					}
-					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaCreatureGUID)
-					aDurationMs := petAuraDuration(s.server, aSpell, motion)
-					aVictimGUID := resolveReflectTarget(areaCreatureGUID)
-					if aVictimGUID == 0 || immuneSet[areaCreatureGUID] || missedTarget(areaCreatureGUID) {
-						continue
-					}
-					var aVictim combatTarget
-					if ct, ok := s.getCombatTarget(ctx, aVictimGUID); ok {
-						aVictim = ct
-					}
-					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
-					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-					if s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
-						s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
-					}
-				}
-			}
-			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
-				applyAllyAura := func(origGUID uint64) {
-					if !auraTargetKept(origGUID) {
-						return
-					}
-					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, origGUID)
-					aDurationMs := petAuraDuration(s.server, aSpell, motion)
-					aVictimGUID := resolveReflectTarget(origGUID)
-					if aVictimGUID == 0 || immuneSet[origGUID] || missedTarget(origGUID) {
-						return
-					}
-					var aVictim combatTarget
-					if ct, ok := s.getCombatTarget(ctx, aVictimGUID); ok {
-						aVictim = ct
-					}
-					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
-					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-					if s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
-						s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
-					}
-				}
-				for _, areaHit := range areaAllyHits {
-					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
-						applyAllyAura(areaHit.GUID)
-					}
-				}
-				for _, areaCreatureGUID := range areaAllyCreatureHits {
-					if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
-						applyAllyAura(areaCreatureGUID)
-					}
-				}
-			}
-			if chainJumps := chainHitsForEffect(i); len(chainJumps) > 0 {
-				for _, chainGUID := range chainJumps {
-					cSpell, cEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, chainGUID)
+					cSpell, cEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, casterGUID)
 					cDurationMs := petAuraDuration(s.server, cSpell, motion)
-					cVictimGUID := resolveReflectTarget(chainGUID)
-					if cVictimGUID == 0 || immuneSet[chainGUID] || missedTarget(chainGUID) || !auraTargetKept(chainGUID) {
-						continue
+					if cVictimGUID := resolveReflectTarget(casterGUID); cVictimGUID != 0 && !immuneSet[casterGUID] && !missedTarget(casterGUID) {
+						var cVictim combatTarget
+						if ct, ok := s.getCombatTarget(effCtx, cVictimGUID); ok {
+							cVictim = ct
+						}
+						cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
+						cAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
+						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount) {
+							s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
+						}
 					}
-					var cVictim combatTarget
-					if ct, ok := s.getCombatTarget(ctx, cVictimGUID); ok {
-						cVictim = ct
+				}
+				// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (129, SharedDefines.h:940):
+				// an enemy area aura applies to every unit the area selection
+				// picked — the wire target above plus the extra area hits. The
+				// old raw 27 was SPELL_EFFECT_PERSISTENT_AREA_AURA, which C++
+				// routes through DynamicObject (no pet-path bridge), never
+				// per-target application.
+				// A plain ApplyAura effect with an area-enemy target selects the same area (Spell.cpp:1227).
+				if (effect.Effect == spellEffectApplyAreaAuraEnemy || effect.Effect == spellEffectApplyAura) && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
+					for _, areaHit := range areaHits {
+						if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) || !auraTargetKept(areaHit.GUID) {
+							continue
+						}
+						aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
+						aDurationMs := petAuraDuration(s.server, aSpell, motion)
+						aVictimGUID := resolveReflectTarget(areaHit.GUID)
+						if aVictimGUID == 0 || immuneSet[areaHit.GUID] || missedTarget(areaHit.GUID) {
+							continue
+						}
+						var aVictim combatTarget
+						if ct, ok := s.getCombatTarget(effCtx, aVictimGUID); ok {
+							aVictim = ct
+						}
+						aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
+						aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
+						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
+							s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
+						}
 					}
-					cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
-					cAmount = s.petPeriodicApplyDoneLegs(ctx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
-					if s.applyPetAura(ctx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount) {
-						s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
+					// SelectImplicitAreaTargets (Spell.cpp:1227): the
+					// area-selected enemy creatures take the area aura
+					// too — applyPetAura is GUID-generic (creature
+					// targets land in the creature aura store), and the
+					// downrank map above already covers these GUIDs
+					// through hitTargets.
+					for _, areaCreatureGUID := range areaCreatureHits {
+						if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) || !auraTargetKept(areaCreatureGUID) {
+							continue
+						}
+						aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaCreatureGUID)
+						aDurationMs := petAuraDuration(s.server, aSpell, motion)
+						aVictimGUID := resolveReflectTarget(areaCreatureGUID)
+						if aVictimGUID == 0 || immuneSet[areaCreatureGUID] || missedTarget(areaCreatureGUID) {
+							continue
+						}
+						var aVictim combatTarget
+						if ct, ok := s.getCombatTarget(effCtx, aVictimGUID); ok {
+							aVictim = ct
+						}
+						aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
+						aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
+						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
+							s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
+						}
+					}
+				}
+				if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
+					applyAllyAura := func(origGUID uint64) {
+						if !auraTargetKept(origGUID) {
+							return
+						}
+						aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, origGUID)
+						aDurationMs := petAuraDuration(s.server, aSpell, motion)
+						aVictimGUID := resolveReflectTarget(origGUID)
+						if aVictimGUID == 0 || immuneSet[origGUID] || missedTarget(origGUID) {
+							return
+						}
+						var aVictim combatTarget
+						if ct, ok := s.getCombatTarget(effCtx, aVictimGUID); ok {
+							aVictim = ct
+						}
+						aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
+						aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
+						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
+							s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
+						}
+					}
+					for _, areaHit := range areaAllyHits {
+						if areaAllyChecks[areaHit.GUID]&wanted != 0 {
+							applyAllyAura(areaHit.GUID)
+						}
+					}
+					for _, areaCreatureGUID := range areaAllyCreatureHits {
+						if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
+							applyAllyAura(areaCreatureGUID)
+						}
+					}
+				}
+				if chainJumps := chainHitsForEffect(i); len(chainJumps) > 0 {
+					for _, chainGUID := range chainJumps {
+						cSpell, cEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, chainGUID)
+						cDurationMs := petAuraDuration(s.server, cSpell, motion)
+						cVictimGUID := resolveReflectTarget(chainGUID)
+						if cVictimGUID == 0 || immuneSet[chainGUID] || missedTarget(chainGUID) || !auraTargetKept(chainGUID) {
+							continue
+						}
+						var cVictim combatTarget
+						if ct, ok := s.getCombatTarget(effCtx, cVictimGUID); ok {
+							cVictim = ct
+						}
+						cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
+						cAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
+						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount) {
+							s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
+						}
 					}
 				}
 			}
 		}
+	}
+	// Spell::_cast (Spell.cpp:3473-3500) delayed branch, pet-path twin of
+	// finishSpellCast: Speed > 0 and not channeled defers the HIT phase to
+	// the minimum target TimeDelay (GetDelayMoment, Spell.cpp:2167-2168); a
+	// reflected primary takes the return trip (outbound + half,
+	// Spell.cpp:2184). The arrival tick revalidates the hit list
+	// (handle_delayed, Spell.cpp:3645-3663) and drops the cast when the pet
+	// despawned mid-flight (despawned pet's event dies — the
+	// ProcReflectDelayed arm's precedent above).
+	if spell.Speed > 0 && !isChanneledSpell(spell) {
+		timeDelayMs := -1
+		for _, ht := range hitTargets {
+			if tdm := s.petSpellTargetTimeDelayMs(ctx, spell, motion, ht); timeDelayMs < 0 || tdm < timeDelayMs {
+				timeDelayMs = tdm
+			}
+		}
+		if timeDelayMs < 0 {
+			timeDelayMs = s.petSpellTargetTimeDelayMs(ctx, spell, motion, targetGUID)
+		}
+		if reflectedSet[targetGUID] {
+			travelMs := s.petSpellTargetTimeDelayMs(ctx, spell, motion, targetGUID)
+			timeDelayMs = travelMs + (travelMs >> 1)
+		}
+		if timeDelayMs > 0 {
+			launchMs := gameTimeMS() - uint32(timeDelayMs)
+			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
+				if s.server == nil || s.server.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID) == nil {
+					return
+				}
+				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, false, 0)
+				runPetEffects(context.Background())
+			})
+		} else {
+			runPetEffects(ctx)
+		}
+	} else {
+		runPetEffects(ctx)
 	}
 	if !triggered {
 		now := time.Now()
