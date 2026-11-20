@@ -6588,12 +6588,32 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// row all come from it, like hitInfo.AuraBasePoints.
 			auraSpell, auraEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, targetGUID)
 			durationMs := petAuraDuration(s.server, auraSpell, motion)
+			// OnObjectAreaTargetSelect gate (Spell.cpp:1227): when a hook
+			// rewrote this effect's target list, only the hook's targets
+			// take the aura — the area-ally fan-out below would otherwise
+			// buff the whole party (53434/24604 keep caster+owner only,
+			// spell_hunter.cpp:1505-1506). Nil when no hook fired, so the
+			// leg keeps its flat lists untouched.
+			var auraAllowed map[uint64]struct{}
+			if list, ok := petConePart.filtered[i]; ok {
+				auraAllowed = make(map[uint64]struct{}, len(list))
+				for _, guid := range list {
+					auraAllowed[guid] = struct{}{}
+				}
+			}
+			auraTargetKept := func(guid uint64) bool {
+				if auraAllowed == nil {
+					return true
+				}
+				_, ok := auraAllowed[guid]
+				return ok
+			}
 			// Spell.cpp:2350 — a nulled reflect victim, an immune wire
 			// target, or a missed wire target takes no wire leg, but the
 			// gates are a condition, not a continue: each area target is
 			// its own TargetInfo (Spell.cpp:2405) and still takes the
 			// area legs below.
-			if victimGUID := resolveReflectTarget(targetGUID); victimGUID != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) {
+			if victimGUID := resolveReflectTarget(targetGUID); victimGUID != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) && auraTargetKept(targetGUID) {
 				var victim combatTarget
 				if ct, ok := s.getCombatTarget(ctx, victimGUID); ok {
 					victim = ct
@@ -6606,7 +6626,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					s.server.recordCreatureChannelHitTarget(motion, spell, victimGUID)
 				}
 			}
-			if wire := petObjectWireLeg(effect); wire != 0 {
+			if wire := petObjectWireLeg(effect); wire != 0 && auraTargetKept(wire) {
 				wSpell, wEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, wire)
 				wDurationMs := petAuraDuration(s.server, wSpell, motion)
 				if wVictimGUID := resolveReflectTarget(wire); wVictimGUID != 0 && !immuneSet[wire] && !missedTarget(wire) {
@@ -6622,7 +6642,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				}
 			}
 			for _, casterGUID := range petCasterObjectTargets[i] {
-				if casterGUID == targetGUID || casterGUID == petObjectWireLeg(effect) {
+				if casterGUID == targetGUID || casterGUID == petObjectWireLeg(effect) || !auraTargetKept(casterGUID) {
 					continue
 				}
 				cSpell, cEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, casterGUID)
@@ -6648,7 +6668,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// A plain ApplyAura effect with an area-enemy target selects the same area (Spell.cpp:1227).
 			if (effect.Effect == spellEffectApplyAreaAuraEnemy || effect.Effect == spellEffectApplyAura) && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
 				for _, areaHit := range areaHits {
-					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) || !auraTargetKept(areaHit.GUID) {
 						continue
 					}
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
@@ -6674,7 +6694,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// downrank map above already covers these GUIDs
 				// through hitTargets.
 				for _, areaCreatureGUID := range areaCreatureHits {
-					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) || !auraTargetKept(areaCreatureGUID) {
 						continue
 					}
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaCreatureGUID)
@@ -6696,6 +6716,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
 				applyAllyAura := func(origGUID uint64) {
+					if !auraTargetKept(origGUID) {
+						return
+					}
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, origGUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aVictimGUID := resolveReflectTarget(origGUID)
@@ -6728,7 +6751,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					cSpell, cEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, chainGUID)
 					cDurationMs := petAuraDuration(s.server, cSpell, motion)
 					cVictimGUID := resolveReflectTarget(chainGUID)
-					if cVictimGUID == 0 || immuneSet[chainGUID] || missedTarget(chainGUID) {
+					if cVictimGUID == 0 || immuneSet[chainGUID] || missedTarget(chainGUID) || !auraTargetKept(chainGUID) {
 						continue
 					}
 					var cVictim combatTarget

@@ -691,7 +691,7 @@ const (
 // reach the launch-target loop, the ev5 loop and the
 // damage/heal/aura arms via playerSpellTargetSelectFiltered, and
 // the other arms still iterate their own derivations). The
-// triggered funnel runs no target-select fire yet.
+// The triggered funnel fires it too (spells.go:27682).
 // GO-area legs (51/52/108) never fire it — the list holds units
 // only. The deferred-fire call re-runs the cast function, so a
 // cast-time cast fires it once, at fire time, like OnCast.
