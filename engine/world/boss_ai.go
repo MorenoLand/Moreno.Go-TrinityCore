@@ -3681,6 +3681,22 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			s.creatureEffectRedirectThreat(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 		}
 	}
+	// Spell::EffectAddExtraAttacks (SpellEffects.cpp:4300-4314) for a
+	// creature caster: the HIT_TARGET arm, once per hit target per
+	// extra-attacks effect, grouped with the other effect-grouped arms
+	// above (C++ runs effects in index order; documented approximation).
+	// The bank lands on the effect's unit target — the caster for the
+	// known caster-targeted spells — the creature twin of the session
+	// arm in finishSpellCast (spells.go:16552). Gated on spellKnown
+	// like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect != spellEffectAddExtraAttacks {
+				continue
+			}
+			s.creatureEffectAddExtraAttacks(ctx, m, spellInfo, spellInfo.Effects[i], i, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		}
+	}
 	// Spell::EffectDummy (SpellEffects.cpp:792) for a creature caster:
 	// the HIT_TARGET arm, once per hit target per dummy effect, grouped
 	// with the other effect-grouped arms above (C++ runs effects in
@@ -4845,6 +4861,118 @@ func (s *Server) creatureEffectRedirectThreat(ctx context.Context, m *creatureMo
 			guid = m.GUID
 		}
 		tm.RegisterRedirectThreat(spell.ID, guid, uint32(damage))
+	}
+}
+
+// grantCreatureExtraAttacks mirrors the counter arm of
+// Spell::EffectAddExtraAttacks (SpellEffects.cpp:4301-4314): a live
+// target with no pending extra attacks banks the effect's damage as
+// extra base-attack swings. It reports whether the counter was set —
+// C++ skips the log execute when attacks are already pending. The
+// creature twin of session.grantExtraAttacks (spells.go:20970).
+func (s *Server) grantCreatureExtraAttacks(m *creatureMotion, count uint32) bool {
+	if s == nil || m == nil || m.Health == 0 || count == 0 {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if m.extraAttacks != 0 {
+		return false
+	}
+	m.extraAttacks = count
+	return true
+}
+
+// creatureExtraAttacks reads the banked counter under motionMu — the
+// proc-gate twin of the session read (procs.go:3721), since
+// checkCreatureEffectProc evaluates the aura target's bank.
+func (s *Server) creatureExtraAttacks(m *creatureMotion) uint32 {
+	if s == nil || m == nil {
+		return 0
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	return m.extraAttacks
+}
+
+// sendCreatureExtraAttacksLog mirrors Spell::ExecuteLogEffectExtraAttacks
+// (Spell.cpp:4566-4571) as flushed by SendLogExecute (Spell.cpp:4523-4552):
+// SMSG_SPELLLOGEXECUTE carrying the effect id, the InitEffectExecuteData
+// target counter, the target, and the banked attack count. The creature
+// twin of session.sendExtraAttacksLog (spells.go:20982) — the log rides
+// SendMessageToSet on the caster, the caster's visibility set; the
+// creature has no session leg (the victim is reached through the set).
+func (s *Server) sendCreatureExtraAttacksLog(m *creatureMotion, spellID uint32, effectIndex int, targetGUID uint64, count uint32) {
+	if s == nil || m == nil {
+		return
+	}
+	log := protocol.NewBuffer(32)
+	log.WritePackedGUID(m.GUID)
+	log.WriteU32(spellID)
+	log.WriteU32(1)
+	log.WriteU32(spellEffectAddExtraAttacks)
+	log.WriteU32(1)
+	log.WritePackedGUID(targetGUID)
+	log.WriteU32(count)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
+	_ = effectIndex
+}
+
+// creatureEffectAddExtraAttacks mirrors Spell::EffectAddExtraAttacks
+// (SpellEffects.cpp:4300-4314) for a creature caster: the HIT_TARGET arm
+// banks the effect's CalculateDamage value as pending extra base-attack
+// swings on the effect's unit target — the caster itself for the known
+// caster-targeted spells (3391 Thrash, TARGET_UNIT_CASTER), another
+// creature motion, or a player session — when that target is alive and
+// has no pending bank (the m_extraAttacks early return). The filter
+// mirrors the redirect leg: only the hit verdicts a HIT_TARGET arm never
+// sees (evaded / immune / missed) are skipped, and a landed reflect
+// retargets onto the caster. DORMANT until Spell.dbc ships a
+// creature-cast extra-attacks spell: the only effect-19 spell in this
+// tree is 3391 Thrash (druid, player-cast), and no effect-19 row exists
+// in the seed DBC beyond it. The finish-phase spend (Spell.cpp:3753-3761)
+// is NOT wired here: it needs a reusable creature melee-swing executor
+// and the wild-creature swing is still inline in stepCreatureMotion
+// (creaturemotion.go:8777-9400) — the next unit extracts it and hooks the
+// spend ahead of the PHASE_CAST proc leg at the tail of
+// castCreatureSpellInternalWithBasePoints.
+func (s *Server) creatureEffectAddExtraAttacks(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, effectIndex int, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+	if damage <= 0 {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		// C++ banks on the unit target, whoever it is; the caster-targeted
+		// shape is the common case, the other branches are the same arm.
+		banked := false
+		switch {
+		case guid == m.GUID:
+			banked = s.grantCreatureExtraAttacks(m, uint32(damage))
+		case guid>>48 == 0xF130:
+			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				banked = s.grantCreatureExtraAttacks(tm, uint32(damage))
+			}
+		default:
+			if ts := s.findSessionByGUID(guid); ts != nil {
+				banked = ts.grantExtraAttacks(uint32(damage))
+			}
+		}
+		if banked {
+			s.sendCreatureExtraAttacksLog(m, spell.ID, effectIndex, guid, uint32(damage))
+		}
 	}
 }
 
@@ -11132,7 +11260,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 			if aura.EffectMask&(1<<uint(i)) == 0 {
 				continue
 			}
-			if !s.checkCreatureEffectProc(aura, eff, ev) {
+			if !s.checkCreatureEffectProc(m, aura, eff, ev) {
 				continue
 			}
 			eligible = append(eligible, i)

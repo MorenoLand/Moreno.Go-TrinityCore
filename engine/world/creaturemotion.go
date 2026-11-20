@@ -455,6 +455,7 @@ type creatureMotion struct {
 	GCDCooldowns map[uint32]time.Time
 
 	ThreatMgr           *ThreatManager
+	extraAttacks        uint32 // Unit::m_extraAttacks (Unit.h:802) — banked SPELL_EFFECT_ADD_EXTRA_ATTACKS swings, the creature twin of session.extraAttacks
 	BossAI              BossAI
 	ScriptName          string
 	Name                string

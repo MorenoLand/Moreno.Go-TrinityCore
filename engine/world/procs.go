@@ -3638,7 +3638,8 @@ func (s *session) procRangedVictimAuraTriggers(ctx context.Context, attackerGUID
 // checkEffectProcGates is the shared body of AuraEffect::CheckEffectProc
 // (SpellAuraEffects.cpp:835-1043) behind the session and creature twins.
 // extraAttacks is the aura target's banked extra-attack counter (player
-// sessions bank it; creatures never do, so the creature path passes 0).
+// sessions bank it; creatures bank it on creatureMotion.extraAttacks via
+// creatureEffectAddExtraAttacks).
 func checkEffectProcGates(srv *Server, extraAttacks uint32, aura *activeAura, eff *wotlk.SpellEffect, ev procEventInfo) bool {
 	if aura == nil || eff == nil {
 		return false
@@ -3699,8 +3700,8 @@ func checkEffectProcGates(srv *Server, extraAttacks uint32, aura *activeAura, ef
 		// don't proc extra attacks while the aura target is already
 		// processing an extra-attack spell (Unit::m_extraAttacks non-zero).
 		// The session loop evaluates the session player's own auras, so it
-		// passes the player's banked counter; the creature path passes 0 —
-		// creatures never bank extra swings, matching a zero bank.
+		// passes the player's banked counter; the creature loop passes the
+		// motion's bank the same way.
 		if eff.TriggerSpell != 0 && extraAttacks != 0 && srv != nil && srv.Data != nil {
 			if trig, found, err := srv.Data.Spell(eff.TriggerSpell); err == nil && found &&
 				spellHasEffect(trig, spellEffectAddExtraAttacks) {
@@ -3726,10 +3727,11 @@ func (s *session) checkEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev p
 
 // checkCreatureEffectProc is the creature-proc twin of
 // session.checkEffectProc (AuraEffect::CheckEffectProc,
-// SpellAuraEffects.cpp:835-1043): the shared gates with a zero
-// extra-attack bank, since the Go creature path has no extra-swing model.
-func (s *Server) checkCreatureEffectProc(aura *activeAura, eff *wotlk.SpellEffect, ev procEventInfo) bool {
-	return checkEffectProcGates(s, 0, aura, eff, ev)
+// SpellAuraEffects.cpp:835-1043): the shared gates with the aura
+// target's banked extra-attack counter — the loop iterates auras on m,
+// so the target is m and the bank reads through creatureExtraAttacks.
+func (s *Server) checkCreatureEffectProc(m *creatureMotion, aura *activeAura, eff *wotlk.SpellEffect, ev procEventInfo) bool {
+	return checkEffectProcGates(s, s.creatureExtraAttacks(m), aura, eff, ev)
 }
 
 // procAuraTriggerLoop runs one aura-proc pass over the player's active auras:

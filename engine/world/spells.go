@@ -16554,8 +16554,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// banks the effect's damage as pending extra swings on the
 				// effect's unit target when none are pending. The known
 				// extra-attack spells resolve that target to the caster
-				// (TARGET_UNIT_CASTER), and Go's player-centric combat models
-				// the counter on the caster session only.
+				// (TARGET_UNIT_CASTER); the creature-caster twin is
+				// creatureEffectAddExtraAttacks (boss_ai.go), which banks
+				// on the unit target instead of the caster session only.
 				amount := uint32(eff.CalcValueForLevel(spell, casterLevel))
 				// Per-effect target list (Spell.cpp:758-779), same switch as
 				// the heal arms. C++ sets m_extraAttacks on any unitTarget
