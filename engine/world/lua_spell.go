@@ -46,6 +46,7 @@ type spellObjectParams struct {
 	action         *spellScriptAction
 	hitDamage      *spellHitDamageState
 	launch         *spellLaunchDamageState
+	prevent        *spellEffectPreventState
 }
 
 // spellHitPhase identifies which SpellScript hook a spell object's
@@ -453,14 +454,43 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 		}
 		return []any{s.server.serverSpellMaxTicks(sp)}, nil
 	}
+	// PreventHitDefaultEffect(effectIndex) is SpellScript::
+	// PreventHitDefaultEffect (SpellScript.cpp): the default effect
+	// handler for that effect is skipped for this cast. The write
+	// lands in the per-cast veto record the caller threaded in (nil
+	// outside the ev4/ev5 fires: a no-op there, matching C++'s
+	// IsInEffectHook gate). The creature-path twin lives on the
+	// second builder below.
+	methods["PreventHitDefaultEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		index, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		p.prevent.preventDefault(int(index))
+		return nil, nil
+	}
+	// PreventHitEffect(effectIndex) is SpellScript::PreventHitEffect
+	// (SpellScript.cpp): the effect handler is skipped for the hit
+	// target. Go's default arms are grouped per effect, so the veto
+	// collapses to the whole effect (see spellEffectPreventState);
+	// faithful when the cast has one hit target per effect.
+	methods["PreventHitEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		index, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		p.prevent.preventHit(int(index))
+		return nil, nil
+	}
 	attachSpellHitDamageMethods(methods, p.hitDamage)
 	return &scripting.Object{Type: "Spell", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
 
 // spellEffectPreventState is the per-cast record of SpellScript
 // PreventHitDefaultEffect / PreventHitEffect calls (SpellScript.cpp)
-// for one creature-cast spell. The ev4/ev5 hook fires run before the
-// default effect arms in castCreatureSpellInternalWithBasePoints, so a
+// for one cast. The ev4/ev5 hook fires run before the default effect
+// arms in castCreatureSpellInternalWithBasePoints (creature path) and
+// the applyEffects loop in finishSpellCast (player path), so a
 // handler's prevention is recorded here and the arms consult it. Both
 // calls collapse to a per-effect veto: Go's default arms are grouped
 // per effect, not per (effect, target), so a PreventHitEffect veto for
@@ -1008,9 +1038,9 @@ func (s *Server) fireSpellAfterHit(ctx context.Context, spellID uint32, spellObj
 // fireSpellEffectHit dispatches the RegisterSpellEvent OnEffectHit hook
 // for one effect index (SpellEventOnEffectHit, args (event, spell,
 // effectIndex)). A handler's PreventHitDefaultEffect call lands in the
-// per-cast veto record the creature path threads (lua_spell.go) and is
-// consulted by the default arms below; the player and funnel paths
-// thread no prevent record, so the veto is a no-op there.
+// per-cast veto record the creature and player paths thread
+// (lua_spell.go) and is consulted by the default arms below; the
+// funnel path threads no prevent record, so the veto is a no-op there.
 func (s *Server) fireSpellEffectHit(ctx context.Context, spellID uint32, spellObj *scripting.Object, effectIndex int) {
 	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
 		return
@@ -1022,8 +1052,9 @@ func (s *Server) fireSpellEffectHit(ctx context.Context, spellID uint32, spellOb
 // OnEffectHitTarget hook for one (effect, hit target) pair
 // (SpellEventOnEffectHitTarget, args (event, spell, hitTarget,
 // effectIndex)). Like fireSpellEffectHit: a handler's
-// PreventHitDefaultEffect call lands in the per-cast veto record on
-// the creature path and is consulted by the default arms below.
+// PreventHitDefaultEffect call lands in the per-cast veto record the
+// creature and player paths thread, and is consulted by the default
+// arms below.
 func (s *Server) fireSpellEffectHitTarget(ctx context.Context, spellID uint32, spellObj *scripting.Object, hitTarget any, effectIndex int) {
 	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
 		return

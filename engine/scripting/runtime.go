@@ -654,8 +654,9 @@ const (
 // modeled on the creature path: the ev4/ev5 spell object records the
 // veto in the per-cast spellEffectPreventState (lua_spell.go), which
 // the TriggerSpell, ForceCast, TriggerMissile, ScriptEffect and
-// ApplyAura arms consult before running; the player and funnel paths
-// thread no prevent record, so a player-cast
+// ApplyAura arms consult before running; the player path threads the
+// record through finishSpellCast, the funnel path threads no prevent
+// record, so a funnel-cast
 // PreventHitDefaultEffect leg ports as hook-only, and for
 // SCRIPT_EFFECT legs the Go default is a per-spell no-op unless a
 // case exists in creatureEffectScriptEffect / handleEffectScriptEffect.

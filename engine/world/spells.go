@@ -10293,13 +10293,13 @@ func (s *session) applySchoolDMGFamilyArms(effCtx context.Context, spell wotlk.S
 // the C++ SetHitDamage position (Spell.cpp:2377-2380); the twins are
 // notification-only. Returns the spell object for the AfterHit block,
 // which reuses it (Spell.cpp:2659).
-func (s *session) fireSpellScriptPreprocessTwins(ctx context.Context, spell wotlk.Spell, spellID uint32, castTimeMs int32, target protocol.SpellTargetData, castItemGUID uint64, hitTargets []uint64, missStatus []protocol.SpellMissStatus, hitDamage *spellHitDamageState) *scripting.Object {
+func (s *session) fireSpellScriptPreprocessTwins(ctx context.Context, spell wotlk.Spell, spellID uint32, castTimeMs int32, target protocol.SpellTargetData, castItemGUID uint64, hitTargets []uint64, missStatus []protocol.SpellMissStatus, hitDamage *spellHitDamageState, prevent *spellEffectPreventState) *scripting.Object {
 	// SpellScript BeforeHit (Spell.cpp:2357, CallScriptBeforeHitHandlers in
 	// Spell::TargetInfo::PreprocessTarget) fires once per unit hit target,
 	// before OnHit, miss-inclusive — with the unit (not nil) on a miss,
 	// since PreprocessTarget calls it before nulling _spellHitTarget. The
 	// missInfo is the C++ SpellMissInfo number.
-	spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0, hitDamage: hitDamage})
+	spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0, hitDamage: hitDamage, prevent: prevent})
 	for _, effectTarget := range hitTargets {
 		if effectTarget == 0 {
 			continue
@@ -14463,7 +14463,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// the target container (:3601). The channel starts first (above).
 		startChannelIfChanneled()
 		s.fireSpellScriptEffectHitNoTarget(ctx, spell, spellID, castTimeMs, target, castItemGUID)
-		s.fireSpellScriptPreprocessTwins(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}})
+		s.fireSpellScriptPreprocessTwins(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}, nil)
 		fireLaunchMissNodmgProcs(ctx)
 		return
 	}
@@ -14487,6 +14487,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// inside applyEffects. Declared here so the closure captures it;
 	// the delayed branch's arrival closure reads the same record.
 	launch := &spellLaunchDamageState{}
+	// spellEffectPreventState for this cast: the ev4/ev5 hook fires
+	// below record PreventHitDefaultEffect / PreventHitEffect calls
+	// here, and the ACTIVATE_OBJECT arm consults it before running
+	// (the creature-path twin at boss_ai.go:1814). Declared here so
+	// the applyEffects closure captures it; the delayed branch's
+	// arrival closure reads the same record.
+	prevent := &spellEffectPreventState{}
 	applyEffects := func(effCtx context.Context) {
 		// Spell::CalculateDamage (Spell.cpp:6456) -> WorldObject::CalculateSpellDamage
 		// (Object.cpp:2271) -> SpellEffectInfo::CalcValue (SpellInfo.cpp:402): the
@@ -14669,7 +14676,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// precedes the twins: the HIT-mode loop (:3722-3730) runs before
 			// the target container (:3601).
 			s.fireSpellScriptEffectHitNoTarget(effCtx, spell, spellID, castTimeMs, target, castItemGUID)
-			s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}})
+			s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}, nil)
 			fireLaunchMissNodmgProcs(effCtx)
 			return
 		}
@@ -14850,7 +14857,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// effect index. Placed ahead of the effects loop below, matching
 		// C++ order (the HIT phase precedes the target loop).
 		{
-			effectSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
+			effectSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0, prevent: prevent})
 			for effectIndex, eff := range spell.Effects {
 				if eff.Effect == 0 {
 					continue
@@ -14862,7 +14869,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// BeforeHit/OnHit twins fire here, ahead of the damage arms
 		// (fireSpellScriptPreprocessTwins above; moved 2026-11-09, the
 		// creature-caster twin moved the same day in boss_ai.go).
-		spellObj := s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, hitDamage)
+		spellObj := s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, hitDamage, prevent)
 		// SpellScript OnEffectHitTarget (Spell.cpp:2909,
 		// CallScriptEffectHandlers in SPELL_EFFECT_HANDLE_HIT_TARGET mode
 		// from Spell::DoSpellEffectHit, called per (effect, unit target)
@@ -16652,19 +16659,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						missileTargets = append(missileTargets, guid)
 					}
 				}
-				// An empty filtered list must not fall into the helper's empty-list caster arm when the cast had GO-only picks.
-				if len(missileList) == 0 || len(missileTargets) > 0 {
-					s.runTriggerMissileEffect(ctx, spell, eff, missileTargets)
-				}
-				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
-				// HIT_TARGET arm fires per reflected TargetInfo on the
-				// caster, gated by the same NeedsToBeTriggeredByCaster leg
-				// inside runTriggerMissileEffect. The single-element list
-				// keeps the HIT_TARGET arm (the empty-list HIT arm must not
-				// fire per trip). Triggered casts ride the triggered funnel,
-				// never this dispatch, so no trip recursion.
-				for range areaEnemyTrips(eff, reflectedAoETrips) {
-					s.runTriggerMissileEffect(ctx, spell, eff, []uint64{s.playerGUID})
+					// SpellScript::PreventHitEffect (SpellScript.cpp) skips
+					// the default handler for this effect: an ev4 handler's
+					// veto suppresses the missile leg (and its reflected
+					// trips), mirroring the creature twin at boss_ai.go:4111
+					// (midsummer fling-torch 45669).
+				if !prevent.defaultPrevented(effectIndex) {
+					// An empty filtered list must not fall into the helper's empty-list caster arm when the cast had GO-only picks.
+					if len(missileList) == 0 || len(missileTargets) > 0 {
+						s.runTriggerMissileEffect(ctx, spell, eff, missileTargets)
+					}
+					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+					// HIT_TARGET arm fires per reflected TargetInfo on the
+					// caster, gated by the same NeedsToBeTriggeredByCaster leg
+					// inside runTriggerMissileEffect. The single-element list
+					// keeps the HIT_TARGET arm (the empty-list HIT arm must not
+					// fire per trip). Triggered casts ride the triggered funnel,
+					// never this dispatch, so no trip recursion.
+					for range areaEnemyTrips(eff, reflectedAoETrips) {
+						s.runTriggerMissileEffect(ctx, spell, eff, []uint64{s.playerGUID})
+					}
 				}
 			case spellEffectSkillStep: // 44: SPELL_EFFECT_SKILL_STEP
 				// Spell::EffectLearnSkill (SpellEffects.cpp:2637-2654).
@@ -19521,7 +19535,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (GameObjectActions, GameObjectData.h:675). The wire GO
 				// target plus every implicit GO target in hitTargets is
 				// served, matching the per-GO HandleEffects iteration.
-				s.handleEffectActivateObjectMasked(effCtx, eff, effectIndex, target, hitTargets, goEffectMasks)
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4/ev5
+				// handler's veto suppresses the despawn/Use leg, so the
+				// script's own GO handling runs instead (q9452 P2).
+				if !prevent.defaultPrevented(effectIndex) {
+					s.handleEffectActivateObjectMasked(effCtx, eff, effectIndex, target, hitTargets, goEffectMasks)
+				}
 			case spellEffectGameObjectDamage: // 87: SPELL_EFFECT_GAMEOBJECT_DAMAGE (EffectGameObjectDamage, SpellEffects.cpp:5424)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
 				// gameobject target (GOTargetInfo::DoTargetSpellHit,
