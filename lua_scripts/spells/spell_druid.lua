@@ -1107,8 +1107,8 @@ RegisterAuraEvent(SPELL_DRUID_T10_BALANCE_4P_BONUS, 6, t10Balance4pBonusProc)
 --   effect's fire (procs.go fires ev6 once per eligible effect).
 --   DORMANT until Spell.dbc ships the 48516 proc entry.
 local SPELL_DRUID_ECLIPSE = 48516 -- spell_druid.cpp:210
-local SPELL_DRUID_ECLIPSE_SOLAR_PROC = 48517 -- spell_druid.cpp:38
-local SPELL_DRUID_ECLIPSE_LUNAR_PROC = 48518 -- spell_druid.cpp:37
+local SPELL_DRUID_ECLIPSE_SOLAR_PROC = 48517 -- spell_druid.cpp:43
+local SPELL_DRUID_ECLIPSE_LUNAR_PROC = 48518 -- spell_druid.cpp:42
 
 local function eclipseProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
     if actor == nil then

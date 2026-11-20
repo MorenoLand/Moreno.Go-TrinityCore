@@ -91,12 +91,28 @@
 --   (Unit.cpp:10412; procs.go procActionTargetGUID) — the talent
 --   procs only when hit, so the taken-only reading holds. DORMANT
 --   until Spell.dbc ships the 31641 proc entry.
+-- PORTED (this tick, 2026-11-20, RegisterAuraEvent OnRemove = 3):
+--   spell_mage_arcane_missiles (spell_mage.cpp:111-139): aura 5143.
+--   OnRemove casts 70753 on nil, triggered, when the holder carries
+--   the T10 2-piece aura 70752 and the flag is set; the flag is the
+--   per-aura ScriptValues twin of C++ _canProcT10.
+--   spell_mage_missile_barrage_proc OnRemove (spell_mage.cpp:1362-1369):
+--   aura 44401. OnRemove sets "canProcT10" on the ranked 5143 aura
+--   when the holder carries 70752. DORMANT until Spell.dbc ships
+--   the 5143/44401/70752/70753 rows.
+--   spell_mage_ice_block (spell_mage.cpp:1032-1051): spell 45438.
+--   AfterHit casts Hypothermia 41425 on nil, triggered — the DBC
+--   ExcludeCasterAuraSpell (field 26) value, hardcoded: the field
+--   was never read in any build (see the port note below), so 41425
+--   is description-corroborated, NOT DBC-verified. DORMANT until
+--   Spell.dbc ships the 45438 row.
 -- STAY-OUT (tick 294): every other spell_mage class — no proc hook,
---   absorb/CalcAmount/ManaShield hooks absent, SpellScript-only
---   with no RegisterSpellScript in the engine, or cross-script state
---   (arcane_missiles / missile_barrage_proc share a flag no Lua leg
---   can set). Notable: ice_barrier (absorb + GetDummyAuraEffect
---   not on the aura-hook surface).
+--   absorb/CalcAmount/ManaShield hooks absent, or SpellScript-only
+--   with no RegisterSpellScript in the engine. Notable: ice_barrier
+--   (absorb + GetDummyAuraEffect not on the aura-hook surface).
+--   (arcane_missiles left this list this tick: the cross-script
+--   flag has a Lua twin — per-aura ScriptValues, GetScriptValue /
+--   SetScriptValue — and both legs are ported below.)
 --   (Ignite left this list this tick: GetSpellMaxTicks + the new
 --   aura:GetRank bridge cover its rank/max-ticks math. fire_frost_ward
 --   left this list this tick: the ev9 absorb port + the Go
@@ -413,8 +429,10 @@ local SPELL_MAGE_EMPOWERED_FIRE_PROC = 67545 -- spell_mage.cpp:65
 -- (the true return on every path) and the holder casts 67545 on
 -- itself with BP0 = pct(base mana, EFFECT_0 CalcValue of 67545) —
 -- GetCreateMana (lua_player.go) + GetSpellEffectCalcValue
--- (lua_aura.go). C++ casts non-triggered; Lua CastCustomSpell rides
--- the triggered-only funnel (standing gap, same as ignite). The
+-- (lua_aura.go). C++ casts via CastSpellExtraArgs(aurEff), i.e.
+-- TRIGGERED_FULL_MASK (SpellDefines.h:166), so the Lua triggered
+-- CastCustomSpell is exact — the earlier "KNOWN DEVIATION:
+-- non-triggered" note was wrong (2026-11-20 audit). The
 -- effectIndex gate keeps the arm on EFFECT_0. DORMANT until
 -- Spell.dbc ships the 31656 proc entry.
 local function empoweredFireProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
@@ -554,16 +572,20 @@ RegisterAuraEvent(SPELL_MAGE_MASTER_OF_ELEMENTS_AURA, 6, masterOfElementsProc)
 --   8 * rank) / maxTicks (new aura:GetRank bridge + GetSpellMaxTicks
 --   on the GetSpellEffectCalcValue precedent; the damage gate is the
 --   ev6 damage-arg convention for the C++ damageInfo check).
---   KNOWN DEVIATION: C++ casts non-triggered; Lua CastCustomSpell
---   rides the triggered-only funnel (standing gap, same as vendetta).
+--   C++ casts via CastSpellExtraArgs(aurEff), i.e.
+--   TRIGGERED_FULL_MASK (SpellDefines.h:166), so the Lua triggered
+--   CastCustomSpell is exact — the earlier "KNOWN DEVIATION:
+--   non-triggered" note was wrong (2026-11-20 audit).
 --   DORMANT until Spell.dbc ships the 11119 proc entry.
 --   spell_mage_magic_absorption (29441, spell_mage.cpp:1138-1173):
 --   OnEffectProc EFFECT_0 DUMMY. PreventDefaultAction (return true);
 --   the holder (C++ GetActionTarget on the resist event) casts
 --   29442 on itself with BP0 = pct(max mana, aurEff amount), via
---   GetMaxPower(0). KNOWN DEVIATION: C++ casts non-triggered; Lua
---   CastCustomSpell rides the triggered-only funnel (standing gap,
---   same as ignite). DORMANT until Spell.dbc ships the 29441 proc entry.
+--   GetMaxPower(0). C++ casts via CastSpellExtraArgs(aurEff), i.e.
+--   TRIGGERED_FULL_MASK (SpellDefines.h:166), so the Lua triggered
+--   CastCustomSpell is exact — the earlier "KNOWN DEVIATION:
+--   non-triggered" note was wrong (2026-11-20 audit).
+--   DORMANT until Spell.dbc ships the 29441 proc entry.
 --   spell_mage_hot_streak (44445 R1, spell_mage.cpp:919-968):
 --   OnEffectProc EFFECT_0 DUMMY. PreventDefaultAction (return true);
 --   EFFECT_1 consecutive-crit counter doubles per crit (25 -> 50 ->
@@ -656,11 +678,11 @@ local SPELL_MAGE_T8_4P_BONUS = 64869 -- spell_mage.cpp:68
 -- amount (roll_chance_i rides math.random(0, 99) < amount);
 -- otherwise passes so the DBC default trigger leg fires. No
 -- effectIndex gate (per-aura check, same shape as 44404 above).
--- OnRemove STAYS OUT: it sets _canProcT10 on the Arcane Missiles
--- aura script via aura->GetScript<spell_mage_arcane_missiles>
--- (spell_mage.cpp:1362-1369) — cross-script state with no Lua
--- twin, and 5143 itself is unported in Lua. DORMANT until
--- Spell.dbc ships the 44401 proc entry.
+-- OnRemove PORTED below (this tick): it sets _canProcT10 on the
+-- Arcane Missiles aura script via aura->GetScript<spell_mage_arcane_missiles>
+-- (spell_mage.cpp:1362-1369) — the Lua twin is the per-aura
+-- ScriptValues map (SetScriptValue on the ranked 5143 aura object).
+-- DORMANT until Spell.dbc ships the 44401 proc entry.
 local function missileBarrageProcCheck(event, aura, target, actor, procTarget, damage, procEvent)
     if procEvent == nil or actor == nil then
         return true
@@ -675,6 +697,89 @@ local function missileBarrageProcCheck(event, aura, target, actor, procTarget, d
 end
 
 RegisterAuraEvent(SPELL_MAGE_MISSILE_BARRAGE_PROC, 6, missileBarrageProcCheck)
+
+local SPELL_MAGE_ARCANE_MISSILES_R1 = 5143 -- spell_mage.cpp:72
+local SPELL_MAGE_T10_2P_BONUS = 70752 -- spell_mage.cpp:66
+local SPELL_MAGE_T10_2P_BONUS_EFFECT = 70753 -- spell_mage.cpp:67
+
+-- C++ spell_mage_arcane_missiles::OnRemove (spell_mage.cpp:122-127):
+-- AfterEffectRemove EFFECT_1 PERIODIC_TRIGGER_SPELL, REAL. When the
+-- holder carries the T10 2-piece aura 70752 and the flag is set, the
+-- holder casts 70753 on nil, triggered via the aurEff overload
+-- (CastSpellExtraArgs(aurEff) = TRIGGERED_FULL_MASK). The flag is
+-- the cross-script state: missile_barrage_proc::OnRemove sets it
+-- (spell_mage.cpp:1362-1369) via GetAuraOfRankedSpell(5143) +
+-- AllowT10Proc; the Lua twin is the per-aura ScriptValues map
+-- (GetScriptValue/SetScriptValue, lua_aura.go) — the ev3 snapshot
+-- is the live aura record, so the setter's write is visible here.
+-- Same ordering caveat as C++: the flag is lost if 5143 is already
+-- gone when 44401 removes. DORMANT until Spell.dbc ships the
+-- 5143/44401/70752/70753 rows.
+local function arcaneMissilesRemove(event, aura, target)
+    if target == nil or aura == nil then
+        return
+    end
+    if not target:HasAura(SPELL_MAGE_T10_2P_BONUS) then
+        return
+    end
+    if aura:GetScriptValue("canProcT10") ~= 1 then
+        return
+    end
+    target:CastSpell(nil, SPELL_MAGE_T10_2P_BONUS_EFFECT, true)
+end
+
+RegisterAuraEvent(SPELL_MAGE_ARCANE_MISSILES_R1, 3, arcaneMissilesRemove)
+
+-- C++ spell_mage_missile_barrage_proc::OnRemove (spell_mage.cpp:1362-1369):
+-- AfterEffectRemove EFFECT_0 ADD_FLAT_MODIFIER, REAL. When the
+-- holder carries the T10 2-piece aura 70752, the Arcane Missiles
+-- aura (any rank, GetAuraOfRankedSpell) gets its _canProcT10 flag
+-- set. Lua twin: SetScriptValue("canProcT10", 1) on the ranked
+-- 5143 aura object. DORMANT until Spell.dbc ships the 44401 row.
+local function missileBarrageProcAllowT10(event, aura, target)
+    if target == nil then
+        return
+    end
+    if not target:HasAura(SPELL_MAGE_T10_2P_BONUS) then
+        return
+    end
+    local missiles = target:GetAuraOfRankedSpell(SPELL_MAGE_ARCANE_MISSILES_R1)
+    if missiles == nil then
+        return
+    end
+    missiles:SetScriptValue("canProcT10", 1)
+end
+
+RegisterAuraEvent(SPELL_MAGE_MISSILE_BARRAGE_PROC, 3, missileBarrageProcAllowT10)
+
+local SPELL_MAGE_ICE_BLOCK = 45438 -- spell_mage.cpp:1032
+local SPELL_MAGE_HYPOTHERMIA = 41425 -- Hypothermia debuff; see note below
+
+-- C++ spell_mage_ice_block::TriggerHypothermia (spell_mage.cpp:1042-1045):
+-- AfterHit. The caster casts GetSpellInfo()->ExcludeCasterAuraSpell
+-- (Spell.dbc field 26) on nil, triggered. That field is the Hypothermia
+-- debuff: 45438's description reads "causes Hypothermia, preventing you
+-- from recasting Ice Block for 30 sec", and 41425 is the Hypothermia ID
+-- (in-tree seed comment tools/spelldbc_seed/main.go:3666; WoWWiki).
+-- FIELD-UNVERIFIED: row 45438 field 26 was never read in any build —
+-- wago.tools hosts no 3.3.5 build, wow.tools is retired, the local
+-- Spell.dbc subsets carry no 45438 row — so 41425 here is
+-- description-corroborated, NOT DBC-verified. Correct it when the
+-- 45438 row is seeded. No Lua spell-object reader for the field
+-- exists, so the value must be hardcoded. DORMANT until Spell.dbc
+-- ships the 45438 row.
+local function iceBlockAfterHit(event, spell, hitTarget)
+    if hitTarget == nil or spell == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(nil, SPELL_MAGE_HYPOTHERMIA, true)
+end
+
+RegisterSpellEvent(SPELL_MAGE_ICE_BLOCK, 3, iceBlockAfterHit)
 
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_mage_polymorph_cast_visual::HandleDummy (spell_mage.cpp:1386-1418):
