@@ -116,19 +116,6 @@ local SPELL_AGGRO_CHECK = 40112 -- spell_quest.cpp:1530
 local SPELL_AGGRO_BURST_AURA = 40119 -- spell_quest.cpp:1594 (class spell_q11010_q11102_q11023_aggro_burst)
 local SPELL_CHOOSE_LOC = 40056 -- spell_quest.cpp:1529
 local SPELL_EMBLAZON_RUNEBLADE = 51769 -- spell_quest.cpp:2412 (class spell_q12619_emblazon_runeblade)
-local SPELL_BURST_AT_THE_SEAMS_59579 = 59579 -- spell_quest.cpp:2011
-local SPELL_TROLL_EXPLOSION = 52565 -- spell_quest.cpp:2005
-local SPELL_EXPLODE_ABOMINATION_MEAT = 52520 -- spell_quest.cpp:2004
-local SPELL_EXPLODE_TROLL_MEAT = 52578 -- spell_quest.cpp:2006
-local SPELL_EXPLODE_TROLL_BLOODY_MEAT = 52580 -- spell_quest.cpp:2007
-local SPELL_BURST_AT_THE_SEAMS_BONE = 52516 -- spell_quest.cpp:2003
-local SPELL_BURST_AT_THE_SEAMS_59580 = 59580 -- spell_quest.cpp:2012
-local SPELL_ASSIGN_GHOUL_KILL_CREDIT_TO_MASTER = 59590 -- spell_quest.cpp:2014
-local SPELL_ASSIGN_GEIST_KILL_CREDIT_TO_MASTER = 60041 -- spell_quest.cpp:2015
-local SPELL_ASSIGN_SKELETON_KILL_CREDIT_TO_MASTER = 60039 -- spell_quest.cpp:2016
-local NPC_ICY_GHOUL = 31142 -- spell_quest.cpp:1995
-local NPC_VICIOUS_GEIST = 31147 -- spell_quest.cpp:1996
-local NPC_RISEN_ALLIANCE_SOLDIERS = 31205 -- spell_quest.cpp:1997
 local SPELL_BLOATED_ABOMINATION_FEIGN_DEATH = 52593 -- spell_quest.cpp:2002
 local UNIT_DYNAMIC_FLAGS = 79 -- UpdateFields.h:136 (OBJECT_END 6 + 0x49)
 local UNIT_DYNFLAG_DEAD = 0x20 -- SharedDefines.h:3133
@@ -178,44 +165,22 @@ RegisterAuraEvent(SPELL_EMBLAZON_RUNEBLADE, 1, emblazonRunebladeTick)
 --   cast the effect-0 value spell twice (a910c39d ev5-site double-fire
 --   audit). The Go case carries the documented triggered-funnel delta.
 
-local function burstAtTheSeamsApply(event, aura, target)
-    target:CastSpell(target, SPELL_TROLL_EXPLOSION, true)
-    target:CastSpell(target, SPELL_EXPLODE_ABOMINATION_MEAT, true)
-    target:CastSpell(target, SPELL_EXPLODE_TROLL_MEAT, true)
-    target:CastSpell(target, SPELL_EXPLODE_TROLL_MEAT, true)
-    target:CastSpell(target, SPELL_EXPLODE_TROLL_BLOODY_MEAT, true)
-    target:CastSpell(target, SPELL_BURST_AT_THE_SEAMS_BONE, true)
-end
-
-RegisterAuraEvent(SPELL_BURST_AT_THE_SEAMS_59579, 2, burstAtTheSeamsApply)
-
-local function burstAtTheSeamsRemove(event, aura, target)
-    local caster = aura:GetCaster()
-    if caster ~= nil then
-        local entry = target:GetEntry()
-        if entry == NPC_ICY_GHOUL then
-            target:CastSpell(caster, SPELL_ASSIGN_GHOUL_KILL_CREDIT_TO_MASTER, true)
-        elseif entry == NPC_VICIOUS_GEIST then
-            target:CastSpell(caster, SPELL_ASSIGN_GEIST_KILL_CREDIT_TO_MASTER, true)
-        elseif entry == NPC_RISEN_ALLIANCE_SOLDIERS then
-            target:CastSpell(caster, SPELL_ASSIGN_SKELETON_KILL_CREDIT_TO_MASTER, true)
-        end
-    end
-    target:CastSpell(target, SPELL_BURST_AT_THE_SEAMS_59580, true)
-end
-
-RegisterAuraEvent(SPELL_BURST_AT_THE_SEAMS_59579, 3, burstAtTheSeamsRemove)
-
 local function bloatedAbomFeignDeathApply(event, aura, target)
     target:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_DEAD)
     target:SetFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_FEIGN_DEATH)
-    target:SetReactState(REACT_PASSIVE)
+    local creature = target:ToCreature()
+    if creature ~= nil then
+        creature:SetReactState(REACT_PASSIVE)
+    end
 end
 
 RegisterAuraEvent(SPELL_BLOATED_ABOMINATION_FEIGN_DEATH, 2, bloatedAbomFeignDeathApply)
 
 local function bloatedAbomFeignDeathRemove(event, aura, target)
-    target:DespawnOrUnsummon()
+    local creature = target:ToCreature()
+    if creature ~= nil then
+        creature:DespawnOrUnsummon()
+    end
 end
 
 RegisterAuraEvent(SPELL_BLOATED_ABOMINATION_FEIGN_DEATH, 3, bloatedAbomFeignDeathRemove)
