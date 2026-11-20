@@ -340,13 +340,13 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 --   binding spell is unidentifiable from C++ (no comment, no enum);
 --   secondary: ev5-only + GO targets never fire (spells.go). The
 --   q14076 GO leg has since PORTED via ev4 (tick 2026-11-20); the
---   q9452 HandleActiveObject leg (:1157) is HELD, not blocked by ev5 —
---   it ports via ev4 too, but C++ PreventHitDefaultEffect has no
---   player-path twin, and 29866 EFFECT_1's MiscValue is 15 = Despawn
---   (Wowhead WotLK 29866 Effect #2 "Activate Object (15)";
---   GameObjectActions::Despawn, GameObjectData.h:675) — the Go default
---   leg would DESPAWN the school GO (spells.go goActionDespawn case),
---   not double-Use it, so the port waits on the player-path veto twin.
+--   q9452 HandleActiveObject leg (:1157) PORTED the same tick via ev4
+--   (castNetGOLEGHit below) once the player-path prevent twin landed
+--   (lua_spell.go / spells.go finishSpellCast): the veto suppresses
+--   the Go default ACTIVATE_OBJECT leg (MiscValue 15 = Despawn,
+--   Wowhead WotLK 29866 Effect #2 "Activate Object (15)";
+--   GameObjectActions::Despawn, GameObjectData.h:675), which would
+--   otherwise DESPAWN the school GO instead of double-Using it.
 --   spell_q1846_bending_shinbone (spell_quest.cpp:96-120): PORTED
 --   tick 2026-11-20 via the ev4 no-target path (see the handler
 --   above) — the 2026-11-12 STAY-OUT (ev5-only reasoning) is
@@ -400,6 +400,42 @@ local function castNetHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_CAST_NET, 4, castNetHit)
+
+-- PORTED (tick 2026-11-20, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q9452_cast_net GO leg (spell_quest.cpp:1145-1153):
+--   EFFECT_1 ACTIVATE_OBJECT OnEffectHitTarget, GetHitGObj()->
+--   SetRespawnTime(2 or 3 min, 50/50), Use(caster),
+--   SetLootState(GO_JUST_DEACTIVATED = 3), with
+--   PreventHitDefaultEffect(1) suppressing the Go default
+--   ACTIVATE_OBJECT leg (MiscValue 15 = Despawn would delete the
+--   school GO). Reachable via ev4: ev5 never fires for GO targets
+--   (spells.go ev5 loop skips 0xF110) but ev4 fires once per
+--   non-zero effect with the GO as target (spell:GetTarget()
+--   resolves GOs). The veto rides the player-path prevent twin
+--   landed this tick (lua_spell.go / spells.go finishSpellCast).
+--   DELTA: the 2-3 min respawn rides the loot-release timer's
+--   stored-delay read (loot.go), not a map-tick GO respawn; Use()
+--   runs the server twin without the player-only legs.
+
+local function castNetGOLEGHit(event, spell, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local target = spell:GetTarget()
+    if target == nil or target:GetObjectType() ~= "GameObject" then
+        return
+    end
+    spell:PreventHitDefaultEffect(1)
+    if math.random(1, 100) <= 50 then
+        target:SetRespawnTime(120)
+    else
+        target:SetRespawnTime(180)
+    end
+    target:Use()
+    target:SetLootState(3)
+end
+
+RegisterSpellEvent(SPELL_CAST_NET, 4, castNetGOLEGHit)
 
 -- PORTED (tick 2026-11-20, RegisterSpellEvent OnEffectHit = 4):
 --   spell_q1846_bending_shinbone (spell_quest.cpp:96-120): EFFECT_0
