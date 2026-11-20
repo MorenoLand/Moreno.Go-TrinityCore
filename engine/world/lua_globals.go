@@ -116,6 +116,72 @@ func (s *Server) luaSpellFamilyFlags(spellID, index uint32) uint32 {
 	return spell.SpellFamilyFlags[index]
 }
 
+// luaSpellFamilyName is the SpellFamilyNameProvider behind the
+// MorenoCore GetSpellFamilyName global: the Spell.dbc
+// SpellFamilyName word for the spell id (0 for an unknown spell),
+// the SpellInfo::SpellFamilyName read the deadly-poison enchant loop
+// needs (spell_rogue.cpp:337, SPELLFAMILY_ROGUE = 8).
+func (s *Server) luaSpellFamilyName(spellID uint32) uint32 {
+	if s == nil || s.Data == nil {
+		return 0
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found {
+		return 0
+	}
+	return spell.SpellFamilyName
+}
+
+// luaSpellDispelType is the SpellDispelTypeProvider behind the
+// MorenoCore GetSpellDispelType global: the Spell.dbc DispelType word
+// for the spell id (0 for an unknown spell), the SpellInfo::Dispel
+// read the deadly-poison enchant loop needs (spell_rogue.cpp:337,
+// DISPEL_POISON = 4).
+func (s *Server) luaSpellDispelType(spellID uint32) uint32 {
+	if s == nil || s.Data == nil {
+		return 0
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found {
+		return 0
+	}
+	return spell.DispelType
+}
+
+// luaSpellPositive is the SpellPositiveProvider behind the MorenoCore
+// IsPositiveSpell global: the SpellInfo::IsPositive read for a spell
+// id, the positive/negative gate the deadly-poison enchant loop needs
+// (spell_rogue.cpp:345-349). An unknown spell reads false, so a port
+// that casts only on a known-positive spell never fires a bogus cast.
+func (s *Server) luaSpellPositive(spellID uint32) bool {
+	if s == nil || s.Data == nil {
+		return false
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found {
+		return false
+	}
+	return spellIsPositive(spell)
+}
+
+// luaSpellItemEnchantmentEffect is the SpellItemEnchantmentProvider
+// behind the MorenoCore GetSpellItemEnchantmentEffect global: the
+// SpellItemEnchantment.dbc Effect/EffectArg pair for an enchantment id
+// at an effect index (0-2), the read the deadly-poison AfterHit arm
+// needs (spell_rogue.cpp:318-326). An unknown enchantment or an
+// out-of-range index reads (0, 0), the ITEM_ENCHANTMENT_TYPE_NONE
+// pair, so the caller's combat-spell gate skips it.
+func (s *Server) luaSpellItemEnchantmentEffect(enchantID, index uint32) (uint32, uint32) {
+	if s == nil || s.Data == nil || index >= 3 {
+		return 0, 0
+	}
+	entry, found, err := s.Data.SpellItemEnchantment(enchantID)
+	if err != nil || !found {
+		return 0, 0
+	}
+	return entry.Effects[index], entry.EffectArg[index]
+}
+
 // luaAddTaxiPath is the TaxiPathProvider behind the Eluna AddTaxiPath
 // global: it registers the waypoints in the DBC store's taxi overlay and
 // returns the used path id. Without a data store there is nowhere to

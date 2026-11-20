@@ -835,32 +835,36 @@ type TaxiPathArgs struct {
 }
 
 type Config struct {
-	Enabled                  bool
-	ScriptPath               string
-	CoreName                 string
-	CoreVersion              string
-	RealmID                  uint32
-	CoreExpansion            uint32
-	PlayerProvider           func() []*Object
-	GameEventProvider        func() []uint32
-	GameEventControlProvider func(eventID uint32, start, force bool)
-	MapProvider              func(mapID, instanceID uint32) *Object
-	WorldMessageProvider     func(string)
-	AreaNameProvider         func(id uint32) (string, bool)
-	SpellFamilyFlagsProvider func(spellID uint32, index uint32) uint32
-	SpawnProvider            func(SpawnArgs) *Object
-	TaxiPathProvider         func(TaxiPathArgs) uint32
-	SendMailProvider         func(SendMailArgs) error
-	VendorAddProvider        func(entry, item uint32, maxCount int32, incrTime, extCost uint32)
-	VendorRemoveProvider     func(entry, item uint32) error
-	VendorRemoveAllProvider  func(entry uint32)
-	KickProvider             func(playerGUID uint64)
-	BanProvider              func(args BanArgs) (int, string)
-	SaveAllPlayersProvider   func()
-	AuthDatabase             *sql.DB
-	CharacterDB              *sql.DB
-	WorldDatabase            *sql.DB
-	Logger                   *slog.Logger
+	Enabled                      bool
+	ScriptPath                   string
+	CoreName                     string
+	CoreVersion                  string
+	RealmID                      uint32
+	CoreExpansion                uint32
+	PlayerProvider               func() []*Object
+	GameEventProvider            func() []uint32
+	GameEventControlProvider     func(eventID uint32, start, force bool)
+	MapProvider                  func(mapID, instanceID uint32) *Object
+	WorldMessageProvider         func(string)
+	AreaNameProvider             func(id uint32) (string, bool)
+	SpellFamilyFlagsProvider     func(spellID uint32, index uint32) uint32
+	SpellFamilyNameProvider      func(spellID uint32) uint32
+	SpellDispelTypeProvider      func(spellID uint32) uint32
+	SpellPositiveProvider        func(spellID uint32) bool
+	SpellItemEnchantmentProvider func(enchantID uint32, index uint32) (uint32, uint32)
+	SpawnProvider                func(SpawnArgs) *Object
+	TaxiPathProvider             func(TaxiPathArgs) uint32
+	SendMailProvider             func(SendMailArgs) error
+	VendorAddProvider            func(entry, item uint32, maxCount int32, incrTime, extCost uint32)
+	VendorRemoveProvider         func(entry, item uint32) error
+	VendorRemoveAllProvider      func(entry uint32)
+	KickProvider                 func(playerGUID uint64)
+	BanProvider                  func(args BanArgs) (int, string)
+	SaveAllPlayersProvider       func()
+	AuthDatabase                 *sql.DB
+	CharacterDB                  *sql.DB
+	WorldDatabase                *sql.DB
+	Logger                       *slog.Logger
 }
 
 type Runtime struct {
@@ -1584,6 +1588,10 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("SendWorldMessage", r.sendWorldMessage)
 	r.state.Register("GetAreaName", r.getAreaName)
 	r.state.Register("GetSpellFamilyFlags", r.getSpellFamilyFlags)
+	r.state.Register("GetSpellFamilyName", r.getSpellFamilyName)
+	r.state.Register("GetSpellDispelType", r.getSpellDispelType)
+	r.state.Register("IsPositiveSpell", r.isPositiveSpell)
+	r.state.Register("GetSpellItemEnchantmentEffect", r.getSpellItemEnchantmentEffect)
 	r.state.Register("CreateInt64", r.createInt64)
 	r.state.Register("CreateUint64", r.createUint64)
 	r.state.Register("CreateLongLong", r.createInt64)
@@ -2113,6 +2121,78 @@ func (r *Runtime) getSpellFamilyFlags(state *lua.State) int {
 	return 1
 }
 
+// getSpellFamilyName is the MorenoCore GetSpellFamilyName global: the
+// SpellInfo::SpellFamilyName word for a spell id, the DBC twin of the
+// family-name gate the deadly-poison enchant loop needs
+// (spell_rogue.cpp:337, SPELLFAMILY_ROGUE). An unknown spell or a
+// missing provider reads 0, the GetSpellFamilyFlags convention.
+func (r *Runtime) getSpellFamilyName(state *lua.State) int {
+	spellID := uint32(lua.CheckUnsigned(state, 1))
+	if r.config.SpellFamilyNameProvider == nil {
+		state.PushUnsigned(0)
+		return 1
+	}
+	state.PushUnsigned(uint(r.config.SpellFamilyNameProvider(spellID)))
+	return 1
+}
+
+// getSpellDispelType is the MorenoCore GetSpellDispelType global: the
+// SpellInfo::Dispel word for a spell id (Spell.dbc field 2), the DBC
+// twin of the dispel gate the deadly-poison enchant loop needs
+// (spell_rogue.cpp:337, DISPEL_POISON). An unknown spell or a missing
+// provider reads 0, the GetSpellFamilyFlags convention.
+func (r *Runtime) getSpellDispelType(state *lua.State) int {
+	spellID := uint32(lua.CheckUnsigned(state, 1))
+	if r.config.SpellDispelTypeProvider == nil {
+		state.PushUnsigned(0)
+		return 1
+	}
+	state.PushUnsigned(uint(r.config.SpellDispelTypeProvider(spellID)))
+	return 1
+}
+
+// isPositiveSpell is the MorenoCore IsPositiveSpell global: the
+// SpellInfo::IsPositive read for a spell id, the DBC twin of the
+// positive/negative gate the deadly-poison enchant loop needs
+// (spell_rogue.cpp:345-349). An unknown spell or a missing provider
+// reads false, so a port that casts only on a known-positive spell
+// never fires a bogus cast.
+func (r *Runtime) isPositiveSpell(state *lua.State) int {
+	spellID := uint32(lua.CheckUnsigned(state, 1))
+	if r.config.SpellPositiveProvider == nil {
+		state.PushBoolean(false)
+		return 1
+	}
+	state.PushBoolean(r.config.SpellPositiveProvider(spellID))
+	return 1
+}
+
+// getSpellItemEnchantmentEffect is the MorenoCore
+// GetSpellItemEnchantmentEffect global: the SpellItemEnchantment.dbc
+// Effect/EffectArg pair for an enchantment id at an effect index
+// (0-2), the DBC twin of the enchantment loop the deadly-poison
+// AfterHit arm needs (spell_rogue.cpp:318-326,
+// ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL). An unknown enchantment, an
+// out-of-range index, or a missing provider reads (0, 0), the
+// ITEM_ENCHANTMENT_TYPE_NONE pair, so the caller's combat-spell
+// gate skips it exactly like the C++ null-entry continue.
+func (r *Runtime) getSpellItemEnchantmentEffect(state *lua.State) int {
+	enchantID := uint32(lua.CheckUnsigned(state, 1))
+	var index uint64
+	if state.Top() >= 2 && !state.IsNil(2) {
+		index = checkLuaUint64(state, 2)
+	}
+	if r.config.SpellItemEnchantmentProvider == nil {
+		state.PushUnsigned(0)
+		state.PushUnsigned(0)
+		return 2
+	}
+	effect, arg := r.config.SpellItemEnchantmentProvider(enchantID, uint32(index))
+	state.PushUnsigned(uint(effect))
+	state.PushUnsigned(uint(arg))
+	return 2
+}
+
 func (r *Runtime) SetPlayerProvider(provider func() []*Object) {
 	r.mu.Lock()
 	r.config.PlayerProvider = provider
@@ -2152,6 +2232,30 @@ func (r *Runtime) SetAreaNameProvider(provider func(id uint32) (string, bool)) {
 func (r *Runtime) SetSpellFamilyFlagsProvider(provider func(spellID uint32, index uint32) uint32) {
 	r.mu.Lock()
 	r.config.SpellFamilyFlagsProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetSpellFamilyNameProvider(provider func(spellID uint32) uint32) {
+	r.mu.Lock()
+	r.config.SpellFamilyNameProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetSpellDispelTypeProvider(provider func(spellID uint32) uint32) {
+	r.mu.Lock()
+	r.config.SpellDispelTypeProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetSpellPositiveProvider(provider func(spellID uint32) bool) {
+	r.mu.Lock()
+	r.config.SpellPositiveProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetSpellItemEnchantmentProvider(provider func(enchantID uint32, index uint32) (uint32, uint32)) {
+	r.mu.Lock()
+	r.config.SpellItemEnchantmentProvider = provider
 	r.mu.Unlock()
 }
 

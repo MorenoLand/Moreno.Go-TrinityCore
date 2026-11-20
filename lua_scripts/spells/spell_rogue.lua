@@ -105,20 +105,25 @@
 --   (no absorb hook, unbridged cooldown writes) is superseded by
 --   the AuraEventOnEffectAbsorb bridge and the 31228 unlimited-pool
 --   leg in absorption.go.
---   deadly_poison (2818, row 748): SpellScript BeforeHit/
---   AfterHit only; no RegisterSpellScript in the engine, and
---   GetCastItem is open engine work; GetItemByPos is a nil stub
---   and there is no enchantment-store read. The go_hit is a false
---   positive (SpellInfo.cpp line numbers in comments).
+--   deadly_poison (2818, row 748): PORTED below (ev6/ev3 +
+--   the GetSpellItemEnchantmentEffect / GetSpellFamilyName /
+--   GetSpellDispelType / IsPositiveSpell globals, this tick);
+--   the tick-294/298 stay-out ("no RegisterSpellScript,
+--   GetCastItem open engine work, GetItemByPos nil stub, no
+--   enchantment-store read") is superseded by the ev6/ev3 hooks,
+--   the bridged GetCastItem, GetEquippedItemBySlot and
+--   GetEnchantmentId. The go_hit is a false positive
+--   (SpellInfo.cpp line numbers in comments).
 --   nerves_of_steel (31130, row 749): PORTED below (ev9 + the
 --   31130 unlimited-pool leg in absorption.go, this tick); the
 --   tick-294/298 stay-out ("no absorb hook") is superseded.
---   rupture (1943, row 752): CalcAmount (AP x combo points) +
---   AfterEffectApply reapply reset; no CalcAmount bridge and no
+--   rupture (1943, row 752): PORTED below (ev11, this tick);
+--   the tick-294/298 stay-out ("no CalcAmount bridge and no
 --   GetTotalAttackPowerValue bridge; the REAPPLY-only leg is
---   unmodellable (mode 2 is fresh-apply only). The lua_hit is a
---   false positive (1943xx gameobject IDs in
---   boss_hodir/boss_razorscale).
+--   unmodellable") is superseded by the ev11 bridge, the bridged
+--   GetTotalAttackPowerValue / GetComboPoints, and the Go-owned
+--   reapply BonusDuration reset. The lua_hit is a false positive
+--   (1943xx gameobject IDs in boss_hodir/boss_razorscale).
 --   setup (13983, row 753): DoCheckProc ONLY (census
 --   HandleDummy/OnEffectHitTarget is WRONG); the gate needs
 --   GetSelectedUnit, which has no bridge. Engine work.
@@ -127,9 +132,10 @@
 --   SpellScript, ResetCooldowns with a family-flag predicate; no
 --   RegisterSpellScript. glyph_of_backstab_triggered (63975, row
 --   245): SpellScript; stays out — the Go default leg owns it
---   (spells.go:53830 player + boss_ai.go:7952 creature); a Lua ev5
---   leg would double-fire (finishSpellCast fires ev5 at
---   spells.go:14735 on the same cast). shiv (5938, row 246):
+--   (spells.go:54549 player + boss_ai.go:8102 creature,
+--   spells.go:55655 func); a Lua ev5 leg would double-fire
+--   (finishSpellCast fires ev5 at spells.go:14934 on the same
+--   cast). shiv (5938, row 246):
 --   SpellScript only.
 --   tricks_of_the_trade (57934/59628): proc + redirect-target
 --   state via GetScript + threat redirect, unbridged.
@@ -162,6 +168,29 @@ local SPELL_ROGUE_CHEAT_DEATH_COOLDOWN = 31231 -- spell_rogue.cpp:39
 local SPELL_ROGUE_QUICK_RECOVERY = 31244 -- spell_rogue.cpp:645 (class spell_rog_quick_recovery)
 local SPELL_ROGUE_QUICK_RECOVERY_ENERGY = 31663 -- spell_rogue.cpp:55
 local SPELL_ROGUE_NERVES_OF_STEEL = 31130 -- spell_rogue.cpp:465
+local SPELL_ROGUE_RUPTURE = 1943 -- spell_rogue.cpp:687
+local SPELL_ROGUE_RUPTURE_R2 = 8639
+local SPELL_ROGUE_RUPTURE_R3 = 8640
+local SPELL_ROGUE_RUPTURE_R4 = 11273
+local SPELL_ROGUE_RUPTURE_R5 = 11274
+local SPELL_ROGUE_RUPTURE_R6 = 11275
+local SPELL_ROGUE_RUPTURE_R7 = 26867
+local SPELL_ROGUE_RUPTURE_R8 = 48671
+local SPELL_ROGUE_RUPTURE_R9 = 48672
+local SPELL_ROGUE_DEADLY_POISON = 2818 -- spell_rogue.cpp:268
+local SPELL_ROGUE_DEADLY_POISON_R2 = 2819
+local SPELL_ROGUE_DEADLY_POISON_R3 = 11353
+local SPELL_ROGUE_DEADLY_POISON_R4 = 11354
+local SPELL_ROGUE_DEADLY_POISON_R5 = 25349
+local SPELL_ROGUE_DEADLY_POISON_R6 = 26968
+local SPELL_ROGUE_DEADLY_POISON_R7 = 27187
+local SPELL_ROGUE_DEADLY_POISON_R8 = 57969
+local SPELL_ROGUE_DEADLY_POISON_R9 = 57970
+local EQUIPMENT_SLOT_MAINHAND = 15
+local EQUIPMENT_SLOT_OFFHAND = 16
+local ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL = 1 -- DBCEnums.h:356
+local DISPEL_POISON = 4 -- dispel.go:18
+local SPELLFAMILY_ROGUE = 8 -- aura_state.go:159
 
 local SPELL_AURA_MOD_STALKED = 68
 
@@ -449,3 +478,150 @@ local function quickRecoveryProc(event, aura, target, actor, procTarget, damage,
 end
 
 RegisterAuraEvent(SPELL_ROGUE_QUICK_RECOVERY, 6, quickRecoveryProc)
+
+-- C++ spell_rog_rupture_AuraScript::CalculateAmount
+-- (spell_rogue.cpp:700-758): DoEffectCalcAmount, EFFECT_0
+-- PERIODIC_DAMAGE. amount += AP * attackpowerPerCombo[cp], cp =
+-- caster combo points clamped to 5, table {0, 0.015, 0.024, 0.03,
+-- 0.03428571, 0.0375}; canBeRecalculated = false. The
+-- AfterEffectApply REAPPLY-only leg zeroes the public BonusDuration
+-- field, which Go already owns (RuptureBonusDurationMs, zeroed on
+-- reapply by the generic aura-refresh path; the glyph legs advance
+-- it) — no Lua twin. Player casters only: the C++ npcbot leg reads
+-- creature combo points, which has no bridge, so a creature caster
+-- gets no AP bonus. DORMANT until Spell.dbc ships the 1943 rows.
+local RUPTURE_AP_PER_CP = { 0, 0.015, 0.024, 0.03, 0.03428571, 0.0375 }
+
+local function ruptureCalcAmount(event, aura, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    local cp = caster:GetComboPoints()
+    if cp > 5 then
+        cp = 5
+    end
+    local amount = aura:GetAmount(0)
+    aura:SetAmount(amount + math.floor(caster:GetTotalAttackPowerValue(0) * RUPTURE_AP_PER_CP[cp + 1]), 0)
+end
+
+RegisterAuraEvent(SPELL_ROGUE_RUPTURE, 11, ruptureCalcAmount)
+RegisterAuraEvent(SPELL_ROGUE_RUPTURE_R2, 11, ruptureCalcAmount)
+RegisterAuraEvent(SPELL_ROGUE_RUPTURE_R3, 11, ruptureCalcAmount)
+RegisterAuraEvent(SPELL_ROGUE_RUPTURE_R4, 11, ruptureCalcAmount)
+RegisterAuraEvent(SPELL_ROGUE_RUPTURE_R5, 11, ruptureCalcAmount)
+RegisterAuraEvent(SPELL_ROGUE_RUPTURE_R6, 11, ruptureCalcAmount)
+RegisterAuraEvent(SPELL_ROGUE_RUPTURE_R7, 11, ruptureCalcAmount)
+RegisterAuraEvent(SPELL_ROGUE_RUPTURE_R8, 11, ruptureCalcAmount)
+RegisterAuraEvent(SPELL_ROGUE_RUPTURE_R9, 11, ruptureCalcAmount)
+
+-- C++ spell_rog_deadly_poison_SpellScript (spell_rogue.cpp:268-380):
+-- Load gates player caster + a cast item. HandleBeforeHit reads the
+-- hit unit's Deadly Poison stack count (any rank, PERIODIC_DAMAGE,
+-- rogue family flags 0x10000/0x80000, cast by this rogue) on a
+-- non-miss. HandleAfterHit, at 5 stacks, takes the OTHER weapon
+-- (mainhand unless it is the cast item, then offhand) and casts each
+-- of its combat-spell enchantments that is a rogue poison other than
+-- Deadly Poison itself — positive spells on the player, negative on
+-- the target — with the item as cast item. DELTAS: (a) the stack
+-- read has no caster-GUID filter (GetAura is by spell id), so
+-- another rogue's poison on the same target counts; (b) the
+-- BeforeHit -> AfterHit handoff rides the spell object's per-cast
+-- SetScriptValue slot (lua_spell.go; the same object serves both
+-- hooks on the player path); a miss stores nothing, so the AfterHit
+-- reads 0 and no-ops; (c) the other-weapon pick compares the cast
+-- item's equipment slot (GetSlot) instead of item identity — the
+-- item object exposes no GUID — so a mainhand cast item picks the
+-- offhand. DORMANT until Spell.dbc ships the 2818 rows.
+local function deadlyPoisonBeforeHit(event, spell, hitTarget, missInfo)
+    if missInfo ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 or spell:GetCastItem() == nil then
+        return
+    end
+    local stacks = 0
+    for _, rankId in ipairs({
+        SPELL_ROGUE_DEADLY_POISON, SPELL_ROGUE_DEADLY_POISON_R2,
+        SPELL_ROGUE_DEADLY_POISON_R3, SPELL_ROGUE_DEADLY_POISON_R4,
+        SPELL_ROGUE_DEADLY_POISON_R5, SPELL_ROGUE_DEADLY_POISON_R6,
+        SPELL_ROGUE_DEADLY_POISON_R7, SPELL_ROGUE_DEADLY_POISON_R8,
+        SPELL_ROGUE_DEADLY_POISON_R9,
+    }) do
+        local aura = hitTarget:GetAura(rankId)
+        if aura ~= nil then
+            stacks = aura:GetStackAmount()
+            break
+        end
+    end
+    spell:SetScriptValue("deadlyPoisonStacks", stacks)
+end
+
+local function deadlyPoisonAfterHit(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    local stacks = spell:GetScriptValue("deadlyPoisonStacks")
+    if stacks == nil or stacks < 5 then
+        return
+    end
+    local castItem = spell:GetCastItem()
+    if castItem == nil then
+        return
+    end
+    local item = caster:GetEquippedItemBySlot(EQUIPMENT_SLOT_MAINHAND)
+    if castItem:GetSlot() == EQUIPMENT_SLOT_MAINHAND then
+        item = caster:GetEquippedItemBySlot(EQUIPMENT_SLOT_OFFHAND)
+    end
+    if item == nil then
+        return
+    end
+    for slot = 0, 6 do
+        local enchantId = item:GetEnchantmentId(slot)
+        if enchantId ~= nil and enchantId ~= 0 then
+            for s = 0, 2 do
+                local effect, enchantSpellId = GetSpellItemEnchantmentEffect(enchantId, s)
+                if effect == ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL
+                    and enchantSpellId ~= 0
+                    and GetSpellFamilyName(enchantSpellId) == SPELLFAMILY_ROGUE
+                    and GetSpellDispelType(enchantSpellId) == DISPEL_POISON
+                    and not (GetSpellFamilyFlags(enchantSpellId, 0) == 0x10000
+                        and GetSpellFamilyFlags(enchantSpellId, 1) == 0x80000
+                        and GetSpellFamilyFlags(enchantSpellId, 2) == 0) then
+                    if IsPositiveSpell(enchantSpellId) then
+                        caster:CastCustomSpell(caster, enchantSpellId, false, nil, nil, nil, item)
+                    else
+                        caster:CastCustomSpell(hitTarget, enchantSpellId, false, nil, nil, nil, item)
+                    end
+                end
+            end
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON, 6, deadlyPoisonBeforeHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R2, 6, deadlyPoisonBeforeHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R3, 6, deadlyPoisonBeforeHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R4, 6, deadlyPoisonBeforeHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R5, 6, deadlyPoisonBeforeHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R6, 6, deadlyPoisonBeforeHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R7, 6, deadlyPoisonBeforeHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R8, 6, deadlyPoisonBeforeHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R9, 6, deadlyPoisonBeforeHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON, 3, deadlyPoisonAfterHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R2, 3, deadlyPoisonAfterHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R3, 3, deadlyPoisonAfterHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R4, 3, deadlyPoisonAfterHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R5, 3, deadlyPoisonAfterHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R6, 3, deadlyPoisonAfterHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R7, 3, deadlyPoisonAfterHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R8, 3, deadlyPoisonAfterHit)
+RegisterSpellEvent(SPELL_ROGUE_DEADLY_POISON_R9, 3, deadlyPoisonAfterHit)

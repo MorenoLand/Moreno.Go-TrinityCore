@@ -304,6 +304,35 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 		}
 		return nil, nil
 	}
+	// GetScriptValue(key) / SetScriptValue(key, value) is the Spell
+	// object's per-cast scratch slot, the aura ScriptValues twin
+	// (lua_aura.go:1002): the same object is handed to every hook of
+	// one cast on the player path (finishSpellCast reuses the
+	// preprocess spell object for the AfterHit block), so a BeforeHit
+	// handler can stash per-cast state for its AfterHit twin — the
+	// deadly-poison stack count (spell_rogue.cpp:283-296 vs :298-374).
+	// A missing key reads 0. The creature path rebuilds the object
+	// per hook block, so values do not cross hooks there.
+	scriptValues := map[string]int64{}
+	methods["GetScriptValue"] = func(_ context.Context, args []any) ([]any, error) {
+		key, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{scriptValues[key]}, nil
+	}
+	methods["SetScriptValue"] = func(_ context.Context, args []any) ([]any, error) {
+		key, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		value, err := luaInt64Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		scriptValues[key] = value
+		return nil, nil
+	}
 	methods["IsAutoRepeat"] = luaNoArgs(func() any {
 		if p.action != nil && p.action.autoRepeatSet {
 			return p.action.autoRepeat
@@ -659,6 +688,30 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 		if launch != nil {
 			launch.setValue(value)
 		}
+		return nil, nil
+	}
+	// GetScriptValue(key) / SetScriptValue(key, value) is the
+	// session builder's twin (same contract: the per-cast scratch
+	// slot, a missing key reads 0). The creature path rebuilds the
+	// object per hook block, so values do not cross hooks there.
+	scriptValues := map[string]int64{}
+	methods["GetScriptValue"] = func(_ context.Context, args []any) ([]any, error) {
+		key, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{scriptValues[key]}, nil
+	}
+	methods["SetScriptValue"] = func(_ context.Context, args []any) ([]any, error) {
+		key, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		value, err := luaInt64Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		scriptValues[key] = value
 		return nil, nil
 	}
 	// GetTriggerSpell([effectIndex]) is SpellInfo::Effects[eff].
