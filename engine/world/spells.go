@@ -21591,6 +21591,17 @@ func isFireFrostWardSpellID(spellID uint32) bool {
 	return false
 }
 
+// isRendSpellID reports whether spellID is a Rend rank — TDB
+// spell_ranks chain for 772, R1-R10, bound by (-772) to
+// spell_warr_rend (spell_warrior.cpp:754).
+func isRendSpellID(spellID uint32) bool {
+	switch spellID {
+	case 772, 6546, 6547, 6548, 11572, 11573, 11574, 25208, 46845, 47465:
+		return true
+	}
+	return false
+}
+
 // fireFrostWardCalcBonus mirrors spell_mage_fire_frost_ward::CalculateAmount
 // (spell_mage.cpp:645-659): the DoEffectCalcAmount leg on EFFECT_0
 // SPELL_AURA_SCHOOL_ABSORB — +80.68% of the caster's
@@ -39634,6 +39645,41 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	if casterGUID == s.playerGUID && s.player != nil {
 		if bonus, ok := mixologyBonusFor(spell.ID, effIndex, int32(amount)); ok && s.hasAura(spellMixology) && len(spell.Effects) > 0 && playerHasSpell(s.player, spell.Effects[0].TriggerSpell) {
 			amount = uint32(int32(amount) + bonus)
+		}
+	}
+	// spell_warr_rend::CalculateAmount (spell_warrior.cpp:769-797):
+	// DoEffectCalcAmount on EFFECT_0 SPELL_AURA_PERIODIC_DAMAGE — the
+	// bleed ticks for $0.2 * (($MWB + $mwb) / 2 + $AP / 14 * $MWS) per
+	// tick on top of the DBC base amount, where $MWB is the main-hand
+	// weapon damage range (Min/MaxDamage, the GetWeaponDamageRange sum
+	// over damage indices), $AP the caster's total melee attack power
+	// and $MWS the main-hand attack time in ms. The bonus rides
+	// ApplyEffectModifiers (spellmod ALL + EFFECT_0 twins, float domain
+	// like C++). Ranks 9+ add EFFECT_2 CalcValue pct while the target
+	// is above 75% health (targetHasAuraState twin of HasAuraState
+	// HEALTH_ABOVE_75_PERCENT). Adjusted here, before the
+	// player/creature split, so both branches and both merge arms take
+	// the bonused amount; the caster must be the session player (the
+	// Load() TYPEID_PLAYER gate — creature-cast Rend has no weapon
+	// damage model here). No Lua calc-amount hook exists, so this rides
+	// the Go apply funnel with the guardian-spirit/mixology legs.
+	// canBeRecalculated=false in C++: the amount is fixed at apply,
+	// which the Go funnel already does. DORMANT until Spell.dbc ships
+	// the 772-family rows.
+	if casterGUID == s.playerGUID && s.player != nil && effIndex == 0 && eff.Aura == spellAuraPeriodicDamage && isRendSpellID(spell.ID) {
+		mwb := ((float64(s.player.MinDamage)+float64(s.player.MaxDamage))/2 + float64(s.totalAttackPowerValue(false))*float64(s.player.AttackTime)/14000) * 0.2
+		mwb = s.applySpellModFloat(spell, spellModAllEffects, mwb)
+		mwb = s.applySpellModFloat(spell, spellModEffect1, mwb)
+		amount = uint32(int32(amount) + int32(mwb))
+		if s.server != nil && s.server.spellRank(spell.ID) >= 9 && len(spell.Effects) > 2 {
+			ownerGUID := targetGUID
+			if ownerGUID == 0 {
+				ownerGUID = s.playerGUID
+			}
+			if s.targetHasAuraState(ctx, ownerGUID, auraStateHealthAbove75Pct, spell) {
+				pct := spell.Effects[2].CalcValueForLevel(spell, uint32(s.player.Level))
+				amount = uint32(int32(amount) + int32(amount)*pct/100)
+			}
 		}
 	}
 	mountEffectMask, mountMiscValue, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(spell)
