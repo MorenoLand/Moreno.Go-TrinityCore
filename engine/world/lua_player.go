@@ -2372,6 +2372,26 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{hasDiscoveredAllSpells(state, spell)}, nil
 	}
+	// HasDiscoveredAnySpell is HasDiscoveredAnySpell
+	// (SkillDiscovery.cpp:210-222), the first-time gate of the
+	// Northrend Inscription Research leg (spell_generic.cpp:2826).
+	methods["HasDiscoveredAnySpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{hasDiscoveredAnySpell(state, spell)}, nil
+	}
+	// GetExplicitDiscoverySpell is GetExplicitDiscoverySpell
+	// (SkillDiscovery.cpp:158-193), the weighted roll over the
+	// reqSpell's undiscovered entries (skill_discovery.go).
+	methods["GetExplicitDiscoverySpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.getExplicitDiscoverySpell(spell)}, nil
+	}
 	methods["HasSkill"] = func(_ context.Context, args []any) ([]any, error) {
 		skill, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -5036,18 +5056,20 @@ func (s *session) luaPlayer() *scripting.Object {
 	// session rooted flag (setRooted + login root-aura scan,
 	// characters.go); a bare movement-flag root has no Go model.
 	methods["IsRooted"] = luaNoArgs(func() any { return s.rooted })
+	// LearnSpell is Player::LearnSpell (Player.cpp:3661-3666) via the
+	// session learnSpell path (trainers.go): the DB row, the
+	// in-memory spell list, the supercede handling and the learned
+	// packet. The in-memory sync is load-bearing for the
+	// profession-research triple learn (spell_generic.cpp:2826-2834):
+	// each GetExplicitDiscoverySpell roll must exclude the spell the
+	// previous roll just taught.
 	methods["LearnSpell"] = func(ctx context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		query := "INSERT OR IGNORE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)"
-		if s.server.CharactersStore.Backend != "sqlite" {
-			query = "INSERT IGNORE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)"
-		}
-		_, err = s.server.CharactersStore.DB.Exec(query, state.GUID, spell)
-		s.learnOwnerPetAuraSources(ctx, spell)
-		return nil, err
+		s.learnSpell(ctx, spell)
+		return nil, nil
 	}
 	methods["RemoveSpell"] = func(ctx context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
