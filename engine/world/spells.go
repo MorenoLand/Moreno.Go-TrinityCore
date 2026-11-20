@@ -297,7 +297,7 @@ const (
 	spellFailedTryAgain                  uint8  = 132   // SPELL_FAILED_TRY_AGAIN (SharedDefines.h:1114)
 	spellFailedNotInBattleground         uint8  = 166   // SPELL_FAILED_NOT_IN_BATTLEGROUND (SharedDefines.h:1148)
 	spellFailedAlreadyHaveSummon         uint8  = 7     // SPELL_FAILED_ALREADY_HAVE_SUMMON (SharedDefines.h:989)
-	spellFailedAlreadyHaveCharm          uint8  = 6     // SPELL_FAILED_ALREADY_HAVE_CHARM (SharedDefines.h:988) — caster-side charmed-unit tracking has no Go bridge, named for the charm gate comment
+	spellFailedAlreadyHaveCharm          uint8  = 6     // SPELL_FAILED_ALREADY_HAVE_CHARM (SharedDefines.h:988) — bridged via casterHasCharmedCreature
 	spellFailedBadImplicitTargets        uint8  = 11    // SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993)
 	spellFailedCantBeCharmed             uint8  = 13    // SPELL_FAILED_CANT_BE_CHARMED (SharedDefines.h:995)
 	spellFailedHighLevel                 uint8  = 36    // SPELL_FAILED_HIGHLEVEL (SharedDefines.h:1018)
@@ -516,7 +516,7 @@ const (
 	summonCategoryWild    = 0 // SUMMON_CATEGORY_WILD (SharedDefines.h:3298)
 	summonCategoryAlly    = 1 // SUMMON_CATEGORY_ALLY
 	summonCategoryPet     = 2 // SUMMON_CATEGORY_PET
-	summonCategoryPuppet  = 3 // SUMMON_CATEGORY_PUPPET — the charm arm has no Go bridge (see checkSummonCast)
+	summonCategoryPuppet  = 3 // SUMMON_CATEGORY_PUPPET — charm arm bridged via casterHasCharmedCreature (see checkSummonCast)
 	summonCategoryVehicle = 4 // SUMMON_CATEGORY_VEHICLE — no vehicle model on the creature-cast path
 	summonCategoryUnk     = 5 // SUMMON_CATEGORY_UNK
 
@@ -4151,8 +4151,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// a SPELL_EFFECT_SUMMON_PET effect fails with SPELL_FAILED_DONT_REPORT
 	// when the caster's stable holds a dead or untameable hunter pet for the
 	// effect's MiscValue entry, or no pet at all when MiscValue is 0; the
-	// pet self-stun (32752) and charm arms have no Go bridge. C++ relative
-	// order places this right after the create-tamed-pet leg.
+	// pet self-stun (32752) arm has no Go bridge, and the charm arm rides
+	// checkSummonPetCast. C++ relative order places this right after the
+	// create-tamed-pet leg.
 	if failure := s.checkSummonPetCast(spell); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-pet validation", "failure", failure)
@@ -4292,7 +4293,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// SPELL_FAILED_BAD_TARGETS when the unit target does not use mana.
 	// C++ relative order places this leg immediately after the
 	// SPELL_AURA_FLY leg in the ApplyAuraName switch.
-	if failure := s.checkPeriodicManaLeechCast(spell, target); failure != 0 {
+	if failure := s.checkPeriodicManaLeechCast(spell, target, false); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "periodic-mana-leech validation", "failure", failure)
 		return true
@@ -4320,7 +4321,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// the per-effect loop's AURA_BOUNCED recheck (Spell.cpp:6155-6162, now
 	// bridged by checkAuraBouncedCast), so it wires after the
 	// aura-bounced leg.
-	if failure := s.checkTradeSlotCast(target); failure != 0 {
+	if failure := s.checkTradeSlotCast(target, false); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "trade-slot validation", "failure", failure)
 		return true
@@ -6540,10 +6541,9 @@ func (s *session) checkResurrectPetCast(spell wotlk.Spell) uint8 {
 // SPELL_ATTR1_DISMISS_PET (0x1, SharedDefines.h:449 — the _cast dismissal at
 // spells.go:2763 then clears the pet instead). A missing properties entry
 // passes, matching C++'s `if (!SummonProperties) break`. The null-caster arm
-// is vacuous on the client-initiated path. No bridge: the
-// SUMMON_CATEGORY_PUPPET charm arm and the pet leg's fallthrough charm check
-// (Unit::GetCharmedGUID → SPELL_FAILED_ALREADY_HAVE_CHARM) — Go has no
-// charm/possess model (commands_misc2.go).
+// is vacuous on the client-initiated path. The charm arm bridges via
+// casterHasCharmedCreature (Spell.cpp:5818-5825): SUMMON_CATEGORY_PET
+// falls through to the PUPPET charm check, and PUPPET alone checks it.
 func (s *session) checkSummonCast(spell wotlk.Spell) uint8 {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return 0
@@ -6556,11 +6556,17 @@ func (s *session) checkSummonCast(spell wotlk.Spell) uint8 {
 		if err != nil || !found {
 			continue // missing DBC row or file: unknown-data-is-permissive (terrain.go convention)
 		}
-		if props.Control != summonCategoryPet {
-			continue // SUMMON_CATEGORY_PUPPET/others: charm arm has no bridge
+		if props.Control != summonCategoryPet && props.Control != summonCategoryPuppet {
+			continue
 		}
-		if spell.AttributesEx&spellAttr1DismissPet == 0 && s.player.PetGUID != 0 {
+		if props.Control == summonCategoryPet && spell.AttributesEx&spellAttr1DismissPet == 0 && s.player.PetGUID != 0 {
 			return spellFailedAlreadyHaveSummon
+		}
+		// Spell.cpp:5818-5825: SUMMON_CATEGORY_PET falls through to the
+		// PUPPET charm check, and PUPPET alone checks it — a caster with
+		// a charmed unit fails with SPELL_FAILED_ALREADY_HAVE_CHARM.
+		if s.casterHasCharmedCreature() {
+			return spellFailedAlreadyHaveCharm
 		}
 	}
 	return 0
@@ -6612,11 +6618,11 @@ func (s *session) checkCreateTamedPetCast(spell wotlk.Spell, target protocol.Spe
 // per-effect block (Spell.cpp:5837-5873). The m_caster->ToUnit() null arm is
 // vacuous on the client-initiated path (the session is always a player
 // unit), and the non-player-caster ALREADY_HAVE_SUMMON arm with it —
-// creature casters never enter handleCastSpell. No bridge, documented:
-// (1) the strict-cast pet self-stun (pet->CastSpell(pet, 32752) so the
+// creature casters never enter handleCastSpell. The charm arm bridges via
+// casterHasCharmedCreature (Spell.cpp:5855-5856). No bridge, documented:
+// the strict-cast pet self-stun (pet->CastSpell(pet, 32752) so the
 // replaced pet does not attack the player) — creature motions carry no
-// aura/CC model; (2) the GetCharmedGUID() → SPELL_FAILED_ALREADY_HAVE_CHARM
-// arm — Go has no charm/possess model (commands_misc2.go).
+// aura/CC model.
 //
 // The GetPetStable() block bridges through character_pet: C++
 // Pet::GetLoadPetInfo(stable, MiscValue, 0, false) resolves the current pet
@@ -6645,6 +6651,13 @@ func (s *session) checkSummonPetCast(spell wotlk.Spell) uint8 {
 	}
 	if !hasSummonPet {
 		return 0
+	}
+	// Spell.cpp:5855-5856: a caster with a charmed unit fails with
+	// SPELL_FAILED_ALREADY_HAVE_CHARM. C++ order places this after the
+	// live-pet block (whose player half is the strict-cast self-stun,
+	// unbridged above) and before the stable block.
+	if s.casterHasCharmedCreature() {
+		return spellFailedAlreadyHaveCharm
 	}
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return 0
@@ -7439,9 +7452,10 @@ func (s *session) checkFlyCast(spell wotlk.Spell) uint8 {
 // SpellEffectInfo::IsTargetingArea (SpellInfo.cpp:380-383 — selection
 // category AREA or CONE) via the enemy/friendly area target-type lists plus
 // the friendly cone list. The caster-TYPEID_PLAYER arm is vacuous on the
-// client path (session always a player), and handleCastSpell passes no cast
-// item (verified at checkOpenLockCast — m_CastItem is always nil here), so
-// the mana gate always applies once the effect and unit target resolve.
+// client path (session always a player). The m_CastItem arm
+// (Spell.cpp:6142-6143) skips the power check: castItem callers (item
+// casts) pass true; book and triggered callers pass false (m_CastItem is
+// always nil there — verified at checkOpenLockCast).
 // Player targets read the shapeshift-aware playerPowerType (shapeshift.go);
 // creature targets read the motion PowerType — reusing unitTargetPowerType,
 // the same bridge as checkPowerBurnDrainCast. C++ gates only when
@@ -7449,7 +7463,7 @@ func (s *session) checkFlyCast(spell wotlk.Spell) uint8 {
 // (pets have no power-type model). Returns the SPELL_FAILED_* result code, 0
 // on success. Neither result carries extra WriteCastResultInfo params, so
 // castFailedExtParams needs no case (verified Spell.cpp:3974-4160).
-func (s *session) checkPeriodicManaLeechCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+func (s *session) checkPeriodicManaLeechCast(spell wotlk.Spell, target protocol.SpellTargetData, castItem bool) uint8 {
 	if s == nil || s.player == nil || s.server == nil {
 		return 0
 	}
@@ -7473,6 +7487,10 @@ func (s *session) checkPeriodicManaLeechCast(spell wotlk.Spell, target protocol.
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 {
 		return spellFailedBadImplicitTargets
 	}
+	if castItem {
+		// Spell.cpp:6142-6143: m_CastItem skips the power-type leg.
+		return 0
+	}
 	targetPower, ok := s.unitTargetPowerType(target.UnitGUID)
 	if !ok {
 		return 0
@@ -7484,31 +7502,36 @@ func (s *session) checkPeriodicManaLeechCast(spell wotlk.Spell, target protocol.
 }
 
 // checkTradeSlotCast mirrors the trade-slot block of Spell::CheckCast
-// (Spell.cpp:6164-6181). The m_CastItem arm is vacuous on the
-// handleCastSpell path: book casts (CMSG_CAST_SPELL) never carry a cast
-// item (Spell.cpp:584 — m_CastItem is set only by CastItemUseSpell), and
-// the item-cast variant of the arm is already bridged at cast completion
-// in finishSpellCast (spells.go:3429), which is the only CheckCast-time
-// coverage item casts get (the CMSG_USE_ITEM path in items.go runs no
-// CheckCast gates). The caster-TYPEID_PLAYER arm is vacuous (the session
-// is always a player). Otherwise: no trade state (Player::GetTradeData)
-// → SPELL_FAILED_NOT_TRADING; a wire item GUID other than the non-traded
-// slot sentinel (TRADE_SLOT_NONTRADED = 6, TradeData.h:27 — the client
-// sends the slot index as the item target GUID until
-// UpdateTradeSlotItem rewrites it) → SPELL_FAILED_BAD_TARGETS; an
-// enchant already deferred into the trade (TradeData::GetSpell) →
-// SPELL_FAILED_ITEM_ALREADY_ENCHANTED. The !IsTriggered() guard is
-// structural: handleCastSpell serves only client-initiated casts
-// (server.go:1466) and triggered casts go through castSpellDirect, so
-// the enchant-pending arm always applies here. Neither failure code
-// carries extra WriteCastResultInfo params (verified
+// (Spell.cpp:6164-6181). The m_CastItem arm (Spell.cpp:6167-6171) fires
+// first when set: an item cast targeting the trade window fails with
+// SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW ahead of the NOT_TRADING terms;
+// castItem callers (item casts) pass true, book casts pass false
+// (CMSG_CAST_SPELL never carries a cast item, Spell.cpp:584). The
+// finishSpellCast completion arm is the _cast CheckCast(false)
+// revalidation twin of the same leg. The caster-TYPEID_PLAYER arm is
+// vacuous (the session is always a player). Otherwise: no trade state
+// (Player::GetTradeData) → SPELL_FAILED_NOT_TRADING; a wire item GUID
+// other than the non-traded slot sentinel (TRADE_SLOT_NONTRADED = 6,
+// TradeData.h:27 — the client sends the slot index as the item target
+// GUID until UpdateTradeSlotItem rewrites it) →
+// SPELL_FAILED_BAD_TARGETS; an enchant already deferred into the trade
+// (TradeData::GetSpell) → SPELL_FAILED_ITEM_ALREADY_ENCHANTED. The
+// !IsTriggered() guard is structural: handleCastSpell serves only
+// client-initiated casts (server.go:1466) and triggered casts go through
+// castSpellDirect, so the enchant-pending arm always applies here.
+// Neither failure code carries extra WriteCastResultInfo params (verified
 // Spell.cpp:3974-4160), so castFailedExtParams needs no case.
-func (s *session) checkTradeSlotCast(target protocol.SpellTargetData) uint8 {
+func (s *session) checkTradeSlotCast(target protocol.SpellTargetData, castItem bool) uint8 {
 	if s == nil || s.player == nil {
 		return 0
 	}
 	if target.Flags&protocol.SpellTargetFlagTradeItem == 0 {
 		return 0
+	}
+	if castItem {
+		// Spell.cpp:6167-6171: m_CastItem returns first, ahead of the
+		// NOT_TRADING terms.
+		return spellFailedItemEnchantTradeWindow
 	}
 	if s.trade == nil {
 		return spellFailedNotTrading
@@ -26710,12 +26733,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// arms stay unbridged, no navmesh, same as the client twin; the
 	// Warbringer script-override aura strip is a SpellScript side
 	// effect with no bridge). Summon-pet's strict pet self-stun
-	// (32752) and charm legs stay out with the client twin (player
-	// casters never fail on an existing pet; the charm arm has no
-	// bridge); summon-player/RAF key on the caster's selection, not
-	// the wire target, exactly as C++ GetTarget does; open-lock's
-	// item-target leg reads no item here (the funnel carries no item
-	// target, and castItemGUID is the cast item, not GetItemTarget).
+	// (32752) leg stays out (no pet-cast bridge; the charm leg is
+	// bridged on the client twin checkSummonPetCast, which the funnel
+	// does not run — triggered casts skip CheckCast); summon-player/RAF
+	// key on the caster's selection, not the wire target, exactly as
+	// C++ GetTarget does; open-lock's item-target leg reads no item
+	// here (the funnel carries no item target, and castItemGUID is the
+	// cast item, not GetItemTarget).
 	funnelWireTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
 	if targetGUID != 0 && uint16(targetGUID>>48) == 0xF110 {
 		funnelWireTarget = protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: targetGUID}
@@ -26822,7 +26846,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		return
 	}
 	if castItemGUID == 0 {
-		if failure := s.checkPeriodicManaLeechCast(spell, funnelWireTarget); failure != 0 {
+		if failure := s.checkPeriodicManaLeechCast(spell, funnelWireTarget, false); failure != 0 {
 			rejectTriggeredCast("triggered periodic mana leech spell invalid")
 			return
 		}

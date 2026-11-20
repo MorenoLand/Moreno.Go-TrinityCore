@@ -4979,6 +4979,59 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "talent-spec-select in active bg", "failure", failure)
 			return true
 		}
+		// CheckCast ApplyAuraName switch + tail (Spell.cpp:6033-6209): the
+		// aura loop runs for item casts too (prepare runs CheckCast for
+		// CastItemUseSpell, Spell.cpp:3096), in the book path's order —
+		// possess-pet, charm, mounted, ranged-attack-power-attacker-bonus,
+		// fly, periodic-mana-leech (castItem skips its power-type leg,
+		// Spell.cpp:6142-6143), aura-bounced, trade-slot (castItem takes
+		// the ITEM_ENCHANT_TRADE_WINDOW arm first, Spell.cpp:6167-6171),
+		// combo points. The helpers are shared with handleCastSpell.
+		if failure := s.checkPossessPetCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "possess-pet validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkCharmCast(spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "charm/possess validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkMountedCast(ctx, spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "mounted validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkRangedAttackPowerAttackerBonusCast(spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "ranged-attack-power-attacker-bonus validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkFlyCast(spell); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "fly validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkPeriodicManaLeechCast(spell, target, true); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "periodic-mana-leech validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkAuraBouncedCast(spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "aura-bounced validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkTradeSlotCast(target, true); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "trade-slot validation", "failure", failure)
+			return true
+		}
+		if failure := s.checkComboPointsCast(spell, target); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "combo-point validation", "failure", failure)
+			return true
+		}
 		// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
 		// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster):
 		// item casts are TRIGGERED_NONE prepares
