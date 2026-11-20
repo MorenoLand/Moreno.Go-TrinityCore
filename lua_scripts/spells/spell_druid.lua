@@ -1092,3 +1092,330 @@ local function t10Balance4pBonusProc(event, aura, target, actor, procTarget, dam
 end
 
 RegisterAuraEvent(SPELL_DRUID_T10_BALANCE_4P_BONUS, 6, t10Balance4pBonusProc)
+
+--   spell_dru_eclipse (spell_druid.cpp:210-284): aura 48516, mode
+--   6 (OnEffectProc, EFFECT_0/1, SPELL_AURA_DUMMY). CheckProc
+--   vetoes the whole proc while the actor carries a solar (48517)
+--   or lunar (48518) proc aura; CheckSolar admits only Starfire
+--   (family flags[0] & 0x4) and CheckLunar only Wrath (flags[0] &
+--   0x1, 60% roll), each on its own 30 s cooldown kept in the
+--   aura's script store against GetGameTimeMS (an unset key reads
+--   0, the C++ time_point::min twin). PreventDefaultAction; the
+--   actor casts 48517 / 48518 on self, triggered. A false return
+--   on the non-matching effect falls through to that effect's
+--   default leg (a DUMMY no-op) and does not block the other
+--   effect's fire (procs.go fires ev6 once per eligible effect).
+--   DORMANT until Spell.dbc ships the 48516 proc entry.
+local SPELL_DRUID_ECLIPSE = 48516 -- spell_druid.cpp:210
+local SPELL_DRUID_ECLIPSE_SOLAR_PROC = 48517 -- spell_druid.cpp:38
+local SPELL_DRUID_ECLIPSE_LUNAR_PROC = 48518 -- spell_druid.cpp:37
+
+local function eclipseProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if actor == nil then
+        return true
+    end
+    if actor:HasAura(SPELL_DRUID_ECLIPSE_SOLAR_PROC) or actor:HasAura(SPELL_DRUID_ECLIPSE_LUNAR_PROC) then
+        return true
+    end
+    local now = GetGameTimeMS()
+    if effectIndex == 0 then
+        if bit32.band(procEvent:GetSpellFamilyFlags(0), 0x4) == 0 then
+            return false
+        end
+        if aura:GetScriptValue("solar") > now then
+            return false
+        end
+        aura:SetScriptValue("solar", now + 30000)
+        actor:CastSpell(actor, SPELL_DRUID_ECLIPSE_SOLAR_PROC, true)
+        return true
+    elseif effectIndex == 1 then
+        if bit32.band(procEvent:GetSpellFamilyFlags(0), 0x1) == 0 then
+            return false
+        end
+        if math.random(0, 99) >= 60 then
+            return false
+        end
+        if aura:GetScriptValue("lunar") > now then
+            return false
+        end
+        aura:SetScriptValue("lunar", now + 30000)
+        actor:CastSpell(actor, SPELL_DRUID_ECLIPSE_LUNAR_PROC, true)
+        return true
+    end
+    return false
+end
+
+RegisterAuraEvent(SPELL_DRUID_ECLIPSE, 6, eclipseProc)
+
+--   spell_dru_glyph_of_shred (spell_druid.cpp:594-641): aura
+--   54815, mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; the proc target's Rip (PERIODIC_DAMAGE,
+--   family 7, flag 0x00800000, cast by the actor) gains
+--   EFFECT_0 amount * 1000 ms of duration and max duration, while
+--   its live max stays under the DBC max + 3 * amount * 1000 +
+--   4000 per Glyph of Rip (54818) / T7 lacerate bonus (60141) the
+--   actor carries. A missing Rip casts nothing but still vetoes.
+--   DORMANT until Spell.dbc ships the 54815 proc entry; the cap
+--   reads 0 (GetSpellMaxDuration) until the Rip row ships.
+local SPELL_DRUID_GLYPH_OF_SHRED = 54815 -- spell_druid.cpp:594
+local SPELL_DRUID_GLYPH_OF_RIP = 54818 -- spell_druid.cpp:79
+local SPELL_DRUID_RIP_DURATION_LACERATE_DMG = 60141 -- spell_druid.cpp:80
+local SPELL_AURA_PERIODIC_DAMAGE = 3 -- SpellAuraDefines.h:83
+local SPELLFAMILY_DRUID = 7 -- SharedDefines.h:3588
+
+local function glyphOfShredProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    local ripId = procTarget:GetAuraEffectSpellIdByFamily(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_DRUID, 0x00800000, 0, 0, actor:GetGUID())
+    if ripId == nil then
+        return true
+    end
+    local rip = procTarget:GetAura(ripId)
+    if rip == nil then
+        return true
+    end
+    local cap = rip:GetSpellMaxDuration(ripId) + 3 * aura:GetAmount(0) * 1000
+    if actor:HasAura(SPELL_DRUID_GLYPH_OF_RIP) then
+        cap = cap + 4000
+    end
+    if actor:HasAura(SPELL_DRUID_RIP_DURATION_LACERATE_DMG) then
+        cap = cap + 4000
+    end
+    if rip:GetMaxDuration() < cap then
+        rip:SetDuration(rip:GetDuration() + aura:GetAmount(0) * 1000)
+        rip:SetMaxDuration(rip:GetMaxDuration() + aura:GetAmount(0) * 1000)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_GLYPH_OF_SHRED, 6, glyphOfShredProc)
+
+--   spell_dru_glyph_of_starfire (spell_druid.cpp:643-682): spell
+--   54846, mode 5 (OnEffectHitTarget, EFFECT_0,
+--   SPELL_EFFECT_SCRIPT_EFFECT). The hit unit's Moonfire
+--   (PERIODIC_DAMAGE, family 7, flag 0x00000002, cast by the
+--   caster) gains 3000 ms of duration and max duration, while its
+--   live max stays under the DBC max + 9000 + 3000 per Increased
+--   Moonfire Duration (38414) / Nature's Splendor (57865) the
+--   caster carries. DORMANT until Spell.dbc ships the 54846 row;
+--   the cap reads 0 (GetSpellMaxDuration) until the Moonfire row
+--   ships.
+local SPELL_DRUID_INCREASED_MOONFIRE_DURATION = 38414 -- spell_druid.cpp:55
+local SPELL_DRUID_NATURES_SPLENDOR = 57865 -- spell_druid.cpp:63
+
+local function glyphOfStarfireHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local moonfireId = target:GetAuraEffectSpellIdByFamily(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_DRUID, 0x00000002, 0, 0, caster:GetGUID())
+    if moonfireId == nil then
+        return
+    end
+    local moonfire = target:GetAura(moonfireId)
+    if moonfire == nil then
+        return
+    end
+    local cap = moonfire:GetSpellMaxDuration(moonfireId) + 9000
+    if caster:HasAura(SPELL_DRUID_INCREASED_MOONFIRE_DURATION) then
+        cap = cap + 3000
+    end
+    if caster:HasAura(SPELL_DRUID_NATURES_SPLENDOR) then
+        cap = cap + 3000
+    end
+    if moonfire:GetMaxDuration() < cap then
+        moonfire:SetDuration(moonfire:GetDuration() + 3000)
+        moonfire:SetMaxDuration(moonfire:GetMaxDuration() + 3000)
+    end
+end
+
+RegisterSpellEvent(SPELL_DRUID_GLYPH_OF_STARFIRE_SCRIPT, 5, glyphOfStarfireHit)
+
+--   spell_dru_item_t6_trinket (spell_druid.cpp:1614-1667): aura
+--   40442, mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; the proc spell's family flags select
+--   the blessing (Starfire flags[0] & 0x4 -> 40445 at 25%,
+--   Rejuvenation flags[0] & 0x10 -> 40446 at 25%, Mangle
+--   flags[1] & 0x440 -> 40452 at 40%), rolled in that order and
+--   cast by the actor on self, triggered. A spell matching none
+--   casts nothing but still vetoes. DORMANT until Spell.dbc
+--   ships the 40442 proc entry.
+local SPELL_DRUID_ITEM_T6_TRINKET = 40442 -- spell_druid.cpp:1614
+local SPELL_DRUID_BLESSING_OF_REMULOS = 40445 -- spell_druid.cpp:88
+local SPELL_DRUID_BLESSING_OF_ELUNE = 40446 -- spell_druid.cpp:89
+local SPELL_DRUID_BLESSING_OF_CENARIUS = 40452 -- spell_druid.cpp:90
+
+local function itemT6TrinketProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil then
+        return true
+    end
+    local spellId = nil
+    local chance = 0
+    if bit32.band(procEvent:GetSpellFamilyFlags(0), 0x4) ~= 0 then
+        spellId = SPELL_DRUID_BLESSING_OF_REMULOS
+        chance = 25
+    elseif bit32.band(procEvent:GetSpellFamilyFlags(0), 0x10) ~= 0 then
+        spellId = SPELL_DRUID_BLESSING_OF_ELUNE
+        chance = 25
+    elseif bit32.band(procEvent:GetSpellFamilyFlags(1), 0x440) ~= 0 then
+        spellId = SPELL_DRUID_BLESSING_OF_CENARIUS
+        chance = 40
+    else
+        return true
+    end
+    if math.random(0, 99) < chance then
+        actor:CastSpell(nil, spellId, true)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_ITEM_T6_TRINKET, 6, itemT6TrinketProc)
+
+--   spell_dru_leader_of_the_pack (spell_druid.cpp:777-826): aura
+--   24932, mode 6 (OnEffectProc, EFFECT_1, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; a 0 EFFECT_1 amount or a 34299
+--   cooldown casts nothing. Otherwise the actor casts the heal
+--   34299 on self with BP0 = CountPctFromMaxHealth(EFFECT_1
+--   amount) and takes the 6 s cooldown on 34299; only when the
+--   aura's caster is the actor itself does the Improved Leader
+--   of the Pack mana leg fire (34297 rank aura, EFFECT_1
+--   CalcValue of its spell, no-caster overload, as the percent
+--   of max mana for 68285). DORMANT until Spell.dbc ships the
+--   24932 proc entry; the mana leg is DBC-dormant on
+--   GetSpellEffectCalcValue until the 34297 row ships.
+local SPELL_DRUID_LEADER_OF_THE_PACK = 24932 -- spell_druid.cpp:777
+local SPELL_DRUID_IMP_LEADER_OF_THE_PACK_R1 = 34297 -- spell_druid.cpp:82
+local SPELL_DRUID_IMP_LEADER_OF_THE_PACK_HEAL = 34299 -- spell_druid.cpp:83
+local SPELL_DRUID_IMP_LEADER_OF_THE_PACK_MANA = 68285 -- spell_druid.cpp:84
+
+local function leaderOfThePackProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 1 then
+        return false
+    end
+    if actor == nil or actor:GetObjectType() ~= "Player" then
+        return true
+    end
+    if aura:GetAmount(1) == 0 or actor:HasSpellCooldown(SPELL_DRUID_IMP_LEADER_OF_THE_PACK_HEAL) then
+        return true
+    end
+    actor:CastCustomSpell(nil, SPELL_DRUID_IMP_LEADER_OF_THE_PACK_HEAL, true, actor:CountPctFromMaxHealth(aura:GetAmount(1)))
+    actor:AddSpellCooldown(SPELL_DRUID_IMP_LEADER_OF_THE_PACK_HEAL, 6000)
+    if aura:GetCasterGUID() ~= actor:GetGUID() then
+        return true
+    end
+    local imp = actor:GetAuraOfRankedSpell(SPELL_DRUID_IMP_LEADER_OF_THE_PACK_R1)
+    if imp == nil then
+        return true
+    end
+    actor:CastCustomSpell(nil, SPELL_DRUID_IMP_LEADER_OF_THE_PACK_MANA, true, math.floor(actor:GetMaxPower(POWER_MANA) * imp:GetSpellEffectCalcValue(imp:GetAuraId(), 1) / 100))
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_LEADER_OF_THE_PACK, 6, leaderOfThePackProc)
+
+--   spell_dru_t10_restoration_4p_bonus_dummy
+--   (spell_druid.cpp:1846-1891): aura 70664, mode 6 (OnEffectProc,
+--   EFFECT_0, SPELL_AURA_DUMMY). CheckProc vetoes the proc when
+--   the event spell is 70691 itself, when the heal is nil/0, when
+--   the actor is not a player (the NPCBot leg stays out: no
+--   IsNPCBot bridge), or when the actor is ungrouped and the proc
+--   target is the actor itself; otherwise PreventDefaultAction
+--   and the actor casts 70691 on self with BP0 = the heal.
+--   DORMANT until Spell.dbc ships the 70664 proc entry.
+local SPELL_DRUID_T10_RESTORATION_4P_BONUS_DUMMY = 70664 -- spell_druid.cpp:1846
+
+local function t10Restoration4pBonusDummyProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if procEvent:GetSpellId() == SPELL_DRUID_T10_RESTORATION_4P_BONUS then
+        return true
+    end
+    local heal = procEvent:GetHeal()
+    if heal == nil or heal == 0 then
+        return true
+    end
+    if actor == nil or actor:GetObjectType() ~= "Player" then
+        return true
+    end
+    if actor:GetGroup() == nil and procTarget ~= nil and actor:GetGUID() == procTarget:GetGUID() then
+        return true
+    end
+    actor:CastCustomSpell(nil, SPELL_DRUID_T10_RESTORATION_4P_BONUS, true, heal)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_T10_RESTORATION_4P_BONUS_DUMMY, 6, t10Restoration4pBonusDummyProc)
+
+--   spell_dru_wild_growth (spell_druid.cpp:1913-1951): -48438,
+--   mode 7 (OnObjectAreaTargetSelect, EFFECT_0/1,
+--   TARGET_UNIT_DEST_AREA_ALLY). EFFECT_0 drops targets not in
+--   the caster's raid (IsInRaidWith, self included), keeps the
+--   lowest-health-% first up to GetEffectValue(2) targets — the
+--   DBC CalcValue of the dummy EFFECT_2 at the caster's level —
+--   and stashes the list; EFFECT_1 restores the stashed list.
+--   The stash is module-local and safe only because EFFECT_0 and
+--   EFFECT_1 fire synchronously in one target-select loop; it is
+--   cleared at the start of EFFECT_0, so a guard failure (no
+--   caster, or a 0 effect-2 value without the 48438 row) leaves
+--   EFFECT_1 a no-op and the targets unmutated. TDB spell_ranks
+--   chain 48438/53248/53249/53251. DORMANT until Spell.dbc ships
+--   the 48438 row.
+local SPELL_DRUID_WILD_GROWTH_RANKS = { 48438, 53248, 53249, 53251 }
+
+local wildGrowthStash = nil
+
+local function wildGrowthTargetSelect(event, spell, effectIndex, targets)
+    if effectIndex == 0 then
+        wildGrowthStash = nil
+        local caster = spell:GetCaster()
+        if caster == nil then
+            return
+        end
+        local maxTargets = spell:GetEffectValue(2)
+        if maxTargets == 0 then
+            return
+        end
+        local kept = {}
+        for _, unit in ipairs(targets:GetTargets()) do
+            if unit ~= nil and caster:IsInRaidWith(unit) then
+                table.insert(kept, unit)
+            end
+        end
+        table.sort(kept, function(a, b) return a:GetHealthPct() < b:GetHealthPct() end)
+        while #kept > maxTargets do
+            table.remove(kept)
+        end
+        targets:Clear()
+        for _, unit in ipairs(kept) do
+            targets:Add(unit)
+        end
+        wildGrowthStash = kept
+    elseif effectIndex == 1 then
+        if wildGrowthStash == nil then
+            return
+        end
+        targets:Clear()
+        for _, unit in ipairs(wildGrowthStash) do
+            targets:Add(unit)
+        end
+        wildGrowthStash = nil
+    end
+end
+
+for _, spellId in ipairs(SPELL_DRUID_WILD_GROWTH_RANKS) do
+    RegisterSpellEvent(spellId, 7, wildGrowthTargetSelect)
+end
