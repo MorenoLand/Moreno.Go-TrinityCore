@@ -242,7 +242,8 @@ RegisterAuraEvent(SPELL_GEN_STRIP14.animalBlood, 3, SPELL_GEN_STRIP14.animalBloo
 -- fire on both paths), so the GetHitAura twin reads it: the hit
 -- target's aura of this spell at any rank, guarded on this cast's
 -- caster (the Haunt idiom, spell_warlock.lua) — C++ GetHitAura is
--- m_spell->_spellAura (Spell.cpp:2908), the aura this cast
+-- m_spell->_spellAura (Spell.cpp:2658, DoDamageAndTriggers), the aura
+-- this cast
 -- created/refreshed on the hit target. The StackAmount value rides
 -- the new spell:GetStackAmount bridge (DBC field 49), so no literal
 -- is guessed; a missing DBC row reads 0 and the handler no-ops.
@@ -257,31 +258,30 @@ RegisterAuraEvent(SPELL_GEN_STRIP14.animalBlood, 3, SPELL_GEN_STRIP14.animalBloo
 -- registration is path-agnostic and fires on any player/creature
 -- cast. DORMANT until Spell.dbc ships the 32065/36659 rows (not in
 -- tools/spelldbc_seed/main.go; seed axis parked).
--- C++ spell_gen_landmine_knockback_achievement::HandleScript
--- (spell_generic.cpp:4030-4051): 57099 EFFECT_0 SPELL_EFFECT_SCRIPT_
--- EFFECT. OnEffectHitTarget, when the hit player carries the hit
--- aura at >= 10 stacks, the player casts the achievement spell
--- 57064 triggered on itself. Same GetHitAura twin as above, plus the
--- player gate (GetHitPlayer, TYPEID_PLAYER = 4). ORDERING DELTA: Go
--- fires ev5 before the default apply arms on both paths (spells.go
--- ev5 loop ahead of the apply arm; boss_ai.go:3562 ahead of :3814),
--- while C++ reads the post-application stack — this cast already
--- merged +1 into it (TryRefreshStackOrCreate, Unit.cpp:3326 twin in
--- the Go merge leg). The port therefore gates on the pre-cast stack
--- >= 9, i.e. (pre-cast + 1) >= 10, AND on spell:GetStackAmount() >=
--- 10, so a spell whose ceiling is below 10 can never fire early the
--- way a bare >= 9 gate would. No cast site for 57099 exists in the
--- C++ tree outside this registration; the registration fires on
--- whichever path casts it. TDB 26091 binds 57099 to
--- spell_gen_landmine_knockback_achievement (AC says
--- spell_gen_mine_sweeper, divergent name, same id). DORMANT until
--- Spell.dbc ships the 57099 row.
+-- NOT PORTED (reverted 2026-11-20, was e4dd1434): C++
+-- spell_gen_landmine_knockback_achievement::HandleScript
+-- (spell_generic.cpp:4030-4051) can never observe its hit aura, so
+-- the 57064 achievement cast is unreachable in C++ and any Lua twin
+-- would fabricate it. Proof: the hook is EFFECT_0, SPELL_EFFECT_
+-- SCRIPT_EFFECT, and it reads GetHitAura() = m_spell->_spellAura
+-- (SpellScript.cpp:614-630); _spellAura is set only in
+-- DoSpellEffectHit (Spell.cpp:2908) from hitInfo.HitAura, which is
+-- created only when the current effect has an aura mask
+-- (BuildEffectMaskForOwner, Spell.cpp:2843, returns effMask &
+-- availableEffectMask; SCRIPT_EFFECT is not a unit-owned aura effect,
+-- SpellInfo.cpp:397-400) — and HitAura starts nullptr
+-- (Spell.h:697), with no other assignment in Spell.cpp. At the i=0
+-- hook the aura therefore reads nil and the handler returns, before
+-- the aura effect's own index ever runs; if EFFECT_0 were an aura
+-- effect instead, the hook would never fire (EffectNameCheck,
+-- SpellScript.cpp:131-137). The e4dd1434 port's "post-application
+-- stack" premise was wrong for this hook, and its >= 9 pre-cast
+-- gate would have credited 57064 on the 10th stack. TDB 26091 binds
+-- 57099 to spell_gen_landmine_knockback_achievement (AC says
+-- spell_gen_mine_sweeper, divergent name, same id); no cast site
+-- for 57099 exists in the C++ tree outside this registration.
 local SPELL_GEN_STRIP15 = {
     decayOverTime = { 32065, 36659 }, -- spell_generic.cpp:4381-4382
-    landmine = 57099, -- spell_generic.cpp:4030
-    landmineAchievement = 57064, -- spell_generic.cpp:4027
-    landmineStacks = 10, -- spell_generic.cpp:4040
-    typeIdPlayer = 4,
 
     decayAfterHit = function(event, spell, hitTarget)
         if hitTarget == nil then
@@ -301,33 +301,8 @@ local SPELL_GEN_STRIP15 = {
         end
         aura:SetStackAmount(stackAmount)
     end,
-
-    landmineHit = function(event, spell, hitTarget, effectIndex)
-        if effectIndex ~= 0 then
-            return
-        end
-        if hitTarget == nil or hitTarget:GetTypeId() ~= SPELL_GEN_STRIP15.typeIdPlayer then
-            return
-        end
-        local aura = hitTarget:GetAuraOfRankedSpell(SPELL_GEN_STRIP15.landmine)
-        if aura == nil then
-            return
-        end
-        local caster = spell:GetCaster()
-        if caster ~= nil and aura:GetCasterGUID() ~= caster:GetGUID() then
-            return
-        end
-        if spell:GetStackAmount() < SPELL_GEN_STRIP15.landmineStacks then
-            return
-        end
-        if aura:GetStackAmount() + 1 < SPELL_GEN_STRIP15.landmineStacks then
-            return
-        end
-        hitTarget:CastSpell(hitTarget, SPELL_GEN_STRIP15.landmineAchievement, true)
-    end,
 }
 
 for _, spellId in ipairs(SPELL_GEN_STRIP15.decayOverTime) do
     RegisterSpellEvent(spellId, 3, SPELL_GEN_STRIP15.decayAfterHit)
 end
-RegisterSpellEvent(SPELL_GEN_STRIP15.landmine, 5, SPELL_GEN_STRIP15.landmineHit)

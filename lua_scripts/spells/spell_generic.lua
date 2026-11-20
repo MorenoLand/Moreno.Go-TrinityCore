@@ -1022,9 +1022,10 @@ RegisterAuraEvent(SPELL_BURNING_DEPTHS_NECROLYTE_IMAGE, 3, burningDepthsRemove)
 --   (procEvent:GetSpellId() == 36659; a spell-less event reads 0 and vetoes);
 --   Decay vetoes the default leg and drops one stack
 --   (SetStackAmount(GetStackAmount() - 1), the ModStackAmount(-1) twin).
---   SPELL HALF STAYS OUT: spell_gen_decay_over_time_spell::ModAuraStack
---   (AfterHit, :1324-1338) needs GetHitAura (no Lua bridge) plus the DBC
---   StackAmount value (no bridge). DORMANT until Spell.dbc ships 36659.
+--   SPELL HALF PORTED in spell_generic2.lua (STRIP15, e4dd1434):
+--   spell_gen_decay_over_time_spell::ModAuraStack (AfterHit,
+--   :1324-1338) via the hit target's GetAuraOfRankedSpell twin +
+--   spell:GetStackAmount(). DORMANT until Spell.dbc ships 36659.
 local SPELL_DECAY_OVER_TIME_TAIL_STING = 36659 -- spell_generic.cpp:1393
 
 local function decayOverTimeProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
@@ -1542,8 +1543,9 @@ RegisterSpellEvent(SPELL_GEN_GNOMISH_TRANSPORTER, 5, gnomishTransporterHit)
 --   arm is ported above. Same shape: the proc event's spell must
 --   be this aura's own spell, then veto the default leg and drop
 --   one stack. The factory keeps the per-spell gate; the 36659
---   handler above is untouched. SPELL HALF STAYS OUT (GetHitAura
---   gap, same as 36659). DORMANT until Spell.dbc ships 32065.
+--   handler above is untouched. SPELL HALF PORTED in
+--   spell_generic2.lua (STRIP15, e4dd1434), same twin as 36659.
+--   DORMANT until Spell.dbc ships 32065.
 local SPELL_DECAY_OVER_TIME_FUNGAL_DECAY = 32065 -- spell_generic.cpp:1372
 
 local function makeDecayOverTimeProc(spellId)
