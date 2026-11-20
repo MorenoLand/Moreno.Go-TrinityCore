@@ -119,6 +119,8 @@ local SPELL_MAGE_FIRE_WARD_RANKS = { 543, 8457, 8458, 10223, 10225, 27128, 43010
 local SPELL_MAGE_FROST_WARD = 6143 -- spell_mage.cpp:627
 local SPELL_MAGE_FROST_WARD_RANKS = { 6143, 8461, 8462, 10177, 28609, 32796, 43012 } -- TDB spell_ranks chain for 6143
 local SPELL_MAGE_FROST_WARDING_R1 = 11189 -- spell_mage.cpp:39
+local SPELL_MAGE_FROST_WARDING_R2 = 28332 -- Wowhead-verified rank 2 (EFFECT_1 Dummy 30)
+local SPELL_MAGE_FROST_WARDING_RANKS = { SPELL_MAGE_FROST_WARDING_R1, SPELL_MAGE_FROST_WARDING_R2 }
 local SPELL_MAGE_FROST_WARDING_TRIGGERED = 57776 -- spell_mage.cpp:40
 
 local AURA_REMOVE_BY_ENEMY_SPELL = 3
@@ -126,8 +128,9 @@ local AURA_REMOVE_BY_EXPIRE = 4
 
 -- C++ spell_mage_fire_frost_ward::Absorb (spell_mage.cpp:661-679):
 -- EFFECT_0 OnEffectAbsorb. When the holder carries the Frost
--- Warding talent aura (any rank; EFFECT_0 presence via
--- GetAuraEffectOfRankedSpell), the talent's EFFECT_1 CalcValue is
+-- Warding talent aura (any rank; exact-id GetAura loop over both
+-- ranks — the TDB spell_ranks chain for 11189 is unseeded, so the
+-- ranked lookups miss R2), the talent's EFFECT_1 CalcValue is
 -- the roll chance (C++ reads EFFECT_1 CalcValue of the same spell)
 -- and a passed roll negates the full remaining damage and casts the
 -- triggered leg 57776 on the holder with BP0 = damage, triggered.
@@ -148,10 +151,17 @@ local function fireFrostWardAbsorb(event, aura, target, damage, absorbAmount)
     if target == nil or damage == nil or damage == 0 then
         return nil
     end
-    if target:GetAuraEffectOfRankedSpell(SPELL_MAGE_FROST_WARDING_R1, 0) == nil then
+    local talentId = nil
+    for _, id in ipairs(SPELL_MAGE_FROST_WARDING_RANKS) do
+        if target:GetAura(id) ~= nil then
+            talentId = id
+            break
+        end
+    end
+    if talentId == nil then
         return nil
     end
-    local chance = aura:GetSpellEffectCalcValue(SPELL_MAGE_FROST_WARDING_R1, 1)
+    local chance = aura:GetSpellEffectCalcValue(talentId, 1)
     if chance == nil or chance <= 0 then
         return nil
     end
