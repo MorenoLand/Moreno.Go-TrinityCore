@@ -11982,9 +11982,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// retarget (Object.cpp:2641-2648, Spell.cpp:2174-2188): the spell
 	// returns to the caster while the reflector stays the TargetInfo
 	// target for the return trip's travel time. The ProcReflectDelayed
-	// arm fires only for player reflectors — creature taken-side procs
-	// have no Go event-list model, so a creature reflector's proc is
-	// skipped (findSessionByGUID finds no session).
+	// arm fires for any Unit reflector — a creature reflector runs the
+	// creature proc loop (procCreatureReflectTakenAuraTriggers) on the
+	// same timer.
 	doReflect := func() {
 		isReflected = true
 		reflectSourceGUID = targetGUID
@@ -12016,10 +12016,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// outbound-missile arrival — never at the roll above.
 				rsess.consumeReflectAuraCharge()
 			} else {
-				// Creature reflector: the same charge arm over
-				// activeCreatureAuras. Go has no creature event-list
-				// model, so the timer covers it (the taken-side proc
-				// loop itself stays player-only).
+				// Creature reflector: the taken-side proc loop runs for
+				// any Unit reflector (ProcReflectDelayed::Execute,
+				// Spell.cpp:2076-2078), then the same charge arm over
+				// activeCreatureAuras.
+				if rm := s.server.findCreatureMotion(reflectCreatureKey.Map, reflectCreatureKey.InstanceID, reflectorGUID); rm != nil {
+					s.server.procCreatureReflectTakenAuraTriggers(context.Background(), rm, procCasterGUID, procSpell, procTriggered)
+				}
 				s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 			}
 		})
@@ -35582,14 +35585,26 @@ func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, 
 				}
 			})
 		} else if reflectCreatureKey.GUID != 0 {
-			// Creature reflector: the same arrival charge arm over
-			// activeCreatureAuras (no creature event-list model, so the
-			// timer covers it; the taken-side proc loop stays
-			// player-only).
+			// Creature reflector: the taken-side proc loop runs for any
+			// Unit reflector (ProcReflectDelayed::Execute, Spell.cpp:2076-2078),
+			// then the same arrival charge arm over activeCreatureAuras.
 			procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, guid)
+			procCasterGUID := s.playerGUID
+			procTriggered := s.triggeredNoProcEvents > 0
+			procSpell := spell
+			reflectorGUID := guid
 			time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
 				if s.server == nil {
 					return
+				}
+				// ProcReflectDelayed::Execute (Spell.cpp:2077-2078): the arrival
+				// proc and the charge drop are skipped when the original caster
+				// no longer resolves (ObjectAccessor::GetUnit null arm).
+				if s.server.findSessionByGUID(procCasterGUID) == nil {
+					return
+				}
+				if rm := s.server.findCreatureMotion(reflectCreatureKey.Map, reflectCreatureKey.InstanceID, reflectorGUID); rm != nil {
+					s.server.procCreatureReflectTakenAuraTriggers(context.Background(), rm, procCasterGUID, procSpell, procTriggered)
 				}
 				s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 			})

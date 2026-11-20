@@ -4473,7 +4473,13 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				}
 			}
 			if locationFail != 0 {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, locationFail), true)
+				// Spell::WriteCastResultInfo (Spell.cpp:3987-4007):
+				// SPELL_FAILED_REQUIRES_AREA always appends the
+				// uint32 area trailer (0 for every spell but the
+				// hardcoded 41617/41619/41618/41620/45373); the
+				// book-cast twin already routes through
+				// sendCastFailed for this.
+				s.sendCastFailed(ctx, castCount, spell, locationFail)
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "location check", "zone", zoneID, "area", areaID, "failure", locationFail)
 				return true
 			}

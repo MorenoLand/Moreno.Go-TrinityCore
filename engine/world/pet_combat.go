@@ -4989,8 +4989,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// (AddUnitTarget precedes 4338). Each reflected target produces its
 	// own return trip on the pet. The ProcReflectDelayed arm
 	// (Spell.cpp:2181) fires the reflector's taken-side procs at missile
-	// arrival — creature reflectors have no Go event-list model, so only
-	// player reflectors arm it (same as the player-path doReflect).
+	// arrival — a creature reflector runs the creature proc loop
+	// (procCreatureReflectTakenAuraTriggers) on the same timer.
 	// SpellHitResult immune head (Object.cpp:2617-2627) for a pet
 	// caster: the server creature-caster immune verdict, which precedes
 	// evade and reflect in C++ order, so an immune target never rolls
@@ -5100,18 +5100,42 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	for _, trip := range reflectTrips {
 		missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: trip.victimGUID, Reason: protocol.SpellMissReflect, ReflectStatus: trip.status})
-		if s.server.findSessionByGUID(trip.victimGUID) != nil {
-			reflectorGUID := trip.victimGUID
-			delayMs := s.spellTargetTimeDelayMs(ctx, spell, trip.victimGUID)
-			time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
-				if s.server == nil {
-					return
-				}
-				if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
-					rsess.procSpellReflectTakenAuraTriggers(context.Background(), motion.GUID, spell, triggered)
-				}
-			})
+		// ProcReflectDelayed (Spell.cpp:2181) fires the reflector's
+		// taken-side auras at outbound-missile arrival — for a creature
+		// reflector the same event runs the creature proc loop
+		// (procCreatureReflectTakenAuraTriggers); the charge was already
+		// spent at roll time (petSpellReflectVerdict, the synchronous
+		// path's arrival equivalent), so the timer fires the proc only.
+		reflectorGUID := trip.victimGUID
+		delayMs := s.spellTargetTimeDelayMs(ctx, spell, trip.victimGUID)
+		// The creature key resolves now, while the cast ctx is live; the
+		// motion itself resolves at fire time (a despawned reflector's
+		// event dies with it).
+		var reflectCreatureKey creatureAuraKey
+		if tgt, ok := s.getCombatTarget(ctx, reflectorGUID); ok {
+			reflectCreatureKey = creatureAuraKeyForTarget(tgt)
 		}
+		time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+			if s.server == nil {
+				return
+			}
+			// ProcReflectDelayed::Execute (Spell.cpp:2077-2078): the arrival
+			// proc is skipped when the original caster no longer resolves
+			// (ObjectAccessor::GetUnit null arm) — a despawned pet's event
+			// dies with it.
+			if s.server.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID) == nil {
+				return
+			}
+			if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
+				rsess.procSpellReflectTakenAuraTriggers(context.Background(), motion.GUID, spell, triggered)
+				return
+			}
+			if reflectCreatureKey.GUID != 0 {
+				if rm := s.server.findCreatureMotion(reflectCreatureKey.Map, reflectCreatureKey.InstanceID, reflectorGUID); rm != nil {
+					s.server.procCreatureReflectTakenAuraTriggers(context.Background(), rm, motion.GUID, spell, triggered)
+				}
+			}
+		})
 	}
 	// Spell::PreprocessTarget (Spell.cpp:2350) and DoSpellHitOnUnit
 	// (Spell.cpp:7740-7743): a non-NONE ReflectResult nulls _spellHitTarget,

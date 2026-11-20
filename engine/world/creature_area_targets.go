@@ -3380,11 +3380,10 @@ func (s *Server) serverCreatureFullyEffectImmuneVerdict(ctx context.Context, m *
 // floored, min 5y, 0 for instant — Spell.cpp:2157-2171), measured from the
 // motion to the reflector's combat position; the session resolves at fire
 // time, the same shape as the inline-path and pet-path bridges. Creature
-// reflectors have no Go event-list model, so the taken-side proc loop only
-// runs for player reflectors — but the charge arm
-// (consumeCreatureReflectAuraCharge) runs for creature reflectors on the
-// same timer, matching C++ which schedules ProcReflectDelayed on the
-// creature's own event list.
+// reflectors have no Go event-list model, so the timer covers both arms:
+// the taken-side proc loop (procCreatureReflectTakenAuraTriggers) and the
+// charge arm (consumeCreatureReflectAuraCharge), matching C++ which
+// schedules ProcReflectDelayed on the creature's own event list.
 func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *creatureMotion, reflectorGUID uint64, spell wotlk.Spell) {
 	if s == nil || motion == nil || reflectorGUID == 0 {
 		return
@@ -3432,6 +3431,11 @@ func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *
 			// ProcReflectDelayed charge arm (Spell.cpp:2181).
 			rsess.consumeReflectAuraCharge()
 		} else {
+			// Creature reflector: the taken-side proc loop runs for any
+			// Unit reflector (ProcReflectDelayed::Execute, Spell.cpp:2076-2078).
+			if rm := s.findCreatureMotion(reflectCreatureKey.Map, reflectCreatureKey.InstanceID, reflectorGUID); rm != nil {
+				s.procCreatureReflectTakenAuraTriggers(context.Background(), rm, attackerGUID, spell, false)
+			}
 			s.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 		}
 	})

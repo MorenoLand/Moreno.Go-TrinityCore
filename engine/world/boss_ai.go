@@ -11691,6 +11691,44 @@ func (s *Server) cheatDeathCreatureProcAllowed(ctx context.Context, m *creatureM
 	return int64(target.Health)-int64(ev.damage) < int64(target.MaxHealth)*20/100
 }
 
+// procCreatureReflectTakenAuraTriggers is the creature-reflector twin of
+// procSpellReflectTakenAuraTriggers (procs.go): the ProcReflectDelayed
+// arrival event (Spell.cpp:2076-2078, 2181) procs the reflector's taken-side
+// auras with PROC_HIT_REFLECT — C++ schedules it on any Unit reflector's
+// event list, so a creature reflector's taken-side auras proc too, not just
+// a player's. The event mirrors ProcReflectDelayed::Execute exactly: actor
+// is the original caster, the action-target mask is
+// TAKEN_SPELL_MAGIC_DMG_CLASS_NEG | TAKEN_SPELL_NONE_DMG_CLASS_NEG, spell
+// type DAMAGE | NO_DMG_HEAL, phase NONE, hit mask REFLECT. Spells with
+// SPELL_ATTR3_CANT_TRIGGER_PROC never reach the loop (Spell.cpp:2440).
+// The reflect aura itself never fires here — 28/74 are not proc-trigger aura
+// types (isProcTriggerAuraType), so its charge still drops through
+// consumeCreatureReflectAuraCharge at the call site, like the player twin's
+// consumeReflectAuraCharge.
+func (s *Server) procCreatureReflectTakenAuraTriggers(ctx context.Context, reflector *creatureMotion, casterGUID uint64, spell wotlk.Spell, triggered bool) {
+	if s == nil || reflector == nil {
+		return
+	}
+	if spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	spellCopy := spell
+	s.fireCreatureAuraProcLoop(ctx, reflector, casterGUID, procEventInfo{
+		typeMask:       procFlagTakenSpellMagicDmgClassNeg | procFlagTakenSpellNoneDmgClassNeg,
+		schoolMask:     schoolMask,
+		spellTypeMask:  procSpellTypeDamage | procSpellTypeNoDmgHeal,
+		spellPhaseMask: procSpellPhaseNone,
+		hitMask:        procHitReflect,
+		triggered:      triggered,
+		eventSpell:     &spellCopy,
+		actorGUID:      casterGUID,
+	})
+}
+
 func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion, triggerTargetGUID uint64, ev procEventInfo) {
 	if s == nil || m == nil {
 		return
