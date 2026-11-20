@@ -628,3 +628,24 @@ local function concussionBlowLaunch(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_WARRIOR_CONCUSSION_BLOW, 10, concussionBlowLaunch)
+
+local SPELL_WARRIOR_INTERVENE = 3411 -- spell_warrior.cpp:594 (class spell_warr_intervene, RegisterSpellScript)
+local SPELL_WARRIOR_INTERVENE_THREAT = 59667 -- spell_warrior.cpp:76
+
+-- C++ spell_warr_intervene::HandleThreat (spell_warrior.cpp:603-607):
+-- OnEffectHitTarget EFFECT_0 CHARGE — the hit unit casts Intervene
+-- Threat (59667) on itself, triggered. No PreventHitDefaultEffect:
+-- the charge movement leg still runs. ev5 fires on the player
+-- direct-cast path (spells.go:14892) and the creature path
+-- (boss_ai.go). No Go twin: 59667 has no Go call site. TDB
+-- spell_script_names binds 3411 (positive, R1-only; no spell_ranks
+-- chain). DORMANT until Spell.dbc ships the 3411 row (unseeded;
+-- seed axis parked).
+local function interveneThreat(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, SPELL_WARRIOR_INTERVENE_THREAT, true)
+end
+
+RegisterSpellEvent(SPELL_WARRIOR_INTERVENE, 5, interveneThreat)
