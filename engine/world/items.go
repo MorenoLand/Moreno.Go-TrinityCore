@@ -3630,6 +3630,16 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	// Capture the ORIGINAL packet dst flag alongside it: the START dest
 	// gate reads the parse-time flag, never the live one (Spell.cpp:700-716).
 	packetHasDst := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+	// SpellCastTargets::Read (Spell.cpp:159-161) + Update (Spell.cpp:483-491):
+	// a packet dest with a transport GUID carries transport-relative
+	// offsets, not world coordinates. Resolve to the transport's current
+	// position now and keep the offset on the target for the UpdatePointers
+	// re-relocation twins (finish head, delayed arrival, update tick).
+	if packetHasDst && target.Destination.Transport != 0 {
+		target.DestTransportGUID = target.Destination.Transport
+		target.DestTransportOffset = [3]float32{target.Destination.X, target.Destination.Y, target.Destination.Z}
+		target.Destination = s.server.relocateSpellDestFromTransport(target.Destination)
+	}
 
 	// HandleClientCastFlags (SpellHandler.cpp:50-72): castFlags & 0x02 carries
 	// elevation, speed, and an optional embedded movement block AFTER the

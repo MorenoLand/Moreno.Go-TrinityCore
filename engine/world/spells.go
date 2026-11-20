@@ -2277,6 +2277,62 @@ func disabledIDListContains(list string, id uint32) bool {
 	return false
 }
 
+// relocateSpellDestFromTransport is the Spell::UpdatePointers dest leg
+// (Spell.cpp:7370-7389) and SpellCastTargets::Update (Spell.cpp:483-491):
+// when the dest carries a transport GUID, the packet X/Y/Z are offsets
+// relative to the transport (Spell.cpp:159-161), so the world position is
+// the transport's current position plus the offset rotated by the
+// transport's orientation (Position::RelocateOffset, Position.cpp:36-42).
+// The input is the offset form; the output is world coords with the
+// transport GUID cleared, so the effect arms and the START/GO packets
+// (which send Destination X/Y/Z verbatim) see world coordinates. A dest
+// with no transport GUID passes through unchanged; a transport that no
+// longer resolves leaves the dest untouched, matching C++'s Update
+// (which relocates only when the transport resolves).
+func (s *Server) relocateSpellDestFromTransport(dest protocol.SpellTargetLocation) protocol.SpellTargetLocation {
+	if s == nil || dest.Transport == 0 {
+		return dest
+	}
+	spawn, ok := s.transportSpawnForGUID(dest.Transport)
+	if !ok {
+		return dest
+	}
+	offX, offY, offZ := dest.X, dest.Y, dest.Z
+	cosO := math.Cos(float64(spawn.Orientation))
+	sinO := math.Sin(float64(spawn.Orientation))
+	dest.X = spawn.X + float32(float64(offX)*cosO-float64(offY)*sinO)
+	dest.Y = spawn.Y + float32(float64(offY)*cosO+float64(offX)*sinO)
+	dest.Z = spawn.Z + offZ
+	dest.Transport = 0
+	return dest
+}
+
+// relocateSpellTargetDest re-derives a target's destination from its
+// preserved transport offset (SpellTargetData.DestTransportGUID/Offset,
+// the C++ SpellDestination _transportGUID/_transportOffset) at an
+// UpdatePointers twin — the finish head (Spell.cpp:3284), the delayed
+// arrival (Spell.cpp:3631), and the update tick (Spell.cpp:3797). A
+// target with no transport dest passes through unchanged.
+func (s *Server) relocateSpellTargetDest(target protocol.SpellTargetData) protocol.SpellTargetData {
+	if target.DestTransportGUID == 0 {
+		return target
+	}
+	relocated := s.relocateSpellDestFromTransport(protocol.SpellTargetLocation{
+		Transport: target.DestTransportGUID,
+		X:         target.DestTransportOffset[0],
+		Y:         target.DestTransportOffset[1],
+		Z:         target.DestTransportOffset[2],
+	})
+	// A transport that vanished mid-cast leaves the destination at its
+	// last world position: the helper returns the offset form untouched
+	// on lookup failure (Transport still set), and overwriting the
+	// world coords with offsets would misplace the landing.
+	if relocated.Transport == 0 {
+		target.Destination = relocated
+	}
+	return target
+}
+
 func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server.Data == nil {
 		return true
@@ -2326,6 +2382,17 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// START dest gate reads the ORIGINAL packet dst flag, not the live
 	// one (Spell.cpp:700-716).
 	packetHasDst := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+	// SpellCastTargets::Read (Spell.cpp:159-161) + Update (Spell.cpp:483-491):
+	// a packet dest with a transport GUID carries transport-relative
+	// offsets, not world coordinates. Resolve to the transport's current
+	// position now (the Read→Update pass) and keep the offset on the
+	// target for the UpdatePointers re-relocation twins (finish head,
+	// delayed arrival, update tick).
+	if packetHasDst && target.Destination.Transport != 0 {
+		target.DestTransportGUID = target.Destination.Transport
+		target.DestTransportOffset = [3]float32{target.Destination.X, target.Destination.Y, target.Destination.Z}
+		target.Destination = s.server.relocateSpellDestFromTransport(target.Destination)
+	}
 	if clientCastFlags&0x02 != 0 {
 		// SpellCastTargets m_elevation / m_speed (HandleClientCastFlags,
 		// SpellHandler.cpp:50-72): projectile data consumed by
@@ -4624,6 +4691,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					s.castMu.Unlock()
 					return
 				}
+				// Spell::update (Spell.cpp:3797): UpdatePointers runs on
+				// every tick, so the in-flight dest tracks the transport
+				// instead of freezing at its prepare-time position.
+				cur.Target = s.server.relocateSpellTargetDest(cur.Target)
 				targetGUID := cur.Target.UnitGUID
 				s.castMu.Unlock()
 				// Spell::update (Spell.cpp:3805-3811):
@@ -10434,6 +10505,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if s.player == nil {
 		return
 	}
+	// Spell::_cast head (Spell.cpp:3284): UpdatePointers re-derives the
+	// dest from the transport's current position before the effects run,
+	// so a cast started on a moving transport lands where the transport
+	// is now, not where it was at prepare time. The instant, bar, item,
+	// and queued-swing paths all funnel through here.
+	target = s.server.relocateSpellTargetDest(target)
 	// Spell::m_hitMask (Spell.cpp:2603): each Spell object accumulates its
 	// targets' proc hit masks for the FINISH/CAST-phase proc events; the
 	// save/reset/restore mirrors that per-cast lifetime across nested
@@ -11320,6 +11397,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if arm.Has {
 						branch.Flags |= protocol.SpellTargetFlagDestLocation
 						branch.Destination = protocol.SpellTargetLocation{X: arm.X, Y: arm.Y, Z: arm.Z}
+						// Arm-time snapshot is a world dest, not the packet
+						// dest — it carries no transport offset.
+						branch.DestTransportGUID = 0
+						branch.DestTransportOffset = [3]float32{}
 					} else {
 						branch.Flags &^= protocol.SpellTargetFlagDestLocation
 					}
@@ -20585,6 +20666,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				refCenteredFriendlyTargets = s.revalidateDelayedHitTargets(context.Background(), spell, refCenteredFriendlyTargets, launchMs, false, 0)
 				friendlyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyConeEffectTargets, launchMs, false, 0)
 				enemyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, enemyConeEffectTargets, launchMs, false, 0)
+				// Spell::handle_delayed (Spell.cpp:3631): UpdatePointers
+				// re-derives the dest from the transport's current
+				// position at missile arrival, so a delayed dest lands
+				// where the transport is now, not where it was at cast.
+				target = s.server.relocateSpellTargetDest(target)
 				applyEffects(context.Background())
 				// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the
 				// combo legs run at the last delayed tick (next_time == 0)
@@ -26379,6 +26465,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					if arm.Has {
 						branch.Flags |= protocol.SpellTargetFlagDestLocation
 						branch.Destination = protocol.SpellTargetLocation{X: arm.X, Y: arm.Y, Z: arm.Z}
+						// Arm-time snapshot is a world dest, not the packet
+						// dest — it carries no transport offset.
+						branch.DestTransportGUID = 0
+						branch.DestTransportOffset = [3]float32{}
 					} else {
 						branch.Flags &^= protocol.SpellTargetFlagDestLocation
 					}
@@ -49285,6 +49375,22 @@ func (s *session) handleUpdateMissileTrajectory(ctx context.Context, payload []b
 		cast.Target.Flags&protocol.SpellTargetFlagSourceLocation != 0 && cast.Target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
 		cast.Target.Source.X, cast.Target.Source.Y, cast.Target.Source.Z = fireX, fireY, fireZ
 		cast.Target.Destination.X, cast.Target.Destination.Y, cast.Target.Destination.Z = impactX, impactY, impactZ
+		// SpellCastTargets::ModDst (Spell.cpp:433-437) → SpellDestination::Relocate
+		// (Spell.cpp:94-100): the client's new impact point keeps the
+		// transport association — the offset is adjusted to the new world
+		// position, so later UpdatePointers twins re-derive from it instead
+		// of overwriting the impact point with the pre-steer dest. A
+		// transport that no longer resolves drops the association, leaving
+		// the impact point as a fixed world dest.
+		if cast.Target.DestTransportGUID != 0 {
+			if spawn, ok := s.server.transportSpawnForGUID(cast.Target.DestTransportGUID); ok {
+				ox, oy, oz, _ := CalculatePassengerOffset(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, impactX, impactY, impactZ, 0)
+				cast.Target.DestTransportOffset = [3]float32{ox, oy, oz}
+			} else {
+				cast.Target.DestTransportGUID = 0
+				cast.Target.DestTransportOffset = [3]float32{}
+			}
+		}
 		cast.Target.TrajElevation = elevation
 		cast.Target.TrajSpeed = speed
 		castMatched = true

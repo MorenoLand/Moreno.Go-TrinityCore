@@ -386,6 +386,14 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 		} else {
 			target.Flags &^= protocol.SpellTargetFlagDestLocation
 		}
+		// The seed replaces the packet dest with a world position
+		// (SetDst, Spell.cpp:1430 family) and a dropped dest carries
+		// none — both clear the transport offset; a kept packet dest
+		// keeps it for the UpdatePointers twins.
+		if !dstKept {
+			target.DestTransportGUID = 0
+			target.DestTransportOffset = [3]float32{}
+		}
 		return finalizeSessionSrcTarget(spell, target, target.Flags&protocol.SpellTargetFlagSourceLocation != 0, s.player.X, s.player.Y, s.player.Z), snapshots, true
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
@@ -450,6 +458,18 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 	}
 	snapshots := make([]sessionDestSnapshot, len(spell.Effects))
 	hasDst := packetHasDstKept || seedApplied
+	// destOp tracks what the implicit dest arms did to the packet dest, so
+	// the transport offset stays valid: keep (no arm moved the dest), reset
+	// (a SetDst arm replaced it with a world position, Spell.cpp:1430/1461
+	// — the transport association dies with the packet dest), shift (a ModDst
+	// arm moved the running dest, Spell.cpp:1497/1705 — the association
+	// survives with the offset re-derived from the final world position).
+	const (
+		destOpKeep = iota
+		destOpReset
+		destOpShift
+	)
+	destOp := destOpKeep
 	// seenSrcCaster tracks whether a TARGET_SRC_CASTER (22) arm has
 	// already run at an earlier (effect, slot) in SelectSpellTargets
 	// order (Spell.cpp:758-779: effects in index order, TargetA
@@ -492,6 +512,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				}
 				x, y, z = resolveCasterDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach, modRadius)
 				hasDst = true
+				destOp = destOpReset
 				// SpellScript OnDestinationTargetSelect RelocateOffset
 				// legs (spell_quest.cpp): 55368 Summon Stefan and 59303
 				// Summon Frost Wyrm raise the EFFECT_0
@@ -548,6 +569,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				// map-height/liquid model).
 				x, y, z = s.fishingDestPoint(spell)
 				hasDst = true
+				destOp = destOpReset
 			case isTargetDestTarget(targetType):
 				// C++ asserts a non-null object target here; without a
 				// resolvable unit target Go keeps the current destination.
@@ -556,6 +578,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				}
 				x, y, z = resolveTargetDestPosition(s.server.Data, targetType, eff.RadiusIndex, unitTarget.X, unitTarget.Y, unitTarget.Z, unitTarget.Orientation)
 				hasDst = true
+				destOp = destOpReset
 			case isDestDestTarget(targetType):
 				// Spell::SelectImplicitDestDestTargets (Spell.cpp:1464):
 				// CheckDst runs before the switch, so the arm sets HasDst
@@ -572,6 +595,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				nx, ny, nz, changed := resolveDestDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), x, y, z, s.player.Orientation, modRadius)
 				if changed {
 					x, y, z = nx, ny, nz
+					destOp = destOpShift
 				}
 			case targetType == implicitTargetDestTraj:
 				// Spell::SelectImplicitTrajTargets (Spell.cpp:1626):
@@ -600,6 +624,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				}
 				if nx, ny, nz, changed := s.resolveTrajDestination(ctx, spell, eff, trajTarget, x, y, z); changed {
 					x, y, z = nx, ny, nz
+					destOp = destOpShift
 				}
 			case targetType == implicitTargetDestChannelTarget || targetType == implicitTargetDestChannelCaster:
 				// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032):
@@ -611,6 +636,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				if nx, ny, nz, ok := s.channelDestForSpell(ctx, spell); ok {
 					x, y, z = nx, ny, nz
 					hasDst = true
+					destOp = destOpReset
 				}
 			case targetType == implicitTargetDestNearbyEntry:
 				// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
@@ -630,6 +656,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				if nx, ny, nz, ok := s.spellEntryNearbyDestPosition(ctx, spell, spellID, effIndex); ok {
 					x, y, z = nx, ny, nz
 					hasDst = true
+					destOp = destOpReset
 				} else {
 					return target, nil, false
 				}
@@ -655,6 +682,28 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 		target.Destination = protocol.SpellTargetLocation{X: x, Y: y, Z: z}
 	} else {
 		target.Flags &^= protocol.SpellTargetFlagDestLocation
+		// No dest at all drops the transport association with the flag.
+		destOp = destOpReset
+	}
+	// Apply the transport-offset consequence of the arms above: a SetDst
+	// arm replaced the packet dest with a world position (no transport
+	// association survives), a ModDst arm shifted the running dest (the
+	// association survives with the offset re-derived from the final world
+	// position at the transport's current position, SpellDestination::Relocate,
+	// Spell.cpp:94-100). A transport that no longer resolves drops the
+	// association, leaving the final world dest fixed.
+	switch destOp {
+	case destOpReset:
+		target.DestTransportGUID = 0
+		target.DestTransportOffset = [3]float32{}
+	case destOpShift:
+		if spawn, ok := s.server.transportSpawnForGUID(target.DestTransportGUID); ok {
+			ox, oy, oz, _ := CalculatePassengerOffset(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, x, y, z, 0)
+			target.DestTransportOffset = [3]float32{ox, oy, oz}
+		} else {
+			target.DestTransportGUID = 0
+			target.DestTransportOffset = [3]float32{}
+		}
 	}
 	return finalizeSessionSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), snapshots, true
 }

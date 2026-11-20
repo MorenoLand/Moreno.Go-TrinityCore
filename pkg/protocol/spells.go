@@ -124,6 +124,18 @@ type SpellTargetData struct {
 	// which C++ fails for no-need spells since RemoveSrc cleared it.
 	ReadSrc    SpellTargetLocation
 	HasReadSrc bool
+	// DestTransportGUID/DestTransportOffset carry the C++ SpellDestination
+	// _transportGUID/_transportOffset (Spell.h:134-135) for the cast's
+	// destination: when the client packet's dest carries a transport GUID,
+	// its X/Y/Z are transport-relative offsets (Spell.cpp:159-161), and
+	// the world dest is re-derived from the transport's current position
+	// at every UpdatePointers twin (Spell.cpp:7331-7389). Destination.X/Y/Z
+	// hold the relocated world coords; the offset rides here so the twins
+	// can re-derive them. Never written to the wire: WriteSpellTargetData
+	// sends Destination X/Y/Z verbatim, which hold world coords with the
+	// transport GUID cleared once relocated.
+	DestTransportGUID   uint64
+	DestTransportOffset [3]float32
 }
 
 type SpellMissStatus struct {
