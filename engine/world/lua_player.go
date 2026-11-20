@@ -284,6 +284,53 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.spellBaseDamageBonusDone(schoolMask)}, nil
 	}
+	// CalculateSpellDamage(spellID[, effectIndex[, baseAmount]]) is
+	// WorldObject::CalculateSpellDamage (Object.cpp:2271-2274) for an
+	// explicit spell: SpellEffectInfo::CalcValue(caster, &baseAmount)
+	// (SpellInfo.cpp:402-440) via the calcSpellDamageForBase twin
+	// (lua_aura.go). The base defaults to the DBC BasePoints of the
+	// effect, the C++ no-pointer overload's shape; an unknown spell
+	// reads the given base, else 0. The caster level is this player's
+	// level. Backs the demonic empowerment voidwalker leg
+	// (spell_warlock.cpp:460-465): the caster prices the voidwalker
+	// buff's EFFECT_0, then CountPctFromMaxHealth turns it into the
+	// BP0 of the triggered cast.
+	methods["CalculateSpellDamage"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{int32(0)}, nil
+		}
+		targetSpell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		index := 0
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		if index < 0 {
+			return []any{int32(0)}, nil
+		}
+		baseAmount := int32(0)
+		baseGiven := false
+		if len(args) > 2 && args[2] != nil {
+			v, err := luaInt64Arg(args, 2)
+			if err != nil {
+				return nil, err
+			}
+			baseAmount = int32(v)
+			baseGiven = true
+		}
+		if !baseGiven && s.server != nil && s.server.Data != nil {
+			if sp, found, err := s.server.Data.Spell(targetSpell); err == nil && found && index < len(sp.Effects) {
+				baseAmount = sp.Effects[index].BasePoints
+			}
+		}
+		return []any{calcSpellDamageForBase(s.server, targetSpell, index, baseAmount, uint32(state.Level))}, nil
+	}
 	methods["IsArmorer"] = luaNoArgs(func() any { return false })
 	methods["IsBanker"] = luaNoArgs(func() any { return false })
 	methods["IsBattleMaster"] = luaNoArgs(func() any { return false })
