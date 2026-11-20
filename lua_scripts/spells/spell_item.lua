@@ -2365,3 +2365,208 @@ RegisterAuraEvent(EV6_ITEM.DEADLY_PRECISION, 6, function(event, aura, target, ac
     target:RemoveAuraFromStack(EV6_ITEM.DEADLY_PRECISION)
     return true
 end)
+
+-- EV7/EV9 -- spell_item ev7 (OnObjectAreaTargetSelect) + ev9 (AfterCast) strip.
+--   echoes_of_light (spell_item.cpp:852-868): EFFECT_0 TARGET_UNIT_DEST_AREA_ALLY;
+--   sort by health pct, keep only the lowest. Bindings 71610/71641.
+--   toy_train_set_pulse (:3597-3626): EFFECT_ALL TARGET_UNIT_SRC_AREA_ALLY drops
+--   non-players; EFFECT_0 SCRIPT_EFFECT emotes EMOTE_ONESHOT_TRAIN (275) on hit
+--   players. The FindTextSoundEmoteFor sound leg stays out (no bridge).
+--   Binding 61551 (AC spell_item_toy_train_set; TDB spell_item_toy_train_set_pulse).
+--   taunt_flag_targeting (:3921-3950): EFFECT_0 TARGET_CORPSE_SRC_AREA_ENEMY drops
+--   non-player/non-corpse, random-resize to 1; EFFECT_0 DUMMY casts 51657 on the
+--   hit unit. The FinishCast(SPELL_FAILED_NO_VALID_TARGETS) leg stays out (no
+--   bridge); an empty list just fizzles. The TextEmote(28008) leg stays out
+--   (string-only TextEmote). Binding 51640 (AC spell_the_flag_of_ownership;
+--   TDB spell_item_taunt_flag_targeting). The ev7 list holds units only, so the
+--   corpse leg may never see a corpse; the player leg still works.
+--   mad_alchemists_potion (:4150-4210) + crazy_alchemists_potion (:4221-4257):
+--   AfterCast secondary elixir rolls; the item rides CastCustomSpell's castItem
+--   arg with triggered=false (C++ CastSpell(target, chosen, GetCastItem()) is
+--   non-triggered; the bridge ignores the triggered arg today). The mad-potion
+--   same-group block rides static battle/guardian lists + HasAura — an
+--   approximation of IsSpellMemberOfSpellGroup + the applied-aura iteration,
+--   both unbridged. Bindings 45051/53750 (AC).
+local EV79_ITEM = {
+    ECHOES_OF_LIGHT = 71610,
+    ECHOES_OF_LIGHT_2 = 71641,
+    TOY_TRAIN_SET_PULSE = 61551,
+    TAUNT_FLAG_TARGETING = 51640,
+    TAUNT_FLAG = 51657,
+    MAD_ALCHEMISTS_POTION = 45051,
+    CRAZY_ALCHEMISTS_POTION = 53750,
+    TYPEID_CORPSE = 7,
+    POWER_MANA = 0,
+    EMOTE_ONESHOT_TRAIN = 275,
+    MAD_BATTLE_ELIXIRS = { 33720, 54452, 33726, 28490, 28491, 28493, 54494, 28501, 28503, 38954 },
+    MAD_GUARDIAN_ELIXIRS = { 39625, 39626, 39627, 39628, 28502, 28514 },
+    MAD_OTHER_ELIXIRS = { 28489, 28496 },
+    ELIXIR_OF_MAJOR_MAGEBLOOD = 28509,
+    CRAZY_ELIXIRS = { 43185, 53750, 53761, 53762, 53908, 53909, 53910, 53911, 53913, 53914, 53915 },
+    POTION_OF_NIGHTMARES = 53753,
+    RUNIC_MANA_POTION = 43186,
+}
+
+RegisterSpellEvent(EV79_ITEM.ECHOES_OF_LIGHT, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local list = targets:GetTargets()
+    if list == nil or #list < 2 then
+        return
+    end
+    local lowest = list[1]
+    local lowestPct = lowest:GetHealthPct()
+    for i = 2, #list do
+        local pct = list[i]:GetHealthPct()
+        if pct < lowestPct then
+            lowest = list[i]
+            lowestPct = pct
+        end
+    end
+    for i = 1, #list do
+        if list[i] ~= lowest then
+            targets:Remove(list[i])
+        end
+    end
+end)
+RegisterSpellEvent(EV79_ITEM.ECHOES_OF_LIGHT_2, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local list = targets:GetTargets()
+    if list == nil or #list < 2 then
+        return
+    end
+    local lowest = list[1]
+    local lowestPct = lowest:GetHealthPct()
+    for i = 2, #list do
+        local pct = list[i]:GetHealthPct()
+        if pct < lowestPct then
+            lowest = list[i]
+            lowestPct = pct
+        end
+    end
+    for i = 1, #list do
+        if list[i] ~= lowest then
+            targets:Remove(list[i])
+        end
+    end
+end)
+
+RegisterSpellEvent(EV79_ITEM.TOY_TRAIN_SET_PULSE, 7, function(event, spell, effectIndex, targets)
+    local list = targets:GetTargets()
+    if list == nil then
+        return
+    end
+    for i = 1, #list do
+        if list[i]:GetTypeId() ~= TYPEID_PLAYER then
+            targets:Remove(list[i])
+        end
+    end
+end)
+RegisterSpellEvent(EV79_ITEM.TOY_TRAIN_SET_PULSE, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil or hitTarget:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    hitTarget:PerformEmote(EV79_ITEM.EMOTE_ONESHOT_TRAIN)
+end)
+
+RegisterSpellEvent(EV79_ITEM.TAUNT_FLAG_TARGETING, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local list = targets:GetTargets()
+    if list == nil then
+        return
+    end
+    local kept = {}
+    for i = 1, #list do
+        local t = list[i]:GetTypeId()
+        if t == TYPEID_PLAYER or t == EV79_ITEM.TYPEID_CORPSE then
+            kept[#kept + 1] = list[i]
+        else
+            targets:Remove(list[i])
+        end
+    end
+    if #kept > 1 then
+        local pick = kept[math.random(1, #kept)]
+        for i = 1, #kept do
+            if kept[i] ~= pick then
+                targets:Remove(kept[i])
+            end
+        end
+    end
+end)
+RegisterSpellEvent(EV79_ITEM.TAUNT_FLAG_TARGETING, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(hitTarget, EV79_ITEM.TAUNT_FLAG, true)
+end)
+
+RegisterSpellEvent(EV79_ITEM.MAD_ALCHEMISTS_POTION, 9, function(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local available = {}
+    for i = 1, #EV79_ITEM.MAD_BATTLE_ELIXIRS do
+        available[#available + 1] = EV79_ITEM.MAD_BATTLE_ELIXIRS[i]
+    end
+    for i = 1, #EV79_ITEM.MAD_GUARDIAN_ELIXIRS do
+        available[#available + 1] = EV79_ITEM.MAD_GUARDIAN_ELIXIRS[i]
+    end
+    for i = 1, #EV79_ITEM.MAD_OTHER_ELIXIRS do
+        available[#available + 1] = EV79_ITEM.MAD_OTHER_ELIXIRS[i]
+    end
+    if caster:GetPowerType() == EV79_ITEM.POWER_MANA then
+        available[#available + 1] = EV79_ITEM.ELIXIR_OF_MAJOR_MAGEBLOOD
+    end
+    local chosen = available[math.random(1, #available)]
+    local group = nil
+    for i = 1, #EV79_ITEM.MAD_BATTLE_ELIXIRS do
+        if EV79_ITEM.MAD_BATTLE_ELIXIRS[i] == chosen then
+            group = EV79_ITEM.MAD_BATTLE_ELIXIRS
+            break
+        end
+    end
+    if group == nil then
+        for i = 1, #EV79_ITEM.MAD_GUARDIAN_ELIXIRS do
+            if EV79_ITEM.MAD_GUARDIAN_ELIXIRS[i] == chosen then
+                group = EV79_ITEM.MAD_GUARDIAN_ELIXIRS
+                break
+            end
+        end
+    end
+    if group ~= nil then
+        for i = 1, #group do
+            if group[i] ~= chosen and caster:HasAura(group[i]) then
+                return
+            end
+        end
+    end
+    caster:CastCustomSpell(caster, chosen, false, nil, nil, nil, spell:GetCastItem())
+end)
+
+RegisterSpellEvent(EV79_ITEM.CRAZY_ALCHEMISTS_POTION, 9, function(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local available = {}
+    for i = 1, #EV79_ITEM.CRAZY_ELIXIRS do
+        available[#available + 1] = EV79_ITEM.CRAZY_ELIXIRS[i]
+    end
+    if not caster:IsInCombat() then
+        available[#available + 1] = EV79_ITEM.POTION_OF_NIGHTMARES
+    end
+    if caster:GetPowerType() == EV79_ITEM.POWER_MANA then
+        available[#available + 1] = EV79_ITEM.RUNIC_MANA_POTION
+    end
+    caster:CastCustomSpell(caster, available[math.random(1, #available)], false, nil, nil, nil, spell:GetCastItem())
+end)
