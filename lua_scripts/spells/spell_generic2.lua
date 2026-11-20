@@ -306,3 +306,105 @@ local SPELL_GEN_STRIP15 = {
 for _, spellId in ipairs(SPELL_GEN_STRIP15.decayOverTime) do
     RegisterSpellEvent(spellId, 3, SPELL_GEN_STRIP15.decayAfterHit)
 end
+
+-- C++ spell_gen_netherbloom::HandleScript (spell_generic.cpp:2405-2418):
+-- 28702, EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT. PreventHitDefaultEffect
+-- (vacuous here: no Go SCRIPT_EFFECT default case for 28702, and the
+-- player spell builder carries no PreventHitDefaultEffect method --
+-- lua_spell.go:755 is creature-only; throw_shield precedent). 75%
+-- early return (roll_chance_i(75)); skip if the hit unit already has
+-- any 28703-28707 aura; else triggered self-cast of a random
+-- 28703+urand(0,4). DORMANT until Spell.dbc ships the 28702 row.
+-- C++ spell_gen_nightmare_vine::HandleScript (spell_generic.cpp:2438-2447):
+-- 28720, EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT. Same PreventHitDefaultEffect
+-- note as netherbloom. 25% chance (roll_chance_i(25)) of a triggered
+-- self-cast of Nightmare Pollen 28721. DORMANT until Spell.dbc ships
+-- the 28720 row.
+-- C++ spell_gen_vendor_bark_trigger::HandleDummy
+-- (spell_generic.cpp:3555-3571): 56096, EFFECT_0 SPELL_EFFECT_DUMMY.
+-- The caster creature with entry 30098 (Amphitheater Vendor) talks
+-- text 0. Bridges, all verified in the current tree: the creature
+-- spell builder returns the motion creature from spell:GetCaster()
+-- (lua_spell.go:777); GetEntry rides the generic object fallback
+-- (engine/scripting/object.go:164); Talk(textId) is the CreatureAI
+-- ::Talk twin (lua_creature_events.go:1434). The TYPEID_UNIT gate is
+-- the C++ ToCreature() twin (the player-path spell object returns the
+-- session player from GetCaster, lua_spell.go:192). The effectIndex
+-- + GetEffectType(0) == 3 (SPELL_EFFECT_DUMMY, spell_generic.lua:325)
+-- gates mirror the EFFECT_0 DUMMY registration. DORMANT until
+-- Spell.dbc ships the 56096 row (not in tools/spelldbc_seed/main.go).
+-- C++ spell_gen_vehicle_control_link::OnRemove
+-- (spell_generic.cpp:4235-4257): 49078 / 50343, AfterEffectRemove
+-- EFFECT_1 DUMMY REAL. The aura target drops the Siege Tank Control
+-- aura 47963. Bridges: ev3 OnRemove fires once per removal with
+-- (event, aura, target) (lua_aura.go:1212); RemoveAurasDueToSpell on
+-- both surfaces (lua_player.go:3301, lua_creature_events.go:1827).
+-- Delta: Go ev3 carries no effect index, so the EFFECT_1 gate cannot
+-- be checked — the body is effect-independent, so equivalent in
+-- practice. DORMANT until Spell.dbc ships the 49078/50343 rows.
+local SPELL_GEN_STRIP16 = {
+    netherbloom = 28702, -- spell_generic.cpp:2375
+    netherbloomPollenFirst = 28703, -- spell_generic.cpp:2368
+    nightmareVine = 28720, -- spell_generic.cpp:2423
+    nightmarePollen = 28721, -- spell_generic.cpp:2419
+    vendorBarkTrigger = 56096, -- spell_generic.cpp:3555
+    amphitheaterVendor = 30098, -- spell_generic.cpp:3550
+    vendorBarkTalk = 0, -- spell_generic.cpp:3551
+    vehicleControlLink = { 49078, 50343 }, -- spell_generic.cpp:4235
+    siegeTankControl = 47963, -- spell_generic.cpp:4228
+
+    netherbloomHit = function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 0 or hitTarget == nil then
+            return
+        end
+        if math.random(0, 99) < 75 then
+            return
+        end
+        for i = 0, 4 do
+            if hitTarget:HasAura(SPELL_GEN_STRIP16.netherbloomPollenFirst + i) then
+                return
+            end
+        end
+        hitTarget:CastSpell(hitTarget, SPELL_GEN_STRIP16.netherbloomPollenFirst + math.random(0, 4), true)
+    end,
+
+    nightmareVineHit = function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 0 or hitTarget == nil then
+            return
+        end
+        if math.random(0, 99) < 25 then
+            hitTarget:CastSpell(hitTarget, SPELL_GEN_STRIP16.nightmarePollen, true)
+        end
+    end,
+
+    vendorBarkHit = function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 0 then
+            return
+        end
+        if spell:GetEffectType(0) ~= 3 then -- SPELL_EFFECT_DUMMY
+            return
+        end
+        local caster = spell:GetCaster()
+        if caster == nil or caster:GetTypeId() ~= 3 then -- TYPEID_UNIT
+            return
+        end
+        if caster:GetEntry() ~= SPELL_GEN_STRIP16.amphitheaterVendor then
+            return
+        end
+        caster:Talk(SPELL_GEN_STRIP16.vendorBarkTalk)
+    end,
+
+    vehicleControlLinkRemoved = function(event, aura, target)
+        if target == nil then
+            return
+        end
+        target:RemoveAurasDueToSpell(SPELL_GEN_STRIP16.siegeTankControl)
+    end,
+}
+
+RegisterSpellEvent(SPELL_GEN_STRIP16.netherbloom, 5, SPELL_GEN_STRIP16.netherbloomHit)
+RegisterSpellEvent(SPELL_GEN_STRIP16.nightmareVine, 5, SPELL_GEN_STRIP16.nightmareVineHit)
+RegisterSpellEvent(SPELL_GEN_STRIP16.vendorBarkTrigger, 5, SPELL_GEN_STRIP16.vendorBarkHit)
+for _, auraId in ipairs(SPELL_GEN_STRIP16.vehicleControlLink) do
+    RegisterAuraEvent(auraId, 3, SPELL_GEN_STRIP16.vehicleControlLinkRemoved)
+end

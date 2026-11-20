@@ -203,6 +203,13 @@ for _, spellId in ipairs(SPELL_GEN_ADAPTIVE_WARDING_SPELLS) do
     RegisterSpellEvent(spellId, 8, allowCastFromItemOnlyCheckCast)
 end
 
+-- spell_gen_allow_cast_from_item_only bound IDs (both DBs); the five
+-- Adaptive Warding trigger spells above carry no spell_script_names
+-- rows in either DB.
+for _, spellId in ipairs({ 4073, 12749, 13166, 13258, 19804 }) do
+    RegisterSpellEvent(spellId, 8, allowCastFromItemOnlyCheckCast)
+end
+
 -- C++ spell_gen_profession_research::CheckRequirement
 -- (spell_generic.cpp:2809-2820, registered OnCheckCast): the caster
 -- fails SPELL_FAILED_CUSTOM_ERROR with NOTHING_TO_DISCOVER (46)
@@ -343,6 +350,10 @@ RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_4, 5, despawnSelfHit)
 RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_5, 5, despawnSelfHit)
 RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_6, 5, despawnSelfHit)
 RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_7, 5, despawnSelfHit)
+-- spell_gen_despawn_self TDB-only bindings missing from Lua.
+for _, spellId in ipairs({ 45980, 54420 }) do
+    RegisterSpellEvent(spellId, 5, despawnSelfHit)
+end
 
 -- PORTED (tick 2026-11-12, RegisterSpellEvent OnCheckCast = 8 /
 -- RegisterSpellEvent AfterHit = 3):
@@ -1138,18 +1149,25 @@ RegisterAuraEvent(SPELL_CORRUPTING_PLAGUE_AURA, 1, plagueFieldTick)
 local SPELL_ABSORB0_HITLIMIT1 = 64765 -- spell_generic.cpp:45
 
 local function absorb0Hitlimit1(event, aura, target, damage, absorbAmount)
-    local limit = aura:GetSpellEffectCalcValue(SPELL_ABSORB0_HITLIMIT1, 1)
+    local limit = aura:GetSpellEffectCalcValue(aura:GetAuraId(), 1)
     return math.min(limit, absorbAmount)
 end
 
 RegisterAuraEvent(SPELL_ABSORB0_HITLIMIT1, 9, absorb0Hitlimit1)
+-- spell_gen_absorb0_hitlimit1 bound IDs 39228/60218 (both DBs);
+-- the handler reads the registering aura's own EFF_1, so the
+-- same cap applies to each aura's own limit.
+RegisterAuraEvent(39228, 9, absorb0Hitlimit1)
+RegisterAuraEvent(60218, 9, absorb0Hitlimit1)
 
 -- C++ spell_gen_summon_tournament_mount::CheckIfLanceEquiped
 -- (spell_generic.cpp:3207-3219, registered OnCheckCast): the caster
 -- must have the lance aura 62853, else SPELL_FAILED_CUSTOM_ERROR
--- with MUST_HAVE_LANCE_EQUIPPED. The shapeshift-strip leg stays out:
--- IsInDisallowedMountForm has no bridge (DBC shapeshift-store +
--- transform-spell attribute, taxi.go:520).
+-- with MUST_HAVE_LANCE_EQUIPPED. The shapeshift-strip leg is ported
+-- below: IsInDisallowedMountForm is bridged on players
+-- (lua_player.go:464); RemoveAurasByType(36) is SPELL_AURA_MOD_SHAPESHIFT
+-- (SpellAuraDefines.h:116). The strip runs before the lance check and
+-- even when the cast then fails, matching C++ order.
 -- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
 -- Bindings are the AC spell_script_names rows.
 local SPELL_TOURNAMENT_MOUNT_SPELLS = { 62774, 62779, 62780, 62781, 62782, 62783, 62784, 62785, 62786, 62787, 63215, 63663, 63791, 63792 }
@@ -1160,6 +1178,9 @@ local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to t
 
 local function tournamentMountCheckCast(event, spell)
     local caster = spell:GetCaster()
+    if caster ~= nil and caster:IsInDisallowedMountForm() then
+        caster:RemoveAurasByType(36) -- SPELL_AURA_MOD_SHAPESHIFT, SpellAuraDefines.h:116
+    end
     if caster ~= nil and not caster:HasAura(SPELL_LANCE_EQUIPPED) then
         return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_MUST_HAVE_LANCE_EQUIPPED
     end
