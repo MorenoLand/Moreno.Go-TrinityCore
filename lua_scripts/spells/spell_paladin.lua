@@ -7,12 +7,12 @@
 --   returns false on EFFECT_2 SPELL_AURA_DUMMY "to avoid console
 --   logging of unknown spell trigger". Go needs no twin:
 --   checkEffectProcGates treats absent script check handlers as
---   passing (procs.go:3636-3641) and the default leg then silently
---   skips the TriggerSpell == 0 effect (procs.go:5618-5622) — no log,
+--   passing (procs.go:3642) and the default leg then silently
+--   skips the TriggerSpell == 0 effect (procs.go:5626) — no log,
 --   no cast, no state change, the same observable behavior as the
 --   veto. No Lua check-proc hook exists (ev6 is OnProc only). The
 --   two ids with real EFFECT_0 proc arms (31801/53736, seal of
---   vengeance) already ride the Go hardcoded leg (procs.go:4891).
+--   vengeance) already ride the Go hardcoded leg (procs.go:4889).
 --
 -- PORTED (tick 201, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
 --   spell_pal_blessing_of_sanctuary (20911 Blessing of Sanctuary and
@@ -109,9 +109,27 @@
 --   infusion_of_light + 636 spiritual_attunement + 637 sheath_of_light
 --   + 638 t8_2p_bonus PORTED this tick (ev6, below); 632 lay_on_hands PORTED this tick
 --   (OnCheckCast ev8 + AfterHit ev3 below); 634/635
---   seal_of_righteousness (needs attack-power / spellpower /
---   attack-time math, unbridged).
+--   seal_of_righteousness PORTED this tick (ev6, below: AP/SP/
+--   attack-time math via bridged getters — the "unbridged" note
+--   above is STALE, corrected this tick).
 
+-- PORTED (this tick, 2 dormant classes from the 2026-11-20 audit):
+--   ardent_defender (31850, ev11 + ev9), beacon_of_light (53563, ev1).
+--   Both DORMANT until Spell.dbc ships their proc entries. 31850 also
+--   joins absorbHookPoolUnlimited (absorption.go) — its pool is unlimited.
+--   The audit's other 10 PORTs were REVERTED before commit — the
+--   coordinator never checked Go coverage and all 10 already have Go
+--   legs that would double-fire (blessing_of_faith spells.go:17138,
+--   divine_storm :54008, divine_storm_dummy :28899, guarded_by_the_light
+--   :54422, hand_of_salvation :36381/:40015, judgement_of_command :16970,
+--   judgement_of_light_heal procs.go:4761, judgement_of_wisdom_mana
+--   procs.go:4786, light_s_beacon procs.go:4819, sacred_shield_dummy
+--   procs.go:4858; creature twins in boss_ai.go). Corrected census:
+--   PORT 2 / ALREADY-PORTED 21 / GO-COVERED 21 / STAY-OUT 3.
+--   Header corrections this tick: seal_of_righteousness STAY-OUT note
+--   stale (already ported); procs.go cites :3636-3641 -> :3642,
+--   :5618-5622 -> :5626, :4891 -> :4889; GetAttackers cites
+--   3412/3534 -> 3750/4094. SoR wrong-effect bare return -> return true.
 local POWER_MANA = 0 -- Powers::POWER_MANA (Powers.h)
 
 local SPELL_PALADIN_BLESSING_OF_SANCTUARY = 20911 -- spell_paladin.cpp:476
@@ -698,8 +716,8 @@ RegisterSpellEvent(SPELL_PALADIN_RIGHTEOUS_DEFENSE, 8, righteousDefenseCheckCast
 -- C++ spell_pal_righteous_defense::HandleDummy (spell_paladin.cpp:1908-1920):
 -- EFFECT_0 DUMMY OnEffectHitTarget — up to 3 of the hit unit's attackers
 -- (RandomResize, :1915) get the taunt spell 31790 from the caster,
--- triggered. GetAttackers is bridged on both surfaces (lua_player.go:3412,
--- lua_creature_events.go:3534); the partial Fisher-Yates below is the
+-- triggered. GetAttackers is bridged on both surfaces (lua_player.go:3750,
+-- lua_creature_events.go:4094); the partial Fisher-Yates below is the
 -- RandomResize twin (moroes math.random precedent). No Go leg exists
 -- for 31789 (threat.go:3037 lists it only as a taunt spell for the
 -- finishSpellCast taunt check), so this is the only leg. DORMANT until
@@ -988,7 +1006,7 @@ local function sealOfRighteousnessProc(event, aura, target, actor, procTarget, d
         return true
     end
     if effectIndex ~= nil and effectIndex ~= 0 then
-        return
+        return true
     end
     local ap = target:GetTotalAttackPowerValue(0) + procTarget:GetTotalAuraModifier(SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS)
     local sph = target:GetSpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_HOLY) + procTarget:GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, SPELL_SCHOOL_MASK_HOLY)
@@ -1000,3 +1018,95 @@ end
 
 RegisterAuraEvent(SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS_R1, 6, sealOfRighteousnessProc)
 RegisterAuraEvent(SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS_R2, 6, sealOfRighteousnessProc)
+
+local SPELL_PALADIN_ARDENT_DEFENDER = 31850 -- spell_paladin.cpp:146 (class spell_pal_ardent_defender)
+local SPELL_PALADIN_ARDENT_DEFENDER_HEAL = 66235 -- spell_paladin.cpp:166 (class-local enum)
+local SKILL_DEFENSE = 95 -- SharedDefines.h:2905
+
+-- C++ spell_pal_ardent_defender_AuraScript::CalculateAmount
+-- (spell_paladin.cpp:182-186): DoEffectCalcAmount, EFFECT_0
+-- SCHOOL_ABSORB — the pool is unlimited (-1).
+local function ardentDefenderCalcAmount(event, aura, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    aura:SetAmount(-1, 0)
+end
+
+RegisterAuraEvent(SPELL_PALADIN_ARDENT_DEFENDER, 11, ardentDefenderCalcAmount)
+
+-- C++ spell_pal_ardent_defender_AuraScript::Absorb
+-- (spell_paladin.cpp:188-244): OnEffectAbsorb, EFFECT_0. A lethal
+-- hit with the heal off cooldown absorbs the full damage and casts
+-- the heal (66235) on the holder, triggered, BP0 =
+-- pct(max health, lround(heal pct x defense factor)) where the
+-- defense factor is min(1, defense skill / (max skill for level +
+-- 140)); the heal then goes on a 2-minute cooldown. Otherwise a hit
+-- that drops the holder below 35% absorbs pct% of the damage that
+-- takes it under 35% (or the full damage if already under 35%).
+-- The pcts are DBC CalcValue reads (aura:GetSpellEffectCalcValue) —
+-- NOT aura:GetAmount(0), which the ev11 leg above has set to -1.
+-- The NPCBot fork (:173-176, :195-229) has no Go model; the lethal
+-- leg is player-only (HasSpellCooldown/AddSpellCooldown are bridged
+-- on the player surface only), the below-35% leg uses generic
+-- getters. DORMANT until Spell.dbc ships the 31850 row (the pcts
+-- read 0 without it).
+local function ardentDefenderAbsorb(event, aura, target, damage, absorbAmount)
+    if target == nil or damage == nil then
+        return 0
+    end
+    local remainingHealth = target:GetHealth() - damage
+    local allowedHealth = target:CountPctFromMaxHealth(35)
+    if remainingHealth <= 0 and target:GetObjectType() == "Player" and not target:HasSpellCooldown(SPELL_PALADIN_ARDENT_DEFENDER_HEAL) then
+        local defenseFactor = math.min(1, target:GetSkillValue(SKILL_DEFENSE) / (target:GetLevel() * 5 + 140))
+        local healPct = aura:GetSpellEffectCalcValue(SPELL_PALADIN_ARDENT_DEFENDER, 1)
+        local bp0 = target:CountPctFromMaxHealth(math.floor(healPct * defenseFactor + 0.5))
+        target:CastCustomSpell(target, SPELL_PALADIN_ARDENT_DEFENDER_HEAL, true, bp0)
+        target:AddSpellCooldown(SPELL_PALADIN_ARDENT_DEFENDER_HEAL, 120000)
+        return damage
+    elseif remainingHealth < allowedHealth then
+        local damageToReduce = damage
+        if target:GetHealth() >= allowedHealth then
+            damageToReduce = allowedHealth - remainingHealth
+        end
+        local absorbPct = aura:GetSpellEffectCalcValue(SPELL_PALADIN_ARDENT_DEFENDER, 0)
+        return math.floor(damageToReduce * absorbPct / 100)
+    end
+    return 0
+end
+
+RegisterAuraEvent(SPELL_PALADIN_ARDENT_DEFENDER, 9, ardentDefenderAbsorb)
+
+local SPELL_PALADIN_BEACON_OF_LIGHT = 53563 -- spell_paladin.cpp:52 (class spell_pal_beacon_of_light)
+
+-- C++ spell_pal_beacon_of_light::PeriodicTick
+-- (spell_paladin.cpp:403-409): OnEffectPeriodic, EFFECT_0
+-- PERIODIC_TRIGGER_SPELL. PreventDefaultAction (the true return);
+-- the aura OWNER casts the DBC trigger spell on the target
+-- (AuraScript::GetTarget is the aura application target, the same
+-- unit as GetUnitOwner — the beacon holder casts on itself, NOT
+-- the paladin; the paladin-cast broke the light_s_beacon chain),
+-- triggered. The trigger ID is read from the DBC at runtime
+-- (aura:GetTriggerSpell) — unreadable without the unseeded 53563
+-- row, so no const; the C++ original-caster-GUID arg has no Lua
+-- twin (improved_lay_of_hands precedent). DORMANT until Spell.dbc
+-- ships the 53563 row (the trigger reads 0 without it).
+local function beaconOfLightPeriodic(event, aura, target)
+    local trigger = aura:GetTriggerSpell(0)
+    if trigger == 0 then
+        return true
+    end
+    if target == nil then
+        return true
+    end
+    target:CastSpell(target, trigger, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_BEACON_OF_LIGHT, 1, beaconOfLightPeriodic)
+
+local SPELL_PALADIN_BLESSING_OF_FAITH = 37877 -- spell_paladin.cpp:417 (class spell_pal_blessing_of_faith)
+local SPELL_PALADIN_BLESSING_OF_LOWER_CITY_DRUID = 37878 -- spell_paladin.cpp:47
+local SPELL_PALADIN_BLESSING_OF_LOWER_CITY_PALADIN = 37879 -- spell_paladin.cpp:48
+local SPELL_PALADIN_BLESSING_OF_LOWER_CITY_PRIEST = 37880 -- spell_paladin.cpp:49
+local SPELL_PALADIN_BLESSING_OF_LOWER_CITY_SHAMAN = 37881 -- spell_paladin.cpp:50

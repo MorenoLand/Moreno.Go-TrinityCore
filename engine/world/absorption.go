@@ -69,10 +69,11 @@ type absorbAfterPending struct {
 // DoEffectCalcAmount (spell_rogue.cpp:137-141), and nerves of steel
 // (31130) sets -1 via DoEffectCalcAmount (spell_rogue.cpp:495-498).
 // Any other hook spell's pool is finite and decrements like the
-// generic leg.
+// generic leg. Ardent defender (31850) sets -1 via
+// DoEffectCalcAmount (spell_paladin.cpp:182-186).
 func absorbHookPoolUnlimited(spellID uint32) bool {
 	switch spellID {
-	case 69366, 33851, 31228, 31130:
+	case 69366, 33851, 31228, 31130, 31850:
 		return true
 	}
 	return false
