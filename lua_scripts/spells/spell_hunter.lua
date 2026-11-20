@@ -303,15 +303,30 @@ RegisterSpellEvent(SPELL_HUNTER_INVIGORATION, 5, invigorationScript)
 --   bridge (lua_creature_events.go); the nil-pet arm twins the
 --   generic Spell::CheckCast no-guardian-pet gate (Spell.cpp:5422).
 --   HandleDummy eff0 (spell_hunter.cpp:871-874) — the pet casts
---   GetEffectValue() on the hit unit; spell:GetEffectValue(0)
---   exists (lua_spell.go:215) but there is no player-side
---   pet-object bridge (only GetPetGUID, lua_player.go:1466;
---   GetCreatureByGUID is creature-object-only).
+--   GetEffectValue() on the hit unit, triggered; ported in the same
+--   ev5 handler below via the player:GetPet bridge (lua_player.go:1818)
+--   + spell:GetEffectValue(0) (lua_spell.go:217). The old "no
+--   player-side pet-object bridge" claim is stale — GetPet exists.
 local SPELL_HUNTER_MASTERS_CALL = 53271 -- spell_hunter.cpp:814
 local SPELL_HUNTER_MASTERS_CALL_TRIGGERED = 62305 -- spell_hunter.cpp:47
 
 local function mastersCallScript(event, spell, target, effectIndex)
-    if effectIndex ~= 1 or target == nil then
+    if target == nil then
+        return
+    end
+    if effectIndex == 0 then
+        local caster = spell:GetCaster()
+        if caster == nil then
+            return
+        end
+        local pet = caster:GetPet()
+        if pet == nil then
+            return
+        end
+        pet:CastSpell(target, spell:GetEffectValue(0), true)
+        return
+    end
+    if effectIndex ~= 1 then
         return
     end
     target:CastSpell(target, SPELL_HUNTER_MASTERS_CALL_TRIGGERED, true)
@@ -849,6 +864,7 @@ local SPELL_HUNTER_TAME_BEAST = 1515 -- spell_hunter.cpp:1425 (class spell_hun_t
 local SPELL_FAILED_DONT_REPORT = 27 -- SharedDefines.h:1009
 local SPELL_FAILED_BAD_IMPLICIT_TARGETS = 11 -- SharedDefines.h:993
 local SPELL_FAILED_HIGHLEVEL = 36 -- SharedDefines.h:1018
+local SPELL_FAILED_ALREADY_HAVE_CHARM = 6 -- SharedDefines.h:988
 
 -- C++ spell_hun_tame_beast_SpellScript::CheckCast (spell_hunter.cpp:1432-1470):
 -- a non-player caster fails DONT_REPORT; no explicit target or a
@@ -856,8 +872,11 @@ local SPELL_FAILED_HIGHLEVEL = 36 -- SharedDefines.h:1018
 -- caster's level fails HIGHLEVEL; a non-tameable target fails
 -- BAD_TARGETS (IsTameable(CanTameExoticPets()) via the new bridges).
 -- The pet-stable legs (ALREADY_HAVE_SUMMON / SendTameFailure TOOMANY)
--- and the charmed-GUID leg (ALREADY_HAVE_CHARM) stay out: no
--- GetPetStable / GetCharmedGUID bridge. RegisterSpellEvent OnCheckCast = 8
+-- stay out: no GetPetStable bridge (Go spells.go:4288-4339 covers the
+-- stable/pet legs). The charmed leg rides player:GetCharmGUID
+-- (lua_player.go:1834), checked after the tameable leg — C++ checks it
+-- after the stable legs, so the order differs only when a stable pet
+-- and a charm coexist. RegisterSpellEvent OnCheckCast = 8
 -- (lua_spell.go fireSpellCheckCast).
 local function tameBeastCheckCast(event, spell)
     local caster = spell:GetCaster()
@@ -873,6 +892,9 @@ local function tameBeastCheckCast(event, spell)
     end
     if not target:IsTameable(caster:CanTameExoticPets()) then
         return SPELL_FAILED_BAD_TARGETS
+    end
+    if caster:GetCharmGUID() ~= 0 then
+        return SPELL_FAILED_ALREADY_HAVE_CHARM
     end
     return SPELL_CAST_OK
 end
