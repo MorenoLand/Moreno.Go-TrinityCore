@@ -14025,8 +14025,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// SPELL_EFFECT_HANDLE_LAUNCH_TARGET effect modes, the
 	// DoEffectOnLaunchTarget combat engage, and TakeAmmo for player
 	// SPELL_ATTR0_REQ_AMMO spells. Go bridges the ammo leg, the launch-time
-	// engage, and the trigger-spell whole-spell LAUNCH arm
-	// (triggerLaunchSpellEffects below); the remaining LAUNCH /
+	// engage, the trigger-spell whole-spell LAUNCH arm
+	// (triggerLaunchSpellEffects below) and the JumpDest LAUNCH arm
+	// (handleEffectJumpDest in the loop below); the remaining LAUNCH /
 	// LAUNCH_TARGET effect arms have no Go equivalent — all other effects
 	// resolve at hit time in applyEffects.
 	//   - The launch-time SetInCombatWith engage is a timing delta: C++
@@ -14088,6 +14089,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.bloodTapHandleEffect()
 			} else {
 				s.handleEffectActivateRune(spell, eff, effectIndex)
+			}
+		}
+		if eff.Effect == spellEffectJumpDest {
+			// Spell::EffectJumpDest (SpellEffects.cpp:1179-1197) runs at
+			// SPELL_EFFECT_HANDLE_LAUNCH — the whole-spell LAUNCH arm,
+			// once per effect, ahead of SendSpellGo and of the empty-list
+			// early return below (a LAUNCH arm needs no unit target, so
+			// an all-miss cast still jumps, like C++). The HasDst gate is
+			// the cast's resolved destination (the leap arm's gate). The
+			// triggered-cast twin rides the launch block in
+			// castSpellDirectWithOverrides.
+			if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+				s.handleEffectJumpDest(ctx, spell, effectIndex, target.Destination.X, target.Destination.Y, target.Destination.Z)
 			}
 		}
 	}
@@ -18023,12 +18037,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// height, like C++).
 				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.handleEffectJump(effCtx, spell, effectIndex, s.playerGUID)
-				}
-			case spellEffectJumpDest: // 42: SPELL_EFFECT_JUMP_DEST (EffectJumpDest, SpellEffects.cpp:1179-1197)
-				// LAUNCH once per effect: the HasDst gate is the cast's
-				// resolved destination (the leap arm's gate).
-				if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
-					s.handleEffectJumpDest(effCtx, spell, effectIndex, target.Destination.X, target.Destination.Y, target.Destination.Z)
 				}
 			case spellEffectTeleportUnitsFaceCaster: // 43: SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER (EffectTeleUnitsFaceCaster, SpellEffects.cpp:2618)
 				// Per-effect target list (Spell.cpp:758-779), same switch as
@@ -53398,6 +53406,13 @@ func (s *session) calculatePlayerJumpSpeeds(spell wotlk.Spell, effIndex int, dis
 // hops in place.
 func (s *session) handleEffectJump(ctx context.Context, spell wotlk.Spell, effectIndex int, targetGUID uint64) {
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 || s.inFlight {
+		return
+	}
+	// Spell::GOTargetInfo::DoTargetSpellHit (Spell.cpp:2663) passes null
+	// for GO targets — but findCreatureMotion's low-bits fallback would
+	// resolve a GO guid to an unrelated creature row (the charge arm's
+	// guard, same hazard).
+	if uint16(targetGUID>>48) == 0xF110 {
 		return
 	}
 	_ = ctx
