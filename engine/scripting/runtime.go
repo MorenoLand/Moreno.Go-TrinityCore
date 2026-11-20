@@ -571,6 +571,20 @@ const (
 // astral shift, scriptAbsorbHit) run before the hook, so a Lua port
 // of one of those spells would never fire its hook — those spells
 // are Go-owned.
+// AfterEffectAbsorb mirrors AuraScript::AfterEffectAbsorb
+// (AuraEffectAbsorbFn, SpellScript.h): it fires once per school-absorb
+// aura effect after that effect's absorb is applied in
+// Unit::CalcAbsorbResist (Unit.cpp:1909-1912), with args (event, aura,
+// target, damage, absorbAmount) — damage is the remaining damage after
+// this aura's absorb, absorbAmount the amount this aura actually
+// absorbed this hit. It is notification-only (C++ handlers return
+// void); the fire is deferred to the same post-lock pass as
+// OnEffectAbsorb, so all ev9 handlers run before any ev10 handler —
+// C++ interleaves them per aura, Go batches them per pass. The
+// generic-loop absorbs are recorded for the same pass, so an aura
+// with no ev9 handler (ice barrier) still fires its after hook;
+// the mana-shield loop fires the separate AfterEffectManaShield hook
+// in C++, so mana shield never fires this one.
 const (
 	AuraEventOnPeriodic        = 1
 	AuraEventOnApply           = 2
@@ -581,6 +595,7 @@ const (
 	AuraEventOnBeforeDispel    = 7
 	AuraEventOnCheckAreaTarget = 8
 	AuraEventOnEffectAbsorb    = 9
+	AuraEventAfterEffectAbsorb = 10
 )
 
 // SpellEvents contract for RegisterSpellEvent(spellID, event, fn). There

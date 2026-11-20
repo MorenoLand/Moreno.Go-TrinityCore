@@ -100,8 +100,8 @@
 --   (Ignite left this list this tick: GetSpellMaxTicks + the new
 --   aura:GetRank bridge cover its rank/max-ticks math. fire_frost_ward
 --   left this list this tick: the ev9 absorb port + the Go
---   CalculateAmount leg cover arms 1-2; only the AfterEffectAbsorb
---   Trigger arm stays out.)
+--   CalculateAmount leg cover arms 1-2, and the AfterEffectAbsorb
+--   Trigger arm is ported below on the new ev10 bridge.)
 
 local SPELL_MAGE_FROSTFIRE_BOLT = 44614
 local SPELL_MAGE_FROSTFIRE_BOLT_R2 = 47610
@@ -122,6 +122,13 @@ local SPELL_MAGE_FROST_WARDING_R1 = 11189 -- spell_mage.cpp:39
 local SPELL_MAGE_FROST_WARDING_R2 = 28332 -- Wowhead-verified rank 2 (EFFECT_1 Dummy 30)
 local SPELL_MAGE_FROST_WARDING_RANKS = { SPELL_MAGE_FROST_WARDING_R1, SPELL_MAGE_FROST_WARDING_R2 }
 local SPELL_MAGE_FROST_WARDING_TRIGGERED = 57776 -- spell_mage.cpp:40
+local SPELL_MAGE_INCANTERS_ABSORPTION_R1 = 44394 -- spell_mage.cpp:41
+local SPELL_MAGE_INCANTERS_ABSORPTION_R2 = 44395 -- Wowhead-verified rank 2 (EFFECT_0 Dummy 10)
+local SPELL_MAGE_INCANTERS_ABSORPTION_R3 = 44396 -- Wowhead-verified rank 3 (EFFECT_0 Dummy 15)
+local SPELL_MAGE_INCANTERS_ABSORPTION_RANKS = { SPELL_MAGE_INCANTERS_ABSORPTION_R1, SPELL_MAGE_INCANTERS_ABSORPTION_R2, SPELL_MAGE_INCANTERS_ABSORPTION_R3 }
+local SPELL_MAGE_INCANTERS_ABSORPTION_TRIGGERED = 44413 -- spell_mage.cpp:42
+local SPELL_MAGE_ICE_BARRIER = 11426 -- spell_mage.cpp:971
+local SPELL_MAGE_ICE_BARRIER_RANKS = { 11426, 13031, 13032, 13033, 27134, 33405, 43038, 43039 } -- TDB spell_ranks chain for 11426
 
 local AURA_REMOVE_BY_ENEMY_SPELL = 3
 local AURA_REMOVE_BY_EXPIRE = 4
@@ -143,8 +150,8 @@ local AURA_REMOVE_BY_EXPIRE = 4
 -- The damage outcome is exact only when damage <= pool, and the ward
 -- is consumed faster than C++ in all cases. A failed roll or no
 -- talent aura returns nil, keeping the default pool absorb. The
--- AfterEffectAbsorb Trigger arm (Incanter's Absorption 44394 -> 44413)
--- stays out: no AuraEventAfterEffectAbsorb bridge. The CalculateAmount
+-- The AfterEffectAbsorb Trigger arm (Incanter's Absorption 44394 ->
+-- 44413) is ported below on the new ev10 bridge. The CalculateAmount
 -- SP leg is the Go arm in spells.go (fireFrostWardCalcBonus).
 -- DORMANT until Spell.dbc ships the 543/6143, 57776 and 11189 rows.
 local function fireFrostWardAbsorb(event, aura, target, damage, absorbAmount)
@@ -179,6 +186,64 @@ for _, spellId in ipairs(SPELL_MAGE_FIRE_WARD_RANKS) do
 end
 for _, spellId in ipairs(SPELL_MAGE_FROST_WARD_RANKS) do
     RegisterAuraEvent(spellId, 9, fireFrostWardAbsorb)
+end
+
+-- C++ spell_mage_incanters_absorbtion_base_AuraScript::Trigger
+-- (spell_mage.cpp:96-105): EFFECT_0 AfterEffectAbsorb, shared by the
+-- fire/frost ward and ice barrier scripts (each registers it in its own
+-- Register). When the holder carries the Incanter's Absorption talent
+-- aura (any rank; exact-id GetAura loop — the TDB spell_ranks chain
+-- for 44394 is unseeded, like 11189), BP0 = pct of the amount this
+-- aura absorbed (C++ CalculatePct(absorbAmount, EFFECT_0 amount)) and
+-- the triggered leg 44413 is cast on the holder, triggered. The pct
+-- reads via aura:GetSpellEffectCalcValue (DBC read): EFFECT_0 is a
+-- non-aura DUMMY, so the ranked live-amount lookup reads nil. A 0 bp
+-- casts nothing (C++ casts 44413 with BP0 0; a 0-SP buff is a no-op).
+-- Mana shield registers AfterEffectManaShield, not AfterEffectAbsorb,
+-- so its Trigger stays out (no AfterManaShield bridge). The ev10 fire
+-- is deferred to the post-lock after pass, so all ev9 handlers run
+-- before any ev10 handler (C++ interleaves per aura); the absorbed
+-- amount is the post-clamp applied amount, so on a Frost Warding
+-- roll the Trigger prices the pool-clamped absorb, not the full
+-- negated damage (same bounded deviation as the ev9 leg).
+-- DORMANT until Spell.dbc ships the 44394/44413 rows (and the
+-- 543/6143/11426 rows for the shields themselves).
+local function fireIncanterAbsorptionTrigger(event, aura, target, damage, absorbAmount)
+    if target == nil or absorbAmount == nil or absorbAmount <= 0 then
+        return
+    end
+    local talentId = nil
+    for _, id in ipairs(SPELL_MAGE_INCANTERS_ABSORPTION_RANKS) do
+        if target:GetAura(id) ~= nil then
+            talentId = id
+            break
+        end
+    end
+    if talentId == nil then
+        return
+    end
+    local pct = aura:GetSpellEffectCalcValue(talentId, 0)
+    if pct == nil or pct <= 0 then
+        return
+    end
+    local bp = math.floor(absorbAmount * pct / 100)
+    if bp <= 0 then
+        return
+    end
+    target:CastCustomSpell(target, SPELL_MAGE_INCANTERS_ABSORPTION_TRIGGERED, true, bp)
+end
+
+-- TDB spell_ranks chains + (-543)/(-6143)/(-11426) all-ranks bindings:
+-- all fourteen ward ranks and all eight ice barrier ranks on the same
+-- rank-agnostic handler.
+for _, spellId in ipairs(SPELL_MAGE_FIRE_WARD_RANKS) do
+    RegisterAuraEvent(spellId, 10, fireIncanterAbsorptionTrigger)
+end
+for _, spellId in ipairs(SPELL_MAGE_FROST_WARD_RANKS) do
+    RegisterAuraEvent(spellId, 10, fireIncanterAbsorptionTrigger)
+end
+for _, spellId in ipairs(SPELL_MAGE_ICE_BARRIER_RANKS) do
+    RegisterAuraEvent(spellId, 10, fireIncanterAbsorptionTrigger)
 end
 
 local function frostfireBoltApply(event, aura, target)
@@ -515,7 +580,8 @@ RegisterAuraEvent(SPELL_MAGE_MASTER_OF_ELEMENTS_AURA, 6, masterOfElementsProc)
 --   Surge 37436 leg needs a mana-shield proc leg in the Go loops
 --   first; the CalculateAmount spellpower leg and the incanter's-
 --   absorption Trigger leg stay out with it (no Go CalculateAmount
---   leg yet; no AfterEffectAbsorb bridge for the Trigger arm).
+--   leg yet; mana shield registers AfterEffectManaShield, not
+--   AfterEffectAbsorb, so the new ev10 bridge does not cover it).
 --   613 empowered_fire PORTED this tick (ev6, above): CheckProc
 --   (proc spell is Ignite 12654 via procEvent:GetSpellId) +
 --   HandleProc (BP0 = pct(GetCreateMana, CalcValue of 67545),
@@ -526,7 +592,7 @@ RegisterAuraEvent(SPELL_MAGE_MASTER_OF_ELEMENTS_AURA, 6, masterOfElementsProc)
 --   614 fire_frost_ward PORTED this tick (ev9 absorb, above; Go
 --   CalculateAmount leg in spells.go): the Frost Warding roll reads
 --   the talent's EFFECT_1 live amount rank-aware; the Trigger arm
---   (Incanter's Absorption) stays out — no AfterEffectAbsorb bridge.
+--   (Incanter's Absorption) is ported below on the new ev10 bridge.
 --   BOUNDED DEVIATION: Go consumes the ward pool on a Frost Warding
 --   absorb; C++ bypasses it. DORMANT until Spell.dbc ships the
 --   543/6143, 57776 and 11189 rows.
@@ -537,6 +603,8 @@ RegisterAuraEvent(SPELL_MAGE_MASTER_OF_ELEMENTS_AURA, 6, masterOfElementsProc)
 --   616 ice_barrier STAYS OUT — CalculateAmount needs
 --   SpellBaseHealingBonusDone + ApplyEffectModifiers + level
 --   penalty; AfterRemove needs GetDummyAuraEffect + ProcChance.
+--   The AfterEffectAbsorb Trigger arm (Incanter's Absorption) IS
+--   ported above on the new ev10 bridge (all eight ranks).
 --   621 master_of_elements PORTED this tick (ev6: CheckProc damage
 --   spell via procEvent:GetSpellId; HandleProc BP0 = pct(CalcPowerCost,
 --   EFFECT_0 amount), mana > 0 gate, holder casts 29077 self).

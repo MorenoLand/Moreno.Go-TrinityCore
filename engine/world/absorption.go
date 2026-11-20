@@ -48,6 +48,17 @@ type absorbHookPending struct {
 	damage uint32
 }
 
+// absorbAfterPending is one deferred AfterEffectAbsorb hook: the aura,
+// the remaining damage after this aura's absorb, and the amount this
+// aura actually absorbed this hit. Recorded in the absorb loop and in
+// the OnEffectAbsorb pass, fired after the lock is released (see
+// fireAuraAfterAbsorb) — Lua never runs under castMu/auraMu.
+type absorbAfterPending struct {
+	aura     *activeAura
+	damage   uint32
+	absorbed uint32
+}
+
 // absorbHookPoolUnlimited reports whether the C++ script for the spell
 // sets an unlimited (-1) absorb pool via DoEffectCalcAmount, so the
 // hook's absorb is never consumed from the Go pool and the aura is
@@ -773,6 +784,7 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 	var exhaustedSpells []uint32
 	var guardianHeal uint32
 	var absorbPending []absorbHookPending
+	var absorbAfter []absorbAfterPending
 
 	// The mana-shield leg resolves each shield caster's spell-mod owner
 	// through findCreatureMotion (motionMu) for pet casters, so those
@@ -891,6 +903,9 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 					if aura.Amount == 0 {
 						exhaustedSpells = append(exhaustedSpells, aura.SpellID)
 					}
+					if s.server.hasAuraAfterAbsorbHook(aura.SpellID) {
+						absorbAfter = append(absorbAfter, absorbAfterPending{aura: aura, damage: remainingDamage, absorbed: absorbThis})
+					}
 				}
 				continue
 			}
@@ -978,6 +993,9 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 		if absorbHookPoolUnlimited(aura.SpellID) {
 			remainingDamage -= amount
 			absorbed += amount
+			if s.server.hasAuraAfterAbsorbHook(aura.SpellID) {
+				absorbAfter = append(absorbAfter, absorbAfterPending{aura: aura, damage: remainingDamage, absorbed: amount})
+			}
 			continue
 		}
 		if amount > aura.Amount {
@@ -992,6 +1010,24 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 		if aura.Amount == 0 {
 			exhaustedSpells = append(exhaustedSpells, aura.SpellID)
 		}
+		if s.server.hasAuraAfterAbsorbHook(aura.SpellID) {
+			absorbAfter = append(absorbAfter, absorbAfterPending{aura: aura, damage: remainingDamage, absorbed: amount})
+		}
+	}
+
+	// AfterEffectAbsorb hook pass (Unit.cpp:1909-1912): the deferred Lua
+	// fire for school-absorb auras that absorbed this hit, after the
+	// lock is released (see the AuraEventAfterEffectAbsorb contract).
+	// Each aura fires once with the amount it actually absorbed and the
+	// remaining damage after its absorb; auras that absorbed nothing
+	// never reach this pass.
+	for _, pend := range absorbAfter {
+		aura := pend.aura
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraObj := (&luaAuraRef{server: s.server, spellID: aura.SpellID, player: s, mapID: mapID, instanceID: instanceID}).luaAuraObject()
+		s.server.fireAuraAfterAbsorb(context.Background(), aura.SpellID, auraObj, s.luaPlayer(), pend.damage, pend.absorbed)
 	}
 
 	// Remove exhausted shields outside the lock; a shield that hits zero
@@ -1023,6 +1059,7 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 	var exhaustedSpells []uint32
 	var guardianHeal uint32
 	var absorbPending []absorbHookPending
+	var absorbAfter []absorbAfterPending
 
 	// The mana-shield leg drains the creature's mana pool (Powers[0], filled
 	// from the template mana row at spawn); resolved ahead of the aura lock
@@ -1096,6 +1133,9 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 						if aura.Amount == 0 {
 							exhaustedSpells = append(exhaustedSpells, aura.SpellID)
 						}
+						if s.hasAuraAfterAbsorbHook(aura.SpellID) {
+							absorbAfter = append(absorbAfter, absorbAfterPending{aura: aura, damage: remainingDamage, absorbed: absorbThis})
+						}
 					}
 					continue
 				}
@@ -1166,6 +1206,9 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 		if absorbHookPoolUnlimited(aura.SpellID) {
 			remainingDamage -= amount
 			absorbed += amount
+			if s.hasAuraAfterAbsorbHook(aura.SpellID) {
+				absorbAfter = append(absorbAfter, absorbAfterPending{aura: aura, damage: remainingDamage, absorbed: amount})
+			}
 			continue
 		}
 		if amount > aura.Amount {
@@ -1180,6 +1223,25 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 		if aura.Amount == 0 {
 			exhaustedSpells = append(exhaustedSpells, aura.SpellID)
 		}
+		if s.hasAuraAfterAbsorbHook(aura.SpellID) {
+			absorbAfter = append(absorbAfter, absorbAfterPending{aura: aura, damage: remainingDamage, absorbed: amount})
+		}
+	}
+
+	// AfterEffectAbsorb hook pass (Unit.cpp:1909-1912): the creature-leg
+	// twin, after auraMu is released. The holder is the creature
+	// motion object; a despawned creature (nil motion) cannot fire.
+	for _, pend := range absorbAfter {
+		aura := pend.aura
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		target := s.luaMotionCreature(motion)
+		if target == nil {
+			continue
+		}
+		auraObj := (&luaAuraRef{server: s, spellID: aura.SpellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID}).luaAuraObject()
+		s.fireAuraAfterAbsorb(context.Background(), aura.SpellID, auraObj, target, pend.damage, pend.absorbed)
 	}
 
 	// Unit.cpp:1965: an exhausted shield is removed with

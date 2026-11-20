@@ -1390,6 +1390,31 @@ func (s *Server) fireAuraAbsorb(ctx context.Context, spellID uint32, auraObj *sc
 	return amount, false
 }
 
+// hasAuraAfterAbsorbHook reports whether any RegisterAuraEvent(...,
+// AfterEffectAbsorb, ...) handler is registered for the spell, so the
+// absorb loops can record the aura for the post-lock after pass only
+// when a handler could run (the hasAuraAbsorbHook twin).
+func (s *Server) hasAuraAfterAbsorbHook(spellID uint32) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil {
+		return false
+	}
+	return s.Features.Scripts.HasHook("aura:"+strconv.FormatUint(uint64(spellID), 10), scripting.AuraEventAfterEffectAbsorb)
+}
+
+// fireAuraAfterAbsorb dispatches the RegisterAuraEvent AfterEffectAbsorb
+// hook for one school-absorb aura (args (event, aura, target, damage,
+// absorbAmount); damage is the remaining damage after this aura's
+// absorb, absorbAmount the amount this aura actually absorbed this
+// hit) and ignores returns — C++ AfterEffectAbsorb handlers return
+// void (Unit.cpp:1909-1912). Lua errors are logged by the runtime,
+// never propagated.
+func (s *Server) fireAuraAfterAbsorb(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any, damage uint32, absorbAmount uint32) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventAfterEffectAbsorb, scripting.AuraEventAfterEffectAbsorb, auraObj, target, damage, absorbAmount)
+}
+
 // fireAuraCheckAreaTarget dispatches the RegisterAuraEvent
 // OnCheckAreaTarget hook for a candidate dynobj-aura target (args
 // (event, aura, target)) and reports whether the aura may be applied.
