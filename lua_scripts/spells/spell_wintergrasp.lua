@@ -14,10 +14,19 @@ local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to t
 -- gate (SPELL_CAST_OK), as does a missing battlefield — the Go twin of
 -- the always-registered C++ battlefield is getOrCreateWGState, so the
 -- defender read never misses. The 54643 trigger HandleDummy leg stays
--- out: it only writes the spell's explicit target destination
--- (SetExplTargetDest, zone_wintergrasp.cpp:538-541) and the Lua spell
--- object has no dest write (the ev5 player-path site itself is live
--- since a910c39d). The second 54640 row (spell_gen_cast_target_to_target)
+-- out as DEAD C++: its OnEffectHitTarget (EFFECT_0) can never fire.
+-- eff0's only target is TARGET_DEST_NEARBY_ENTRY, a dest
+-- (Spell.cpp:1161 SelectImplicitNearbyTargets sets m_targets dst, adds no
+-- unit target), and SPELL_EFFECT_DUMMY's implicit target type is NONE
+-- (SpellInfo.cpp:621), so no unit/GO/corpse/item TargetInfo carries
+-- eff0's bit and CallScriptEffectHandlers (Spell.cpp:7996) dispatches
+-- OnEffectHitTarget only in HIT_TARGET mode. SetExplTargetDest
+-- (zone_wintergrasp.cpp:536-541) therefore never runs; eff1
+-- TELEPORT_UNITS takes the selection-time dest (the nearby-entry
+-- position), honored on the client path by the DestLocation branch
+-- (spells.go, mirroring the funnel leg). No SetExplTargetDest bridge
+-- is built: nothing in C++ ever calls it. The second 54640 row
+-- (spell_gen_cast_target_to_target)
 -- has no C++ loader in this tree. Binding 54640 is the TDB 26091
 -- spell_script_names row (spell_wintergrasp_defender_teleport); no AC
 -- spell_script_names row exists for 54640 (grep count 0).

@@ -369,7 +369,6 @@ end
 local SPELL_GEN_BANDAGE = { 23567, 23568, 23569, 23696, 24412, 24413, 24414, 35207 } -- spell_generic.cpp:495
 local SPELL_RECENTLY_BANDAGED = 11196 -- spell_generic.cpp:492
 local SPELL_FAILED_TARGET_AURASTATE = 111 -- SharedDefines.h:1093
-local SPELL_CAST_OK = 255 -- SharedDefines.h:1171
 
 local function bandageCheckCast(event, spell)
     local target = spell:GetTarget()
@@ -1172,9 +1171,7 @@ RegisterAuraEvent(60218, 9, absorb0Hitlimit1)
 -- Bindings are the AC spell_script_names rows.
 local SPELL_TOURNAMENT_MOUNT_SPELLS = { 62774, 62779, 62780, 62781, 62782, 62783, 62784, 62785, 62786, 62787, 63215, 63663, 63791, 63792 }
 local SPELL_LANCE_EQUIPPED = 62853 -- spell_generic.cpp:3195
-local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
 local SPELL_CUSTOM_ERROR_MUST_HAVE_LANCE_EQUIPPED = 60 -- SharedDefines.h:1236
-local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
 
 local function tournamentMountCheckCast(event, spell)
     local caster = spell:GetCaster()

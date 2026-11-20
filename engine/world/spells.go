@@ -17504,6 +17504,32 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// destination from `spell_target_position`.
 					s.teleportSpellEffectCaster(mapID, x, y, z, ori)
 					s.teleportEffectUnitTargets(teleList, mapID, x, y, z, ori)
+				} else if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+					// Spell::EffectTeleportUnits (SpellEffects.cpp:1214-1218):
+					// with a resolved destination the unit targets teleport
+					// there on the caster's map (Go's dest model has no map
+					// field — the MAPID_INVALID branch, :1216-1218). A zero
+					// dest orientation substitutes the explicit unit target's
+					// orientation (:1222); without one the caster's stands in.
+					// The funnel leg carries this branch already; the client
+					// leg fell through to the object-target fallback instead,
+					// so a spell whose dest comes from another effect's
+					// selection (54643 eff1 TARGET_DEST_DEST, dest resolved by
+					// eff0's TARGET_DEST_NEARBY_ENTRY) teleported its targets
+					// to the explicit target / caster position instead of the
+					// dest.
+					dx, dy, dz := target.Destination.X, target.Destination.Y, target.Destination.Z
+					ori := s.player.Orientation
+					if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && uint16(target.UnitGUID>>48) != 0xF110 {
+						if obj, found := s.getCombatTarget(effCtx, target.UnitGUID); found {
+							ori = obj.Orientation
+							if ori == 0 {
+								ori = s.player.Orientation
+							}
+						}
+					}
+					s.teleportSpellEffectCaster(s.player.Map, dx, dy, dz, ori)
+					s.teleportEffectUnitTargets(teleList, s.player.Map, dx, dy, dz, ori)
 				} else {
 					// Spell::SelectImplicitCasterDestTargets
 					// (Spell.cpp:1353-1357): no row falls back to the object

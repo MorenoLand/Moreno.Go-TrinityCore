@@ -704,7 +704,6 @@ end
 RegisterAuraEvent(SPELL_DK_THREAT_OF_THASSARIAN, 6, threatOfThassarianProc)
 
 local SPELL_DK_BLADE_BARRIER = 49182 -- spell_dk.cpp:429 (class spell_dk_blade_barrier)
-local CLASS_DEATH_KNIGHT = 6 -- SharedDefines.h:132
 local RUNE_BLOOD = 0 -- Player.h:269
 
 -- C++ spell_dk_blade_barrier::CheckProc (spell_dk.cpp:440-450):
