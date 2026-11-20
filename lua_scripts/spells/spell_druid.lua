@@ -14,28 +14,36 @@
 --   (GetAuraEffectOfRankedSpell(48492, 0)), when present, casts
 --   51185 with BP0 = that amount, triggered; while the T10 Feral 4P
 --   aura 70726 is up, casts 70725 triggered. Mode 3: removes 51185
---   then 70725. The RecalculateBaseArmor leg stays out (no bridge;
---   a no-op in the Go model since the bear-form passive CalcAmount
---   arm is itself stay-out).
+--   then 70725. The RecalculateBaseArmor leg stays out (no
+--   RecalculateAmount bridge): live, not a no-op, now that the
+--   bear-form passive CalcAmount arm ported (this tick) — Enrage
+--   apply/remove should re-run that amount.
 --   spell_dru_frenzied_regeneration (spell_druid.cpp:443-477): aura
 --   22842, mode 1. PeriodicTick: returns unless the target's power
 --   type is rage; returns when rage is 0; converts mod = min(rage,
---   100) rage into health: pct = floor(EFFECT_1 CalcValue of 22842
---   * mod / 100) (DBC read, 0 returns without consuming rage),
---   regen = floor(maxHealth * pct / 100) (CalculatePct, Util.h:66,
---   float multiply then truncate), cast 22845 on self with BP0 =
---   regen, then set rage to rage - mod. No return true: C++ has no
---   PreventDefaultAction (PERIODIC_DUMMY), so the Go default tick
---   still fires.
+--   100) rage into health: regen = floor(maxHealth * (EFFECT_1
+--   CalcValue of 22842 * mod / 100) / 100) — a single truncation
+--   (CalculatePct, Util.h:66, float multiply then truncate; the
+--   double-floor form read up to ~1% of max health low) — cast 22845
+--   on self with BP0 = regen, then set rage to rage - mod. No return
+--   true: C++ has no PreventDefaultAction (PERIODIC_DUMMY), so the Go
+--   default tick still fires.
 --   spell_dru_lifebloom (spell_druid.cpp:828-883): aura 33763, mode
 --   3, PARTIAL. R2-R3 (48450/48451) ride the same handler — TDB
 --   (-33763) NEG all-ranks binding, chain 33763/48450/48451.
 --   AfterRemove fires only on expire
 --   (GetRemoveMode() == 4, AURA_REMOVE_BY_EXPIRE): the target casts
 --   the final heal 33778 on itself with BP0 = the EFFECT_1 amount
---   (live, stack-scaled). The mana-energize leg (64372, needs the
---   caster's GetCreateMana/ManaCostPercentage) and the dispel leg
---   (no OnDispel hook) stay out.
+--   (live, stack-scaled), and the caster self-casts the mana
+--   energize 64372 with BP0 = floor(floor(GetCreateMana() *
+--   ManaCostPercentage / 100) * stack / 2) (stack = GetStackAmount();
+--   DBC-dormant on GetSpellManaCostPercentage until the 33763 row
+--   ships). The dispel leg (ev5 OnDispel, same two casts with
+--   stack = 1: Go removes exactly one charge per successful dispel,
+--   dispel.go:1036-1041) rides the same helper; the "no OnDispel
+--   hook" claim in the 2026-11-20 audit was stale (ev5 fires from
+--   dispel.go:1724). No OriginalCaster bridge (a triggered self-cast
+--   is the closest available).
 --   spell_dru_savage_roar_aura (spell_druid.cpp:1296-1323): aura
 --   52610, modes 2 + 3. Apply casts 62071 on the target, triggered;
 --   remove drops 62071. 62071 is the buff the handler casts, not
@@ -69,11 +77,25 @@
 --   ONLY_SHAPESHIFT unless the caster is in cat form; survival
 --   instincts fails it unless the caster is in a feral form (cat /
 --   bear / direbear, Unit.cpp:9164-9168 via GetShapeshiftForm).
--- STAY-OUT (tick 294): every other spell_druid class — CalcAmount/
---   hooks absent, or SpellScript-only with no RegisterSpellScript in
---   the engine. Notable: rip (combo points + attack power), berserk
---   (ResetCooldowns), nurturing_instinct (GetRank), living_seed
---   (proc), wild_growth (proc + CalcAmount).
+-- STAY-OUT (tick 294, updated this tick): the remaining
+-- spell_druid classes — CalcAmount/hooks absent, or SpellScript-only
+-- with no RegisterSpellScript in the engine. Notable: nurturing_instinct
+-- (GetRank), living_seed (proc), wild_growth (proc + CalcAmount),
+-- dash (no ev11 re-fire on shapeshift change), idol_lifebloom (no
+-- CalcSpellMod event), nourish (no GetHitHeal/SetHitHeal),
+-- starfall_dummy (no GetTriggerSpell on the player spell builder),
+-- swift_flight_passive (no Has310Flyer bridge), typhoon
+-- (PreventHitDefaultEffect unhonored on the player path),
+-- wild_growth_aura (no OnEffectUpdatePeriodic event). The 2026-11-20
+-- remaining-classes audit (hidden_files/
+-- spell_druid_remaining_classes_2026-11-20.md) reconciles all 53
+-- classes: 13 ALREADY-PORTED / 1 GO-COVERED (predatory_strikes,
+-- shapeshift.go AP fold) / 31 PORT / 8 STAY-OUT. This tick ports the
+-- 8 no-DBC-dependency PORTs (bear_form_passive, berserk, innervate,
+-- insect_swarm, rip, starfall_aoe, tiger_s_fury,
+-- t10_restoration_4p_bonus) plus the lifebloom mana/dispel legs and
+-- the frenzied-regeneration single-truncation fix; the other 23 PORTs
+-- are dormant ev6/proc-entry classes, still unported.
 
 local SPELL_DRUID_BARKSKIN = 22812
 local SPELL_DRUID_BARKSKIN_01 = 63058
@@ -135,25 +157,55 @@ local function frenziedRegenerationTick(event, aura, target)
     if calc == 0 then
         return
     end
-    local pct = math.floor(calc * mod / 100)
-    local regen = math.floor(target:GetMaxHealth() * pct / 100)
+    local regen = math.floor(target:GetMaxHealth() * (calc * mod / 100) / 100)
     target:CastCustomSpell(nil, SPELL_DRUID_FRENZIED_REGENERATION_HEAL, true, regen)
     target:SetPower(rage - mod, POWER_RAGE)
 end
 
 RegisterAuraEvent(SPELL_DRUID_FRENZIED_REGENERATION, 1, frenziedRegenerationTick)
 
+local SPELL_DRUID_LIFEBLOOM_ENERGIZE = 64372 -- spell_druid.cpp:59
+
+local function lifebloomManaLeg(aura, stack)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+    local manaPct = aura:GetSpellManaCostPercentage(SPELL_DRUID_LIFEBLOOM)
+    if manaPct == nil or manaPct <= 0 then
+        return
+    end
+    local mana = math.floor(math.floor(caster:GetCreateMana() * manaPct / 100) * stack / 2)
+    caster:CastCustomSpell(caster, SPELL_DRUID_LIFEBLOOM_ENERGIZE, true, mana)
+end
+
 local function lifebloomRemove(event, aura, target)
     if aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
         return
     end
     local heal = aura:GetAmount(1)
+    lifebloomManaLeg(aura, aura:GetStackAmount())
     target:CastCustomSpell(target, SPELL_DRUID_LIFEBLOOM_FINAL_HEAL, true, heal)
 end
 
 RegisterAuraEvent(SPELL_DRUID_LIFEBLOOM, 3, lifebloomRemove)
 RegisterAuraEvent(SPELL_DRUID_LIFEBLOOM_R2, 3, lifebloomRemove)
 RegisterAuraEvent(SPELL_DRUID_LIFEBLOOM_R3, 3, lifebloomRemove)
+
+-- C++ spell_dru_lifebloom::HandleDispel (spell_druid.cpp:867-875):
+-- the dispel leg runs OnRemoveEffect with stack = GetRemovedCharges()
+-- (1 per successful dispel, dispel.go:1036-1041): same final heal
+-- (EFFECT_1 amount) and mana energize (stack 1) as the expire leg.
+-- RegisterAuraEvent OnDispel = 5 (fireAuraDispel, dispel.go:1724).
+local function lifebloomDispel(event, aura, target, dispeller)
+    local heal = aura:GetAmount(1)
+    lifebloomManaLeg(aura, 1)
+    target:CastCustomSpell(target, SPELL_DRUID_LIFEBLOOM_FINAL_HEAL, true, heal)
+end
+
+RegisterAuraEvent(SPELL_DRUID_LIFEBLOOM, 5, lifebloomDispel)
+RegisterAuraEvent(SPELL_DRUID_LIFEBLOOM_R2, 5, lifebloomDispel)
+RegisterAuraEvent(SPELL_DRUID_LIFEBLOOM_R3, 5, lifebloomDispel)
 
 local function savageRoarApply(event, aura, target)
     target:CastSpell(target, SPELL_DRUID_SAVAGE_ROAR_BUFF, true)
@@ -375,3 +427,241 @@ local function primalTenacityAbsorb(event, aura, target, damage, absorbAmount)
 end
 
 RegisterAuraEvent(SPELL_DRUID_PRIMAL_TENACITY, 9, primalTenacityAbsorb)
+
+-- PORTED (this tick, 2026-11-20 remaining-classes audit):
+--   spell_dru_bear_form_passive (spell_druid.cpp:131-170): auras
+--   1178 / 9635, mode 11 (DoEffectCalcAmount, EFFECT_0,
+--   SPELL_AURA_MOD_BASE_RESISTANCE_PCT). While the owner has Enrage
+--   (5229) and not the T10 Feral 4P aura (70726), amount += -27
+--   (1178) / -16 (9635). GetAmount(0) at ev11 time is the rolled
+--   DBC base (spells.go apply leg), i.e. C++'s amount parameter.
+--   Partial: no dynamic recalc when Enrage lands/leaves (no
+--   RecalculateAmount bridge — same gap blocks dash and enrage's
+--   RecalculateBaseArmor leg).
+local SPELL_DRUID_BEAR_FORM_PASSIVE = 1178 -- spell_druid.cpp:40
+local SPELL_DRUID_DIRE_BEAR_FORM_PASSIVE = 9635 -- spell_druid.cpp:41
+
+local function bearFormPassiveCalcAmount(event, aura, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    if not target:HasAura(SPELL_DRUID_ENRAGE) or target:HasAura(SPELL_DRUID_ITEM_T10_FERAL_4P_BONUS) then
+        return
+    end
+    local mod = 0
+    if aura:GetAuraId() == SPELL_DRUID_BEAR_FORM_PASSIVE then
+        mod = -27
+    elseif aura:GetAuraId() == SPELL_DRUID_DIRE_BEAR_FORM_PASSIVE then
+        mod = -16
+    else
+        return
+    end
+    aura:SetAmount(aura:GetAmount(0) + mod, 0)
+end
+
+RegisterAuraEvent(SPELL_DRUID_BEAR_FORM_PASSIVE, 11, bearFormPassiveCalcAmount)
+RegisterAuraEvent(SPELL_DRUID_DIRE_BEAR_FORM_PASSIVE, 11, bearFormPassiveCalcAmount)
+
+--   spell_dru_berserk (spell_druid.cpp:171-191): aura 50334, mode 2
+--   (AfterEffectApply, EFFECT_1, SPELL_AURA_ADD_FLAT_MODIFIER).
+--   On apply, reset the cooldowns of every spell in category 971
+--   (SPELL_CATEGORY_MANGLE_BEAR, spell_druid.cpp:105), update sent.
+--   ResetTypeCooldowns is the PlayerMethods.h:3519 twin
+--   (lua_player.go:2138); the warrior Shield Slam precedent
+--   (spell_warrior.lua:394) calls it the same way.
+local SPELL_DRUID_BERSERK = 50334 -- spell_druid.cpp:171
+local SPELL_CATEGORY_MANGLE_BEAR = 971 -- spell_druid.cpp:105
+
+local function berserkApply(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    target:ResetTypeCooldowns(SPELL_CATEGORY_MANGLE_BEAR, true)
+end
+
+RegisterAuraEvent(SPELL_DRUID_BERSERK, 2, berserkApply)
+
+--   spell_dru_innervate (spell_druid.cpp:731-754): aura 29166,
+--   mode 11 (DoEffectCalcAmount, EFFECT_0,
+--   SPELL_AURA_PERIODIC_ENERGIZE). With 0 total ticks the amount
+--   is 0; otherwise amount = floor(floor(caster GetCreateMana() *
+--   base / 100) / ticks) (CalculatePct truncates once, then integer
+--   division by ticks truncates). No caster -> 0, as C++.
+--   GetCreateMana is the player-surface Unit::GetCreateMana
+--   (lua_player.go:1403); luaUnitObjectForGUID returns the player
+--   object for a player caster (pet_combat.go:479).
+local SPELL_DRUID_INNERVATE = 29166 -- spell_druid.cpp:731
+
+local function innervateCalcAmount(event, aura, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local ticks = aura:GetTotalTicks()
+    if ticks == 0 then
+        aura:SetAmount(0, 0)
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        aura:SetAmount(0, 0)
+        return
+    end
+    local base = aura:GetAmount(0)
+    aura:SetAmount(math.floor(math.floor(caster:GetCreateMana() * base / 100) / ticks), 0)
+end
+
+RegisterAuraEvent(SPELL_DRUID_INNERVATE, 11, innervateCalcAmount)
+
+--   spell_dru_insect_swarm (spell_druid.cpp:756-775): -5570, mode
+--   11 (DoEffectCalcAmount, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE).
+--   With 0 total ticks the amount is unchanged; otherwise the
+--   caster's T8 balance relic (64950) EFFECT_0 amount, when
+--   present, adds floor(relic / ticks). TDB spell_ranks chain
+--   5570/24974/24975/24976/24977/27013/48468.
+local SPELL_DRUID_INSECT_SWARM = 5570 -- spell_druid.cpp:756
+local SPELL_DRUID_INSECT_SWARM_RANKS = { 5570, 24974, 24975, 24976, 24977, 27013, 48468 }
+local SPELL_DRUID_ITEM_T8_BALANCE_RELIC = 64950 -- spell_druid.cpp:56
+
+local function insectSwarmCalcAmount(event, aura, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local ticks = aura:GetTotalTicks()
+    if ticks == 0 then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    local relic = caster:GetAuraEffect(SPELL_DRUID_ITEM_T8_BALANCE_RELIC, 0)
+    if relic ~= nil then
+        aura:SetAmount(aura:GetAmount(0) + math.floor(relic / ticks), 0)
+    end
+end
+
+for _, spellId in ipairs(SPELL_DRUID_INSECT_SWARM_RANKS) do
+    RegisterAuraEvent(spellId, 11, insectSwarmCalcAmount)
+end
+
+--   spell_dru_rip (spell_druid.cpp:1195-1250): -1079, mode 11
+--   (DoEffectCalcAmount, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE).
+--   Player-caster leg only (Load() admits players and NPCBot
+--   creatures; the bot leg stays out — no IsNPCBot bridge, no
+--   creature GetComboPoints): amount += cp * idol + floor(AP * cp /
+--   100), where cp is the caster's combo points, idol is the
+--   Idol of Feral Shadows (34241) EFFECT_0 amount else the Idol of
+--   Worship (60774) EFFECT_0 amount (the C++ if/else-if), and AP is
+--   GetTotalAttackPowerValue(BASE_ATTACK). The creature-target ev11
+--   fire site is spells.go:41904 (applyAuraToTarget). TDB
+--   spell_ranks chain 1079/9492/9493/9752/9894/9896/27008/49799/
+--   49800.
+local SPELL_DRUID_RIP_RANKS = { 1079, 9492, 9493, 9752, 9894, 9896, 27008, 49799, 49800 }
+local SPELL_DRUID_IDOL_OF_FERAL_SHADOWS = 34241 -- spell_druid.cpp:53
+local SPELL_DRUID_IDOL_OF_WORSHIP = 60774 -- spell_druid.cpp:54
+
+local function ripCalcAmount(event, aura, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+    local cp = caster:GetComboPoints()
+    local idol = caster:GetAuraEffect(SPELL_DRUID_IDOL_OF_FERAL_SHADOWS, 0) or caster:GetAuraEffect(SPELL_DRUID_IDOL_OF_WORSHIP, 0) or 0
+    aura:SetAmount(aura:GetAmount(0) + cp * idol + math.floor(caster:GetTotalAttackPowerValue() * cp / 100), 0)
+end
+
+for _, spellId in ipairs(SPELL_DRUID_RIP_RANKS) do
+    RegisterAuraEvent(spellId, 11, ripCalcAmount)
+end
+
+--   spell_dru_starfall_aoe (spell_druid.cpp:1324-1338): -50294,
+--   mode 7 (OnObjectAreaTargetSelect, EFFECT_0,
+--   TARGET_UNIT_DEST_AREA_ENEMY). The explicit target unit leaves
+--   the list. spell:GetTarget() is the cast packet's unit target
+--   (lua_spell.go:354), the C++ GetExplTargetUnit() twin. TDB
+--   spell_ranks chain 50294/53188/53189/53190.
+local SPELL_DRUID_STARFALL_RANKS = { 50294, 53188, 53189, 53190 }
+
+local function starfallAoeTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local expl = spell:GetTarget()
+    if expl ~= nil then
+        targets:Remove(expl)
+    end
+end
+
+for _, spellId in ipairs(SPELL_DRUID_STARFALL_RANKS) do
+    RegisterSpellEvent(spellId, 7, starfallAoeTargets)
+end
+
+--   spell_dru_tiger_s_fury (spell_druid.cpp:1447-1466): -5217,
+--   mode 3 (AfterHit). When the hit unit carries King of the
+--   Jungle (48492) EFFECT_1, it self-casts the energize 51178 with
+--   BP0 = that amount, triggered (TRIGGERED_FULL_MASK). TDB
+--   spell_ranks chain 5217/6793/9845/9846/50212/50213.
+local SPELL_DRUID_TIGER_S_FURY_RANKS = { 5217, 6793, 9845, 9846, 50212, 50213 }
+local SPELL_DRUID_TIGER_S_FURY_ENERGIZE = 51178 -- spell_druid.cpp:68
+
+local function tigerSFuryAfterHit(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    local amt = hitTarget:GetAuraEffectOfRankedSpell(SPELL_DRUID_KING_OF_THE_JUNGLE, 1)
+    if amt ~= nil then
+        hitTarget:CastCustomSpell(hitTarget, SPELL_DRUID_TIGER_S_FURY_ENERGIZE, true, amt)
+    end
+end
+
+for _, spellId in ipairs(SPELL_DRUID_TIGER_S_FURY_RANKS) do
+    RegisterSpellEvent(spellId, 3, tigerSFuryAfterHit)
+end
+
+--   spell_dru_t10_restoration_4p_bonus (spell_druid.cpp:1768-1844):
+--   spell 70691, mode 7 (OnObjectAreaTargetSelect, EFFECT_0,
+--   TARGET_UNIT_DEST_AREA_ALLY). Load gate is caster TYPEID_PLAYER
+--   (checked in the handler; Lua has no Load hook). Groupless: the
+--   caster alone. Grouped: drop the explicit target, keep only
+--   players in the caster's raid, pick one at random; an empty
+--   list clears the targets (FinishCast DONT_REPORT has no mid-cast
+--   model — a no-op here). The NPCBot branch stays out.
+local SPELL_DRUID_T10_RESTORATION_4P_BONUS = 70691 -- spell_druid.cpp:1768
+local TYPEID_PLAYER = 4 -- SharedDefines.h: TypeID
+
+local function t10Restoration4pBonusTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+    if caster:GetGroup() == nil then
+        targets:Clear()
+        targets:Add(caster)
+        return
+    end
+    local expl = spell:GetTarget()
+    if expl ~= nil then
+        targets:Remove(expl)
+    end
+    local kept = {}
+    for _, unit in ipairs(targets:GetTargets()) do
+        if unit ~= nil and unit:GetTypeId() == TYPEID_PLAYER and caster:IsInRaidWith(unit) then
+            table.insert(kept, unit)
+        end
+    end
+    if #kept == 0 then
+        targets:Clear()
+        return
+    end
+    local pick = kept[math.random(#kept)]
+    targets:Clear()
+    targets:Add(pick)
+end
+
+RegisterSpellEvent(SPELL_DRUID_T10_RESTORATION_4P_BONUS, 7, t10Restoration4pBonusTargets)
