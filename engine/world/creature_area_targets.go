@@ -4094,8 +4094,13 @@ func (s *Server) applyInlineCreatureReflectReturnTrip(ctx context.Context, motio
 	// sets the outbound leg; a reflector that already despawned
 	// leaves no distance, so the trip lands synchronously like before.
 	delayMs := 0
-	if rm := s.findCreatureMotion(motion.Map, motion.InstanceID, reflectorGUID); rm != nil {
-		delayMs = inlineReflectReturnDelayMs(motion, rm.X, rm.Y, rm.Z, spell)
+	// Spell.cpp:2157-2162: a self-cast has TimeDelay 0 (m_caster ==
+	// target skips the distance leg), so a caster reflecting its own
+	// spell lands synchronously — the 5-yard floor never applies.
+	if reflectorGUID != motion.GUID {
+		if rm := s.findCreatureMotion(motion.Map, motion.InstanceID, reflectorGUID); rm != nil {
+			delayMs = inlineReflectReturnDelayMs(motion, rm.X, rm.Y, rm.Z, spell)
+		}
 	}
 	if delayMs > 0 {
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
