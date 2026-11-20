@@ -10028,7 +10028,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 			continue
 		}
-		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level), 0, nil)
+		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level), 0, nil, false)
 		s.recordCreatureChannelHitTarget(m, spell, guid)
 	}
 	for _, guid := range hitTargets {
@@ -10065,7 +10065,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			}
 			continue
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false)
 	}
 }
 
@@ -10075,17 +10075,16 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 // caster position when the spell carries no dest-family target), with the
 // DBC duration and radius at the caster's level. The session helper's
 // SPELLMOD_DURATION fold has no creature twin (no spellmod owner session),
-// so the raw DBC duration stands. The dynobj target-map pass is
-// session-rooted (caster session + session area sweeps) and has no creature
-// twin, so the aura is applied here to the units in radius at cast time —
-// players through applyAuraFromCaster, creatures through the Server twin —
-// gated on the spell-level friendly/enemy split (isFriendlyAreaSpell) like
-// the session dynobj pass's enemy/friendly branch. Documented residuals:
-// newcomers after the cast miss the aura, and leavers keep it to its own
-// duration expiry (the dynobj despawn strip only removes
-// PersistentAreaAura-flagged applications, which these cast-time applies
-// are not); the object itself persists for its duration through the
-// creature-caster keepalive in updateDynamicSpellAuras.
+// so the raw DBC duration stands. The aura is applied here to the units in
+// radius at cast time — players through applyAuraFromCaster, creatures
+// through the Server twin — gated on the spell-level friendly/enemy split
+// (isFriendlyAreaSpell) like the session dynobj pass's enemy/friendly
+// branch. Cast-time applies carry the PersistentAreaAura flag, so the 500ms
+// creature pass (updateCreatureDynobjTargetMap) adopts them into
+// AuraHolders instead of re-applying, and the despawn strip removes them;
+// newcomers after the cast gain the aura from that pass. The object itself
+// persists for its duration through the creature-caster keepalive in
+// updateDynamicSpellAuras.
 func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hasDest bool, destX, destY, destZ float32) {
 	if s == nil || m == nil || s.Data == nil {
 		return
@@ -10146,7 +10145,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		schoolMask = 1
 	}
 	now := time.Now()
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(s.nextDynamicSpellLowGUID()), CasterGUID: m.GUID, SpellID: uint64(spell.ID), Map: m.Map, InstanceID: m.InstanceID, X: cx, Y: cy, Z: cz, Orientation: m.Orientation, Radius: radius, CastTime: uint32(now.UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: now.Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: now}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(s.nextDynamicSpellLowGUID()), CasterGUID: m.GUID, SpellID: uint64(spell.ID), Map: m.Map, InstanceID: m.InstanceID, X: cx, Y: cy, Z: cz, Orientation: m.Orientation, Radius: radius, CastTime: uint32(now.UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: now.Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: now, NextUpkeepTick: now.Add(auraUpkeepIntervalMs * time.Millisecond)}
 	s.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 	friendly := isFriendlyAreaSpell(spell)
 	inRadius := func(x, y, z float32) bool {
@@ -10198,7 +10197,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 			continue
 		}
 		sharedDelayMs := uint32(object.NextAuraTick.Sub(now) / time.Millisecond)
-		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), periodMs, &sharedDelayMs)
+		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), periodMs, &sharedDelayMs, true)
 	}
 	type creatureTarget struct {
 		guid    uint64
@@ -10232,7 +10231,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		if s.dynobjCreatureTargetImmune(ctx, spell, tm.guid, m.Map, m.InstanceID, s.creatureFriendlyToTarget(m, tm.guid)) {
 			continue
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true)
 	}
 }
 
@@ -10248,7 +10247,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 // wild-cast DoT/HoT record lands and expires but does not tick),
 // the linked-aura apply arms, and the charm, vehicle, dummy,
 // feign-death and phase effect tails.
-func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState) {
+func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool) {
 	if s == nil || m == nil || targetGUID == 0 {
 		return
 	}
@@ -10431,6 +10430,7 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			StoredCasterLevel:  uint8(casterLevel(m)),
 			ApplyResilience:    applyResilience,
 			SingleTarget:       isSingleTargetAuraSpell(spell),
+			PersistentAreaAura: persistentAreaAura,
 			TriggerSpell:       eff.TriggerSpell,
 			AuraInterruptFlags: spell.AuraInterruptFlags,
 			StackAmount:        spell.StackAmount,

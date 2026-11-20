@@ -1234,7 +1234,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// instead of being re-applied unconditionally each pulse.
 			if s.player.Map == totem.Map && s.player.InstanceID == totem.InstanceID &&
 				totemWithinAreaRange(s.player.X, s.player.Y, s.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) {
-				s.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel, 0, nil)
+				s.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel, 0, nil, false)
 			}
 			// Apply to nearby party members
 			if s.server != nil && s.groupID != 0 {
@@ -1249,7 +1249,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				}
 				s.server.sessionsMu.RUnlock()
 				for _, other := range buffTargets {
-					other.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel, 0, nil)
+					other.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel, 0, nil, false)
 				}
 			}
 		}
@@ -1299,7 +1299,7 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 				}
 				s.server.sessionsMu.RUnlock()
 				for _, other := range debuffTargets {
-					other.applyAuraFromCaster(def.DebuffSpell, totem.DurationMs, totem.TotemGUID, ownerLevel, 0, nil)
+					other.applyAuraFromCaster(def.DebuffSpell, totem.DurationMs, totem.TotemGUID, ownerLevel, 0, nil, false)
 				}
 			}
 		}
@@ -1816,7 +1816,7 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 		}
 		s.server.sessionsMu.RUnlock()
 		for _, other := range pulseTargets {
-			other.applyAuraFromCaster(def.PulseSpell, slowDurationMs, totem.TotemGUID, uint8(totemMotion.Level), 0, nil)
+			other.applyAuraFromCaster(def.PulseSpell, slowDurationMs, totem.TotemGUID, uint8(totemMotion.Level), 0, nil, false)
 		}
 	}
 	// UpdateTargetMap drop (SpellAuras.cpp:643): each pulse rebuilds

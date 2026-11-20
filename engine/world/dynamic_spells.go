@@ -51,7 +51,13 @@ type dynamicSpellObjectState struct {
 	// auras align their first tick to it instead of starting their own
 	// period timer.
 	NextTargetMapPass time.Time
-	DespawnTimer      *time.Timer
+	// NextUpkeepTick is the next m_timeCla drain deadline for the dynobj's
+	// own aura (SpellAuras.cpp:838-857, via DynamicObject::Update,
+	// DynamicObject.cpp:158-173): the caster pays ManaPerSecond once per
+	// second, and a failed payment despawns the whole patch. Zero arms the
+	// first drain one second after spawn (Aura ctor, SpellAuras.cpp:436-437).
+	NextUpkeepTick time.Time
+	DespawnTimer   *time.Timer
 	// ExpiresAt is the wall-clock deadline the DespawnTimer was armed for;
 	// Spell::DelayedChannel's dynobj->Delay arm (Spell.cpp:7324-7326)
 	// shortens it on channel pushback.
@@ -139,6 +145,12 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 	if s == nil || object == nil || duration <= 0 {
 		return
 	}
+	// DynamicObject::CreateDynamicObject (DynamicObject.cpp:105-112):
+	// an invalid position (non-finite or out-of-bounds coordinate)
+	// rejects the object outright — the patch is never created.
+	if !validTrinityMapCoordinates(object.X, object.Y, object.Z, object.Orientation) {
+		return
+	}
 	if caster := s.findSessionByGUID(object.CasterGUID); caster != nil && caster.player != nil {
 		object.Map, object.InstanceID = caster.player.Map, caster.player.InstanceID
 	}
@@ -198,6 +210,29 @@ func (s *Server) dynobjCreatureTargetImmune(ctx context.Context, spell wotlk.Spe
 	return creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(targetGUID), nil, tm.Faction, func(uint32) bool { return friendly })
 }
 
+// dynobjUpkeepTick mirrors the m_timeCla arm of Aura::Update
+// (SpellAuras.cpp:838-857) for the dynobj's own aura: DynamicObject::Update
+// (DynamicObject.cpp:158-173) runs the aura update on the patch itself, so
+// the caster pays ManaPerSecond + ManaPerSecondPerLevel * casterLevel once
+// per second no matter how many targets stand in the patch, and a failed
+// payment removes the aura, which despawns the whole object. Returns false
+// when the dynobj must despawn. The first drain lands one second after
+// spawn (Aura ctor, SpellAuras.cpp:436-437: m_timeCla starts at 1000).
+func (s *Server) dynobjUpkeepTick(object *dynamicSpellObjectState, now time.Time) bool {
+	if s == nil || object == nil || !auraUpkeepNeeded(object.SpellData) {
+		return true
+	}
+	if object.NextUpkeepTick.IsZero() {
+		object.NextUpkeepTick = now.Add(auraUpkeepIntervalMs * time.Millisecond)
+		return true
+	}
+	if now.Before(object.NextUpkeepTick) {
+		return true
+	}
+	object.NextUpkeepTick = now.Add(auraUpkeepIntervalMs * time.Millisecond)
+	return s.auraUpkeepTick(uint32(object.SpellID), object.CasterGUID, object.Map, object.InstanceID)
+}
+
 func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	if s == nil {
 		return
@@ -226,6 +261,15 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	}
 	s.objectsMu.Unlock()
 	for _, object := range objects {
+		// DynObjAura upkeep (SpellAuras.cpp:838-857 via
+		// DynamicObject::Update, DynamicObject.cpp:158-173): the m_timeCla
+		// drain runs once per second on the dynobj's own aura, and a
+		// failed payment despawns the whole patch with all its
+		// applications — never one target's aura at a time.
+		if !s.dynobjUpkeepTick(object, now) {
+			s.despawnDynamicSpellObject(object.GUID)
+			continue
+		}
 		caster := s.findSessionByGUID(object.CasterGUID)
 		if caster == nil || caster.player == nil || caster.player.Map != object.Map || caster.player.InstanceID != object.InstanceID {
 			// Creature-caster dynobj (creatureEffectPersistentAreaAura):
@@ -436,12 +480,12 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 			if object.AuraEffectIndex >= 0 && vs.isImmunedToSpellEffect(spell, object.AuraEffectIndex, nil) {
 				continue
 			}
-			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs)
+			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs, true)
 		} else {
 			if s.dynobjCreatureTargetImmune(ctx, spell, guid, object.Map, object.InstanceID, s.creatureFriendlyToTarget(caster, guid)) {
 				continue
 			}
-			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil)
+			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil, true)
 		}
 		object.AuraHolders[guid] = struct{}{}
 	}

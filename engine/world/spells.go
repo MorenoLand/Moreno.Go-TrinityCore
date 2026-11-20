@@ -21905,7 +21905,7 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	if schoolMask == 0 {
 		schoolMask = 1
 	}
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: time.Now()}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: time.Now(), NextUpkeepTick: time.Now().Add(auraUpkeepIntervalMs * time.Millisecond)}
 	s.server.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 }
 
@@ -36974,7 +36974,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.player != nil {
 		casterLevel = s.player.Level
 	}
-	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel, 0, nil)
+	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel, 0, nil, false)
 }
 
 // refreshCommandAura mirrors the Unit::_TryStackingOrRefreshingExistingAura
@@ -37060,8 +37060,9 @@ func (s *session) refreshCommandAura(spellID, durationMs uint32) bool {
 		existing.TickTimer = nil
 	}
 	// Aura::RefreshDuration (SpellAuras.cpp:915-927) re-arms the 1s power
-	// upkeep on every refresh.
-	if auraUpkeepNeeded(spell) {
+	// upkeep on every refresh — except for a persistent-area-aura
+	// application, whose upkeep lives on the dynobj (dynobjUpkeepTick).
+	if auraUpkeepNeeded(spell) && !existing.PersistentAreaAura {
 		s.scheduleAuraUpkeepLocked(existing)
 	}
 	slot, positive := existing.Slot, existing.Positive
@@ -37164,7 +37165,7 @@ func (s *Server) calcAuraMaxCharges(spell wotlk.Spell, mapID, instanceID uint32,
 // record, wire caster/level, and level-scaled amounts use the caster's GUID
 // and level. The totem's level is its owner's (Totem.cpp:103), passed
 // explicitly because the aura may land on a party member of another level.
-func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8, periodMs uint32, periodicInitialDelay *uint32) {
+func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8, periodMs uint32, periodicInitialDelay *uint32, persistentAreaAura bool) {
 	if s.auras == nil {
 		s.auras = make(map[uint32]struct{})
 	}
@@ -37420,6 +37421,7 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		RemainingMs:        durationMs,
 		DurationUpdatedAt:  time.Now(),
 		SingleTarget:       isSingleTargetAuraSpellID(s.server.Data, spellID),
+		PersistentAreaAura: persistentAreaAura,
 		Slot:               slot,
 		Positive:           positive,
 		StoredCasterLevel:  casterLevel,
@@ -37656,17 +37658,15 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	}
 	// Aura constructor (SpellAuras.cpp:436-437): spells with
 	// ManaPerSecond start the 1s power-upkeep timer (m_timeCla) — the
-	// applyAuraToTarget fresh-apply twin (spells.go:42078). This funnel
-	// armed the periodic tick but never the upkeep, so a creature-cast
-	// ManaPerSecond aura on a player never drained its caster (and a
-	// dynobj patch never died from upkeep failure). The DurationMs==0
-	// gate inside scheduleAuraUpkeepLocked covers permanent/mounted
-	// auras. Dynobj holders pay per holder here; C++ drains once per
-	// DynObjAura (one aura per object), so a shared object-level timer
-	// is the remaining refinement — latent, zero seeded spells carry
+	// applyAuraToTarget fresh-apply twin. The DurationMs==0 gate inside
+	// scheduleAuraUpkeepLocked covers permanent/mounted auras.
+	// Persistent-area-aura applications pay no per-target upkeep here:
+	// C++ drains once per DynObjAura (DynamicObject.cpp:158-173), so the
+	// dynobj-level timer (dynobjUpkeepTick) owns the drain and the
+	// whole-patch despawn on failure. Latent: zero seeded spells carry
 	// ManaPerSecond.
 	if s.server != nil && s.server.Data != nil {
-		if sp, found, _ := s.server.Data.Spell(spellID); found && auraUpkeepNeeded(sp) {
+		if sp, found, _ := s.server.Data.Spell(spellID); found && auraUpkeepNeeded(sp) && !persistentAreaAura {
 			s.scheduleAuraUpkeep(aura)
 		}
 	}
@@ -38127,7 +38127,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 				fadeMs = uint32(dur)
 			}
 		}
-		s.applyAuraFromCaster(32612, fadeMs, s.playerGUID, s.player.Level, 0, nil)
+		s.applyAuraFromCaster(32612, fadeMs, s.playerGUID, s.player.Level, 0, nil, false)
 		// Unit::CombatStop(true) twin: interrupt the cast, stop the swing,
 		// clear the in-combat flag. The victim-side attacker clearing and
 		// the pet stop have no Go model (documented delta).
@@ -41203,8 +41203,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				}
 			}
 			// Aura::RefreshDuration (SpellAuras.cpp:915-927) re-arms the 1s
-			// power upkeep (m_timeCla) on every refresh.
-			if auraUpkeepNeeded(spell) {
+			// power upkeep (m_timeCla) on every refresh — except for a
+			// persistent-area-aura application, whose upkeep lives on the
+			// dynobj (dynobjUpkeepTick).
+			if auraUpkeepNeeded(spell) && !existing.PersistentAreaAura {
 				targetSess.scheduleAuraUpkeepLocked(existing)
 			}
 			slot, effectMask, charges := existing.Slot, existing.EffectMask, existing.RemainingCharges
@@ -42098,8 +42100,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			targetSess.schedulePlayerPeriodicTickInitial(aura, aura.PeriodMs, initialDelay)
 		}
 		// Aura constructor (SpellAuras.cpp:431-437): spells with
-		// ManaPerSecond start the 1s power-upkeep timer (m_timeCla).
-		if auraUpkeepNeeded(spell) {
+		// ManaPerSecond start the 1s power-upkeep timer (m_timeCla) —
+		// except persistent-area-aura applications, whose upkeep runs
+		// once per second on the dynobj's own aura (dynobjUpkeepTick).
+		if auraUpkeepNeeded(spell) && !persistentAreaAura {
 			targetSess.scheduleAuraUpkeep(aura)
 		}
 		if durationMs > 0 && durationMs < 18000000 {
@@ -42279,8 +42283,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 		}
 		// Aura::RefreshDuration (SpellAuras.cpp:915-927) re-arms the 1s
-		// power upkeep (m_timeCla) on every refresh.
-		if auraUpkeepNeeded(spell) {
+		// power upkeep (m_timeCla) on every refresh — except for a
+		// persistent-area-aura application, whose upkeep lives on the
+		// dynobj (dynobjUpkeepTick).
+		if auraUpkeepNeeded(spell) && !existing.PersistentAreaAura {
 			s.scheduleCreatureAuraUpkeepLocked(existing)
 		}
 		slot, effectMask := existing.Slot, existing.EffectMask
@@ -42882,8 +42888,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		s.scheduleCreaturePeriodicTickInitial(aura, aura.PeriodMs, initialDelay)
 	}
 	// Aura constructor (SpellAuras.cpp:431-437): spells with
-	// ManaPerSecond start the 1s power-upkeep timer (m_timeCla).
-	if auraUpkeepNeeded(spell) {
+	// ManaPerSecond start the 1s power-upkeep timer (m_timeCla) —
+	// except persistent-area-aura applications, whose upkeep runs
+	// once per second on the dynobj's own aura (dynobjUpkeepTick).
+	if auraUpkeepNeeded(spell) && !persistentAreaAura {
 		s.scheduleCreatureAuraUpkeep(aura)
 	}
 	if durationMs > 0 && durationMs < 18000000 {
@@ -43203,7 +43211,7 @@ func (ts *session) scheduleAuraUpkeepLocked(aura *activeAura) {
 			pMap, pInst = ts.player.Map, ts.player.InstanceID
 		}
 		ts.playerStateMu.Unlock()
-		if !ts.server.auraUpkeepTick(aura, pMap, pInst) {
+		if !ts.server.auraUpkeepTick(aura.SpellID, aura.CasterGUID, pMap, pInst) {
 			// Aura::Update mana-upkeep failure (SpellAuras.cpp:855): plain
 			// Remove() = AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
 			ts.removeAuraWithMode(aura.SpellID, auraRemoveByDefault)
@@ -43243,7 +43251,7 @@ func (s *session) scheduleCreatureAuraUpkeepLocked(aura *activeAura) {
 			return
 		}
 		s.server.auraMu.Unlock()
-		if !s.server.auraUpkeepTick(aura, aura.TargetKey.Map, aura.TargetKey.InstanceID) {
+		if !s.server.auraUpkeepTick(aura.SpellID, aura.CasterGUID, aura.TargetKey.Map, aura.TargetKey.InstanceID) {
 			// SpellAuras.cpp:838-857: upkeep failure is a plain Remove() =
 			// BY_DEFAULT (SpellAuras.h:129); only natural expiry is BY_EXPIRE.
 			s.removeCreatureAuraTimed(aura.TargetKey, aura.SpellID, aura.Slot, auraRemoveByDefault)
@@ -43265,16 +43273,18 @@ func (s *session) scheduleCreatureAuraUpkeepLocked(aura *activeAura) {
 // cannot pay, the aura is removed (C++ Remove() drops the aura without
 // paying). A caster that cannot be resolved pays nothing and the aura stays,
 // like the C++ `else if (caster)` gate. Returns false when the aura must be
-// removed.
-func (s *Server) auraUpkeepTick(aura *activeAura, mapID, instanceID uint32) bool {
-	if s == nil || s.Data == nil || aura == nil || aura.CasterGUID == 0 {
+// removed. The spell/caster ride as IDs (not an aura record) so the dynobj
+// level drain (dynobjUpkeepTick) can pay once per patch instead of once
+// per target aura.
+func (s *Server) auraUpkeepTick(spellID uint32, casterGUID uint64, mapID, instanceID uint32) bool {
+	if s == nil || s.Data == nil || spellID == 0 || casterGUID == 0 {
 		return true
 	}
-	spell, found, err := s.Data.Spell(aura.SpellID)
+	spell, found, err := s.Data.Spell(spellID)
 	if err != nil || !found {
 		return true
 	}
-	if casterSess := s.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess.player != nil {
+	if casterSess := s.findSessionByGUID(casterGUID); casterSess != nil && casterSess.player != nil {
 		casterSess.playerStateMu.Lock()
 		keep := true
 		paid := false
@@ -43310,7 +43320,7 @@ func (s *Server) auraUpkeepTick(aura *activeAura, mapID, instanceID uint32) bool
 	keep := true
 	paid := false
 	s.motionMu.Lock()
-	if motion := s.findCreatureMotionLocked(mapID, instanceID, aura.CasterGUID); motion != nil {
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, casterGUID); motion != nil {
 		cost := int32(spell.ManaPerSecond) + int32(spell.ManaPerSecondPerLevel)*int32(motion.Level)
 		switch {
 		case cost <= 0:
@@ -43334,7 +43344,7 @@ func (s *Server) auraUpkeepTick(aura *activeAura, mapID, instanceID uint32) bool
 	}
 	s.motionMu.Unlock()
 	if paid {
-		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, aura.CasterGUID, fields)
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, casterGUID, fields)
 	}
 	return keep
 }
