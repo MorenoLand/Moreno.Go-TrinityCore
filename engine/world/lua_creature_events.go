@@ -1035,6 +1035,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{isSummon}, nil
 	}
+	// IsCritter is Unit::IsCritter (Unit.h:1022): the creature template
+	// type is CREATURE_TYPE_CRITTER (SharedDefines.h:2668, 8). Lets Lua
+	// gate IsCritter arms such as the unsated-craving CheckProc
+	// gating Shadow's Fate 71169 (spell_item.cpp:1952-1962).
+	methods["IsCritter"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		isCritter := motion.CreatureType == creatureTypeCritter
+		s.motionMu.Unlock()
+		return []any{isCritter}, nil
+	}
 	// GetSpellFamilyFlags(spellId, index) reads SpellInfo::SpellFamilyFlags
 	// (Spell.dbc fields 209-211, wotlk store.go:197) for an arbitrary spell
 	// id — the ev14 bare-spellId twin of the procEventObject's

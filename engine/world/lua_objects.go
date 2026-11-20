@@ -3230,6 +3230,14 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		motion := s.luaCreatureMotion(state.GUID, state.Entry)
 		return motion != nil && motion.IsTempSummon
 	})
+	// IsCritter is Unit::IsCritter (Unit.h:1022): the creature template
+	// type is CREATURE_TYPE_CRITTER (SharedDefines.h:2668, 8). The
+	// handler-surface twin lives in lua_creature_events.go; this session
+	// binding reads the same creaturemotion CreatureType.
+	methods["IsCritter"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		return motion != nil && motion.CreatureType == creatureTypeCritter
+	})
 	// IsTargetableForAttack is CreatureMethods::IsTargetableForAttack
 	// (CreatureMethods.h:55-64): Unit::isTargetableForAttack(checkFakeDeath
 	// = mustBeDead) (Unit.cpp:8504-8516) — alive, no NON_ATTACKABLE

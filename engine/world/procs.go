@@ -4367,9 +4367,10 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// 69734 on the proc target, a NEG event the damage
 				// 69730, both with the aura effect. The two legs are
 				// independent in C++ (two ifs), so both fire if both
-				// flags are set. No Lua ev6 twin: ev6 args carry no
-				// proc type mask. DORMANT until Spell.dbc ships the
-				// 69739 proc entry.
+				// flags are set. Lua ev6 twin in spell_item.lua
+				// (procEvent:GetTypeMask) vetoes this leg via return
+				// true. DORMANT until Spell.dbc ships the 69739 proc
+				// entry.
 				if ev.typeMask&procFlagDoneSpellMagicDmgClassPos != 0 {
 					s.triggeredByAuraCast = true
 					s.triggeredByAuraSpell = auraSpell.ID
@@ -4395,8 +4396,10 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// DONE_SPELL_MAGIC_DMG_CLASS_POS event casts the heal
 				// 69733 on the proc target, a NEG event the damage
 				// 69729, both with the aura effect, independent legs.
-				// No Lua ev6 twin: ev6 args carry no proc type mask.
-				// DORMANT until Spell.dbc ships the 69755 proc entry.
+				// Lua ev6 twin in spell_item.lua
+				// (procEvent:GetTypeMask) vetoes this leg via return
+				// true. DORMANT until Spell.dbc ships the 69755 proc
+				// entry.
 				if ev.typeMask&procFlagDoneSpellMagicDmgClassPos != 0 {
 					s.triggeredByAuraCast = true
 					s.triggeredByAuraSpell = auraSpell.ID
@@ -4417,10 +4420,10 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// spell_item_zandalarian_charm::HandleStackDrop
 				// (spell_item.cpp:4133-4137): PreventDefaultAction;
 				// the holder loses one stack of the Unstable Power
-				// stack aura 24659. No Lua ev6 twin: ev6 args carry
-				// no triggering spell id, so the CheckProc gate is
-				// unimplementable in Lua. DORMANT until Spell.dbc
-				// ships the 24658 proc entry.
+				// stack aura 24659. Lua ev6 twin in spell_item.lua
+				// (procEvent:GetSpellId) vetoes this leg via return
+				// true. DORMANT until Spell.dbc ships the 24658 proc
+				// entry.
 				_ = s.removePlayerAuraFromStack(24659)
 				continue
 			}
@@ -4428,10 +4431,10 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// spell_item_zandalarian_charm::HandleStackDrop,
 				// Restless Strength twin (spell_item.cpp:4133-4137):
 				// PreventDefaultAction; the holder loses one stack of
-				// the Restless Strength stack aura 24662. No Lua ev6
-				// twin: ev6 args carry no triggering spell id, so the
-				// CheckProc gate is unimplementable in Lua. DORMANT
-				// until Spell.dbc ships the 24661 proc entry.
+				// the Restless Strength stack aura 24662. Lua ev6 twin
+				// in spell_item.lua (procEvent:GetSpellId) vetoes this
+				// leg via return true. DORMANT until Spell.dbc ships
+				// the 24661 proc entry.
 				_ = s.removePlayerAuraFromStack(24662)
 				continue
 			}

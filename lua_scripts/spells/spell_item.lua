@@ -1857,6 +1857,57 @@ local EV6_ITEM = {
     STAT_AGILITY = 1,
     STAT_INTELLECT = 3,
     STAT_SPIRIT = 4,
+    MARK_OF_CONQUEST = 33510,
+    MARK_OF_CONQUEST_ENERGIZE = 39599,
+    PROC_FLAG_DONE_RANGED_AUTO_ATTACK = 0x40,
+    PROC_FLAG_DONE_SPELL_RANGED_DMG_CLASS = 0x100,
+    SHARD_OF_THE_SCALE_PURIFIED = 69755,
+    SHARD_OF_THE_SCALE_SHINY = 69739,
+    PURIFIED_CAUTERIZING_HEAL = 69733,
+    PURIFIED_SEARING_FLAMES = 69729,
+    SHINY_CAUTERIZING_HEAL = 69734,
+    SHINY_SEARING_FLAMES = 69730,
+    PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_POS = 0x4000,
+    PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_NEG = 0x10000,
+    ZANDALARIAN_UNSTABLE_POWER = 24658,
+    ZANDALARIAN_RESTLESS_STRENGTH = 24661,
+    UNSTABLE_POWER_STACK = 24659,
+    RESTLESS_STRENGTH_STACK = 24662,
+    FROZEN_SHADOWEAVE = 39372,
+    SHADOWMEND = 39373,
+    NECROTIC_TOUCH = 71875,
+    NECROTIC_TOUCH_2 = 71877,
+    NECROTIC_TOUCH_PROC = 71879,
+    SWIFT_HAND_OF_JUSTICE = 59906,
+    SWIFT_HAND_HEAL = 59913,
+    BLESSING_OF_ANCIENT_KINGS = 64411,
+    PROTECTION_OF_ANCIENT_KINGS = 64413,
+    PROTECTION_CAP = 20000,
+    PERSISTENT_SHIELD = 26467,
+    PERSISTENT_SHIELD_TRIGGERED = 26470,
+    SHADOWMOURNE = 71903,
+    SHADOWMOURNE_SOUL_FRAGMENT = 71905,
+    SHADOWMOURNE_CHAOS_BANE_DAMAGE = 71904,
+    SHADOWMOURNE_CHAOS_BANE_BUFF = 73422,
+    SHADOWS_FATE = 71169,
+    SOUL_FEAST = 71203,
+    NPC_SINDRAGOSA = 36853,
+    AURA_OF_MADNESS = 39446,
+    AURA_OF_MADNESS_BY_CLASS = {
+        [1] = { 39511, 40997, 40998, 41002, 41005, 41011 },
+        [2] = { 39511, 40997, 40998, 40999, 41002, 41005, 41009, 41011, 41404 },
+        [3] = { 40997, 40999, 41002, 41005, 41009, 41011, 41404 },
+        [4] = { 39511, 40997, 40998, 41002, 41005, 41011 },
+        [5] = { 40999, 41002, 41005, 41009, 41011, 41404 },
+        [6] = { 39511, 40997, 40998, 41002, 41005, 41011 },
+        [7] = { 40999, 41002, 41005, 41009, 41011, 41404 },
+        [8] = { 40999, 41002, 41005, 41009, 41011, 41404 },
+        [9] = { 40999, 41002, 41005, 41009, 41011, 41404 },
+        [11] = { 39511, 40997, 40998, 40999, 41002, 41005, 41009, 41011, 41404 },
+    },
+    VALANYR = 64415,
+    CRYSTAL_SPIRE = 40971,
+    DEADLY_PRECISION = 71564,
 }
 
 RegisterAuraEvent(EV6_ITEM.AEGIS_OF_PRESERVATION, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
@@ -1995,5 +2046,322 @@ RegisterAuraEvent(EV6_ITEM.MANA_DRAIN_2, 6, function(event, aura, target, actor,
     if procTarget ~= nil and procTarget:IsAlive() then
         actor:CastSpell(procTarget, EV6_ITEM.MANA_DRAIN_LEECH, true)
     end
+    return true
+end)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6; handler returns true = PreventDefaultAction):
+--   spell_item_mark_of_conquest::HandleProc (spell_item.cpp:1283-1291): EFFECT_0
+--   PROC_TRIGGER_SPELL. Ranged typeMask (0x40 | 0x100, SpellMgr.h:126/:129)
+--   vetoes the default leg and the actor self-casts 39599; any other mask
+--   returns false so the default leg fires.
+--   spell_item_shard_of_the_scale::HandleProc (:3448-3460): EFFECT_0 DUMMY.
+--   POS magic mask (0x4000) casts the heal proc on the proc target, NEG
+--   (0x10000) the damage proc; purified 69755 -> 69733/69729, shiny
+--   69739 -> 69734/69730.
+--   spell_item_zandalarian_charm::HandleStackDrop (:4117-4121) + CheckProc
+--   (:4111-4116): EFFECT_0 DUMMY. Gate: the event spell exists and is not
+--   the aura itself (a no-spell event fails the gate); the holder drops
+--   one stack of 24659 (aura 24658) / 24662 (aura 24661).
+--   spell_item_frozen_shadoweave::HandleProc (:1002-1012): EFFECT_0 DUMMY.
+--   Zero-damage gate; BP0 = pct(damage, aura amount); actor self-casts
+--   39373 via CastCustomSpell.
+--   spell_item_necrotic_touch::HandleProc (:1389-1399) + CheckProc
+--   (:1383-1386): EFFECT_0 DUMMY. Gate: proc target alive; zero-damage
+--   gate; BP0 = pct(damage, aura amount); holder casts 71879 on the proc
+--   target. Registered for both auras 71875 and 71877.
+--   spell_item_swift_hand_justice_dummy::HandleProc (:2195-2204): EFFECT_0
+--   DUMMY. BP0 = CountPctFromMaxHealth(aura amount); actor self-casts
+--   59913 via CastCustomSpell.
+--   spell_item_blessing_of_ancient_kings::HandleProc (:450-470) + CheckProc
+--   (:443-446): EFFECT_0 DUMMY. Gate: proc target exists; zero-heal
+--   gate; absorb = 15% of the heal; an existing 64413 on the proc target
+--   grows to min(amount + absorb, 20000) with SetDuration(GetMaxDuration)
+--   as the RefreshDuration twin, else the holder casts 64413 with BP0.
+--   The C++ caster-GUID filter on the 64413 lookup is unmodeled.
+--   spell_item_persistent_shield::HandleProc (:1545-1557) + CheckProc
+--   (:1540-1543): EFFECT_0 PROC_TRIGGER_SPELL. Gate: a nonzero heal;
+--   BP0 = 15% of the heal; a stronger existing 26470 on the proc target
+--   skips the manual cast. The C++ handler never calls
+--   PreventDefaultAction, so every HandleProc path returns false and the
+--   default leg still runs. The C++ caster-GUID filter on the 26470
+--   lookup is unmodeled.
+--   spell_item_shadowmourne::HandleProc (:2034-2048) + CheckProc
+--   (:2027-2032): EFFECT_0 DUMMY. Gate: holder lacks 73422 and the proc
+--   target is alive. Holder self-casts 71905; at 10 stacks it casts
+--   71904 on the proc target and removes 71905. The AfterEffectRemove
+--   leg (:2050-2053) rides as an event-3 handler below.
+--   spell_item_shadows_fate::HandleProc (:1981-1991) + unsated craving
+--   CheckProc (:1952-1962): OnProc, no C++ effect index (guarded on 0;
+--   the 71169 DBC proc effect is unverified, world.db spell_dbc empty).
+--   Gate: actor is a player and the action target is a non-critter
+--   creature that is Sindragosa (36853) or not a summon; actor casts
+--   71203 on the aura holder. IsCritter bridged this tick
+--   (lua_objects.go / lua_creature_events.go).
+--   spell_item_aura_of_madness::HandleProc (:375-395): EFFECT_0 DUMMY.
+--   One uniform pick from the class table on the actor; the 10% Say
+--   leg is omitted (broadcast_text 21954 is absent from world.db and
+--   Say takes literal text).
+--   spell_item_valanyr_hammer_of_ancient_kings::CheckProc (:484-487):
+--   CheckProc-only, inverted veto (runtime.go:524): effective heal > 0
+--   lets the default leg fire, else veto. Proc effect assumed eff0.
+--   spell_item_crystal_spire_of_karabor::CheckProc (:1197-1208):
+--   CheckProc-only, inverted veto: passes when the heal target's
+--   health minus the effective heal is at or below
+--   CountPctFromMaxHealth of the aura's eff0 base amount. Proc effect
+--   assumed eff0.
+--   spell_item_deadly_precision::HandleStackDrop (:507-511): EFFECT_0
+--   MOD_RATING. Holder drops one stack of 71564 (the player bridge
+--   takes spellId only; the C++ caster-GUID arg is unmodeled and a
+--   float64 GUID round-trips lossy).
+--   NOT PORTED: deathbringers will 71519/71562 is Go-covered
+--   (procs.go:4311 leg + deathbringersWillForms; a Lua twin would
+--   double-fire). Pet healing 37381 is blocked: 37382 targets the
+--   pet and Lua has no pet-object bridge (only GetPetGUID, whose
+--   float64 round-trip is lossy). Deadly precision dummy 71563 is an
+--   ev4 SpellScript, out of this ev6 strip.
+--   Bindings per C++ comments; world.db spell_script_names, spell_dbc
+--   and broadcast_text are all empty (0 rows), so DBC-side effect
+--   indices, trigger spells and implicit targets are unverified.
+--   Handlers are inline anonymous functions (skadi precedent) — no new
+--   top-level locals.
+RegisterAuraEvent(EV6_ITEM.MARK_OF_CONQUEST, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    if bit32.band(procEvent:GetTypeMask(), bit32.bor(EV6_ITEM.PROC_FLAG_DONE_RANGED_AUTO_ATTACK, EV6_ITEM.PROC_FLAG_DONE_SPELL_RANGED_DMG_CLASS)) ~= 0 then
+        actor:CastSpell(actor, EV6_ITEM.MARK_OF_CONQUEST_ENERGIZE, true)
+        return true
+    end
+    return false
+end)
+
+RegisterAuraEvent(EV6_ITEM.SHARD_OF_THE_SCALE_PURIFIED, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil or procTarget == nil then
+        return effectIndex == 0
+    end
+    local typeMask = procEvent:GetTypeMask()
+    if bit32.band(typeMask, EV6_ITEM.PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_POS) ~= 0 then
+        actor:CastSpell(procTarget, EV6_ITEM.PURIFIED_CAUTERIZING_HEAL, true)
+    end
+    if bit32.band(typeMask, EV6_ITEM.PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_NEG) ~= 0 then
+        actor:CastSpell(procTarget, EV6_ITEM.PURIFIED_SEARING_FLAMES, true)
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.SHARD_OF_THE_SCALE_SHINY, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil or procTarget == nil then
+        return effectIndex == 0
+    end
+    local typeMask = procEvent:GetTypeMask()
+    if bit32.band(typeMask, EV6_ITEM.PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_POS) ~= 0 then
+        actor:CastSpell(procTarget, EV6_ITEM.SHINY_CAUTERIZING_HEAL, true)
+    end
+    if bit32.band(typeMask, EV6_ITEM.PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_NEG) ~= 0 then
+        actor:CastSpell(procTarget, EV6_ITEM.SHINY_SEARING_FLAMES, true)
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.ZANDALARIAN_UNSTABLE_POWER, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return effectIndex == 0
+    end
+    local spellId = procEvent:GetSpellId()
+    if spellId == 0 or spellId == EV6_ITEM.ZANDALARIAN_UNSTABLE_POWER then
+        return true
+    end
+    target:RemoveAuraFromStack(EV6_ITEM.UNSTABLE_POWER_STACK)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.ZANDALARIAN_RESTLESS_STRENGTH, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return effectIndex == 0
+    end
+    local spellId = procEvent:GetSpellId()
+    if spellId == 0 or spellId == EV6_ITEM.ZANDALARIAN_RESTLESS_STRENGTH then
+        return true
+    end
+    target:RemoveAuraFromStack(EV6_ITEM.RESTLESS_STRENGTH_STACK)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.FROZEN_SHADOWEAVE, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    local dealt = procEvent:GetDamage()
+    if dealt == nil or dealt == 0 then
+        return true
+    end
+    actor:CastCustomSpell(actor, EV6_ITEM.SHADOWMEND, true, math.floor(dealt * aura:GetAmount() / 100))
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.NECROTIC_TOUCH, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return effectIndex == 0
+    end
+    if procTarget == nil or not procTarget:IsAlive() then
+        return true
+    end
+    local dealt = procEvent:GetDamage()
+    if dealt == nil or dealt == 0 then
+        return true
+    end
+    target:CastCustomSpell(procTarget, EV6_ITEM.NECROTIC_TOUCH_PROC, true, math.floor(dealt * aura:GetAmount() / 100))
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.NECROTIC_TOUCH_2, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return effectIndex == 0
+    end
+    if procTarget == nil or not procTarget:IsAlive() then
+        return true
+    end
+    local dealt = procEvent:GetDamage()
+    if dealt == nil or dealt == 0 then
+        return true
+    end
+    target:CastCustomSpell(procTarget, EV6_ITEM.NECROTIC_TOUCH_PROC, true, math.floor(dealt * aura:GetAmount() / 100))
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.SWIFT_HAND_OF_JUSTICE, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    actor:CastCustomSpell(actor, EV6_ITEM.SWIFT_HAND_HEAL, true, actor:CountPctFromMaxHealth(aura:GetAmount()))
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.BLESSING_OF_ANCIENT_KINGS, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return effectIndex == 0
+    end
+    if procTarget == nil then
+        return true
+    end
+    local heal = procEvent:GetHeal()
+    if heal == nil or heal == 0 then
+        return true
+    end
+    local absorb = math.floor(heal * 15 / 100)
+    local prot = procTarget:GetAura(EV6_ITEM.PROTECTION_OF_ANCIENT_KINGS)
+    if prot ~= nil then
+        prot:SetAmount(math.min(prot:GetAmount() + absorb, EV6_ITEM.PROTECTION_CAP))
+        local maxDuration = prot:GetMaxDuration()
+        if maxDuration > 0 then
+            prot:SetDuration(maxDuration)
+        end
+    else
+        target:CastCustomSpell(procTarget, EV6_ITEM.PROTECTION_OF_ANCIENT_KINGS, true, absorb)
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.PERSISTENT_SHIELD, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil or procTarget == nil then
+        return effectIndex == 0
+    end
+    local heal = procEvent:GetHeal()
+    if heal == nil or heal == 0 then
+        return true
+    end
+    local bp0 = math.floor(heal * 15 / 100)
+    local existing = procTarget:GetAuraEffect(EV6_ITEM.PERSISTENT_SHIELD_TRIGGERED, 0)
+    if existing ~= nil and existing > bp0 then
+        return false
+    end
+    actor:CastCustomSpell(procTarget, EV6_ITEM.PERSISTENT_SHIELD_TRIGGERED, true, bp0)
+    return false
+end)
+
+RegisterAuraEvent(EV6_ITEM.SHADOWMOURNE, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return effectIndex == 0
+    end
+    if target:HasAura(EV6_ITEM.SHADOWMOURNE_CHAOS_BANE_BUFF) then
+        return true
+    end
+    if procTarget == nil or not procTarget:IsAlive() then
+        return true
+    end
+    target:CastSpell(target, EV6_ITEM.SHADOWMOURNE_SOUL_FRAGMENT, true)
+    local fragments = target:GetAura(EV6_ITEM.SHADOWMOURNE_SOUL_FRAGMENT)
+    if fragments ~= nil and fragments:GetStackAmount() >= 10 then
+        target:CastSpell(procTarget, EV6_ITEM.SHADOWMOURNE_CHAOS_BANE_DAMAGE, true)
+        fragments:Remove()
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.SHADOWMOURNE, 3, function(event, aura, target)
+    if target ~= nil then
+        target:RemoveAurasDueToSpell(EV6_ITEM.SHADOWMOURNE_SOUL_FRAGMENT)
+    end
+end)
+
+RegisterAuraEvent(EV6_ITEM.SHADOWS_FATE, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil or target == nil then
+        return effectIndex == 0
+    end
+    if actor:ToPlayer() == nil then
+        return true
+    end
+    local actionTarget = procEvent:GetActionTarget()
+    if actionTarget == nil or actionTarget:ToCreature() == nil then
+        return true
+    end
+    if actionTarget:IsCritter() then
+        return true
+    end
+    if actionTarget:GetEntry() ~= EV6_ITEM.NPC_SINDRAGOSA and actionTarget:IsSummon() then
+        return true
+    end
+    actor:CastSpell(target, EV6_ITEM.SOUL_FEAST, true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.AURA_OF_MADNESS, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    local spells = EV6_ITEM.AURA_OF_MADNESS_BY_CLASS[actor:GetClass()]
+    if spells == nil then
+        return true
+    end
+    actor:CastSpell(actor, spells[math.random(#spells)], true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.VALANYR, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if procEvent:GetEffectiveHeal() > 0 then
+        return false
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.CRYSTAL_SPIRE, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    local effectiveHeal = procEvent:GetEffectiveHeal()
+    if procTarget ~= nil and effectiveHeal > 0 and procTarget:GetHealth() - effectiveHeal <= procTarget:CountPctFromMaxHealth(aura:GetBaseAmount(0)) then
+        return false
+    end
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.DEADLY_PRECISION, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return effectIndex == 0
+    end
+    target:RemoveAuraFromStack(EV6_ITEM.DEADLY_PRECISION)
     return true
 end)
