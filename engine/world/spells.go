@@ -16821,6 +16821,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 			case 3:
+				// Per-effect target list (Spell.cpp:758-779): every
+				// DUMMY OnEffectHitTarget arm below fires once per hit
+				// target of this effect, so the ev7 rewrite for this
+				// effect applies to the helper arms that iterate
+				// hitTargets internally — the judgement/shiv precedent
+				// (5ea90403) filtered inline; the shared list covers
+				// the rest. No-op without a registered ev7 handler.
+				dummyList := playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, hitTargets)
 				if spellID == spellRaiseAllyInitial {
 					// spell_dk_raise_ally_initial (spell_dk.cpp:2804): the
 					// DUMMY effect's only consumer is the resurrect-request
@@ -16905,7 +16913,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// random area corpse), ahead of the pet-aura/Eluna
 					// legs like the fatal-strike arm above.
 					if spellID == 49158 || spellID == 51325 || spellID == 51326 || spellID == 51327 || spellID == 51328 {
-						s.corpseExplosionDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, explicitAreaJoin)
+						s.corpseExplosionDummyEffect(effCtx, spell, effectIndex, casterLevel, dummyList, explicitAreaJoin)
 					}
 					// spell_dk_death_coil (spell_dk.cpp:841-907):
 					// the EFFECT_0 DUMMY OnEffectHitTarget arm. Fires
@@ -16915,7 +16923,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// corpse-explosion arm above, and only when a
 					// target was actually hit.
 					if (spellID == 47541 || spellID == 52375 || spellID == 59134 || spellID == 62900) && effectIndex == 0 && len(hitTargets) > 0 {
-						s.deathCoilDummyEffect(effCtx, spell, casterLevel, hitTargets)
+						s.deathCoilDummyEffect(effCtx, spell, casterLevel, dummyList)
 					}
 					// spell_dk_death_strike (spell_dk.cpp:1126-1165):
 					// the EFFECT_2 DUMMY OnEffectHitTarget arm. Fires
@@ -16925,7 +16933,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// death-coil arm above, and only when a target was
 					// actually hit.
 					if spellID == 49998 && effectIndex == 2 && len(hitTargets) > 0 {
-						s.deathStrikeDummyEffect(effCtx, spell, casterLevel, hitTargets)
+						s.deathStrikeDummyEffect(effCtx, spell, casterLevel, dummyList)
 					}
 					// spell_dk_death_grip (spell_dk.cpp:950-978): the
 					// EFFECT_0 DUMMY OnEffectHitTarget arm. Fires once per
@@ -16934,7 +16942,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// pet-aura/Eluna legs like the corpse-explosion arm
 					// above, and only when a target was actually hit.
 					if spellID == 49560 && len(hitTargets) > 0 {
-						s.deathGripDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, target)
+						s.deathGripDummyEffect(effCtx, spell, effectIndex, casterLevel, dummyList, target)
 					}
 					// spell_dk_death_grip_initial (spell_dk.cpp:2740-2781): the
 					// EFFECT_0 DUMMY OnEffectHitTarget arm — the caster casts
@@ -16944,7 +16952,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// pet-aura/Eluna legs like the death-grip arm above, and
 					// only when a target was actually hit.
 					if spellID == 49576 && len(hitTargets) > 0 {
-						s.deathGripInitialDummyEffect(ctx, effectIndex, hitTargets)
+						s.deathGripInitialDummyEffect(ctx, effectIndex, dummyList)
 					}
 					// spell_pal_judgement_of_command::HandleDummy
 					// (spell_paladin.cpp:1567-1593): the EFFECT_0 DUMMY
@@ -16996,7 +17004,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// triggered-cast twin sits in the dummy funnel.
 					// DORMANT until Spell.dbc ships the 29858 record.
 					if spellID == 29858 && effectIndex == 0 && len(hitTargets) > 0 {
-						s.soulshatterDummyEffect(effCtx, hitTargets)
+						s.soulshatterDummyEffect(effCtx, dummyList)
 					}
 					// spell_dk_scourge_strike (spell_dk.cpp:2255-2312): the
 					// EFFECT_2 DUMMY OnEffectHitTarget arm — the
@@ -17011,7 +17019,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// The AfterHit leg below reads the per-target
 					// multiplier map this fills.
 					if (spellID == 55090 || spellID == 55265 || spellID == 55270 || spellID == 55271) && len(hitTargets) > 0 {
-						s.scourgeStrikeDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, scourgeStrikeMultipliers)
+						s.scourgeStrikeDummyEffect(effCtx, spell, effectIndex, casterLevel, dummyList, scourgeStrikeMultipliers)
 					}
 					// spell_q12308_escape_from_silverbrook::HandleDummy
 					// (spell_quest.cpp:2256-2259): the EFFECT_0 DUMMY
@@ -17036,7 +17044,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// target was actually hit. DORMANT until Spell.dbc ships
 					// the 51858 record.
 					if spellID == 51858 && effectIndex == 0 && len(hitTargets) > 0 {
-						s.siphonOfAcherusDummyEffect(effCtx, hitTargets)
+						s.siphonOfAcherusDummyEffect(effCtx, dummyList)
 					}
 					// spell_rog_killing_spree::HandleDummy
 					// (spell_rogue.cpp:381-389): the EFFECT_1 DUMMY
@@ -17050,7 +17058,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// site. DORMANT until Spell.dbc ships the 51690
 					// record.
 					if spellID == 51690 && effectIndex == 1 && len(hitTargets) > 0 {
-						s.killingSpreeDummyEffect(hitTargets)
+						s.killingSpreeDummyEffect(dummyList)
 					}
 					// spell_rog_preparation::HandleDummy
 					// (spell_rogue.cpp:569-593): the EFFECT_0 DUMMY
@@ -17128,12 +17136,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// Eluna arm below, and only when a target was
 					// actually hit.
 					if spellID == 37877 && effectIndex == 0 && len(hitTargets) > 0 {
-						s.blessingOfFaithDummyEffect(ctx, hitTargets)
+						s.blessingOfFaithDummyEffect(ctx, dummyList)
 					}
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
 					// early return above.
-					s.fireSpellDummyEffectForTargets(effCtx, spellID, uint8(effectIndex), hitTargets)
+					s.fireSpellDummyEffectForTargets(effCtx, spellID, uint8(effectIndex), dummyList)
 				}
 			case spellEffectThreat:
 				amount := eff.CalcValueForLevel(spell, casterLevel)
