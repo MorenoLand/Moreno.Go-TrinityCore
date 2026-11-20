@@ -1,7 +1,7 @@
 -- Generic spell scripts — Lua port of
 -- src/server/scripts/Spells/spell_generic.cpp
--- (spell_gen_aura_of_fear only; the rest of the file's scripts are
--- not ported here).
+-- (40+ classes ported; each block cites its C++ owner and states
+-- its DORMANT-until-Spell.dbc status where it applies).
 
 -- C++ spell_gen_aura_of_fear::PeriodicTick (spell_generic.cpp:391-412):
 -- 28313 EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL.
@@ -318,6 +318,10 @@ RegisterSpellEvent(SPELL_MANA_BURN, 3, manaBurnAfterHit)
 local SPELL_GEN_DESPAWN_SELF_1 = 25952 -- spell_generic.cpp:1473
 local SPELL_GEN_DESPAWN_SELF_2 = 42268
 local SPELL_GEN_DESPAWN_SELF_3 = 52267
+local SPELL_GEN_DESPAWN_SELF_4 = 15998
+local SPELL_GEN_DESPAWN_SELF_5 = 29435
+local SPELL_GEN_DESPAWN_SELF_6 = 51592
+local SPELL_GEN_DESPAWN_SELF_7 = 51910
 local SPELL_EFFECT_DUMMY = 3 -- SharedDefines.h:814
 local SPELL_EFFECT_SCRIPT_EFFECT = 77 -- SharedDefines.h:888
 
@@ -335,6 +339,10 @@ end
 RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_1, 5, despawnSelfHit)
 RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_2, 5, despawnSelfHit)
 RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_3, 5, despawnSelfHit)
+RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_4, 5, despawnSelfHit)
+RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_5, 5, despawnSelfHit)
+RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_6, 5, despawnSelfHit)
+RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_7, 5, despawnSelfHit)
 
 -- PORTED (tick 2026-11-12, RegisterSpellEvent OnCheckCast = 8 /
 -- RegisterSpellEvent AfterHit = 3):
@@ -616,10 +624,10 @@ RegisterAuraEvent(SPELL_SERVICE_UNIFORM, 3, serviceUniformRemove)
 --   carries the live veto record (lua_spell.go:513); GetEffectValue
 --   is bridged on both spell builders (lua_spell.go:215/430).
 --   Bindings 45204/45785/49889/50218/51719/57528 (AC + TDB 26091
---   agree on all six; 45785 is the Kil'jaeden sinister-reflection
+--   agree on all six) + 69828 (TDB-only row); 45785 is the Kil'jaeden sinister-reflection
 --   clone, the renamed strict candidate).
 local SPELL_GEN_CLONE = {
-    45204, 45785, 49889, 50218, 51719, 57528,
+    45204, 45785, 49889, 50218, 51719, 57528, 69828,
 }
 
 local function cloneHit(event, spell, hitTarget, effectIndex)
@@ -1265,3 +1273,286 @@ local function genStandHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_GEN_STAND, 5, genStandHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_chaos_blast::HandleDummy (spell_generic.cpp:896-915):
+--   EFFECT_0 DUMMY. The caster casts 37675 on the hit unit,
+--   triggered, BP0 = 100 (CastSpellExtraArgs TRIGGERED_FULL_MASK).
+--   No PreventHitDefaultEffect in C++. Binding 37674 is TDB 26091
+--   (spell_gen_chaos_blast) and AC (spell_leotheras_chaos_blast);
+--   the boss casts 37674 directly with BP0=100.
+--   DORMANT until Spell.dbc ships 37674/37675.
+local SPELL_GEN_CHAOS_BLAST = 37674 -- spell_generic.cpp:896
+local SPELL_CHAOS_BLAST = 37675 -- spell_generic.cpp:892
+
+local function chaosBlastHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastCustomSpell(hitTarget, SPELL_CHAOS_BLAST, true, 100)
+end
+
+RegisterSpellEvent(SPELL_GEN_CHAOS_BLAST, 5, chaosBlastHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_clone_weapon::HandleScriptEffect (spell_generic.cpp:998-1013):
+--   EFFECT_0 SCRIPT_EFFECT. PreventHitDefaultEffect, then the hit
+--   unit casts the effect's value (DBC CalcValue) on the caster,
+--   triggered — identical to the ported clone arm except EFFECT_0
+--   vs EFFECT_1/2. Bindings 41055/45206/57593/63416/69891/69892
+--   (AC + TDB 26091 agree). Creature-cast (Kil'jaeden Sinister
+--   Reflection creation, boss_kiljaeden.cpp:95-97), so the
+--   creature-path spell object carries the veto record.
+--   DORMANT until Spell.dbc ships the rows.
+local SPELL_GEN_CLONE_WEAPON = {
+    41055, 45206, 57593, 63416, 69891, 69892,
+}
+
+local function cloneWeaponHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    spell:PreventHitDefaultEffect(effectIndex)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, spell:GetEffectValue(effectIndex), true)
+end
+
+for _, spellId in ipairs(SPELL_GEN_CLONE_WEAPON) do
+    RegisterSpellEvent(spellId, 5, cloneWeaponHit)
+end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_create_lance::HandleScript (spell_generic.cpp:1150-1181):
+--   EFFECT_0 SCRIPT_EFFECT. On a player hit target the caster
+--   casts the faction lance, triggered: Alliance 63914, Horde 63919
+--   (GetTeam 0/1, characters.go:3188). Single rank; TDB + AC agree
+--   on 63845. NO PreventHitDefaultEffect: 63845 is player-cast and
+--   the player spell object carries no veto method
+--   (creature-builder-only, lua_spell.go:716); the Go default
+--   SCRIPT_EFFECT leg has no 63845 case (spells.go:54108), so the
+--   veto is inert here. DORMANT until Spell.dbc ships
+--   63845/63914/63919.
+local SPELL_GEN_CREATE_LANCE = 63845 -- spell_generic.cpp:1150
+local SPELL_CREATE_LANCE_ALLIANCE = 63914 -- spell_generic.cpp:1146
+local SPELL_CREATE_LANCE_HORDE = 63919 -- spell_generic.cpp:1147
+local TEAM_ALLIANCE = 0 -- SharedDefines.h: TeamId
+
+local function createLanceHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if hitTarget:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if hitTarget:GetTeam() == TEAM_ALLIANCE then
+        caster:CastSpell(hitTarget, SPELL_CREATE_LANCE_ALLIANCE, true)
+    else
+        caster:CastSpell(hitTarget, SPELL_CREATE_LANCE_HORDE, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_GEN_CREATE_LANCE, 5, createLanceHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_dalaran_disguise::HandleScript (spell_generic.cpp:1224-1289):
+--   EFFECT_0 SCRIPT_EFFECT. On a player hit target the caster casts
+--   the gendered disguise, triggered (GetNativeGender; GENDER_MALE
+--   = 0): Sunreaver trigger 69672 -> male 70974 / female 70973,
+--   Silver Covenant trigger 69673 -> male 70972 / female 70971.
+--   No spell:GetId bridge, so the two trigger ids ride a closure
+--   factory (the orc-disguise arm above is the single-id shape).
+--   No PreventHitDefaultEffect in C++. Registered WithArgs
+--   sunreaver/silver_covenant (spell_generic.cpp:4378-4379).
+--   DORMANT until Spell.dbc ships the trigger rows.
+local SPELL_SUNREAVER_DISGUISE_TRIGGER = 69672 -- spell_generic.cpp:1216
+local SPELL_SUNREAVER_DISGUISE_FEMALE = 70973 -- spell_generic.cpp:1217
+local SPELL_SUNREAVER_DISGUISE_MALE = 70974 -- spell_generic.cpp:1218
+local SPELL_SILVER_COVENANT_DISGUISE_TRIGGER = 69673 -- spell_generic.cpp:1219
+local SPELL_SILVER_COVENANT_DISGUISE_FEMALE = 70971 -- spell_generic.cpp:1220
+local SPELL_SILVER_COVENANT_DISGUISE_MALE = 70972 -- spell_generic.cpp:1221
+
+local function makeDalaranDisguiseHit(maleSpell, femaleSpell)
+    return function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 0 or hitTarget == nil then
+            return
+        end
+        if hitTarget:GetTypeId() ~= TYPEID_PLAYER then
+            return
+        end
+        local caster = spell:GetCaster()
+        if caster == nil then
+            return
+        end
+        if hitTarget:GetNativeGender() == GENDER_MALE then
+            caster:CastSpell(hitTarget, maleSpell, true)
+        else
+            caster:CastSpell(hitTarget, femaleSpell, true)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_SUNREAVER_DISGUISE_TRIGGER, 5, makeDalaranDisguiseHit(SPELL_SUNREAVER_DISGUISE_MALE, SPELL_SUNREAVER_DISGUISE_FEMALE))
+RegisterSpellEvent(SPELL_SILVER_COVENANT_DISGUISE_TRIGGER, 5, makeDalaranDisguiseHit(SPELL_SILVER_COVENANT_DISGUISE_MALE, SPELL_SILVER_COVENANT_DISGUISE_FEMALE))
+
+-- PORTED (this tick, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
+--   spell_gen_damage_reduction_aura::OnApply/OnRemove
+--   (spell_generic.cpp:1290-1323): EFFECT_0 DUMMY. On apply the
+--   target casts 68066 on itself, triggered; on remove, if the
+--   target still has 68066 and none of 20911/25899/63944/50720
+--   (Vigilance), it removes 68066. Sources 20911/25899/63944 share
+--   the class. DELTA: Go ev2 fires fresh applies only, C++
+--   registers REAL_OR_REAPPLY — a reapply skips the re-cast here.
+--   DORMANT until Spell.dbc ships the source rows.
+local SPELL_DAMAGE_REDUCTION_AURA_SOURCES = { 20911, 25899, 63944 } -- spell_generic.cpp:1290
+local SPELL_DAMAGE_REDUCTION_AURA = 68066 -- spell_generic.cpp:1297
+local SPELL_DAMAGE_REDUCTION_VIGILANCE = 50720 -- spell_generic.cpp:1296
+
+local function damageReductionAuraApply(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_DAMAGE_REDUCTION_AURA, true)
+end
+
+local function damageReductionAuraRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    if not target:HasAura(SPELL_DAMAGE_REDUCTION_AURA) then
+        return
+    end
+    for _, sourceId in ipairs(SPELL_DAMAGE_REDUCTION_AURA_SOURCES) do
+        if target:HasAura(sourceId) then
+            return
+        end
+    end
+    if target:HasAura(SPELL_DAMAGE_REDUCTION_VIGILANCE) then
+        return
+    end
+    target:RemoveAurasDueToSpell(SPELL_DAMAGE_REDUCTION_AURA)
+end
+
+for _, spellId in ipairs(SPELL_DAMAGE_REDUCTION_AURA_SOURCES) do
+    RegisterAuraEvent(spellId, 2, damageReductionAuraApply)
+    RegisterAuraEvent(spellId, 3, damageReductionAuraRemove)
+end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_divine_storm_cd_reset::HandleScript
+--   (spell_generic.cpp:1500-1526): EFFECT_0 DUMMY. Load gate is
+--   caster TYPEID_PLAYER (checked in-handler, no Load hook); if
+--   the caster has Divine Storm (53385) on cooldown, reset it
+--   (ResetCooldown(spell, true)). No PreventHitDefaultEffect.
+--   DORMANT until Spell.dbc ships 70769.
+local SPELL_GEN_DIVINE_STORM_CD_RESET = 70769 -- spell_generic.cpp:1500
+local SPELL_DIVINE_STORM = 53385 -- spell_generic.cpp:1496
+
+local function divineStormCdResetHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    if caster:HasSpellCooldown(SPELL_DIVINE_STORM) then
+        caster:ResetSpellCooldown(SPELL_DIVINE_STORM, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_GEN_DIVINE_STORM_CD_RESET, 5, divineStormCdResetHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_gadgetzan_transporter_backfire::HandleDummy
+--   (spell_generic.cpp:1781-1811): EFFECT_0 DUMMY. irand(0, 119):
+--   <20 polymorph 23444, <100 evil twin 23445, else miss 36902 —
+--   all self-casts by the caster, triggered. No
+--   PreventHitDefaultEffect in C++.
+--   DORMANT until Spell.dbc ships 23448.
+local SPELL_GEN_GADGETZAN_TRANSPORTER_BACKFIRE = 23448 -- spell_generic.cpp:1781
+local SPELL_TRANSPORTER_MALFUNCTION_POLYMORPH = 23444 -- spell_generic.cpp:1776
+local SPELL_TRANSPORTER_EVIL_TWIN = 23445 -- spell_generic.cpp:1777
+local SPELL_TRANSPORTER_MALFUNCTION_MISS = 36902 -- spell_generic.cpp:1778
+
+local function gadgetzanTransporterBackfireHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local r = math.random(0, 119)
+    if r < 20 then
+        caster:CastSpell(caster, SPELL_TRANSPORTER_MALFUNCTION_POLYMORPH, true)
+    elseif r < 100 then
+        caster:CastSpell(caster, SPELL_TRANSPORTER_EVIL_TWIN, true)
+    else
+        caster:CastSpell(caster, SPELL_TRANSPORTER_MALFUNCTION_MISS, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_GEN_GADGETZAN_TRANSPORTER_BACKFIRE, 5, gadgetzanTransporterBackfireHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_gnomish_transporter::HandleDummy (spell_generic.cpp:1861-1883):
+--   EFFECT_0 DUMMY. roll_chance_i(50): success 23441 else failure
+--   23446, self-cast by the caster, triggered. The roll is
+--   roll_chance_i-exact: chance > irand(0, 99), so success while
+--   math.random(0, 99) < 50 (aura-of-fear precedent).
+--   DORMANT until Spell.dbc ships 23453.
+local SPELL_GEN_GNOMISH_TRANSPORTER = 23453 -- spell_generic.cpp:1861
+local SPELL_TRANSPORTER_SUCCESS = 23441 -- spell_generic.cpp:1857
+local SPELL_TRANSPORTER_FAILURE = 23446 -- spell_generic.cpp:1858
+
+local function gnomishTransporterHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(0, 99) < 50 then
+        caster:CastSpell(caster, SPELL_TRANSPORTER_SUCCESS, true)
+    else
+        caster:CastSpell(caster, SPELL_TRANSPORTER_FAILURE, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_GEN_GNOMISH_TRANSPORTER, 5, gnomishTransporterHit)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_gen_decay_over_time_aura::Decay + CheckProc
+--   (spell_generic.cpp:1340-1363), bound to 32065 by
+--   RegisterSpellAndAuraScriptPair (spell_generic.cpp:4381) — the
+--   fungal-decay subclass of the base class whose 36659 tail-sting
+--   arm is ported above. Same shape: the proc event's spell must
+--   be this aura's own spell, then veto the default leg and drop
+--   one stack. The factory keeps the per-spell gate; the 36659
+--   handler above is untouched. SPELL HALF STAYS OUT (GetHitAura
+--   gap, same as 36659). DORMANT until Spell.dbc ships 32065.
+local SPELL_DECAY_OVER_TIME_FUNGAL_DECAY = 32065 -- spell_generic.cpp:1372
+
+local function makeDecayOverTimeProc(spellId)
+    return function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+        if procEvent == nil or procEvent:GetSpellId() ~= spellId then
+            return true
+        end
+        aura:SetStackAmount(aura:GetStackAmount() - 1)
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_DECAY_OVER_TIME_FUNGAL_DECAY, 6, makeDecayOverTimeProc(SPELL_DECAY_OVER_TIME_FUNGAL_DECAY))
