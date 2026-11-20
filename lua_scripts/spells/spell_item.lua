@@ -102,14 +102,16 @@ RegisterAuraEvent(SPELL_NITRO_BOOSTS_BACKFIRE, 3, nitroBackfireRemove)
 -- CLOSED (tick 295 census): the remaining item classes are
 --   SpellScript-only (no RegisterSpellScript bridge), proc arms,
 --   calc arms, or need unbridged data (extract_gas AutoStoreLoot /
---   SkinLootId); magic_eater_food's aura ID lives only in the world
---   DB spell_script_names, unresolvable in workspace.
+--   SkinLootId). CORRECTION (00:40 audit): magic_eater_food IS
+--   resolvable — the AC dump has (58886, spell_magic_eater_food);
+--   ported as the ev1 handler below.
 
 local SPELL_EYE_OF_GRILLOK = 38495 -- spell_item.cpp:113
 local SPELL_ABSORB_EYE_OF_GRILLOK = 38554 -- spell_item.cpp:116 (class spell_item_absorb_eye_of_grillok)
 local SPELL_DEMENTIA = 41404 -- spell_item.cpp:382 (class spell_item_dementia)
 local SPELL_DEMENTIA_POS = 41406 -- spell_item.cpp:308
 local SPELL_DEMENTIA_NEG = 41409 -- spell_item.cpp:309
+local SPELL_MAGIC_EATER_FOOD = 58886 -- spell_item.cpp:2603 (class spell_magic_eater_food)
 local SPELL_POWER_CIRCLE = 45043 -- spell_item.cpp:1618 (class spell_item_power_circle)
 local SPELL_LIMITLESS_POWER = 45044 -- spell_item.cpp:1615
 local SPELL_SHADOWMOURNE_SOUL_FRAGMENT = 71905 -- spell_item.cpp:2059 (class spell_item_shadowmourne_soul_fragment)
@@ -157,6 +159,27 @@ local function dementiaTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_DEMENTIA, 1, dementiaTick)
+
+-- PORTED (RegisterAuraEvent OnPeriodic = 1):
+--   spell_magic_eater_food::HandleTriggerSpell (spell_item.cpp:2614-2634):
+--   EFFECT_1 PERIODIC_TRIGGER_SPELL. PreventDefaultAction (return
+--   true); urand(0, 5) on the target, triggered: 58891 wild magic /
+--   57288 / 57139 / 57111 / 57286 / 57291 well fed. Binding 58886
+--   (AC row; both DBs agree). CAVEAT: ev1 carries no effect index
+--   (one fire per aura tick, executePeriodicTickOnPlayer/Creature),
+--   so this is exact only if 58886 has a single periodic effect.
+--   DORMANT until Spell.dbc ships the 58886 row.
+local MAGIC_EATER_SPELLS = { 58891, 57288, 57139, 57111, 57286, 57291 }
+
+local function magicEaterFoodTick(event, aura, target)
+    if target == nil then
+        return true
+    end
+    target:CastSpell(target, MAGIC_EATER_SPELLS[math.random(1, 6)], true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGIC_EATER_FOOD, 1, magicEaterFoodTick)
 
 local function powerCircleApply(event, aura, target)
     target:CastSpell(target, SPELL_LIMITLESS_POWER, true)
