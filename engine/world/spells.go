@@ -18216,16 +18216,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						pullList = append(joinedKept, explicitAreaJoin)
 					}
 				}
-				s.handleEffectPullTowards(pullList)
+				s.handleEffectPullTowards(eff, pullList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm runs on the caster once per reflected target.
 				// The self-target arm degenerates exactly as in C++: the
-				// caster-to-target angle is zero, so the trip lands the caster
-				// at its combat reach along +X, matching GetFirstCollisionPosition
-				// with GetRelativeAngle(self) cancelling the orientation
-				// (Object.cpp:3386-3392) under the near-teleport bridge.
+				// caster-to-target angle is zero, so the JumpTo leg jumps the
+				// caster at its combat reach along +X, matching
+				// GetFirstCollisionPosition with GetRelativeAngle(self)
+				// cancelling the orientation (Object.cpp:3386-3392).
 				for range areaEnemyTrips(eff, reflectedAoETrips) {
-					s.handleEffectPullTowards([]uint64{s.playerGUID})
+					s.handleEffectPullTowards(eff, []uint64{s.playerGUID})
 				}
 			case spellEffectPullTowardsDest: // 145: SPELL_EFFECT_PULL_TOWARDS_DEST (EffectPullTowardsDest, SpellEffects.cpp:4697)
 				// Per-effect target list (Spell.cpp:758-779), same switch as
@@ -18274,13 +18274,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						pullDestList = append(joinedKept, explicitAreaJoin)
 					}
 				}
-				s.handleEffectPullTowardsDest(target, pullDestList)
+				s.handleEffectPullTowardsDest(eff, target, pullDestList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): as above;
 				// the helper's dest-location + < 0.001 gates are the C++ HasDst
-				// + distXY gates, and repeated trips re-land the caster on the
-				// same destination (idempotent).
+				// + distXY gates, and repeated trips re-jump the caster toward
+				// the same destination (idempotent).
 				for range areaEnemyTrips(eff, reflectedAoETrips) {
-					s.handleEffectPullTowardsDest(target, []uint64{s.playerGUID})
+					s.handleEffectPullTowardsDest(eff, target, []uint64{s.playerGUID})
 				}
 			case spellEffectPlaySound: // 131: SPELL_EFFECT_PLAY_SOUND (EffectPlaySound, SpellEffects.cpp:5578)
 				// Per-effect target list (Spell.cpp:758-779), same switch as
@@ -30105,16 +30105,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			} else if eff.Effect == spellEffectPullTowards {
 				// Spell::EffectPullTowards (SpellEffects.cpp:4667) runs at
 				// HIT_TARGET per unit target: the client arm's helper over
-				// the single miss-filtered target (player targets only,
-				// same as the client arm).
-				s.handleEffectPullTowards([]uint64{effectTarget})
+				// the single miss-filtered target (player targets take the
+				// knockback packet, creature targets the MoveJumpTo spline).
+				s.handleEffectPullTowards(eff, []uint64{effectTarget})
 			} else if eff.Effect == spellEffectPullTowardsDest {
 				// Spell::EffectPullTowardsDest (SpellEffects.cpp:4697) runs
 				// at HIT_TARGET per unit target: the client arm's helper
 				// over the single miss-filtered target, with this path's
 				// spellTarget carrying the DestLocation flag exactly
 				// where C++'s HasDst gate fires.
-				s.handleEffectPullTowardsDest(spellTarget, []uint64{effectTarget})
+				s.handleEffectPullTowardsDest(eff, spellTarget, []uint64{effectTarget})
 			} else if eff.Effect == spellEffectDistract {
 				// Spell::EffectDistract (SpellEffects.cpp:2547) runs at
 				// HIT_TARGET per unit target: the client arm's helper over
@@ -53859,15 +53859,18 @@ func (s *session) handleEffectPlayMusic(eff wotlk.SpellEffect, hitTargets []uint
 }
 
 // handleEffectPullTowards mirrors Spell::EffectPullTowards (SpellEffects.cpp:4667-4694),
-// the SPELL_EFFECT_PULL_TOWARDS (124) HIT_TARGET arm. The MoveJump spline has
-// no Go model; the player hit target is moved to the C++ landing point
-// directly (nearTeleportMove, same as the EffectCharge/EffectLeap bridges):
-// the caster's combat reach out along the caster-to-target angle, keeping the
-// target's Z. The < 0.001 distance early-out is C++-exact (3D GetExactDist);
-// the GetFirstCollisionPosition collision adjustment is collision-only
-// (documented no-bridge). Creature hit targets need a creature teleport
-// (documented, no model).
-func (s *session) handleEffectPullTowards(hitTargets []uint64) {
+// the SPELL_EFFECT_PULL_TOWARDS (124) HIT_TARGET arm: each hit target is
+// pulled to the caster's first-collision position (caster combat reach
+// out along the caster-to-target angle, keeping the caster's Z) via
+// Unit::JumpTo — player targets take the SMSG_MOVE_KNOCK_BACK packet
+// (sendJumpToKnockBackDest), creature targets the MoveJumpTo spline
+// (jumpToCreatureTargetDest); the destination angle is the absolute
+// angle from the target to the landing point. Speeds are MiscValue/10
+// defaulting to 30 with the projectile speedZ formula
+// (pullTowardsJumpSpeeds); the < 0.001 distance early-out is C++-exact
+// (3D GetExactDist, :4681); the GetFirstCollisionPosition collision
+// adjustment is collision-only (documented no-bridge).
+func (s *session) handleEffectPullTowards(eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
@@ -53876,35 +53879,60 @@ func (s *session) handleEffectPullTowards(hitTargets []uint64) {
 		reach = 1.5
 	}
 	for _, effectTarget := range hitTargets {
-		if effectTarget == 0 {
+		if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
 			continue
 		}
-		targetSess := s.server.findSessionByGUID(effectTarget)
-		if targetSess == nil || targetSess.player == nil || targetSess.inFlight {
+		var tx, ty, tz float32
+		var targetSess *session
+		var tm *creatureMotion
+		if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+			if ts.inFlight {
+				continue
+			}
+			targetSess = ts
+			tx, ty, tz = ts.player.X, ts.player.Y, ts.player.Z
+		} else if cm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, effectTarget); cm != nil {
+			tm = cm
+			s.server.motionMu.Lock()
+			tx, ty, tz = cm.X, cm.Y, cm.Z
+			s.server.motionMu.Unlock()
+		} else {
 			continue
 		}
-		dx := targetSess.player.X - s.player.X
-		dy := targetSess.player.Y - s.player.Y
-		dz := targetSess.player.Z - s.player.Z
-		angle := math.Atan2(float64(dy), float64(dx))
+		angle := math.Atan2(float64(ty-s.player.Y), float64(tx-s.player.X))
 		landX := s.player.X + reach*float32(math.Cos(angle))
 		landY := s.player.Y + reach*float32(math.Sin(angle))
-		lx := targetSess.player.X - landX
-		ly := targetSess.player.Y - landY
-		lz := dz
-		if lx*lx+ly*ly+lz*lz < 0.001*0.001 {
+		lx := tx - landX
+		ly := ty - landY
+		lz := tz - s.player.Z
+		distXY := float32(math.Sqrt(float64(lx*lx + ly*ly + lz*lz)))
+		if distXY < 0.001 {
 			continue
 		}
-		targetSess.nearTeleportMove(landX, landY, targetSess.player.Z, targetSess.player.Orientation, true)
+		speedXY, speedZ, ok := pullTowardsJumpSpeeds(eff.MiscValue, distXY, -lz)
+		if !ok {
+			continue
+		}
+		destAngle := math.Atan2(float64(landY-ty), float64(landX-tx))
+		if targetSess != nil {
+			s.server.sendJumpToKnockBackDest(targetSess, effectTarget, destAngle, speedXY, speedZ)
+			continue
+		}
+		s.server.jumpToCreatureTargetDest(tm, destAngle, speedXY, speedZ)
 	}
 }
 
 // handleEffectPullTowardsDest mirrors Spell::EffectPullTowardsDest
 // (SpellEffects.cpp:4697-4731), the SPELL_EFFECT_PULL_TOWARDS_DEST (145)
-// HIT_TARGET arm: each player hit target is pulled to the spell destination.
-// Same MoveJump no-bridge note as handleEffectPullTowards; the < 0.001
-// distance early-out is C++-exact.
-func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, hitTargets []uint64) {
+// HIT_TARGET arm: each hit target is pulled to the spell destination via
+// Unit::JumpTo — player targets take the SMSG_MOVE_KNOCK_BACK packet
+// (sendJumpToKnockBackDest), creature targets the MoveJumpTo spline
+// (jumpToCreatureTargetDest); the destination angle is the absolute
+// angle from the target to the destination. Speeds are MiscValue/10
+// defaulting to 30 with the projectile speedZ formula
+// (pullTowardsJumpSpeeds); the < 0.001 distance early-out is C++-exact
+// (3D GetExactDist, :4716).
+func (s *session) handleEffectPullTowardsDest(eff wotlk.SpellEffect, target protocol.SpellTargetData, hitTargets []uint64) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
@@ -53912,20 +53940,43 @@ func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, h
 		return
 	}
 	for _, effectTarget := range hitTargets {
-		if effectTarget == 0 {
+		if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
 			continue
 		}
-		targetSess := s.server.findSessionByGUID(effectTarget)
-		if targetSess == nil || targetSess.player == nil || targetSess.inFlight {
+		var tx, ty, tz float32
+		var targetSess *session
+		var tm *creatureMotion
+		if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
+			if ts.inFlight {
+				continue
+			}
+			targetSess = ts
+			tx, ty, tz = ts.player.X, ts.player.Y, ts.player.Z
+		} else if cm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, effectTarget); cm != nil {
+			tm = cm
+			s.server.motionMu.Lock()
+			tx, ty, tz = cm.X, cm.Y, cm.Z
+			s.server.motionMu.Unlock()
+		} else {
 			continue
 		}
-		dx := targetSess.player.X - target.Destination.X
-		dy := targetSess.player.Y - target.Destination.Y
-		dz := targetSess.player.Z - target.Destination.Z
-		if dx*dx+dy*dy+dz*dz < 0.001*0.001 {
+		dx := tx - target.Destination.X
+		dy := ty - target.Destination.Y
+		dz := tz - target.Destination.Z
+		distXY := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+		if distXY < 0.001 {
 			continue
 		}
-		targetSess.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, targetSess.player.Orientation, true)
+		speedXY, speedZ, ok := pullTowardsJumpSpeeds(eff.MiscValue, distXY, -dz)
+		if !ok {
+			continue
+		}
+		destAngle := math.Atan2(float64(target.Destination.Y-ty), float64(target.Destination.X-tx))
+		if targetSess != nil {
+			s.server.sendJumpToKnockBackDest(targetSess, effectTarget, destAngle, speedXY, speedZ)
+			continue
+		}
+		s.server.jumpToCreatureTargetDest(tm, destAngle, speedXY, speedZ)
 	}
 }
 

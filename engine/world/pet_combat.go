@@ -5540,9 +5540,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		case spellEffectTeleportUnitsFaceCaster:
 			s.server.creatureEffectTeleUnitsFaceCaster(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectPullTowards:
-			s.server.creatureEffectPullTowards(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectPullTowards(ctx, motion, spell.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectPullTowardsDest:
-			s.server.creatureEffectPullTowardsDest(ctx, motion, hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectPullTowardsDest(ctx, motion, hasDest, dx, dy, dz, spell.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectDistract:
 			s.server.creatureEffectDistract(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectSanctuary:

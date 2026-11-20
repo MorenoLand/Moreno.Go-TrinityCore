@@ -4087,9 +4087,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			case spellEffectTeleportUnitsFaceCaster:
 				s.creatureEffectTeleUnitsFaceCaster(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectPullTowards:
-				s.creatureEffectPullTowards(ctx, m, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectPullTowards(ctx, m, spellInfo.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectPullTowardsDest:
-				s.creatureEffectPullTowardsDest(ctx, m, hasDest, destX, destY, destZ, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectPullTowardsDest(ctx, m, hasDest, destX, destY, destZ, spellInfo.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectDistract:
 				s.creatureEffectDistract(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectSanctuary:
@@ -6255,6 +6255,12 @@ func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion,
 	}
 }
 
+// jumpToGravity is Movement::gravity (MovementUtil.cpp:23), the
+// projectile gravity shared by Unit::JumpTo's MoveJumpTo flight
+// (MotionMaster.cpp:763) and the PullTowards speed formula
+// (SpellEffects.cpp:4683, 4721).
+const jumpToGravity = 19.29110527038574
+
 // sendJumpToKnockBack mirrors the player arm of Unit::JumpTo
 // (Unit.cpp:12950-12972): the SMSG_MOVE_KNOCK_BACK packet carrying the
 // target's own orientation plus the forward/backward angle (forward is
@@ -6282,6 +6288,27 @@ func (s *Server) sendJumpToKnockBack(targetSess *session, guid uint64, orientati
 	_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_KNOCK_BACK), packet.Bytes(), true)
 }
 
+// sendJumpToKnockBackDest mirrors the player arm of Unit::JumpTo
+// (Unit.cpp:12950-12972) with a destination: the packet direction is
+// the absolute angle from the target to the destination (the forward
+// angle 0 plus GetRelativeAngle(dest), plus the target's orientation),
+// the horizontal speed, and the negated vertical speed. Same bare
+// packet as sendJumpToKnockBack — no root/stun gate, no interrupt,
+// no charmer arm and no flying re-enable leg.
+func (s *Server) sendJumpToKnockBackDest(targetSess *session, guid uint64, absoluteAngle float64, speedXY, speedZ float32) {
+	if s == nil || targetSess == nil {
+		return
+	}
+	packet := protocol.NewBuffer(32)
+	packet.WritePackedGUID(guid)
+	packet.WriteU32(0)
+	packet.WriteF32(float32(math.Cos(absoluteAngle)))
+	packet.WriteF32(float32(math.Sin(absoluteAngle)))
+	packet.WriteF32(speedXY)
+	packet.WriteF32(-speedZ)
+	_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_KNOCK_BACK), packet.Bytes(), true)
+}
+
 // jumpToCreatureTarget mirrors the creature arm of Unit::JumpTo via
 // MotionMaster::MoveJumpTo (MotionMaster.cpp:763-777): the flight is
 // dist = 2 * (speedZ / gravity) * speedXY along the target's own
@@ -6299,13 +6326,32 @@ func (s *Server) jumpToCreatureTarget(tm *creatureMotion, forward bool, speedXY,
 	if !forward {
 		angle = math.Pi
 	}
-	const jumpToGravity = 19.29110527038574
 	s.motionMu.Lock()
 	ox, oy, oz, orientation := tm.X, tm.Y, tm.Z, tm.Orientation
 	s.motionMu.Unlock()
 	dist := 2 * (float64(speedZ) / jumpToGravity) * float64(speedXY)
 	destX := ox + float32(dist*math.Cos(float64(orientation+angle)))
 	destY := oy + float32(dist*math.Sin(float64(orientation+angle)))
+	s.launchCreatureJumpSpline(tm, destX, destY, oz, speedXY, speedZ, 1004)
+}
+
+// jumpToCreatureTargetDest mirrors the creature arm of Unit::JumpTo via
+// MotionMaster::MoveJumpTo (MotionMaster.cpp:763-777) with a
+// destination: the flight is dist = 2 * (speedZ / gravity) * speedXY
+// along the absolute angle from the target to the destination (the
+// target's orientation plus GetRelativeAngle(dest)), Z kept — the
+// UpdateAllowedPositionZ ground clamp has no Go model, the charge/pull
+// snap precedent — launched as a parabolic spline (EVENT_JUMP 1004).
+func (s *Server) jumpToCreatureTargetDest(tm *creatureMotion, absoluteAngle float64, speedXY, speedZ float32) {
+	if s == nil || tm == nil {
+		return
+	}
+	s.motionMu.Lock()
+	ox, oy, oz := tm.X, tm.Y, tm.Z
+	s.motionMu.Unlock()
+	dist := 2 * (float64(speedZ) / jumpToGravity) * float64(speedXY)
+	destX := ox + float32(dist*math.Cos(absoluteAngle))
+	destY := oy + float32(dist*math.Sin(absoluteAngle))
 	s.launchCreatureJumpSpline(tm, destX, destY, oz, speedXY, speedZ, 1004)
 }
 
@@ -8083,15 +8129,38 @@ func (s *Server) creatureEffectLeapBack(ctx context.Context, m *creatureMotion, 
 	}
 }
 
+// pullTowardsJumpSpeeds mirrors the speed computation shared by
+// Spell::EffectPullTowards and Spell::EffectPullTowardsDest
+// (SpellEffects.cpp:4685-4686, 4721-4722): speedXY is MiscValue/10,
+// defaulting to 30 when MiscValue is 0; speedZ follows the
+// projectile-motion formula over the (blizzlike 3D) distance to the
+// landing point, and a non-finite speedZ aborts the arm (C++ logs
+// and returns, :4688-4691, :4724-4727).
+func pullTowardsJumpSpeeds(miscValue int32, distXY, distZ float32) (speedXY, speedZ float32, ok bool) {
+	speedXY = float32(miscValue) / 10
+	if miscValue == 0 {
+		speedXY = 30
+	}
+	speedZ = (2*speedXY*speedXY*distZ + float32(jumpToGravity)*distXY*distXY) / (2 * speedXY * distXY)
+	if math.IsInf(float64(speedZ), 0) || math.IsNaN(float64(speedZ)) {
+		return 0, 0, false
+	}
+	return speedXY, speedZ, true
+}
+
 // creatureEffectPullTowards mirrors Spell::EffectPullTowards
 // (SpellEffects.cpp:4667) for a creature caster: the HIT_TARGET arm pulling
 // each hit target to the caster's first-collision position (caster reach
-// along the caster-to-target line). The target snaps like the teleport
-// arm, keeping its z and orientation like the player helper; the <0.001
-// distance early-out is C++-exact. (The JumpTo leg —
-// sendJumpToKnockBack/jumpToCreatureTarget — now exists via the
-// LeapBack port; the PullTowards JumpTo-with-dest arm is the next unit.)
-func (s *Server) creatureEffectPullTowards(ctx context.Context, m *creatureMotion, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+// along the caster-to-target line) via Unit::JumpTo — player targets take
+// the SMSG_MOVE_KNOCK_BACK packet (sendJumpToKnockBackDest), creature
+// targets the MoveJumpTo spline (jumpToCreatureTargetDest); the
+// destination angle is the absolute angle from the target to the landing
+// point. The <0.001 distance early-out (:4681) is C++-exact, over the
+// blizzlike 3D GetExactDist; the GetFirstCollisionPosition collision
+// adjustment is collision-only (documented no-bridge), so the landing
+// point keeps the caster's Z. No root/stun gate, no boss gate and no
+// interrupt leg — EffectPullTowards has none, unlike EffectKnockBack.
+func (s *Server) creatureEffectPullTowards(ctx context.Context, m *creatureMotion, miscValue int32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
 	}
@@ -8117,19 +8186,36 @@ func (s *Server) creatureEffectPullTowards(ctx context.Context, m *creatureMotio
 		lx := tx - landX
 		ly := ty - landY
 		lz := tz - m.Z
-		if lx*lx+ly*ly+lz*lz < 0.001*0.001 {
+		distXY := float32(math.Sqrt(float64(lx*lx + ly*ly + lz*lz)))
+		if distXY < 0.001 {
 			continue
 		}
-		s.creatureMoveTargetTo(m, guid, landX, landY, tz, 0, false, true)
+		speedXY, speedZ, ok := pullTowardsJumpSpeeds(miscValue, distXY, -lz)
+		if !ok {
+			continue
+		}
+		destAngle := math.Atan2(float64(landY-ty), float64(landX-tx))
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			s.sendJumpToKnockBackDest(targetSess, guid, destAngle, speedXY, speedZ)
+			continue
+		}
+		if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+			s.jumpToCreatureTargetDest(tm, destAngle, speedXY, speedZ)
+		}
 	}
 }
 
 // creatureEffectPullTowardsDest mirrors Spell::EffectPullTowardsDest
 // (SpellEffects.cpp:4697) for a creature caster: the HIT_TARGET arm pulling
-// each hit target to the cast's resolved destination, with the <0.001
-// distance early-out. The JumpTo spline speeds have no Go model, so the
-// target snaps like the teleport arm, keeping its orientation.
-func (s *Server) creatureEffectPullTowardsDest(ctx context.Context, m *creatureMotion, hasDest bool, dx, dy, dz float32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+// each hit target to the cast's resolved destination via Unit::JumpTo —
+// player targets take the SMSG_MOVE_KNOCK_BACK packet
+// (sendJumpToKnockBackDest), creature targets the MoveJumpTo spline
+// (jumpToCreatureTargetDest); the destination angle is the absolute
+// angle from the target to the destination. The <0.001 distance
+// early-out (:4716) is C++-exact, over the blizzlike 3D GetExactDist.
+// No root/stun gate, no boss gate and no interrupt leg —
+// EffectPullTowardsDest has none, unlike EffectKnockBack.
+func (s *Server) creatureEffectPullTowardsDest(ctx context.Context, m *creatureMotion, hasDest bool, dx, dy, dz float32, miscValue int32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil || !hasDest {
 		return
 	}
@@ -8151,10 +8237,22 @@ func (s *Server) creatureEffectPullTowardsDest(ctx context.Context, m *creatureM
 		ddx := tx - dx
 		ddy := ty - dy
 		ddz := tz - dz
-		if ddx*ddx+ddy*ddy+ddz*ddz < 0.001*0.001 {
+		distXY := float32(math.Sqrt(float64(ddx*ddx + ddy*ddy + ddz*ddz)))
+		if distXY < 0.001 {
 			continue
 		}
-		s.creatureMoveTargetTo(m, guid, dx, dy, dz, 0, false, true)
+		speedXY, speedZ, ok := pullTowardsJumpSpeeds(miscValue, distXY, -ddz)
+		if !ok {
+			continue
+		}
+		destAngle := math.Atan2(float64(dy-ty), float64(dx-tx))
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			s.sendJumpToKnockBackDest(targetSess, guid, destAngle, speedXY, speedZ)
+			continue
+		}
+		if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+			s.jumpToCreatureTargetDest(tm, destAngle, speedXY, speedZ)
+		}
 	}
 }
 

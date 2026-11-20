@@ -8993,9 +8993,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					case spellEffectTeleportUnitsFaceCaster:
 						s.creatureEffectTeleUnitsFaceCaster(ctx, motion, inlineSpell, inlineSpell.Effects[i], bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), reflected, evadedSet, immuneSet, missSet)
 					case spellEffectPullTowards:
-						s.creatureEffectPullTowards(ctx, motion, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), reflected, evadedSet, immuneSet, missSet)
+						s.creatureEffectPullTowards(ctx, motion, inlineSpell.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), reflected, evadedSet, immuneSet, missSet)
 					case spellEffectPullTowardsDest:
-						s.creatureEffectPullTowardsDest(ctx, motion, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), reflected, evadedSet, immuneSet, missSet)
+						s.creatureEffectPullTowardsDest(ctx, motion, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, inlineSpell.Effects[i].MiscValue, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), reflected, evadedSet, immuneSet, missSet)
 					case spellEffectDistract:
 						s.creatureEffectDistract(ctx, motion, inlineSpell, inlineSpell.Effects[i], (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), reflected, evadedSet, immuneSet, missSet)
 					case spellEffectSanctuary:
