@@ -9155,7 +9155,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// ReflectResult == NONE the reflected spell's effects land on the
 			// caster motion. A non-NONE status already nulled the trip in the
 			// verdict — the GO packet reported REFLECT with the status and
-			// nothing lands.
+			// nothing lands. A missile spell's trip lands 1.5x TimeDelay
+			// after the outbound missile (Spell.cpp:2184) inside the
+			// wrappers; instant trips land synchronously (TimeDelay 0).
 			for _, trip := range reflectTrips {
 				if trip.status != protocol.SpellMissNone {
 					continue
@@ -9178,8 +9180,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// twin of the castCreatureSpellInternal tail: type-0 rows fire
 			// once per cast on the spell's explicit unit target
 			// (spellTarget.UnitGUID, the wire victim — the nearby pick
-			// never rewrites the packet target), after every hit leg
-			// and reflect return trip; the modOwner arm between them is
+			// never rewrites the packet target), after every hit leg; a
+			// missile spell's reflect return trip lands later at 1.5x
+			// TimeDelay, so the tail precedes it like C++ _cast vs
+			// handle_delayed. The modOwner arm between them is
 			// vacuous on this path like the twin's. The cast is a
 			// non-triggered UnitAI::DoCast, so the proc leg runs
 			// untriggered. Gated on inlineSpellKnown like the twin.

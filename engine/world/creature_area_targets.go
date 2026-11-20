@@ -3466,9 +3466,9 @@ type inlineReflectReflector struct {
 // death chain on a lethal hit (the rage.go share-damage funnel shape). The
 // return-trip damage is the already-computed hit damage — C++ recalculates it,
 // but the inline path computes damage once per cast and the pet-path return trip
-// reuses the same value. Deviation: C++ delivers the return trip 1.5x TimeDelay
-// after the outbound missile (Spell.cpp:2184); Go lands it synchronously like
-// the pet-path bridge.
+// reuses the same value. The wrappers delay missile-spell trips by 1.5x TimeDelay
+// (Spell.cpp:2184); instant spells land synchronously (TimeDelay 0), and the
+// pet-path bridge still lands synchronously (separate mechanism).
 func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, damage, leechBase uint32, schoolMask uint8, reflector inlineReflectReflector) {
 	if s == nil || motion == nil {
 		return
@@ -3978,6 +3978,25 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 	}
 }
 
+// inlineReflectReturnDelayMs mirrors the AddUnitTarget reflect leg
+// (Spell.cpp:2157-2171, 2183-2184): the outbound TimeDelay is the floor of
+// distance / spell speed in milliseconds (5-yard minimum, 0 for instant
+// spells), and the return trip adds half again.
+func inlineReflectReturnDelayMs(motion *creatureMotion, rx, ry, rz float32, spell wotlk.Spell) int {
+	if motion == nil || spell.Speed <= 0 {
+		return 0
+	}
+	dx := float64(rx - motion.X)
+	dy := float64(ry - motion.Y)
+	dz := float64(rz - motion.Z)
+	dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
+	if dist < 5.0 {
+		dist = 5.0
+	}
+	delayMs := int(math.Floor(dist / float64(spell.Speed) * 1000.0))
+	return delayMs + (delayMs >> 1)
+}
+
 // applyInlineReflectReturnTrip runs the reflect return trip for a player
 // reflector on the inline AI victim-spell path: the stand-up arm fires on
 // TargetInfo::unit — the reflector, not _spellHitTarget (the caster) — so a
@@ -3989,28 +4008,50 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 	if s == nil || motion == nil || reflector == nil {
 		return
 	}
-	s.applyInlineReflectReturnTripCore(ctx, motion, spell, damage, leechBase, schoolMask, inlineReflectReflector{
-		standUp: func() {
-			if spell.ID != 0 && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
-				if reflector.Sess != nil && reflector.Sess.player != nil && reflector.Sess.player.StandState != 0 {
-					reflector.Sess.player.StandState = 0
-					reflector.Sess.sendPlayerUpdate()
+	fire := func(live *creatureMotion) {
+		s.applyInlineReflectReturnTripCore(ctx, live, spell, damage, leechBase, schoolMask, inlineReflectReflector{
+			standUp: func() {
+				if spell.ID != 0 && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
+					if reflector.Sess != nil && reflector.Sess.player != nil && reflector.Sess.player.StandState != 0 {
+						reflector.Sess.player.StandState = 0
+						reflector.Sess.sendPlayerUpdate()
+					}
 				}
+			},
+			deliverLog: func(payload []byte) {
+				if reflector.Sess != nil {
+					_ = reflector.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, true)
+				}
+				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, live.Map, live.InstanceID, live.X, live.Y, live.Z, reflector.Sess)
+			},
+			killCredit: func(ctx context.Context, target combatTarget) {
+				if reflector.Sess != nil {
+					reflector.Sess.onCreatureKilled(ctx, target, nil)
+				}
+			},
+			shareVehicle: reflector.Sess,
+		})
+	}
+	// Spell::AddUnitTarget (Spell.cpp:2183-2184): a reflected missile
+	// spell's return trip lands 1.5x TimeDelay after the outbound
+	// missile; instant spells (TimeDelay 0) land synchronously. The
+	// timer re-resolves the caster motion at fire time — a despawned
+	// caster's trip dies with it, like the ProcReflectDelayed timer —
+	// and the core's own Health==0 early return drops a trip whose
+	// caster died mid-flight.
+	if delayMs := inlineReflectReturnDelayMs(motion, reflector.X, reflector.Y, reflector.Z, spell); delayMs > 0 {
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+			if s == nil {
+				return
 			}
-		},
-		deliverLog: func(payload []byte) {
-			if reflector.Sess != nil {
-				_ = reflector.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, true)
+			if live := s.findCreatureMotion(mapID, instanceID, guid); live != nil {
+				fire(live)
 			}
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, reflector.Sess)
-		},
-		killCredit: func(ctx context.Context, target combatTarget) {
-			if reflector.Sess != nil {
-				reflector.Sess.onCreatureKilled(ctx, target, nil)
-			}
-		},
-		shareVehicle: reflector.Sess,
-	})
+		})
+		return
+	}
+	fire(motion)
 }
 
 // applyInlineCreatureReflectReturnTrip runs the reflect return trip for a
@@ -4029,23 +4070,46 @@ func (s *Server) applyInlineCreatureReflectReturnTrip(ctx context.Context, motio
 	if s == nil || motion == nil || reflectorGUID == 0 {
 		return
 	}
-	s.applyInlineReflectReturnTripCore(ctx, motion, spell, damage, leechBase, schoolMask, inlineReflectReflector{
-		standUp: func() {
-			if spell.ID == 0 || (spellIsPositive(spell) && !spellHasEffect(spell, spellEffectDispel)) {
+	fire := func(live *creatureMotion) {
+		s.applyInlineReflectReturnTripCore(ctx, live, spell, damage, leechBase, schoolMask, inlineReflectReflector{
+			standUp: func() {
+				if spell.ID == 0 || (spellIsPositive(spell) && !spellHasEffect(spell, spellEffectDispel)) {
+					return
+				}
+				if s.creatureFriendlyToTarget(live, reflectorGUID) {
+					return
+				}
+				if tm := s.findCreatureMotion(live.Map, live.InstanceID, reflectorGUID); tm != nil {
+					s.standCreatureMotionUp(tm)
+				}
+			},
+			deliverLog: func(payload []byte) {
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, live.Map, live.InstanceID, live.X, live.Y, live.Z, live.PhaseMask)
+			},
+			shareVehicle: vehicle,
+		})
+	}
+	// Same 1.5x TimeDelay return trip as the player wrapper
+	// (Spell.cpp:2183-2184). The reflector's position at roll time
+	// sets the outbound leg; a reflector that already despawned
+	// leaves no distance, so the trip lands synchronously like before.
+	delayMs := 0
+	if rm := s.findCreatureMotion(motion.Map, motion.InstanceID, reflectorGUID); rm != nil {
+		delayMs = inlineReflectReturnDelayMs(motion, rm.X, rm.Y, rm.Z, spell)
+	}
+	if delayMs > 0 {
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+			if s == nil {
 				return
 			}
-			if s.creatureFriendlyToTarget(motion, reflectorGUID) {
-				return
+			if live := s.findCreatureMotion(mapID, instanceID, guid); live != nil {
+				fire(live)
 			}
-			if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, reflectorGUID); tm != nil {
-				s.standCreatureMotionUp(tm)
-			}
-		},
-		deliverLog: func(payload []byte) {
-			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
-		},
-		shareVehicle: vehicle,
-	})
+		})
+		return
+	}
+	fire(motion)
 }
 
 // armInlineReflectProcDelayed mirrors the ProcReflectDelayed arm (Spell.cpp:2181)

@@ -3740,8 +3740,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// Player::CanUseItem (Player.cpp:11859-11866) — the dead gate fires
 		// here, after the glyph/item/guid/template/equipped gates: a dead
 		// player with a bad glyph index or a missing item answers
-		// ITEM_NOT_FOUND, not YOU_ARE_DEAD.
-		if s.player.Health == 0 {
+		// ITEM_NOT_FOUND, not YOU_ARE_DEAD. CanUseItem reads !IsAlive(),
+		// which is false for ghosts too (deathState CORPSE) — ghosts ride
+		// Health=1 in Go (buildPlayerRepop, death.go), so the Health==0
+		// read misses them and isDeadOrGhost is the twin, like the
+		// client-path gate (spells.go:2374).
+		if s.isDeadOrGhost() {
 			s.sendEquipError(equipErrYouAreDead, fullItemGUID)
 			return true
 		}
@@ -3847,6 +3851,22 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// eff.CalcValueForLevel(spell, casterLevel), so the override lands on this cast's
 			// spell copy (Store.Spell returns a value).
 			spell.Effects[0].BasePoints = *learnBasePoint
+		}
+		// Spell::CheckCast death-state arm (Spell.cpp:5174-5177), the
+		// first CheckCast check: a dead caster fails with
+		// SPELL_FAILED_CASTER_DEAD unless the spell is passive or
+		// castable while dead. Item casts are TRIGGERED_NONE
+		// (Player::CastItemUseSpell, Player.cpp:8232), so the
+		// triggered non-aura exemption cannot apply here — the
+		// client-path twin (spells.go:2374) carries the same three
+		// terms. Runs ahead of every other CheckCast arm and ahead
+		// of SMSG_SPELL_START, so a dead player's item use answers
+		// CASTER_DEAD instead of starting a bar that finishSpellCast
+		// then drops silently.
+		if s.isDeadOrGhost() && spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0CastableWhileDead == 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster dead")
+			return true
 		}
 		// CheckCast early arms (Spell.cpp:5181-5353) on the m_CastItem
 		// path: item casts are TRIGGERED_NONE prepares
