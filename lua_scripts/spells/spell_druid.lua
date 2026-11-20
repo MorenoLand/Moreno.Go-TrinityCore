@@ -665,3 +665,430 @@ local function t10Restoration4pBonusTargets(event, spell, effectIndex, targets)
 end
 
 RegisterSpellEvent(SPELL_DRUID_T10_RESTORATION_4P_BONUS, 7, t10Restoration4pBonusTargets)
+
+--   spell_dru_glyph_of_barkskin (spell_druid.cpp:478-499): aura
+--   63057, mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; the proc actor casts 63058 on self,
+--   triggered. DORMANT until Spell.dbc ships the 63057 proc entry.
+local SPELL_DRUID_GLYPH_OF_BARKSKIN = 63057 -- spell_druid.cpp:478
+
+local function glyphOfBarkskinProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil then
+        return true
+    end
+    actor:CastSpell(nil, SPELL_DRUID_BARKSKIN_01, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_GLYPH_OF_BARKSKIN, 6, glyphOfBarkskinProc)
+
+--   spell_dru_glyph_of_innervate (spell_druid.cpp:500-531): aura
+--   54832, mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; the actor casts the regen 54833 on self
+--   with BP0 = floor(floor(create mana * amount / 100) / ticks)
+--   (CalculatePct then integer division by GetMaxTicks; a 0 tick
+--   count never fires the cast). DORMANT until Spell.dbc ships the
+--   54832 proc entry and the 54833 row.
+local SPELL_DRUID_GLYPH_OF_INNERVATE = 54832 -- spell_druid.cpp:500
+local SPELL_DRUID_GLYPH_OF_INNERVATE_REGEN = 54833 -- spell_druid.cpp:77
+
+local function glyphOfInnervateProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or actor:GetObjectType() ~= "Player" then
+        return true
+    end
+    local ticks = aura:GetSpellMaxTicks(SPELL_DRUID_GLYPH_OF_INNERVATE_REGEN)
+    if ticks == 0 then
+        return true
+    end
+    local amount = math.floor(math.floor(actor:GetCreateMana() * aura:GetAmount(0) / 100) / ticks)
+    actor:CastCustomSpell(nil, SPELL_DRUID_GLYPH_OF_INNERVATE_REGEN, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_GLYPH_OF_INNERVATE, 6, glyphOfInnervateProc)
+
+--   spell_dru_glyph_of_rake (spell_druid.cpp:532-559): aura 54821,
+--   mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY). CheckProc
+--   admits only TYPEID_UNIT proc targets; PreventDefaultAction;
+--   the actor casts 54820 on the proc target, triggered. DORMANT
+--   until Spell.dbc ships the 54821 proc entry.
+local SPELL_DRUID_GLYPH_OF_RAKE = 54821 -- spell_druid.cpp:532
+local SPELL_DRUID_GLYPH_OF_RAKE_TRIGGERED = 54820 -- spell_druid.cpp:81
+local TYPEID_UNIT = 3 -- SharedDefines.h: TypeID
+
+local function glyphOfRakeProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or procTarget == nil or procTarget:GetTypeId() ~= TYPEID_UNIT then
+        return true
+    end
+    actor:CastSpell(procTarget, SPELL_DRUID_GLYPH_OF_RAKE_TRIGGERED, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_GLYPH_OF_RAKE, 6, glyphOfRakeProc)
+
+--   spell_dru_glyph_of_rejuvenation (spell_druid.cpp:560-591):
+--   aura 54754, mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   CheckProc admits only proc targets below 50% health;
+--   PreventDefaultAction; a nil/0 heal casts nothing, else the
+--   actor casts 54755 on the proc target with BP0 =
+--   floor(heal * amount / 100). DORMANT until Spell.dbc ships the
+--   54754 proc entry.
+local SPELL_DRUID_GLYPH_OF_REJUVENATION = 54754 -- spell_druid.cpp:560
+local SPELL_DRUID_GLYPH_OF_REJUVENATION_HEAL = 54755 -- spell_druid.cpp:86
+
+local function glyphOfRejuvenationProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or procTarget == nil or not procTarget:HealthBelowPct(50) then
+        return true
+    end
+    local heal = procEvent:GetHeal()
+    if heal == nil or heal == 0 then
+        return true
+    end
+    actor:CastCustomSpell(procTarget, SPELL_DRUID_GLYPH_OF_REJUVENATION_HEAL, true, math.floor(heal * aura:GetAmount(0) / 100))
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_GLYPH_OF_REJUVENATION, 6, glyphOfRejuvenationProc)
+
+--   spell_dru_glyph_of_starfire_dummy (spell_druid.cpp:684-705):
+--   aura 54845, mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; the actor casts 54846 on the proc
+--   target, triggered. DORMANT until Spell.dbc ships the 54845
+--   proc entry.
+local SPELL_DRUID_GLYPH_OF_STARFIRE_DUMMY = 54845 -- spell_druid.cpp:684
+local SPELL_DRUID_GLYPH_OF_STARFIRE_SCRIPT = 54846 -- spell_druid.cpp:78
+
+local function glyphOfStarfireDummyProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    actor:CastSpell(procTarget, SPELL_DRUID_GLYPH_OF_STARFIRE_SCRIPT, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_GLYPH_OF_STARFIRE_DUMMY, 6, glyphOfStarfireDummyProc)
+
+--   spell_dru_living_seed (spell_druid.cpp:884-911): aura 48496,
+--   mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; a nil/0 heal casts nothing, else the aura
+--   owner casts 48504 on the proc target with BP0 =
+--   floor(heal * amount / 100). DORMANT until Spell.dbc ships the
+--   48496 proc entry.
+local SPELL_DRUID_LIVING_SEED = 48496 -- spell_druid.cpp:884
+local SPELL_DRUID_LIVING_SEED_PROC = 48504 -- spell_druid.cpp:62
+
+local function livingSeedProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if target == nil or procTarget == nil then
+        return true
+    end
+    local heal = procEvent:GetHeal()
+    if heal == nil or heal == 0 then
+        return true
+    end
+    target:CastCustomSpell(procTarget, SPELL_DRUID_LIVING_SEED_PROC, true, math.floor(heal * aura:GetAmount(0) / 100))
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_LIVING_SEED, 6, livingSeedProc)
+
+--   spell_dru_living_seed_proc (spell_druid.cpp:913-935): aura
+--   48504, mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; the aura owner self-casts 48503 with
+--   BP0 = the aura's EFFECT_0 amount. DORMANT until Spell.dbc ships
+--   the 48504 proc entry.
+local SPELL_DRUID_LIVING_SEED_HEAL = 48503 -- spell_druid.cpp:61
+
+local function livingSeedHealProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if target == nil then
+        return true
+    end
+    target:CastCustomSpell(target, SPELL_DRUID_LIVING_SEED_HEAL, true, aura:GetAmount(0))
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_LIVING_SEED_PROC, 6, livingSeedHealProc)
+
+--   spell_dru_omen_of_clarity (spell_druid.cpp:1041-1066): aura
+--   16864, mode 6 (OnEffectProc, EFFECT_0,
+--   SPELL_AURA_PROC_TRIGGER_SPELL). NO PreventDefaultAction in
+--   C++: when the owner has the T10 balance 4P aura (70718) it
+--   also casts 70721 on self, triggered, and the default trigger
+--   leg still runs (the handler returns nil). DORMANT until
+--   Spell.dbc ships the 16864 proc entry.
+local SPELL_DRUID_OMEN_OF_CLARITY = 16864 -- spell_druid.cpp:1041
+local SPELL_DRUID_BALANCE_T10_BONUS = 70718 -- spell_druid.cpp:93
+local SPELL_DRUID_BALANCE_T10_BONUS_PROC = 70721 -- spell_druid.cpp:94
+
+local function omenOfClarityProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if target ~= nil and target:HasAura(SPELL_DRUID_BALANCE_T10_BONUS) then
+        target:CastSpell(nil, SPELL_DRUID_BALANCE_T10_BONUS_PROC, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_DRUID_OMEN_OF_CLARITY, 6, omenOfClarityProc)
+
+--   spell_dru_owlkin_frenzy (spell_druid.cpp:1068-1081): aura
+--   48391, mode 11 (DoEffectCalcAmount, EFFECT_2,
+--   SPELL_AURA_PERIODIC_ENERGIZE). amount = floor(owner create
+--   mana * base / 100) (CalculatePct). DORMANT until Spell.dbc
+--   ships the 48391 row.
+local SPELL_DRUID_OWLKIN_FRENZY = 48391 -- spell_druid.cpp:1068
+
+local function owlkinFrenzyCalcAmount(event, aura, target, effectIndex)
+    if effectIndex ~= 2 then
+        return
+    end
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    aura:SetAmount(math.floor(target:GetCreateMana() * aura:GetAmount(2) / 100), 2)
+end
+
+RegisterAuraEvent(SPELL_DRUID_OWLKIN_FRENZY, 11, owlkinFrenzyCalcAmount)
+
+--   spell_dru_revitalize (spell_druid.cpp:1143-1193): aura 48539,
+--   mode 6 (OnEffectProc, EFFECT_0,
+--   SPELL_AURA_OVERRIDE_CLASS_SCRIPTS). PreventDefaultAction; the
+--   roll is roll_chance_i(EFFECT_0 amount); the proc target's
+--   power type selects the energize (mana 48542, rage 48541,
+--   energy 48540, runic power 48543), cast by the actor on the
+--   proc target, triggered. DORMANT until Spell.dbc ships the
+--   48539 proc entry.
+local SPELL_DRUID_REVITALIZE = 48539 -- spell_druid.cpp:1143
+local SPELL_DRUID_REVITALIZE_ENERGIZE_MANA = 48542 -- spell_druid.cpp:73
+local SPELL_DRUID_REVITALIZE_ENERGIZE_RAGE = 48541 -- spell_druid.cpp:74
+local SPELL_DRUID_REVITALIZE_ENERGIZE_ENERGY = 48540 -- spell_druid.cpp:75
+local SPELL_DRUID_REVITALIZE_ENERGIZE_RP = 48543 -- spell_druid.cpp:76
+local POWER_MANA = 0 -- SharedDefines.h: Powers
+local POWER_ENERGY = 3 -- SharedDefines.h: Powers
+local POWER_RUNIC_POWER = 6 -- SharedDefines.h: Powers
+
+local REVITALIZE_SPELLS = {
+    [POWER_MANA] = SPELL_DRUID_REVITALIZE_ENERGIZE_MANA,
+    [POWER_RAGE] = SPELL_DRUID_REVITALIZE_ENERGIZE_RAGE,
+    [POWER_ENERGY] = SPELL_DRUID_REVITALIZE_ENERGIZE_ENERGY,
+    [POWER_RUNIC_POWER] = SPELL_DRUID_REVITALIZE_ENERGIZE_RP,
+}
+
+local function revitalizeProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    if math.random(0, 99) >= aura:GetAmount(0) then
+        return true
+    end
+    local spellId = REVITALIZE_SPELLS[procTarget:GetPowerType()]
+    if spellId == nil then
+        return true
+    end
+    actor:CastSpell(procTarget, spellId, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_REVITALIZE, 6, revitalizeProc)
+
+--   spell_dru_t3_2p_bonus (spell_druid.cpp:1486-1537): aura 28716,
+--   mode 6 (OnEffectProc, EFFECT_0,
+--   SPELL_AURA_OVERRIDE_CLASS_SCRIPTS). CheckProc is the 50%
+--   roll; PreventDefaultAction; the proc target's power type
+--   selects the energize (mana 28722, rage 28723, energy 28724),
+--   cast by the actor on the proc target, triggered. DORMANT until
+--   Spell.dbc ships the 28716 proc entry.
+local SPELL_DRUID_T3_2P_BONUS = 28716 -- spell_druid.cpp:1486
+local SPELL_DRUID_T3_PROC_ENERGIZE_MANA = 28722 -- spell_druid.cpp:69
+local SPELL_DRUID_T3_PROC_ENERGIZE_RAGE = 28723 -- spell_druid.cpp:70
+local SPELL_DRUID_T3_PROC_ENERGIZE_ENERGY = 28724 -- spell_druid.cpp:71
+
+local T3_2P_SPELLS = {
+    [POWER_MANA] = SPELL_DRUID_T3_PROC_ENERGIZE_MANA,
+    [POWER_RAGE] = SPELL_DRUID_T3_PROC_ENERGIZE_RAGE,
+    [POWER_ENERGY] = SPELL_DRUID_T3_PROC_ENERGIZE_ENERGY,
+}
+
+local function t32pBonusProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    if math.random(0, 99) >= 50 then
+        return true
+    end
+    local spellId = T3_2P_SPELLS[procTarget:GetPowerType()]
+    if spellId == nil then
+        return true
+    end
+    actor:CastSpell(procTarget, spellId, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_T3_2P_BONUS, 6, t32pBonusProc)
+
+--   spell_dru_t3_6p_bonus (spell_druid.cpp:1539-1560): aura 28744,
+--   mode 6 (OnEffectProc, EFFECT_0,
+--   SPELL_AURA_OVERRIDE_CLASS_SCRIPTS). PreventDefaultAction; the
+--   actor casts 28750 on the proc target, triggered. DORMANT until
+--   Spell.dbc ships the 28744 proc entry.
+local SPELL_DRUID_T3_6P_BONUS = 28744 -- spell_druid.cpp:1539
+local SPELL_DRUID_BLESSING_OF_THE_CLAW = 28750 -- spell_druid.cpp:72
+
+local function t36pBonusProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    actor:CastSpell(procTarget, SPELL_DRUID_BLESSING_OF_THE_CLAW, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_T3_6P_BONUS, 6, t36pBonusProc)
+
+--   spell_dru_t3_8p_bonus (spell_druid.cpp:1561-1590): aura 28719,
+--   mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; no proc spell info casts nothing; the
+--   actor casts 28742 on self with BP0 = floor(power cost of the
+--   proc spell * amount / 100) (a 0 cost casts nothing, the
+--   GetSpellPowerCost convention). DORMANT until Spell.dbc ships
+--   the 28719 proc entry.
+local SPELL_DRUID_T3_8P_BONUS = 28719 -- spell_druid.cpp:1561
+local SPELL_DRUID_EXHILARATE = 28742 -- spell_druid.cpp:85
+
+local function t38pBonusProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or actor:GetObjectType() ~= "Player" then
+        return true
+    end
+    local spellId = procEvent:GetSpellId()
+    if spellId == nil or spellId == 0 then
+        return true
+    end
+    local cost = actor:GetSpellPowerCost(spellId)
+    if cost == nil or cost == 0 then
+        return true
+    end
+    actor:CastCustomSpell(nil, SPELL_DRUID_EXHILARATE, true, math.floor(cost * aura:GetAmount(0) / 100))
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_T3_8P_BONUS, 6, t38pBonusProc)
+
+--   spell_dru_t4_2p_bonus (spell_druid.cpp:1592-1612): auras 37288
+--   / 37295, mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; the actor casts 37238 on self,
+--   triggered. DORMANT until Spell.dbc ships the 37288/37295 proc
+--   entries.
+local SPELL_DRUID_T4_2P_BONUS_IDS = { 37288, 37295 }
+local SPELL_DRUID_INFUSION = 37238 -- spell_druid.cpp:87
+
+local function t42pBonusProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil then
+        return true
+    end
+    actor:CastSpell(nil, SPELL_DRUID_INFUSION, true)
+    return true
+end
+
+for _, spellId in ipairs(SPELL_DRUID_T4_2P_BONUS_IDS) do
+    RegisterAuraEvent(spellId, 6, t42pBonusProc)
+end
+
+--   spell_dru_t9_feral_relic (spell_druid.cpp:1669-1728): aura
+--   67353, mode 6 (OnEffectProc, EFFECT_0,
+--   SPELL_AURA_PROC_TRIGGER_SPELL). CheckProc admits only bear /
+--   dire bear / cat form; PreventDefaultAction; the actor
+--   self-casts 67354 (bear/dire bear) or 67355 (cat), triggered.
+--   DORMANT until Spell.dbc ships the 67353 proc entry.
+local SPELL_DRUID_T9_FERAL_RELIC = 67353 -- spell_druid.cpp:1669
+local SPELL_DRUID_T9_FERAL_RELIC_BEAR = 67354 -- spell_druid.cpp:66
+local SPELL_DRUID_T9_FERAL_RELIC_CAT = 67355 -- spell_druid.cpp:67
+
+local function t9FeralRelicProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil then
+        return true
+    end
+    local form = actor:GetShapeshiftForm()
+    local spellId = nil
+    if form == FORM_BEAR or form == FORM_DIREBEAR then
+        spellId = SPELL_DRUID_T9_FERAL_RELIC_BEAR
+    elseif form == FORM_CAT then
+        spellId = SPELL_DRUID_T9_FERAL_RELIC_CAT
+    end
+    if spellId == nil then
+        return true
+    end
+    actor:CastSpell(actor, spellId, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_T9_FERAL_RELIC, 6, t9FeralRelicProc)
+
+--   spell_dru_t10_balance_4p_bonus (spell_druid.cpp:1730-1766):
+--   aura 70723, mode 6 (OnEffectProc, EFFECT_0, SPELL_AURA_DUMMY).
+--   PreventDefaultAction; a nil/0 damage casts nothing; the actor
+--   casts 71023 on the proc target with BP0 =
+--   floor(floor(damage * amount / 100) / ticks) (CalculatePct then
+--   integer division by GetMaxTicks; a 0 tick count never fires
+--   the cast). DORMANT until Spell.dbc ships the 70723 proc entry
+--   and the 71023 row.
+local SPELL_DRUID_T10_BALANCE_4P_BONUS = 70723 -- spell_druid.cpp:1730
+local SPELL_DRUID_LANGUISH = 71023 -- spell_druid.cpp:91
+
+local function t10Balance4pBonusProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    local dmg = procEvent:GetDamage()
+    if dmg == nil or dmg == 0 then
+        return true
+    end
+    local ticks = aura:GetSpellMaxTicks(SPELL_DRUID_LANGUISH)
+    if ticks == 0 then
+        return true
+    end
+    local amount = math.floor(math.floor(dmg * aura:GetAmount(0) / 100) / ticks)
+    actor:CastCustomSpell(procTarget, SPELL_DRUID_LANGUISH, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_T10_BALANCE_4P_BONUS, 6, t10Balance4pBonusProc)
