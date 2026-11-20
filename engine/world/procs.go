@@ -4212,8 +4212,10 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// the DBC trigger on the proc target instead. The cast
 				// carries the triggering-aura attribution (the C++ aurEff
 				// overload), mirroring the generic leg below (50421
-				// precedent). No Lua ev6 twin: spell_shaman.lua holds no
-				// 23552 handler. DORMANT until Spell.dbc ships the 23552
+				// precedent). The Lua ev6 twin exists (spell_shaman.lua
+				// lightningShieldT2TriggerProc) and fires first (:4026),
+				// returning true, so this Go arm is the shadowed
+				// fallback. DORMANT until Spell.dbc ships the 23552
 				// proc entry.
 				s.triggeredByAuraCast = true
 				s.triggeredByAuraSpell = auraSpell.ID

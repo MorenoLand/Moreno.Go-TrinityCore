@@ -11593,9 +11593,12 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				// the procs.go leg — the holder casts Lightning Shield T2
 				// damage (27635) on itself. Placed before the generic
 				// PROC_TRIGGER_SPELL arm, which would cast the DBC trigger
-				// on the proc target instead (the 37594 precedent). No Lua
-				// ev6 twin: spell_shaman.lua holds no 23552 handler.
-				// DORMANT until Spell.dbc ships the 23552 proc entry.
+				// on the proc target instead (the 37594 precedent). The
+				// Lua ev6 twin exists (spell_shaman.lua
+				// lightningShieldT2TriggerProc) and fires first (:11117),
+				// returning true, so this Go arm is the shadowed
+				// fallback. DORMANT until Spell.dbc ships the 23552
+				// proc entry.
 				s.castCreatureSpellInternal(ctx, m, 27635, m.GUID, true)
 				continue
 			}

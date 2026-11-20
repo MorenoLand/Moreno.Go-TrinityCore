@@ -53,9 +53,11 @@
 --   spell_sha_ancestral_awakening_proc::HandleDummy
 --   (spell_shaman.cpp:169-180): EFFECT_0 DUMMY. Per hit unit the caster
 --   casts 52752 triggered with BP0 = GetEffectValue(). The FilterTargets
---   arm (lowest-health-pct raid target only, when 2+ targets) has no Go
---   hook. The ancestral awakening aura proc arm is PORTED below
---   (ev6, census row 758).
+--   arm (lowest-health-pct raid target only, when 2+ targets) is PORTED
+--   below (ev7, 2026-11-20): the ev7 fire site is live on the triggered
+--   path (spells.go:27789), and the filtered list is what the 52759
+--   dummy arm iterates (:29078). The ancestral awakening aura proc arm
+--   is PORTED below (ev6, census row 758).
 --   spell_sha_astral_shift::Absorb (spell_shaman.cpp:224-231): the
 --   SCHOOL_ABSORB leg for 51474, gated on the stun/fear/silence flags
 --   (stun also needs a stun-mechanic aura); the CalculateAmount -1 pool
@@ -891,10 +893,10 @@ RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R9, 8, fireNovaCheckCast)
 -- the actor casts the dummy 52759 on itself (the C++ nil-target
 -- cast), triggered, BP0 = pct of the heal by the effect amount.
 -- Direct heals only (no periodic-heal proc path forwards a heal to
--- ev6); the 52759 lowest-health-only FilterTargets arm is unmodeled
--- on the player path (pre-existing Go deviation, inherited); the
--- creature path has no 52759 dummy twin. DORMANT until Spell.dbc
--- ships the 51556 proc entry and the 52759/52752 rows.
+-- ev6); the 52759 lowest-health-only FilterTargets arm is PORTED below
+-- (ev7, 2026-11-20); the creature path has no 52759 dummy twin.
+-- DORMANT until Spell.dbc ships the 51556 proc entry and the
+-- 52759/52752 rows.
 local function ancestralAwakeningProc(event, aura, target, actor, procTarget, damage, procEvent)
     if actor == nil or procEvent == nil then
         return true
@@ -913,6 +915,35 @@ local function ancestralAwakeningProc(event, aura, target, actor, procTarget, da
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_ANCESTRAL_AWAKENING, 6, ancestralAwakeningProc)
+
+-- C++ spell_sha_ancestral_awakening_proc_SpellScript::FilterTargets
+-- (spell_shaman.cpp:160-169): OnObjectAreaTargetSelect, EFFECT_0
+-- TARGET_UNIT_CASTER_AREA_RAID. With 2+ targets, sort by health pct
+-- ascending and keep only the lowest; with fewer, the list is
+-- untouched. The ev7 fire site is live on the triggered path
+-- (spells.go:27789 firePlayerSpellTargetSelects inside
+-- castSpellDirectWithOverrides, reached from the ancestral proc's
+-- castSpellDirectWithBasePoint), and the filtered list replaces the
+-- seed targets (:28310) the 52759 dummy arm iterates (:29078).
+-- DORMANT until Spell.dbc ships the 52759 row.
+local function ancestralAwakeningTargetSelect(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    if targets:GetCount() < 2 then
+        return
+    end
+    local units = targets:GetTargets()
+    table.sort(units, function(a, b) return a:GetHealthPct() < b:GetHealthPct() end)
+    local lowest = units[1]
+    if lowest == nil then
+        return
+    end
+    targets:Clear()
+    targets:Add(lowest)
+end
+
+RegisterSpellEvent(SPELL_SHAMAN_ANCESTRAL_AWAKENING_DUMMY, 7, ancestralAwakeningTargetSelect)
 
 local SPELL_SHAMAN_IMP_WATER_SHIELD = 16180 -- spell_shaman.cpp:1136 (class spell_sha_imp_water_shield)
 local SPELL_SHAMAN_LIGHTNING_OVERLOAD = 30675 -- spell_shaman.cpp:1196 (class spell_sha_lightning_overload)
@@ -1060,7 +1091,7 @@ RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD_T2_BONUS, 6, lightningShieldT2Bo
 -- (spell_shaman.cpp:1302-1311): OnEffectProc, EFFECT_0
 -- SPELL_AURA_PROC_TRIGGER_SPELL. PreventDefaultAction; the holder casts
 -- Lightning Shield T2 damage (27635) on itself, triggered by the aura.
--- Creature-side twin lives in Go (boss_ai.go:11569); this is the
+-- Creature-side twin lives in Go (boss_ai.go:11590); this is the
 -- player-held ev6 twin. DORMANT until Spell.dbc ships the 23552 proc entry.
 local function lightningShieldT2TriggerProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
     if effectIndex ~= nil and effectIndex ~= 0 then
