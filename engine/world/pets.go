@@ -634,7 +634,7 @@ func (s *session) petOwnerStaminaScale(entry uint32, petType uint8, petNumber ui
 		// StatSystem.cpp:1204-1218).
 		mod = 0.3
 		if pct := s.ravenousDeadStatMod(); pct != 0 {
-			mod *= 1 + float64(pct)/100
+			mod += float64(pct) / 100
 		}
 		if amt, ok := s.auraEffectAmount(58686, 0); ok {
 			mod += float64(amt) / 100
@@ -758,9 +758,11 @@ func (s *session) petGuardianFieldStatsWithStaminaScale(motion *creatureMotion, 
 }
 
 // ravenousDeadStatMod mirrors the Ravenous Dead arm of the ghoul stat scale
-// (StatSystem.cpp:1210-1214): the owner's SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE
-// (137) Death-Knight-family aura with SpellIconID 3010 at effect 0 carries
-// the talent, whose effect-1 CalcValue edits the scale via AddPct.
+// (spell_pet.cpp:1519-1521, spell_dk_pet_scaling_01 stamina leg): the owner's
+// SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (137) Death-Knight-family aura with
+// SpellIconID 3010 at effect 0 carries the talent, whose effect-1 CalcValue
+// is added flat to the scale (mod += CalcValue/100); the strength leg
+// (spell_pet.cpp:1566) instead applies CalculatePct(mod, CalcValue).
 func (s *session) ravenousDeadStatMod() int32 {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return 0
