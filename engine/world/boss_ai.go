@@ -4458,11 +4458,17 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the combo-point
 	// legs run before the extra-attacks spend below, matching C++ order
 	// (the take lands before the gain). didHit rides the miss filter: no
-	// take when the explicit unit target dodged, evaded, or was immune
-	// (Spell.cpp:2605-2607, the session twin's latch); a cast with no
-	// explicit unit target always takes.
+	// take when the explicit unit target dodged, evaded, was immune, or
+	// reflected (Spell.cpp:2605-2607, the session twin's latch) — a
+	// reflected target keeps MissCondition SPELL_MISS_REFLECT on its
+	// TargetInfo (AddUnitTarget :2173-2188 never re-points m_targets),
+	// so the clear fires even on a clean return to the caster; the
+	// reflectedTargets presence check rides that, since a reflected
+	// target takes no missTargets entry. A cast with no explicit unit
+	// target always takes.
 	if spellKnown {
-		didHit := targetGUID == 0 || (missTargets[targetGUID] == protocol.SpellMissNone && !evadedTargets[targetGUID] && !immuneTargets[targetGUID])
+		_, isReflected := reflectedTargets[targetGUID]
+		didHit := targetGUID == 0 || (missTargets[targetGUID] == protocol.SpellMissNone && !evadedTargets[targetGUID] && !immuneTargets[targetGUID] && !isReflected)
 		s.finishCreatureComboPoints(m, spellInfo, targetGUID, comboTarget, comboGain, didHit, triggered)
 	}
 	// Spell::_handle_finish_phase (Spell.cpp:3753-3761): a finished cast
