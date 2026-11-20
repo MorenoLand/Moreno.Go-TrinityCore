@@ -1027,3 +1027,194 @@ local function bookOfGlyphMasteryHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_ITEM_BOOK_OF_GLYPH_MASTERY, 5, bookOfGlyphMasteryHit)
+
+-- PORTED (RegisterSpellEvent OnEffectHit = 4; spell_item.cpp ev4 strip, 2026-11-20):
+--   spell_item_deviate_fish::HandleDummy (:812-817): EFFECT_0 DUMMY; player Load gate
+--   folded in; urand(8064, 8068) self-cast, triggered.
+--   spell_item_flask_of_the_north::HandleDummy (:956-981): EFFECT_0 DUMMY; class-based
+--   flask (warlock/mage/priest SP; DK/warrior STR; rogue/hunter AP; druid/paladin
+--   SP-or-STR; shaman SP-or-AP), triggered. No C++ Load gate; a non-player caster
+--   has no class entry and returns (GetClass resolves via the object fallback).
+--   spell_item_make_a_wish::HandleDummy (:1248-1261): EFFECT_0 DUMMY; player Load gate
+--   folded in; urand 1-5 -> 33053/33057/33059/33062/33064, triggered.
+--   spell_item_mingos_fortune_generator::HandleDummy (:1345-1372): EFFECT_0 DUMMY;
+--   urand 1-20 -> item 32688-32693/32700-32713 via player:AddItem (CreateItem twin;
+--   no spell-object CreateItem bridge). Player gate is the AddItem surface, not C++.
+--   spell_item_underbelly_elixir::HandleDummy (:2277-2289): EFFECT_0 DUMMY; player Load
+--   gate folded in; urand 1-3 -> 59645/59831/59843, triggered.
+--   spell_item_noggenfogger_elixir::HandleDummy (:1479-1490): EFFECT_0 DUMMY; player
+--   Load gate folded in; urand 1-3 -> 16595/16593/16591, triggered.
+--   spell_item_savory_deviate_delight::HandleDummy (:1683-1694): EFFECT_0 DUMMY; player
+--   Load gate folded in; urand 1-2 flip-out/pirate, gendered (GetNativeGender).
+--   spell_item_vanquished_clutches::HandleDummy (:2538-2544): EFFECT_0 DUMMY; RAND
+--   64982/64983/64984 self-cast, triggered.
+--   Bindings 8063/67019/33060/40802/59640/16589/8213/64981 (AC spell_script_names).
+--   DORMANT until Spell.dbc ships the binding rows.
+--   Consts grouped in one table: the main-chunk local limit is 200 (file at 160).
+local EV4_ITEM = {
+    DEVIATE_FISH = 8063,
+    FLASK_OF_THE_NORTH = 67019,
+    FLASK_SP = 67016,
+    FLASK_AP = 67017,
+    FLASK_STR = 67018,
+    MAKE_A_WISH = 33060,
+    MINGOS_FORTUNE_GENERATOR = 40802,
+    UNDERBELLY_ELIXIR = 59640,
+    NOGGENFOGGER_ELIXIR = 16589,
+    SAVORY_DEVIATE_DELIGHT = 8213,
+    VANQUISHED_CLUTCHES = 64981,
+    FLIP_OUT_MALE = 8219,
+    FLIP_OUT_FEMALE = 8220,
+    YAAARRRR_MALE = 8221,
+    YAAARRRR_FEMALE = 8222,
+}
+local GENDER_MALE = 0 -- SharedDefines.h:76
+
+local function deviateFishHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    caster:CastSpell(caster, math.random(8064, 8068), true)
+end
+
+RegisterSpellEvent(EV4_ITEM.DEVIATE_FISH, 4, deviateFishHit)
+
+-- Class ids (SharedDefines.h): 1 warrior, 2 paladin, 3 hunter, 4 rogue, 5 priest,
+-- 6 death knight, 7 shaman, 8 mage, 9 warlock, 11 druid.
+local FLASK_BY_CLASS = {
+    [9] = { EV4_ITEM.FLASK_SP },
+    [8] = { EV4_ITEM.FLASK_SP },
+    [5] = { EV4_ITEM.FLASK_SP },
+    [6] = { EV4_ITEM.FLASK_STR },
+    [1] = { EV4_ITEM.FLASK_STR },
+    [4] = { EV4_ITEM.FLASK_AP },
+    [3] = { EV4_ITEM.FLASK_AP },
+    [11] = { EV4_ITEM.FLASK_SP, EV4_ITEM.FLASK_STR },
+    [2] = { EV4_ITEM.FLASK_SP, EV4_ITEM.FLASK_STR },
+    [7] = { EV4_ITEM.FLASK_SP, EV4_ITEM.FLASK_AP },
+}
+
+local function flaskOfTheNorthHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local choices = FLASK_BY_CLASS[caster:GetClass()]
+    if choices == nil then
+        return
+    end
+    caster:CastSpell(caster, choices[math.random(1, #choices)], true)
+end
+
+RegisterSpellEvent(EV4_ITEM.FLASK_OF_THE_NORTH, 4, flaskOfTheNorthHit)
+
+local MAKE_A_WISH_SPELLS = { 33053, 33057, 33059, 33062, 33064 }
+
+local function makeAWishHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    caster:CastSpell(caster, MAKE_A_WISH_SPELLS[math.random(1, 5)], true)
+end
+
+RegisterSpellEvent(EV4_ITEM.MAKE_A_WISH, 4, makeAWishHit)
+
+local MINGOS_ITEMS = { 32688, 32689, 32690, 32691, 32692, 32693, 32700, 32701, 32702, 32703,
+    32704, 32705, 32706, 32707, 32708, 32709, 32710, 32711, 32712, 32713 }
+
+local function mingosFortuneGeneratorHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+    caster:AddItem(MINGOS_ITEMS[math.random(1, 20)], 1)
+end
+
+RegisterSpellEvent(EV4_ITEM.MINGOS_FORTUNE_GENERATOR, 4, mingosFortuneGeneratorHit)
+
+local function underbellyElixirHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    local roll = math.random(1, 3)
+    local spellId = 59843
+    if roll == 1 then
+        spellId = 59645
+    elseif roll == 2 then
+        spellId = 59831
+    end
+    caster:CastSpell(caster, spellId, true)
+end
+
+RegisterSpellEvent(EV4_ITEM.UNDERBELLY_ELIXIR, 4, underbellyElixirHit)
+
+local function noggenfoggerElixirHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    local roll = math.random(1, 3)
+    local spellId = 16591
+    if roll == 1 then
+        spellId = 16595
+    elseif roll == 2 then
+        spellId = 16593
+    end
+    caster:CastSpell(caster, spellId, true)
+end
+
+RegisterSpellEvent(EV4_ITEM.NOGGENFOGGER_ELIXIR, 4, noggenfoggerElixirHit)
+
+local function savoryDeviateDelightHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    local male = caster:GetNativeGender() == GENDER_MALE
+    if math.random(1, 2) == 1 then
+        caster:CastSpell(caster, male and EV4_ITEM.FLIP_OUT_MALE or EV4_ITEM.FLIP_OUT_FEMALE, true)
+    else
+        caster:CastSpell(caster, male and EV4_ITEM.YAAARRRR_MALE or EV4_ITEM.YAAARRRR_FEMALE, true)
+    end
+end
+
+RegisterSpellEvent(EV4_ITEM.SAVORY_DEVIATE_DELIGHT, 4, savoryDeviateDelightHit)
+
+local VANQUISHED_SPELLS = { 64982, 64983, 64984 }
+
+local function vanquishedClutchesHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, VANQUISHED_SPELLS[math.random(1, 3)], true)
+end
+
+RegisterSpellEvent(EV4_ITEM.VANQUISHED_CLUTCHES, 4, vanquishedClutchesHit)
