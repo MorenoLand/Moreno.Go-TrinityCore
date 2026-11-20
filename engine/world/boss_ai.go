@@ -3666,6 +3666,21 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
+	// Spell::EffectRedirectThreat (SpellEffects.cpp:5411-5421) for a creature
+	// caster: the HIT_TARGET arm, once per hit target per redirect effect,
+	// grouped with the other effect-grouped arms above (C++ runs effects
+	// in index order; documented approximation). The caster's ThreatManager
+	// registers (spellID, unitTarget, damage) — the creature twin of the
+	// session handleEffectRedirectThreat (spell_threat.go:200). Gated on
+	// spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect != spellEffectRedirectThreat {
+				continue
+			}
+			s.creatureEffectRedirectThreat(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		}
+	}
 	// Spell::EffectDummy (SpellEffects.cpp:792) for a creature caster:
 	// the HIT_TARGET arm, once per hit target per dummy effect, grouped
 	// with the other effect-grouped arms above (C++ runs effects in
@@ -4784,6 +4799,52 @@ func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, sp
 			startPkt := buildAttackStart(targetGUID, m.GUID)
 			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, m.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		}
+	}
+}
+
+// creatureEffectRedirectThreat mirrors Spell::EffectRedirectThreat
+// (SpellEffects.cpp:5411-5421) for a creature caster: the HIT_TARGET arm
+// registers (spellID, unitTarget, damage) on the caster's ThreatManager
+// redirect registry (ThreatManager.cpp:727-731), consumed when the caster
+// generates threat (ThreatManager.cpp:344-373; Go:
+// splitCreatureThreatRedirects in creatureAddThreatWithRedirect). damage
+// is the effect's CalculateDamage value (eff.CalcValueForLevel at the
+// caster's level). There is no alive check in C++ and no NoThreat gate —
+// registration generates no threat itself — so the helper filters only
+// the hit verdicts a HIT_TARGET arm never sees (evaded / immune /
+// missed), and a landed reflect retargets onto the caster like the threat
+// leg. The warrior Glyph of Vigilance leg (spell_warrior.cpp:1169-1175)
+// is player-only and has no creature twin. DORMANT until Spell.dbc ships
+// a creature-cast redirect spell: the only effect-130 spells in this
+// tree (34477/35079/57934/59628/59665 — Misdirection, Tricks of the
+// Trade, Vigilance) are player-cast, and no effect-130 row exists in the
+// seed DBC (1395 records).
+func (s *Server) creatureEffectRedirectThreat(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	damage := eff.CalcValueForLevel(spell, uint32(m.Level))
+	if damage <= 0 {
+		return
+	}
+	s.motionMu.Lock()
+	if m.ThreatMgr == nil {
+		m.ThreatMgr = NewThreatManager(m)
+	}
+	tm := m.ThreatMgr
+	s.motionMu.Unlock()
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		tm.RegisterRedirectThreat(spell.ID, guid, uint32(damage))
 	}
 }
 

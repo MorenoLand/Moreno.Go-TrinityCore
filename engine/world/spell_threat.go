@@ -163,7 +163,12 @@ func (s *session) splitThreatRedirects(motion *creatureMotion, amount float32) (
 		}
 		dist := distance3D(motion.X, motion.Y, motion.Z, vx, vy, vz)
 		inMelee := inMeleeThreatRange(motion.CombatReach, victimReach, dist)
-		if sw, nv := s.server.creatureAddThreat(motion, r.victim, share, inMelee, victimSess, victimMotion); sw {
+		// The share add is the C++ nested AddThreat(redirTarget,
+		// amountRedirected, spell, true, true) arm (ThreatManager.cpp:344-373):
+		// a redirected share never redirects again, so it runs through the
+		// ignore-redirects entry point even when the share victim is a
+		// creature carrying its own redirect registry.
+		if sw, nv := s.server.creatureAddThreatWithRedirect(motion, r.victim, share, inMelee, victimSess, victimMotion, true); sw {
 			switched, newVictim = true, nv
 		}
 		remaining -= share
@@ -786,10 +791,13 @@ func (s *Server) forwardCreatureInitialAssistThreat(caster *creatureMotion, targ
 // no engage — HandleThreatSpells never reaches AddThreat's engage-only
 // early leg for them. (The player twin's engage-only fallback for list-less
 // targets diverges from this reading; flagged, not changed this tick.)
-// ignoreModifiers=true, so no pctMod, spellmod or school fold; creature
-// casters carry no redirect registry (the redirect effect is player-cast
-// only in Go), so the nil-session split is a no-op and ignoreRedirects=false
-// is vacuous here.
+// ignoreModifiers=true, so no pctMod, spellmod or school fold; the
+// nil-session split is a no-op (a nil session carries no registry) — the
+// caster creature's own redirect registry, if any, is consumed inside
+// creatureAddThreat, which reads it off the caster motion. (An earlier
+// note here claimed creature casters carry no redirect registry; that was
+// the pre-model state — ThreatManager now carries one, registered by the
+// creature EffectRedirectThreat leg.)
 func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, targetGUID uint64, amount float32) {
 	if s == nil || caster == nil || caster.GUID == 0 || targetGUID == 0 {
 		return

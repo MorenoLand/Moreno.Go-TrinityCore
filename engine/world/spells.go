@@ -47594,6 +47594,17 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	if auraWasPresent {
 		s.applyCreatureLinkedRemoveArms(key, spellID, mode)
 		s.applyCreatureSpellAreaRows(key, spellID)
+		// Threat-redirect cleanup (ThreatManager::UnregisterRedirectThreat,
+		// ThreatManager.cpp:727-731): the registry is keyed by the
+		// registering spell's own id, so removing the aura of a
+		// redirect-registering spell drops its entries — the creature twin
+		// of the session remove funnel (spells.go:37040), matching the
+		// proc auras' OnRemove arms (spell_hunter.cpp:914/:948,
+		// spell_rogue.cpp:950/:1007). The Vigilance 50720 special case is
+		// player-only (session funnel).
+		if m := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID); m != nil && m.ThreatMgr != nil {
+			m.ThreatMgr.UnregisterRedirectThreat(spellID)
+		}
 		// Guardian::UpdateStats on pet aura remove (StatSystem.cpp:1266-1282
 		// via Unit::UpdateUnitMod -> UpdateStats, Unit.cpp:9304-9310):
 		// dropping a stat-mod aura recomputes the pet's aura-fed

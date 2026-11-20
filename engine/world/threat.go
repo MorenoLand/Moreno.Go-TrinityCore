@@ -117,6 +117,24 @@ type ThreatManager struct {
 	// and the next Update tick consumes it (SMSG_THREAT_UPDATE when the
 	// victim is unchanged, SMSG_HIGHEST_THREAT_UPDATE when it switched).
 	needClientUpdate bool
+	// redirectRegistry mirrors ThreatManager::_redirectRegistry
+	// (ThreatManager.h): (spellId, victim) -> pct, populated by
+	// SPELL_EFFECT_REDIRECT_THREAT (Spell::EffectRedirectThreat,
+	// SpellEffects.cpp:5411-5421) on the casting unit's manager and
+	// cleared when the registering spell's aura is removed
+	// (ThreatManager::UnregisterRedirectThreat, ThreatManager.cpp:727-753).
+	// The session side carries the same model on the player
+	// (redirectThreatRegistry, server.go:848-860); this is the creature
+	// twin — the 4286b500 effect parity census noted RedirectThreat as
+	// "genuinely caster-agnostic but no creature-side model/consumer
+	// in-tree (session-only registries)".
+	redirectRegistry map[uint32]map[uint64]uint32
+	// redirectInfo mirrors ThreatManager::_redirectInfo
+	// (ThreatManager.cpp:829-845): the flattened, percent-capped view of
+	// the registry, rebuilt by UpdateRedirectInfo on every register /
+	// unregister. Read through redirectInfoSnapshot, which copies under
+	// tm.mu.
+	redirectInfo []redirectThreatTarget
 }
 
 // motionCanHaveThreatList mirrors ThreatManager::CanHaveThreatList
@@ -204,6 +222,123 @@ func (tm *ThreatManager) HasThreatEntry(victim uint64) bool {
 	defer tm.mu.Unlock()
 	_, ok := tm.entries[victim]
 	return ok
+}
+
+// RegisterRedirectThreat mirrors ThreatManager::RegisterRedirectThreat
+// (ThreatManager.cpp:727-731): (spellId, victim) -> pct on this manager's
+// registry, followed by the UpdateRedirectInfo flatten. The session twin
+// is registerRedirectThreat (spell_threat.go:24).
+func (tm *ThreatManager) RegisterRedirectThreat(spellID uint32, victimGUID uint64, pct uint32) {
+	if tm == nil || victimGUID == 0 || pct == 0 {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if tm.redirectRegistry == nil {
+		tm.redirectRegistry = make(map[uint32]map[uint64]uint32)
+	}
+	victims := tm.redirectRegistry[spellID]
+	if victims == nil {
+		victims = make(map[uint64]uint32)
+		tm.redirectRegistry[spellID] = victims
+	}
+	victims[victimGUID] = pct
+	tm.flattenRedirectInfoLocked()
+}
+
+// UnregisterRedirectThreat mirrors ThreatManager::UnregisterRedirectThreat
+// (uint32) (ThreatManager.cpp:733-740): drops every victim under a spell
+// id. The session twin is unregisterRedirectThreat (spell_threat.go:44).
+func (tm *ThreatManager) UnregisterRedirectThreat(spellID uint32) {
+	if tm == nil {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if tm.redirectRegistry == nil {
+		return
+	}
+	delete(tm.redirectRegistry, spellID)
+	tm.flattenRedirectInfoLocked()
+}
+
+// UnregisterRedirectThreatVictim mirrors
+// ThreatManager::UnregisterRedirectThreat(uint32, ObjectGuid)
+// (ThreatManager.cpp:742-753): drops one victim under a spell id, e.g. the
+// Vigilance (50720) aura remove unregistering (59665, warrior) from the
+// vigilance target's manager (spell_warrior.cpp:1128). The session twin is
+// unregisterRedirectThreatVictim (spell_threat.go:66).
+func (tm *ThreatManager) UnregisterRedirectThreatVictim(spellID uint32, victimGUID uint64) {
+	if tm == nil {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	victims, ok := tm.redirectRegistry[spellID]
+	if !ok {
+		return
+	}
+	delete(victims, victimGUID)
+	if len(victims) == 0 {
+		delete(tm.redirectRegistry, spellID)
+	}
+	tm.flattenRedirectInfoLocked()
+}
+
+// flattenRedirectInfoLocked mirrors ThreatManager::UpdateRedirectInfo
+// (ThreatManager.cpp:829-845): every (spell, victim) pair contributes
+// min(100-total, pct), the total capped at 100. C++ iterates std::map
+// (key-sorted); Go sorts by spell id then victim for determinism. The
+// session twin is flattenRedirectThreatInfoLocked (spell_threat.go:87).
+// Caller holds tm.mu.
+func (tm *ThreatManager) flattenRedirectInfoLocked() {
+	tm.redirectInfo = tm.redirectInfo[:0]
+	if len(tm.redirectRegistry) == 0 {
+		return
+	}
+	spellIDs := make([]uint32, 0, len(tm.redirectRegistry))
+	for spellID := range tm.redirectRegistry {
+		spellIDs = append(spellIDs, spellID)
+	}
+	sort.Slice(spellIDs, func(i, j int) bool { return spellIDs[i] < spellIDs[j] })
+	var total uint32
+	for _, spellID := range spellIDs {
+		victims := tm.redirectRegistry[spellID]
+		guids := make([]uint64, 0, len(victims))
+		for guid := range victims {
+			guids = append(guids, guid)
+		}
+		sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+		for _, guid := range guids {
+			thisPct := victims[guid]
+			if total < 100 && thisPct > 100-total {
+				thisPct = 100 - total
+			}
+			if thisPct == 0 {
+				continue
+			}
+			tm.redirectInfo = append(tm.redirectInfo, redirectThreatTarget{spellID: spellID, victim: guid, pct: thisPct})
+			total += thisPct
+			if total == 100 {
+				return
+			}
+		}
+	}
+}
+
+// redirectInfoSnapshot returns a copy of the flattened redirect info
+// under tm.mu, for consumption outside the manager lock (the split in
+// creatureAddThreatWithRedirect resolves victims and adds shares after
+// the copy, like the session splitThreatRedirects).
+func (tm *ThreatManager) redirectInfoSnapshot() []redirectThreatTarget {
+	if tm == nil {
+		return nil
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	info := make([]redirectThreatTarget, len(tm.redirectInfo))
+	copy(info, tm.redirectInfo)
+	return info
 }
 
 // OwnerCanHaveThreatList reports the cached ThreatManager::CanHaveThreatList
@@ -1683,11 +1818,86 @@ func (s *Server) matchUnitThreatToHighestThreat(motion *creatureMotion, victimGU
 }
 
 func (s *Server) creatureAddThreat(motion *creatureMotion, victimGUID uint64, amount float32, inMelee bool, sess *session, vm *creatureMotion) (switched bool, newVictim uint64) {
+	return s.creatureAddThreatWithRedirect(motion, victimGUID, amount, inMelee, sess, vm, false)
+}
+
+// creatureAddThreatWithRedirect is the redirect-aware threat add. With
+// ignoreRedirects=false it runs the redirect leg of
+// ThreatManager::AddThreat (ThreatManager.cpp:344-373) for a creature
+// attacker: the attacker's own redirect registry (vm.ThreatMgr, populated
+// by the creature EffectRedirectThreat leg) splits part of the amount onto
+// the redirect victims before the remainder lands on the attacker's own
+// entry. ignoreRedirects=true is the C++ nested AddThreat(redirTarget,
+// amountRedirected, spell, true, true) arm: a redirected share never
+// redirects again. A player attacker (sess != nil) takes no creature split
+// here — the session splitThreatRedirects already consumed its registry at
+// the call site. A zero or negative amount skips the split (the :348
+// amount > 0.0f gate) and adds plain, like C++.
+func (s *Server) creatureAddThreatWithRedirect(motion *creatureMotion, victimGUID uint64, amount float32, inMelee bool, sess *session, vm *creatureMotion, ignoreRedirects bool) (switched bool, newVictim uint64) {
 	if motion == nil || motion.ThreatMgr == nil {
 		return false, 0
 	}
+	if !ignoreRedirects && sess == nil && vm != nil && vm.ThreatMgr != nil && amount > 0 && motion.ThreatMgr.OwnerCanHaveThreatList() {
+		if info := vm.ThreatMgr.redirectInfoSnapshot(); len(info) > 0 {
+			return s.splitCreatureThreatRedirects(motion, victimGUID, amount, inMelee, sess, vm, info)
+		}
+	}
 	s.evaluateThreatVictimState(motion, victimGUID, sess, vm)
 	return motion.ThreatMgr.AddThreat(victimGUID, amount, inMelee)
+}
+
+// splitCreatureThreatRedirects mirrors the redirect leg of
+// ThreatManager::AddThreat (ThreatManager.cpp:344-373) for threat a
+// creature attacker generates on motion's list — the creature twin of
+// session splitThreatRedirects (spell_threat.go:120). Each flattened entry
+// whose victim resolves takes CalculatePct(origAmount, pct) of the
+// ORIGINAL amount onto the victim's own entry (the recursive AddThreat
+// (redirTarget, amountRedirected, spell, true, true): no threat
+// modifiers, no nested redirect — the share add runs through
+// creatureAddThreatWithRedirect with ignoreRedirects=true).
+// Victim lookup is the threat-list entry first (C++
+// _myThreatListEntries), then the world (C++ ObjectAccessor): a player
+// victim resolves via findSessionByGUID; a creature victim resolves only
+// when it already holds an entry on this list — the motion map is
+// deliberately not consulted here (evaluateThreatVictimState's "never
+// through the motion map" rule: creatureAddThreat has no motionMu
+// contract, and the self-locking lookup would deadlock under the tail
+// helpers that call in holding motionMu). A victim that resolves nowhere
+// keeps its share with the caster (the C++ `if (redirTarget)` gate only
+// subtracts on resolution). For a list-resolved creature victim the share
+// add reuses the original add's inMelee flag: the victim's position is
+// unavailable without the motion map, and the flag only feeds the 110% /
+// 130% switch gate. Returns the remainder for the caster's own entry,
+// plus whether any add switched the victim and the resulting victim.
+func (s *Server) splitCreatureThreatRedirects(motion *creatureMotion, attackerGUID uint64, amount float32, inMelee bool, sess *session, vm *creatureMotion, info []redirectThreatTarget) (switched bool, newVictim uint64) {
+	remaining := amount
+	for _, r := range info {
+		share := amount * float32(r.pct) / 100.0
+		if share <= 0 {
+			continue
+		}
+		var victimSess *session
+		shareInMelee := inMelee
+		if ts := s.findSessionByGUID(r.victim); ts != nil && ts.player != nil {
+			victimSess = ts
+			dist := distance3D(motion.X, motion.Y, motion.Z, ts.player.X, ts.player.Y, ts.player.Z)
+			shareInMelee = inMeleeThreatRange(motion.CombatReach, ts.player.CombatReach, dist)
+		} else if !motion.ThreatMgr.HasThreatEntry(r.victim) {
+			continue
+		}
+		if sw, nv := s.creatureAddThreatWithRedirect(motion, r.victim, share, shareInMelee, victimSess, nil, true); sw {
+			switched, newVictim = true, nv
+		}
+		remaining -= share
+	}
+	s.evaluateThreatVictimState(motion, attackerGUID, sess, vm)
+	if sw, nv := motion.ThreatMgr.AddThreat(attackerGUID, remaining, inMelee); sw {
+		switched, newVictim = true, nv
+	}
+	if !switched {
+		newVictim = motion.ThreatMgr.GetCurrentVictim()
+	}
+	return switched, newVictim
 }
 
 // isTauntedLocked reports whether the victim holds a live taunt state,
