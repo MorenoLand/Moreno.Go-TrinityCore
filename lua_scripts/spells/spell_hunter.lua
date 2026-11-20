@@ -878,3 +878,123 @@ local function tameBeastCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_HUNTER_TAME_BEAST, 8, tameBeastCheckCast)
+
+local SPELL_HUNTER_EXPLOSIVE_SHOT = 53301 -- spell_hunter.cpp:506 (class spell_hun_explosive_shot; ranks 60051/60052/60053, TDB spell_ranks chain)
+local SPELL_HUNTER_EXPLOSIVE_SHOT_R2 = 60051
+local SPELL_HUNTER_EXPLOSIVE_SHOT_R3 = 60052
+local SPELL_HUNTER_EXPLOSIVE_SHOT_R4 = 60053
+local SPELL_HUNTER_EXPLOSIVE_SHOT_DAMAGE = 53352 -- spell_hunter.cpp:73
+
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_hun_explosive_shot::PeriodicTick
+--   (spell_hunter.cpp:514-522): OnEffectPeriodic, EFFECT_0
+--   SPELL_AURA_PERIODIC_DUMMY. The aura caster casts the damage
+--   spell 53352 on the aura target with BP0 = the effect amount,
+--   triggered (CastSpellExtraArgs(aurEff) = TRIGGERED_FULL_MASK,
+--   SpellDefines.h:166). No PreventDefaultAction in C++ — the Go
+--   PERIODIC_DUMMY default leg only handles 51690 (spells.go:43962),
+--   so the handler returns nothing and the default stays a no-op.
+--   The session periodic tick fires ev1 for player targets
+--   (spells.go:42414) and the creature tick for creature targets
+--   (spells.go:44655). DORMANT until Spell.dbc drives the
+--   53301/60051/60052/60053 periodic auras.
+local function explosiveShotTick(event, aura, target)
+    if target == nil then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastCustomSpell(target, SPELL_HUNTER_EXPLOSIVE_SHOT_DAMAGE, true, aura:GetAmount(0))
+end
+
+RegisterAuraEvent(SPELL_HUNTER_EXPLOSIVE_SHOT, 1, explosiveShotTick)
+RegisterAuraEvent(SPELL_HUNTER_EXPLOSIVE_SHOT_R2, 1, explosiveShotTick)
+RegisterAuraEvent(SPELL_HUNTER_EXPLOSIVE_SHOT_R3, 1, explosiveShotTick)
+RegisterAuraEvent(SPELL_HUNTER_EXPLOSIVE_SHOT_R4, 1, explosiveShotTick)
+
+local SPELL_HUNTER_FEEDING_FRENZY = 53511 -- spell_hunter.cpp:532 (class spell_hun_feeding_frenzy; rank 2 is 53512, bpet_hunter.cpp:105)
+local SPELL_HUNTER_FEEDING_FRENZY_R2 = 53512
+local SPELL_HUNTER_FEEDING_FRENZY_BUFF_R1 = 60096 -- spell_hunter.cpp:74
+local SPELL_HUNTER_FEEDING_FRENZY_BUFF_R2 = 60097 -- spell_hunter.cpp:75
+local SPELL_HUNTER_FEEDING_FRENZY_BUFFS = { [SPELL_HUNTER_FEEDING_FRENZY] = SPELL_HUNTER_FEEDING_FRENZY_BUFF_R1, [SPELL_HUNTER_FEEDING_FRENZY_R2] = SPELL_HUNTER_FEEDING_FRENZY_BUFF_R2 }
+
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_hun_feeding_frenzy::PeriodicTick
+--   (spell_hunter.cpp:543-553): OnEffectPeriodic, EFFECT_0
+--   SPELL_AURA_PERIODIC_DUMMY. The pet aura ticks on the pet: while
+--   the pet's victim is below 35% health the pet self-casts the
+--   rank buff (60096/60097, triggered, aurEff args), else it drops
+--   the buff. The rank lookup is a Lua table keyed by the aura id —
+--   TDB spell_ranks carries no 53511 chain, so aura:GetRank()
+--   reads 0 and cannot index the C++ triggerSpells table; the
+--   table is the exact twin (rank 1 -> 60096, rank 2 -> 60097).
+--   The healthless-35% gate is victim:GetHealthPct() < 35 — the
+--   float32 health*100/maxHealth read (lua_objects.go:338) makes
+--   it exactly Unit::HealthBelowPct(35). No PreventDefaultAction
+--   in C++; the Go PERIODIC_DUMMY default is a no-op for this aura.
+--   DORMANT until Spell.dbc drives the 53511/53512 periodic auras.
+local function feedingFrenzyTick(event, aura, target)
+    if target == nil then
+        return
+    end
+    local buff = SPELL_HUNTER_FEEDING_FRENZY_BUFFS[aura:GetAuraId()]
+    if buff == nil then
+        return
+    end
+    local victim = target:GetVictim()
+    if victim ~= nil and victim:GetHealthPct() < 35 then
+        target:CastSpell(target, buff, true)
+    else
+        target:RemoveAurasDueToSpell(buff)
+    end
+end
+
+RegisterAuraEvent(SPELL_HUNTER_FEEDING_FRENZY, 1, feedingFrenzyTick)
+RegisterAuraEvent(SPELL_HUNTER_FEEDING_FRENZY_R2, 1, feedingFrenzyTick)
+
+local SPELL_HUNTER_WYVERN_STING = 19386 -- spell_hunter.cpp:1665 (class spell_hun_wyvern_sting; ranks 24132/24133/27068/49011/49012, TDB spell_ranks chain)
+local SPELL_HUNTER_WYVERN_STING_R2 = 24132
+local SPELL_HUNTER_WYVERN_STING_R3 = 24133
+local SPELL_HUNTER_WYVERN_STING_R4 = 27068
+local SPELL_HUNTER_WYVERN_STING_R5 = 49011
+local SPELL_HUNTER_WYVERN_STING_R6 = 49012
+local SPELL_HUNTER_WYVERN_STING_DOT_R1 = 24131 -- spell_hunter.cpp:76
+
+-- PORTED (this tick, RegisterAuraEvent OnRemove = 3):
+--   spell_hun_wyvern_sting::OnRemove
+--   (spell_hunter.cpp:1682-1688): AfterEffectRemove, EFFECT_0
+--   SPELL_AURA_MOD_STUN, REAL. When the sting aura leaves, the
+--   caster casts the rank-matched DoT (GetSpellWithRank(24131,
+--   rank) -> 24131/24134/24135/27069/49009/49010, TDB chain) on the
+--   target, triggered (aurEff args). A 0 rank (no spell_ranks row)
+--   or a 0 DoT read skips the cast rather than firing a bogus one
+--   (ignite-leg precedent). No PreventDefaultAction in C++; the
+--   handler returns nothing, matching the other ev3 ports.
+--   DORMANT until Spell.dbc drives the wyvern sting auras.
+local function wyvernStingRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    local rank = aura:GetRank()
+    if rank == 0 then
+        return
+    end
+    local dot = aura:GetSpellWithRank(SPELL_HUNTER_WYVERN_STING_DOT_R1, rank)
+    if dot == 0 then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, dot, true)
+end
+
+RegisterAuraEvent(SPELL_HUNTER_WYVERN_STING, 3, wyvernStingRemove)
+RegisterAuraEvent(SPELL_HUNTER_WYVERN_STING_R2, 3, wyvernStingRemove)
+RegisterAuraEvent(SPELL_HUNTER_WYVERN_STING_R3, 3, wyvernStingRemove)
+RegisterAuraEvent(SPELL_HUNTER_WYVERN_STING_R4, 3, wyvernStingRemove)
+RegisterAuraEvent(SPELL_HUNTER_WYVERN_STING_R5, 3, wyvernStingRemove)
+RegisterAuraEvent(SPELL_HUNTER_WYVERN_STING_R6, 3, wyvernStingRemove)
