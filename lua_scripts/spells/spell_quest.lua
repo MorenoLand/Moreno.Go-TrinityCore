@@ -342,9 +342,11 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 --   q14076 GO leg has since PORTED via ev4 (tick 2026-11-20); the
 --   q9452 HandleActiveObject leg (:1157) is HELD, not blocked by ev5 —
 --   it ports via ev4 too, but C++ PreventHitDefaultEffect has no
---   player-path twin, so landing it needs 29866 EFFECT_1's MiscValue
---   first (unverifiable in-tree and on Wowhead; a Disturb/Open value
---   would double-Use the school GO via the Go default leg).
+--   player-path twin, and 29866 EFFECT_1's MiscValue is 15 = Despawn
+--   (Wowhead WotLK 29866 Effect #2 "Activate Object (15)";
+--   GameObjectActions::Despawn, GameObjectData.h:675) — the Go default
+--   leg would DESPAWN the school GO (spells.go goActionDespawn case),
+--   not double-Use it, so the port waits on the player-path veto twin.
 --   spell_q1846_bending_shinbone (spell_quest.cpp:96-120): PORTED
 --   tick 2026-11-20 via the ev4 no-target path (see the handler
 --   above) — the 2026-11-12 STAY-OUT (ev5-only reasoning) is

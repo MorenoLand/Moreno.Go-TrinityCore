@@ -2140,9 +2140,9 @@ end)
 --   The C++ nullptr-target cast relies on 37382's implicit pet target;
 --   the explicit pet target is the Lua modeling of it.
 --   NOT PORTED: deathbringers will 71519/71562 is Go-covered
---   (procs.go:4311 leg + deathbringersWillForms; a Lua twin would
---   double-fire). Deadly precision dummy 71563 is an
---   ev4 SpellScript, out of this ev6 strip.
+--   (procs.go:1012 deathbringersWillForms, used :1059/:1069; a Lua twin
+--   would double-fire). Deadly precision dummy 71563 is an
+--   ev4 SpellScript, ported at the end of this file tick 2026-11-20.
 --   Bindings per C++ comments; world.db spell_script_names, spell_dbc
 --   and broadcast_text are all empty (0 rows), so DBC-side effect
 --   indices, trigger spells and implicit targets are unverified.
@@ -2624,4 +2624,69 @@ RegisterSpellEvent(EV79_ITEM.CRAZY_ALCHEMISTS_POTION, 9, function(event, spell)
         available[#available + 1] = EV79_ITEM.RUNIC_MANA_POTION
     end
     caster:CastCustomSpell(caster, available[math.random(1, #available)], false, nil, nil, nil, spell:GetCastItem())
+end)
+
+-- PORTED (tick 2026-11-20, RegisterAuraEvent OnEffectCalcAmount = 11):
+--   spell_item_arcane_shroud::CalculateAmount (spell_item.cpp:284-290):
+--   EFFECT_0 MOD_THREAT. amount += 2 * (owner level - 60) when positive.
+--   ev11 fires per effect at aura creation (spells.go:36504-36514) with
+--   target = holder; GetAmount(0)/SetAmount(amount, 0) is the
+--   lightwell-renew precedent (spell_priest.lua). Binding 26400 per AC
+--   spell_script_names. DORMANT until Spell.dbc ships 26400.
+RegisterAuraEvent(26400, 11, function(event, aura, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local diff = target:GetLevel() - 60
+    if diff > 0 then
+        aura:SetAmount(aura:GetAmount(0) + 2 * diff, 0)
+    end
+end)
+
+-- PORTED (tick 2026-11-20, RegisterAuraEvent OnEffectCalcAmount = 11):
+--   spell_item_the_eye_of_diminution::CalculateAmount
+--   (spell_item.cpp:2239-2245): EFFECT_0 MOD_THREAT. amount +=
+--   (owner level - 60) when positive (+1 per level, not +2).
+--   Binding 28862 per AC spell_script_names. DORMANT until Spell.dbc
+--   ships 28862.
+RegisterAuraEvent(28862, 11, function(event, aura, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local diff = target:GetLevel() - 60
+    if diff > 0 then
+        aura:SetAmount(aura:GetAmount(0) + diff, 0)
+    end
+end)
+
+-- PORTED (tick 2026-11-20, RegisterSpellEvent OnEffectHit = 4):
+--   spell_item_deadly_precision_dummy::HandleDummy (spell_item.cpp:527-534):
+--   EFFECT_0 APPLY_AURA. Casts 71564 on the caster with
+--   TRIGGERED_FULL_MASK and SPELLVALUE_AURA_STACK = 71564's DBC
+--   StackAmount. The count reads live via the applied aura's
+--   GetSpellStackAmount() (lua_aura.go:611, defaults to its own spell)
+--   and lands with SetStackAmount (lua_aura.go:863); the > 1 guard
+--   skips the write when the DBC row is missing (reads 0), so a
+--   missing row degrades to a 1-stack apply instead of a 0-stack wipe.
+--   No Load() gate in C++ — any caster; GetAura exists on both unit
+--   surfaces. The 71564 ev6 stack-drop handler is a different spell
+--   and event, no conflict; the dummy's own default APPLY_AURA arm
+--   still applies 71563, mirroring C++. Binding 71563 per AC
+--   spell_script_names. DORMANT until Spell.dbc ships 71563/71564.
+RegisterSpellEvent(71563, 4, function(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, 71564, true)
+    local applied = caster:GetAura(71564)
+    if applied ~= nil then
+        local stacks = applied:GetSpellStackAmount()
+        if stacks > 1 then
+            applied:SetStackAmount(stacks)
+        end
+    end
 end)
