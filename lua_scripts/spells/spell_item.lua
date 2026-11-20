@@ -1883,6 +1883,7 @@ local EV6_ITEM = {
     SHADOWMOURNE_CHAOS_BANE_DAMAGE = 71904,
     SHADOWMOURNE_CHAOS_BANE_BUFF = 73422,
     SHADOWS_FATE = 71169,
+    UNSATED_CRAVING = 71168,
     SOUL_FEAST = 71203,
     NPC_SINDRAGOSA = 36853,
     AURA_OF_MADNESS = 39446,
@@ -2085,13 +2086,14 @@ end)
 --   target is alive. Holder self-casts 71905; at 10 stacks it casts
 --   71904 on the proc target and removes 71905. The AfterEffectRemove
 --   leg (:2050-2053) rides as an event-3 handler below.
---   spell_item_shadows_fate::HandleProc (:1981-1991) + unsated craving
---   CheckProc (:1952-1962): OnProc, no C++ effect index (guarded on 0;
---   the 71169 DBC proc effect is unverified, world.db spell_dbc empty).
---   Gate: actor is a player and the action target is a non-critter
---   creature that is Sindragosa (36853) or not a summon; actor casts
---   71203 on the aura caster (GetCaster()). IsCritter bridged this tick
---   (lua_objects.go / lua_creature_events.go).
+--   spell_item_shadows_fate::HandleProc (:1981-1991): OnProc, no C++
+--   effect index (guarded on 0; the 71169 DBC proc effect is
+--   unverified, world.db spell_dbc empty). No CheckProc in C++ — the
+--   actor casts 71203 on the aura caster (GetCaster()) on every proc.
+--   The player/valid-kill gate belongs to the sibling aura 71168
+--   (spell_item_unsated_craving::CheckProc :1952-1962, bound by AC +
+--   TDB to 71168, not 71169); it rides as its own ev6 handler below,
+--   vetoing 71168's default DBC proc leg when the check fails.
 --   spell_item_aura_of_madness::HandleProc (:375-395): EFFECT_0 DUMMY.
 --   One uniform pick from the class table on the actor; the 10% Say
 --   leg is omitted (broadcast_text 21954 is absent from world.db and
@@ -2304,7 +2306,19 @@ RegisterAuraEvent(EV6_ITEM.SHADOWMOURNE, 3, function(event, aura, target)
 end)
 
 RegisterAuraEvent(EV6_ITEM.SHADOWS_FATE, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
-    if effectIndex ~= 0 or actor == nil or target == nil then
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    local feastTarget = aura:GetCaster()
+    if feastTarget == nil then
+        return true
+    end
+    actor:CastSpell(feastTarget, EV6_ITEM.SOUL_FEAST, true)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.UNSATED_CRAVING, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
         return effectIndex == 0
     end
     if actor:ToPlayer() == nil then
@@ -2320,12 +2334,7 @@ RegisterAuraEvent(EV6_ITEM.SHADOWS_FATE, 6, function(event, aura, target, actor,
     if actionTarget:GetEntry() ~= EV6_ITEM.NPC_SINDRAGOSA and actionTarget:IsSummon() then
         return true
     end
-    local feastTarget = aura:GetCaster()
-    if feastTarget == nil then
-        return true
-    end
-    actor:CastSpell(feastTarget, EV6_ITEM.SOUL_FEAST, true)
-    return true
+    return false
 end)
 
 RegisterAuraEvent(EV6_ITEM.AURA_OF_MADNESS, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
