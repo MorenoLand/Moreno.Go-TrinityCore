@@ -12433,7 +12433,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// DmgClass MELEE/RANGED spells through Unit::MeleeSpellHitResult
 				// (Unit.cpp:2478) instead of the magic hit table.
 				missInfo = s.meleeSpellHitResult(ctx, targetGUID, targetSess, spell, targetLevel, isPlayerVictim)
-			} else {
+			} else if spell.DefenseType == spellDamageClassMagic {
+				// WorldObject::SpellHitResult (Object.cpp:2658-2659): a
+				// NONE-DmgClass spell never rolls the hit table — missInfo
+				// stays NONE and the resist arms below are Magic-gated.
 				// WorldObject::MagicSpellHitResult (Object.cpp:2534-2536):
 				// the SPELLMOD_RESIST_MISS_CHANCE arm runs the int32
 				// ApplySpellMod instantiation on the level-diff base BEFORE
@@ -12449,7 +12452,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dropWireTarget(targetGUID)
 				}
 				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: missInfo})
-			} else if s.spellDebuffResisted(ctx, spell, targetGUID, targetSess) {
+			} else if spell.DefenseType == spellDamageClassMagic && s.spellDebuffResisted(ctx, spell, targetGUID, targetSess) {
 				// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592):
 				// the SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm — a
 				// non-positive aura-carrying spell can be fully resisted by
@@ -12458,7 +12461,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dropWireTarget(targetGUID)
 				}
 				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissResist})
-			} else if spellBinaryResistApplies(spell) {
+			} else if spell.DefenseType == spellDamageClassMagic && spellBinaryResistApplies(spell) {
 				var resistances [7]uint32
 				if targetSess != nil && targetSess.player != nil {
 					resistances = targetSess.player.Resistances
@@ -36016,6 +36019,43 @@ func (s *session) applyIgnoreCombatResultAuras(spell wotlk.Spell, canDodge, canP
 // resist roll. The remaining WorldObject::SpellHitResult arms (immune,
 // damage-immune, evade, SPELL_ATTR3_IGNORE_HIT_RESULT) stay on the primary
 // path; chain jumps never carried them in Go.
+// armSyncReflectProcDelayed arms the ProcReflectDelayed taken-side proc
+// (Spell.cpp:2181) for a reflect rolled on the synchronous chain/nearby
+// path: spellTargetMissResult spends the reflect charge at roll time (the
+// arrival equivalent), so this timer fires the proc loop only. C++
+// schedules ProcReflectDelayed for every AddUnitTarget reflect — chain
+// jumps and nearby picks join via AddUnitTarget too — so a jump reflector's
+// taken-side auras proc at the jump's TimeDelay, like the primary's
+// doReflect timer and the pet path's proc-only arm.
+func (s *session) armSyncReflectProcDelayed(ctx context.Context, spell wotlk.Spell, reflectorGUID uint64) {
+	if s == nil || s.server == nil || s.player == nil || reflectorGUID == 0 {
+		return
+	}
+	procCasterGUID := s.playerGUID
+	procTriggered := s.triggeredNoProcEvents > 0
+	procSpell := spell
+	procTravelMs := s.spellTargetTimeDelayMs(ctx, spell, reflectorGUID)
+	reflectCreatureKey := creatureAuraKeyForPlayer(*s.player, reflectorGUID)
+	time.AfterFunc(time.Duration(procTravelMs)*time.Millisecond, func() {
+		if s.server == nil {
+			return
+		}
+		// ProcReflectDelayed::Execute (Spell.cpp:2077-2078): skip the
+		// arrival proc when the original caster no longer resolves
+		// (ObjectAccessor::GetUnit null arm).
+		if s.server.findSessionByGUID(procCasterGUID) == nil {
+			return
+		}
+		if rsess := s.server.findSessionByGUID(reflectorGUID); rsess != nil {
+			rsess.procSpellReflectTakenAuraTriggers(context.Background(), procCasterGUID, procSpell, procTriggered)
+			return
+		}
+		if rm := s.server.findCreatureMotion(reflectCreatureKey.Map, reflectCreatureKey.InstanceID, reflectorGUID); rm != nil {
+			s.server.procCreatureReflectTakenAuraTriggers(context.Background(), rm, procCasterGUID, procSpell, procTriggered)
+		}
+	})
+}
+
 func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, spell wotlk.Spell) uint8 {
 	if s == nil || s.player == nil {
 		return protocol.SpellMissNone
@@ -36066,8 +36106,10 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 		// Synchronous chain path: the C++ ProcReflectDelayed arm
 		// (Spell.cpp:2181) would fire at the jump's TimeDelay, but this
 		// path resolves jumps synchronously — the charge is spent here,
-		// the arrival equivalent.
+		// the arrival equivalent. The taken-side proc loop still fires
+		// on the timer (proc only — the charge above is the one spend).
 		targetSess.consumeReflectAuraCharge()
+		s.armSyncReflectProcDelayed(ctx, spell, targetGUID)
 		return protocol.SpellMissReflect
 	}
 	// Creature jump targets roll the same reflect arm over their
@@ -36087,7 +36129,10 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 				s.server.creatureCheckSpellReflection(creatureAuraKeyForTarget(tgt), spell) {
 				// Synchronous chain path: spend the charge here, the
 				// arrival-timer equivalent (see the player arm above).
+				// The taken-side proc loop still fires on the timer
+				// (proc only — the charge above is the one spend).
 				s.server.consumeCreatureReflectAuraCharge(creatureAuraKeyForTarget(tgt))
+				s.armSyncReflectProcDelayed(ctx, spell, targetGUID)
 				return protocol.SpellMissReflect
 			}
 		}
@@ -36095,6 +36140,16 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	targetLevel := uint8(1)
 	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 		targetLevel = tgt.Level
+	}
+	// WorldObject::SpellHitResult (Object.cpp:2656-2662): DmgClass
+	// dispatch — MELEE/RANGED roll Unit::MeleeSpellHitResult, NONE never
+	// rolls the hit table. The reflect arms above run first, matching
+	// C++ order (reflect precedes the switch).
+	if spell.DefenseType == spellDamageClassMelee || spell.DefenseType == spellDamageClassRanged {
+		return s.meleeSpellHitResult(ctx, targetGUID, targetSess, spell, targetLevel, targetSess != nil)
+	}
+	if spell.DefenseType != spellDamageClassMagic {
+		return protocol.SpellMissNone
 	}
 	// WorldObject::MagicSpellHitResult (Object.cpp:2534-2536): the
 	// SPELLMOD_RESIST_MISS_CHANCE arm folds the caster's mod owner (the
@@ -49136,8 +49191,9 @@ func (s *session) sendSpellCooldownEvent(spell wotlk.Spell) {
 // and category cooldown, the SPELL_AURA_MOD_COOLDOWN arm on the caster's
 // own spells, the negative clamp, the both-zero early return, the entry
 // write, and the conditional SMSG_SPELL_COOLDOWN (needsCooldownPacket
-// carries the modded value; otherwise the raw DBC RecoveryTime rides the
-// packet when positive).
+// only, carrying the modded value — the client starts the display from
+// SMSG_SPELL_GO + DBC RecoveryTime, so no packet rides otherwise; the
+// potion-path twin startPotionCooldownEntry already has this shape).
 // The itemID rides the entry like SpellHistory::AddCooldown's itemId
 // (SpellHistory.cpp:395-407): the cooldown's item source, used by the
 // cooldown-event and persistence paths.
@@ -49178,10 +49234,14 @@ func (s *session) startRealSpellCooldown(spell wotlk.Spell, cooldownMs, category
 		moddedCategoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
 	}
 	s.replaceSpellCooldownEntry(spellCooldown{Spell: spell.ID, Item: itemID, Category: categoryID, End: cooldownEnd, CategoryEnd: moddedCategoryEnd})
+	// SpellHistory::StartCooldown (SpellHistory.cpp:344-360) sends
+	// SMSG_SPELL_COOLDOWN only when needsCooldownPacket — the client
+	// starts the display from SMSG_SPELL_GO + DBC RecoveryTime, so an
+	// unmodded send is redundant, and a spellmod-shortened cooldown
+	// would show the client the longer DBC value while the server
+	// enforces the modded one.
 	if needsCooldownPacket {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spell.ID, uint32(cooldownMs)), true)
-	} else if spell.RecoveryTime > 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spell.ID, spell.RecoveryTime), true)
 	}
 }
 

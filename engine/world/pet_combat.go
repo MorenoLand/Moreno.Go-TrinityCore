@@ -8663,6 +8663,12 @@ func (s *session) petSpellMissVerdict(ctx context.Context, caster *creatureMotio
 	if petSpellKnown && spellIsPositive(petSpell) && s.server.creatureFriendlyToTarget(caster, target.GUID) {
 		return protocol.SpellMissNone
 	}
+	// SpellHitResult DmgClass dispatch (Object.cpp:2658-2659): a
+	// NONE-DmgClass spell never rolls the hit table — no MISS, RESIST or
+	// DEFLECT. MELEE/RANGED already returned through the melee twin above.
+	if petSpellKnown && petSpell.DefenseType != spellDamageClassMagic {
+		return protocol.SpellMissNone
+	}
 	if petSpellKnown {
 		modOwner := s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID)
 		baseHit = modOwner.applySpellMod(petSpell, spellModResistMissChance, baseHit)
@@ -8771,6 +8777,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				damage = 0
 				hitInfo = 0x01
 			}
+		} else if petSpellKnown && petSpell.DefenseType == spellDamageClassNone {
+			// SpellHitResult (Object.cpp:2658-2659): a NONE-DmgClass spell
+			// never rolls the hit table — no MISS, RESIST or DEFLECT.
 		} else if miss := magicSpellHitResultFromBase(float64(baseHit), bonusHit); miss != protocol.SpellMissNone {
 			missKind = miss
 			damage = 0
