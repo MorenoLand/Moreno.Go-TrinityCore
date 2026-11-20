@@ -10028,7 +10028,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 			continue
 		}
-		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level))
+		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level), 0, nil)
 		s.recordCreatureChannelHitTarget(m, spell, guid)
 	}
 	for _, guid := range hitTargets {
@@ -10177,7 +10177,12 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		if !s.fireAuraCheckAreaTarget(ctx, spell.ID, m.GUID, m.Map, m.InstanceID, vs.playerGUID) {
 			continue
 		}
-		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level))
+		// The dynobj's single shared AuraEffect timer
+		// (SpellAuras.cpp:815-843) first ticks at cast + period, so a
+		// target in the patch at cast takes its first tick on that
+		// schedule, not a private period later.
+		sharedDelayMs := uint32(object.NextAuraTick.Sub(now) / time.Millisecond)
+		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), periodMs, &sharedDelayMs)
 	}
 	type creatureTarget struct {
 		guid    uint64

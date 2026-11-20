@@ -36861,7 +36861,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.player != nil {
 		casterLevel = s.player.Level
 	}
-	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel)
+	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel, 0, nil)
 }
 
 // refreshCommandAura mirrors the Unit::_TryStackingOrRefreshingExistingAura
@@ -37051,7 +37051,7 @@ func (s *Server) calcAuraMaxCharges(spell wotlk.Spell, mapID, instanceID uint32,
 // record, wire caster/level, and level-scaled amounts use the caster's GUID
 // and level. The totem's level is its owner's (Totem.cpp:103), passed
 // explicitly because the aura may land on a party member of another level.
-func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8) {
+func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8, periodMs uint32, periodicInitialDelay *uint32) {
 	if s.auras == nil {
 		s.auras = make(map[uint32]struct{})
 	}
@@ -37502,6 +37502,43 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	if s.server != nil && s.server.Data != nil && s.player != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found && spellHasAura(sp, spellAuraModTotalThreat) {
 			s.server.refreshThreatTempModifier(s.player.Map, s.player.InstanceID, s.playerGUID)
+		}
+	}
+	// Periodic-tick arm (AuraEffect::Update, SpellAuras.cpp:815-843):
+	// this funnel arms no periodic timer, so a creature-cast periodic
+	// aura on a player never ticked — every boss direct-target DoT and
+	// every creature-caster dynobj patch (Blizzard et al.) showed the
+	// icon but dealt no periodic damage. C++ ticks every periodic
+	// effect on the aura's amplitude (AuraEffect::CalculatePeriodic,
+	// SpellAuraEffects.cpp:565-617; amplitude 0 is not periodic), so
+	// the arm fires exactly when the resolved period is nonzero. The
+	// period defaults to the first aura effect's DBC amplitude; a
+	// caller that knows better (a dynobj, whose period folds the 3000ms
+	// fallback) passes it explicitly. A dynobj caller additionally
+	// passes the delay to the dynobj's next shared AuraEffect tick, so
+	// the first tick aligns to the dynobj's single shared timer
+	// instead of starting a private period timer — the player-path twin
+	// passes the same delay through applyAuraToTarget. The
+	// START_PERIODIC_AT_APPLY leg mirrors periodicTickInitialDelay.
+	if s.server != nil && s.server.Data != nil && !mounted {
+		if sp, found, _ := s.server.Data.Spell(spellID); found {
+			period := periodMs
+			if period == 0 {
+				for _, effect := range sp.Effects {
+					if effect.Effect != 0 && effect.Aura != 0 {
+						period = effect.AuraPeriod
+						break
+					}
+				}
+			}
+			if period > 0 {
+				aura.PeriodMs = period
+				initialDelay := periodicTickInitialDelay(sp, period)
+				if periodicInitialDelay != nil && initialDelay != 0 {
+					initialDelay = *periodicInitialDelay
+				}
+				s.schedulePlayerPeriodicTickInitial(aura, period, initialDelay)
+			}
 		}
 	}
 }
@@ -37961,7 +37998,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 				fadeMs = uint32(dur)
 			}
 		}
-		s.applyAuraFromCaster(32612, fadeMs, s.playerGUID, s.player.Level)
+		s.applyAuraFromCaster(32612, fadeMs, s.playerGUID, s.player.Level, 0, nil)
 		// Unit::CombatStop(true) twin: interrupt the cast, stop the swing,
 		// clear the in-combat flag. The victim-side attacker clearing and
 		// the pet stop have no Go model (documented delta).

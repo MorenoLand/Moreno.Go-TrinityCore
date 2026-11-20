@@ -356,6 +356,15 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 	if object.AuraHolders == nil {
 		object.AuraHolders = make(map[uint64]struct{})
 	}
+	// The newly applied aura's first tick aligns to the dynobj's shared
+	// amplitude schedule (SpellAuras.cpp:815-843) instead of starting a
+	// private period timer: a target entering just before a tick takes
+	// damage almost immediately, and all applications tick in phase —
+	// the player-path twin in updateDynamicSpellAuras.
+	sharedDelayMs := uint32(0)
+	if d := object.NextAuraTick.Sub(time.Now()); d > 0 {
+		sharedDelayMs = uint32(d / time.Millisecond)
+	}
 	for guid := range inRadius {
 		if _, ok := object.AuraHolders[guid]; ok {
 			continue
@@ -373,7 +382,7 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 			continue
 		}
 		if vs, ok := playerTargets[guid]; ok && vs != nil {
-			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level))
+			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs)
 		} else {
 			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil)
 		}
