@@ -21928,7 +21928,16 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	if schoolMask == 0 {
 		schoolMask = 1
 	}
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: time.Now(), NextUpkeepTick: time.Now().Add(auraUpkeepIntervalMs * time.Millisecond)}
+	// AuraEffect::ResetPeriodic (SpellAuraEffects.cpp:553-563): with
+	// SPELL_ATTR5_START_PERIODIC_AT_APPLY the shared periodic timer
+	// starts AT the amplitude, so the dynobj's first tick fires on the
+	// first world update after creation — the shared schedule starts
+	// now, not a period out.
+	nextAuraTick := time.Now().Add(time.Duration(periodMs) * time.Millisecond)
+	if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+		nextAuraTick = time.Now()
+	}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: nextAuraTick, NextTargetMapPass: time.Now(), NextUpkeepTick: time.Now().Add(auraUpkeepIntervalMs * time.Millisecond)}
 	s.server.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 }
 
@@ -37190,6 +37199,69 @@ func (s *Server) calcAuraMaxCharges(spell wotlk.Spell, mapID, instanceID uint32,
 // and level. The totem's level is its owner's (Totem.cpp:103), passed
 // explicitly because the aura may land on a party member of another level.
 func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8, periodMs uint32, periodicInitialDelay *uint32, persistentAreaAura bool) {
+	// Unit::AddAura (Unit.cpp:12282-12295) runs the whole-spell gate
+	// (IsImmunedToSpell) and the per-effect strip
+	// (IsImmunedToSpellEffect) before the aura is created; the dynobj
+	// call sites gate the same checks before calling here, but totem
+	// pulses, boss direct casts and self-casts arrive ungated, so a
+	// partially immune target took the full record — a partially immune
+	// target keeps only its surviving effects, and a whole-spell immune
+	// target takes nothing (Spell::AddUnitTarget, Spell.cpp:2105-2117,
+	// strips the same bits at targeting time). The caster resolves once
+	// here: a player session (self or foreign) rides the session
+	// helpers, a creature motion (boss, dynobj, totem — the motion
+	// carries the faction) rides the creature-caster helpers with the
+	// live friendly verdict, so the school-fold exemption
+	// (Unit.cpp:7909) and the 267 arm (Unit.cpp:7987) read the caster's
+	// friendliness instead of a nil session. An unresolvable GUID keeps
+	// the old behavior — the gates only run on a resolved caster, so a
+	// stale or synthetic GUID never newly drops an aura. Runs before the
+	// auras/slot setup below so a gated apply leaves no phantom presence
+	// entry, and before castMu (the helpers take it themselves).
+	var casterSess *session
+	var casterMotion *creatureMotion
+	casterFriendly := false
+	if s != nil && s.player != nil && s.server != nil && casterGUID != 0 {
+		if casterGUID == s.playerGUID {
+			casterSess = s
+		} else if cs := s.server.findSessionByGUID(casterGUID); cs != nil {
+			casterSess = cs
+		} else if cm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, casterGUID); cm != nil {
+			casterMotion = cm
+			casterFriendly = s.server.creatureFriendlyToTarget(cm, s.playerGUID)
+		}
+	}
+	var immuneMask uint8
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found {
+			switch {
+			case casterSess != nil:
+				if s.isImmuneToSpell(sp, casterSess) {
+					return
+				}
+				for i, eff := range sp.Effects {
+					if eff.Effect == 0 {
+						continue
+					}
+					if s.isImmunedToSpellEffect(sp, i, casterSess) {
+						immuneMask |= 1 << uint(i)
+					}
+				}
+			case casterMotion != nil:
+				if s.isImmuneToSpellCreatureCaster(sp, casterFriendly) {
+					return
+				}
+				for i, eff := range sp.Effects {
+					if eff.Effect == 0 {
+						continue
+					}
+					if s.isImmunedToSpellEffectCreatureCaster(sp, i, casterFriendly) {
+						immuneMask |= 1 << uint(i)
+					}
+				}
+			}
+		}
+	}
 	if s.auras == nil {
 		s.auras = make(map[uint32]struct{})
 	}
@@ -37235,13 +37307,12 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	// The CalcValue level-scaling term (SpellInfo.cpp:459-511) for auras
 	// this caster applies: player casters and unresolvable caster GUIDs
 	// keep the unscaled value, while a resolved creature caster scales
-	// unless player-controlled. Resolved here, before castMu is taken,
-	// so the motion-map lookup never nests inside the cast lock.
+	// unless player-controlled. The caster resolved in the gate block
+	// above carries this (resolved before castMu is taken, so the
+	// motion-map lookup never nests inside the cast lock).
 	casterControlled := true
-	if s.server != nil && s.player != nil && s.server.findSessionByGUID(casterGUID) == nil {
-		if cm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, casterGUID); cm != nil {
-			casterControlled = creatureIsPlayerControlled(cm)
-		}
+	if casterSess == nil && casterMotion != nil {
+		casterControlled = creatureIsPlayerControlled(casterMotion)
 	}
 
 	// spell_pal_sacred_shield::CalculateAmount (spell_paladin.cpp:1991-2015):
@@ -37319,6 +37390,14 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				stackCount = uint8(procCharges)
 			}
 			for index, effect := range sp.Effects {
+				// Unit::AddAura per-effect strip (Unit.cpp:12291-12297):
+				// an effect the target is immune to leaves the mask —
+				// and the record's type/amounts derive from the first
+				// surviving effect, as the aura is created with the
+				// stripped mask.
+				if immuneMask&(1<<uint(index)) != 0 {
+					continue
+				}
 				// The record keeps the first effect's type/amounts, but its
 				// mask must cover every aura effect the self-cast applies,
 				// or per-effect folds (immunity misc, HasAuraType) miss the
@@ -37396,12 +37475,15 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 			if spellID == 47788 && effectMask&(1<<1) != 0 {
 				amounts[1] = -1
 			}
-			if mask, mountMisc, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(sp); mountedFlight {
-				effectMask, auraType, miscValue = mask, spellAuraMounted, mountMisc
+			if mask, mountMisc, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(sp); mountedFlight && mask&^immuneMask != 0 {
+				// The override keeps only surviving effects: a stripped
+				// mount effect never re-enters the mask.
+				mountMask := mask &^ immuneMask
+				effectMask, auraType, miscValue = mountMask, spellAuraMounted, mountMisc
 				amounts, baseAmounts = mountAmounts, mountBaseAmounts
 				recalculateMask = 0
 				for index, effect := range sp.Effects {
-					if mask&(1<<uint(index)) == 0 {
+					if mountMask&(1<<uint(index)) == 0 {
 						continue
 					}
 					if auraEffectCanBeRecalculated(effect.Aura) {
@@ -37672,8 +37754,14 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 			}
 			if period > 0 {
 				aura.PeriodMs = period
+				// A provided shared delay always wins, even for
+				// START_PERIODIC_AT_APPLY spells: a dynobj joiner ticks
+				// on the effect's shared schedule (AuraEffect::Update,
+				// SpellAuras.cpp:815-843); the attribute's immediate
+				// first tick fires only at aura creation (ResetPeriodic,
+				// SpellAuraEffects.cpp:553-563).
 				initialDelay := periodicTickInitialDelay(sp, period)
-				if periodicInitialDelay != nil && initialDelay != 0 {
+				if periodicInitialDelay != nil {
 					initialDelay = *periodicInitialDelay
 				}
 				s.schedulePlayerPeriodicTickInitial(aura, period, initialDelay)
@@ -42117,8 +42205,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// the tick timer — the mount-flight aura above had PeriodMs zeroed
 		// and previously kept a spurious no-op timer.
 		if aura.PeriodMs > 0 {
+			// A provided shared delay always wins, even for
+			// START_PERIODIC_AT_APPLY spells: a dynobj joiner ticks on
+			// the effect's shared schedule (AuraEffect::Update,
+			// SpellAuras.cpp:815-843); the attribute's immediate first
+			// tick fires only at aura creation (ResetPeriodic,
+			// SpellAuraEffects.cpp:553-563).
 			initialDelay := periodicTickInitialDelay(spell, aura.PeriodMs)
-			if periodicInitialDelay != nil && initialDelay != 0 {
+			if periodicInitialDelay != nil {
 				initialDelay = *periodicInitialDelay
 			}
 			targetSess.schedulePlayerPeriodicTickInitial(aura, aura.PeriodMs, initialDelay)
@@ -42905,8 +42999,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt)
 
 	if aura.PeriodMs > 0 {
+		// A provided shared delay always wins, even for
+		// START_PERIODIC_AT_APPLY spells: a dynobj joiner ticks on the
+		// effect's shared schedule (AuraEffect::Update,
+		// SpellAuras.cpp:815-843); the attribute's immediate first tick
+		// fires only at aura creation (ResetPeriodic,
+		// SpellAuraEffects.cpp:553-563).
 		initialDelay := periodicTickInitialDelay(spell, aura.PeriodMs)
-		if periodicInitialDelay != nil && initialDelay != 0 {
+		if periodicInitialDelay != nil {
 			initialDelay = *periodicInitialDelay
 		}
 		s.scheduleCreaturePeriodicTickInitial(aura, aura.PeriodMs, initialDelay)

@@ -10145,7 +10145,16 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		schoolMask = 1
 	}
 	now := time.Now()
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(s.nextDynamicSpellLowGUID()), CasterGUID: m.GUID, SpellID: uint64(spell.ID), Map: m.Map, InstanceID: m.InstanceID, X: cx, Y: cy, Z: cz, Orientation: m.Orientation, Radius: radius, CastTime: uint32(now.UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: now.Add(time.Duration(periodMs) * time.Millisecond), NextTargetMapPass: now, NextUpkeepTick: now.Add(auraUpkeepIntervalMs * time.Millisecond)}
+	// AuraEffect::ResetPeriodic (SpellAuraEffects.cpp:553-563): with
+	// SPELL_ATTR5_START_PERIODIC_AT_APPLY the shared periodic timer
+	// starts AT the amplitude, so the dynobj's first tick fires on the
+	// first world update after creation — the shared schedule starts
+	// now, not a period out.
+	nextAuraTick := now.Add(time.Duration(periodMs) * time.Millisecond)
+	if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+		nextAuraTick = now
+	}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(s.nextDynamicSpellLowGUID()), CasterGUID: m.GUID, SpellID: uint64(spell.ID), Map: m.Map, InstanceID: m.InstanceID, X: cx, Y: cy, Z: cz, Orientation: m.Orientation, Radius: radius, CastTime: uint32(now.UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: nextAuraTick, NextTargetMapPass: now, NextUpkeepTick: now.Add(auraUpkeepIntervalMs * time.Millisecond)}
 	s.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 	friendly := isFriendlyAreaSpell(spell)
 	inRadius := func(x, y, z float32) bool {
