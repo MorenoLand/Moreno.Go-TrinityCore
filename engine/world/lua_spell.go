@@ -237,6 +237,23 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 		effectValues[int(index)] = value
 		return []any{value}, nil
 	}
+	// GetEffectDamageMultiplier(effectIndex) is
+	// SpellEffectInfo::DamageMultiplier (SpellInfo.cpp:345): the DBC
+	// EffectChainAmplitude (Spell.dbc fields 216-218,
+	// DBCStructure.h:1486), loaded on the Go effect as
+	// ChainAmplitude. An out-of-range index reads 0, the
+	// GetEffectValue convention. Backs the Execute rage-to-damage
+	// leg (spell_warrior.cpp:413-418).
+	methods["GetEffectDamageMultiplier"] = func(_ context.Context, args []any) ([]any, error) {
+		index, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if index >= uint32(len(p.spell.Effects)) {
+			return []any{float32(0)}, nil
+		}
+		return []any{p.spell.Effects[index].ChainAmplitude}, nil
+	}
 	// SetEffectValue(value) is SpellScript::SetEffectValue
 	// (SpellScript.cpp:677-686): writes m_spell->damage for the
 	// effect/target the launch-target fire is currently on. A no-op
@@ -574,6 +591,21 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 		value := spell.Effects[index].CalcValueForLevel(spell, m.Level)
 		effectValues[int(index)] = value
 		return []any{value}, nil
+	}
+	// GetEffectDamageMultiplier(effectIndex) is the creature-path
+	// twin of the session builder's method (same contract:
+	// SpellEffectInfo::DamageMultiplier, SpellInfo.cpp:345 — the
+	// DBC EffectChainAmplitude, loaded on the Go effect as
+	// ChainAmplitude). An out-of-range index reads 0.
+	methods["GetEffectDamageMultiplier"] = func(_ context.Context, args []any) ([]any, error) {
+		index, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if index >= uint32(len(spell.Effects)) {
+			return []any{float32(0)}, nil
+		}
+		return []any{spell.Effects[index].ChainAmplitude}, nil
 	}
 	// SetEffectValue(value) is SpellScript::SetEffectValue
 	// (SpellScript.cpp:677-686): writes m_spell->damage for the

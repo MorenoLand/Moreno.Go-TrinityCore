@@ -165,6 +165,75 @@ end
 RegisterAuraEvent(SPELL_WARRIOR_SUDDEN_DEATH_R1, 6, extraProc(SPELL_WARRIOR_EXECUTE_GCD_REDUCED))
 RegisterAuraEvent(SPELL_WARRIOR_BLOODSURGE_R1, 6, extraProc(SPELL_WARRIOR_SLAM_GCD_REDUCED))
 
+local SPELL_WARRIOR_EXECUTE_R1 = 5308 -- spell_warrior.cpp:378
+local SPELL_WARRIOR_EXECUTE_R2 = 20658
+local SPELL_WARRIOR_EXECUTE_R3 = 20660
+local SPELL_WARRIOR_EXECUTE_R4 = 20661
+local SPELL_WARRIOR_EXECUTE_R5 = 20662
+local SPELL_WARRIOR_EXECUTE_R6 = 25234
+local SPELL_WARRIOR_EXECUTE_R7 = 25236
+local SPELL_WARRIOR_EXECUTE_R8 = 47470
+local SPELL_WARRIOR_EXECUTE_R9 = 47471
+local SPELL_WARRIOR_EXECUTE = 20647 -- spell_warrior.cpp:46 (damage spell)
+local SPELL_WARRIOR_GLYPH_OF_EXECUTION = 58367 -- spell_warrior.cpp:49
+local SPELL_AURA_PROC_TRIGGER_SPELL = 42 -- SpellAuraDefines.h:122, procs.go:1287
+local SPELLFAMILY_GENERIC = 0 -- SharedDefines.h:3581
+local WARRIOR_ICON_ID_SUDDEN_DEATH = 1989 -- spell_warrior.cpp:79
+local POWER_RAGE = 1 -- SharedDefines.h power enum, spell_druid.lua:98 precedent
+
+-- C++ spell_warr_execute_SpellScript::HandleEffect (spell_warrior.cpp:397-421):
+-- OnEffectHitTarget EFFECT_0 DUMMY — rageUsed is the extra rage up to
+-- 300 - CalcPowerCost (30 rage total at base 15 cost); newRage floors
+-- at 0, then at the Sudden Death rage save when the talent aura is
+-- present (icon 1989, EFFECT_1 CalcValue * 10: 3/7/10 rage by rank,
+-- Blizzard-confirmed; read live via GetSpellEffectCalcValue, not
+-- hardcoded). The power is set before the Glyph of Execution bonus:
+-- the glyph's EFFECT_0 amount * 10 joins rageUsed only for damage.
+-- bp = GetEffectValue(0) + floor(rageUsed * DamageMultiplier + AP *
+-- 0.2), and the 20647 damage spell is cast on the hit target,
+-- triggered, BP0 = bp. DamageMultiplier is EffectChainAmplitude
+-- (SpellInfo.cpp:345) via GetEffectDamageMultiplier — no new DBC
+-- field was needed; the Go loader already carries it. Spot check on
+-- the formula: R1 tooltip 125 + 3/rage means DamageMultiplier 0.3,
+-- R5 600 + 15/rage means 1.5. Binds all 9 ranks via DB ScriptName
+-- (-5308, TDB spell_script_names, chain R1-R9). ev5 fires on the
+-- player direct-cast path (spells.go:14892). DORMANT until Spell.dbc
+-- ships the records.
+local function executeEffect(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local rage = caster:GetPower(POWER_RAGE)
+    local rageUsed = math.min(300 - spell:GetPowerCost(), rage)
+    local newRage = math.max(0, rage - rageUsed)
+    local suddenDeath = caster:GetAuraEffectByIcon(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_GENERIC, WARRIOR_ICON_ID_SUDDEN_DEATH, 0)
+    if suddenDeath ~= nil then
+        local ragesave = suddenDeath:GetSpellEffectCalcValue(suddenDeath:GetAuraId(), 1) * 10
+        newRage = math.max(newRage, ragesave)
+    end
+    caster:SetPower(newRage, POWER_RAGE)
+    local glyph = caster:GetAuraEffect(SPELL_WARRIOR_GLYPH_OF_EXECUTION, 0)
+    if glyph ~= nil then
+        rageUsed = rageUsed + glyph * 10
+    end
+    local bp = spell:GetEffectValue(0) + math.floor(rageUsed * spell:GetEffectDamageMultiplier(0) + caster:GetTotalAttackPowerValue(0) * 0.2)
+    caster:CastCustomSpell(hitTarget, SPELL_WARRIOR_EXECUTE, true, bp)
+end
+
+RegisterSpellEvent(SPELL_WARRIOR_EXECUTE_R1, 5, executeEffect)
+RegisterSpellEvent(SPELL_WARRIOR_EXECUTE_R2, 5, executeEffect)
+RegisterSpellEvent(SPELL_WARRIOR_EXECUTE_R3, 5, executeEffect)
+RegisterSpellEvent(SPELL_WARRIOR_EXECUTE_R4, 5, executeEffect)
+RegisterSpellEvent(SPELL_WARRIOR_EXECUTE_R5, 5, executeEffect)
+RegisterSpellEvent(SPELL_WARRIOR_EXECUTE_R6, 5, executeEffect)
+RegisterSpellEvent(SPELL_WARRIOR_EXECUTE_R7, 5, executeEffect)
+RegisterSpellEvent(SPELL_WARRIOR_EXECUTE_R8, 5, executeEffect)
+RegisterSpellEvent(SPELL_WARRIOR_EXECUTE_R9, 5, executeEffect)
+
 local SPELL_WARRIOR_CHARGE_R1 = 100 -- diminishing.go:113 (Charge Stun ranks)
 local SPELL_WARRIOR_CHARGE_R2 = 6178
 local SPELL_WARRIOR_CHARGE_R3 = 11578

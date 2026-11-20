@@ -32351,6 +32351,43 @@ func (s *Server) familyAuraEffectSpellID(auras []*activeAura, auraType, family, 
 	return 0, false
 }
 
+// iconAuraEffectSpellID is the icon-ID half of
+// Unit::GetAuraEffect(AuraType, SpellFamilyNames, uint32 iconId,
+// uint8 effIndex) (Unit.cpp:4510-4524): the spell id of the first
+// live aura effect of the given type whose spell matches the family
+// name and icon id and carries no family flags, at exactly the
+// given effect index — or false when no live effect matches. The
+// caller passes a snapshot slice (loadedAuras on the player side, a
+// copy taken under auraMu on the creature side), so a concurrent map
+// write cannot fault the scan. Backs the Execute Sudden Death
+// rage-save leg (spell_warrior.cpp:403-407).
+func (s *Server) iconAuraEffectSpellID(auras []*activeAura, auraType, family, iconID uint32, effIndex int) (uint32, bool) {
+	if s == nil || s.Data == nil || effIndex < 0 {
+		return 0, false
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != family || auraSpell.SpellIconID != iconID {
+			continue
+		}
+		if auraSpell.SpellFamilyFlags[0] != 0 || auraSpell.SpellFamilyFlags[1] != 0 || auraSpell.SpellFamilyFlags[2] != 0 {
+			continue
+		}
+		if effIndex >= len(aura.Amounts) || effIndex >= len(auraSpell.Effects) || aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			continue
+		}
+		eff := auraSpell.Effects[effIndex]
+		if !spellEffectIsAuraEffect(eff) || eff.Aura != auraType {
+			continue
+		}
+		return aura.SpellID, true
+	}
+	return 0, false
+}
+
 // targetHasBloodPlague mirrors the Blood Boil gate of Spell::EffectSchoolDMG
 // (SpellEffects.cpp:771): the victim carries the caster's own Blood Plague —
 // a SPELL_AURA_PERIODIC_DAMAGE aura whose spell is DeathKnight-family with

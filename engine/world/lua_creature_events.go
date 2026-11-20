@@ -2081,6 +2081,53 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// GetAuraEffectByIcon(auraType, familyName, iconId[, effIndex])
+	// is the icon-ID overload of Unit::GetAuraEffect
+	// (Unit.cpp:4510-4524) for handler creatures: the live aura
+	// object of the first effect of the given type whose spell
+	// matches the family name and icon id and carries no family
+	// flags, at exactly the given effect index (default 0) — or nil
+	// when no live effect matches. The player-surface twin backs
+	// the Execute Sudden Death rage-save leg
+	// (spell_warrior.cpp:403-407); the snapshot copy is taken under
+	// auraMu, the GetAuraOfRankedSpell precedent.
+	methods["GetAuraEffectByIcon"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 3 {
+			return []any{nil}, nil
+		}
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		family, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		iconID, err := luaUint32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		effIndex := 0
+		if len(args) > 3 && args[3] != nil {
+			v, err := luaInt64Arg(args, 3)
+			if err != nil {
+				return nil, err
+			}
+			effIndex = int(v)
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
+		for _, aura := range s.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.auraMu.Unlock()
+		if spellID, ok := s.iconAuraEffectSpellID(auras, auraType, family, iconID, effIndex); ok {
+			ref := &luaAuraRef{server: s, spellID: spellID, creatureKey: key, mapID: motion.Map, instanceID: motion.InstanceID}
+			return []any{ref.luaAuraObject()}, nil
+		}
+		return []any{nil}, nil
+	}
 	// IsPolymorphed is Unit::IsPolymorphed (Unit.cpp:10572): a live
 	// SPELL_AURA_TRANSFORM (56) aura, via the creatureIsPolymorphed twin.
 	methods["IsPolymorphed"] = func(_ context.Context, _ []any) ([]any, error) {
