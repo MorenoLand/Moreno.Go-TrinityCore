@@ -119,7 +119,10 @@ end
 -- casts Haunt Heal 48210 on the caster with BP0 = the effect amount
 -- (aurEff->GetAmount()). Deviation: C++ sets args.OriginalCaster to
 -- the caster GUID; CastCustomSpell takes an originalCaster arg but
--- the Go model ignores it on both paths, so it is not passed. The
+-- the Go model ignores it on both paths, so it is not passed. Second
+-- deviation: C++ registers REAL_OR_REAPPLY, so a refresh (reapply)
+-- also pays the heal; Go's ev3 fires only on genuine removal, so a
+-- reapplied Haunt pays nothing where C++ pays. The
 -- loader's SpellScript side (spell_warl_haunt_SpellScript) is a
 -- separate arm and stays out of this row.
 local SPELL_WARLOCK_HAUNT = 48181 -- spell_warlock.cpp:55
@@ -378,8 +381,9 @@ local SPELL_WARLOCK_FLAMESHADOW = 37379 -- spell_warlock.cpp:86 (SPELL_WARLOCK_F
 -- PreventDefaultAction; the proc actor self-casts the template
 -- trigger, triggered. 37377 binds to spell_warl_t4_2p_bonus_shadow
 -- in spell_script_names (TDB 25101 + 26091), so the trigger is
--- Flameshadow 37379, not Shadowflame 37378 (39437 binds _fire).
--- DORMANT until Spell.dbc ships the 37377 proc entry.
+-- Flameshadow 37379, not Shadowflame 37378 — the fire leg (39437)
+-- is ported below with its own handler, since this one hardcodes
+-- 37379. DORMANT until Spell.dbc ships the 37377 proc entry.
 local function t4TwoPieceBonusProc(event, aura, target, actor, procTarget, damage)
     if actor == nil then
         return true
@@ -389,6 +393,24 @@ local function t4TwoPieceBonusProc(event, aura, target, actor, procTarget, damag
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_T4_2P_BONUS, 6, t4TwoPieceBonusProc)
+
+local SPELL_WARLOCK_T4_2P_BONUS_FIRE = 39437 -- spell_warlock.cpp:1606 (spell_warl_t4_2p_bonus_fire)
+local SPELL_WARLOCK_SHADOWFLAME = 37378 -- spell_warlock.cpp:85 (SPELL_WARLOCK_SHADOWFLAME)
+
+-- C++ spell_warl_t4_2p_bonus_AuraScript::HandleProc
+-- (spell_warlock.cpp:1506-1511), fire registration: same template arm
+-- as the shadow leg above, trigger Shadowflame 37378. A separate
+-- handler — the shadow handler hardcodes 37379. DORMANT until Spell.dbc
+-- ships the 39437 proc entry.
+local function t4TwoPieceBonusFireProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil then
+        return true
+    end
+    actor:CastSpell(actor, SPELL_WARLOCK_SHADOWFLAME, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_T4_2P_BONUS_FIRE, 6, t4TwoPieceBonusFireProc)
 
 local SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY = 27243 -- spell_warlock.cpp:1177
 local SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY_RANKS = { 27243, 47835, 47836 } -- TDB spell_ranks chain for 27243
@@ -409,9 +431,10 @@ local SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_RANKS = { 27285, 47833, 47834 } --
 -- GetActionTarget(); the ev6 procTarget is the attacker on the
 -- taken side, Unit.cpp:10412-10417), triggered.
 -- BLOCKED leg: CalculateBuffer (:1192-1200, SP-scaled buffer via
--- SpellDamageBonusDone) has no DoEffectCalcAmount bridge, so the
--- buffer starts at its DBC base. DORMANT until Spell.dbc ships
--- the 27243 proc entry (and spell_ranks for the rank lookup).
+-- SpellDamageBonusDone) stays out — ev11 (AuraEventOnEffectCalcAmount)
+-- exists, but there is no SpellDamageBonusDone / bonus-coefficient
+-- bridge, so the buffer starts at its DBC base. DORMANT until Spell.dbc
+-- ships the 27243 proc entry (and spell_ranks for the rank lookup).
 local function seedOfCorruptionDummyProc(event, aura, target, actor, procTarget, damage)
     if damage == nil or damage == 0 then
         return true
@@ -553,7 +576,7 @@ RegisterAuraEvent(SPELL_WARLOCK_NIGHTFALL, 6, nightfallProc)
 RegisterAuraEvent(SPELL_WARLOCK_GLYPH_OF_CORRUPTION, 6, nightfallProc)
 
 local SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC = 32865 -- spell_warlock.cpp:76
--- Class ids per spell_warlock.cpp:1246-1252. 39367 shares the class but has
+-- Class ids per spell_warlock.cpp:1240-1246 (class at :1247). 39367 shares the class but has
 -- no census row in 865-879.
 local SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC_AURAS = { 32863, 36123, 38252, 39367, 44141, 70388 }
 
@@ -600,8 +623,11 @@ local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to t
 -- the caster must have strictly more health than the EFFECT_0 health
 -- cost (spell:GetEffectValue(0), the CalcValue twin) or the cast
 -- fizzles. Check-only port: the energize leg still needs
--- spellpower-coefficient / ModifyHealth bridges (census row 796).
--- Registered for all ranks (1454/1455/1456/11687/11688/11689/
+-- spellpower-coefficient / ModifyHealth bridges (census row 796),
+-- plus a family+icon aura-effect search for the Mana Feed leg
+-- (Lua GetAuraEffect takes a spell id only; GetDummyAuraEffect
+-- finds DUMMY auras only, so the ADD_FLAT_MODIFIER leg has no
+-- reader). Registered for all ranks (1454/1455/1456/11687/11688/11689/
 -- 27222/57946; TDB (-1454) NEG all-ranks binding); the gate reads
 -- the cast spell's own EFFECT_0 CalcValue, so it is rank-agnostic.
 -- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
@@ -743,46 +769,6 @@ end
 
 RegisterAuraEvent(SPELL_WARLOCK_GLYPH_OF_SHADOWFLAME, 6, glyphOfShadowflameProc)
 
-local SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC_RANKS = { 32863, 36123, 38252, 39367, 44141, 70388 } -- TDB spell_script_names positive bindings for spell_warl_seed_of_corruption_generic
-local SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC = 32865 -- spell_warlock.cpp:76
-
--- C++ spell_warl_seed_of_corruption_generic_AuraScript::HandleProc
--- (spell_warlock.cpp:1261-1284): OnEffectProc, EFFECT_1 DUMMY.
--- The damage is eaten from the buffer (EFFECT_1 amount); a
--- surviving buffer only sets the new amount and returns, with NO
--- HealthBelowPctDamaged gate — unlike the 27243 dummy arm, this
--- one detonates as soon as the buffer is eaten. On detonation the
--- aura is removed (before the caster-nil return, the dummy-port
--- order) and the caster casts the generic damage spell 32865 on
--- the action target (the seeded holder, GetActionTarget(); the
--- ev6 target on the taken side, Unit.cpp:10412-10417), triggered.
--- DORMANT until Spell.dbc ships the proc entries for the six
--- bound aura ids.
-local function seedOfCorruptionGenericProc(event, aura, target, actor, procTarget, damage)
-    if damage == nil or damage == 0 then
-        return true
-    end
-    if target == nil then
-        return true
-    end
-    local amount = aura:GetAmount(1) - damage
-    if amount > 0 then
-        aura:SetAmount(amount, 1)
-        return true
-    end
-    local caster = aura:GetCaster()
-    aura:Remove()
-    if caster == nil then
-        return true
-    end
-    caster:CastSpell(target, SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC, true)
-    return true
-end
-
-for _, spellId in ipairs(SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC_RANKS) do
-    RegisterAuraEvent(spellId, 6, seedOfCorruptionGenericProc)
-end
-
 local SPELL_WARLOCK_SIPHON_LIFE = 63108 -- spell_warlock.cpp:1334 (class spell_warl_siphon_life)
 local SPELL_WARLOCK_SIPHON_LIFE_HEAL = 63106 -- spell_warlock.cpp:72
 local SPELL_WARLOCK_GLYPH_OF_SIPHON_LIFE = 56216 -- spell_warlock.cpp:54
@@ -815,3 +801,44 @@ local function siphonLifeProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_SIPHON_LIFE, 6, siphonLifeProc)
+
+local SPELL_WARLOCK_CURSE_OF_AGONY_RANKS = { 980, 1014, 6217, 11711, 11712, 11713, 27218, 47863, 47864 } -- TDB spell_ranks chain for 980
+
+-- C++ spell_warl_curse_of_agony::ApplyEffect (spell_warlock.cpp:104-107)
+-- + HandleEffectPeriodicUpdate (:109-134): EFFECT_0 PERIODIC_DAMAGE.
+-- Apply latches the DBC amount; the periodic update rescales the tick
+-- amount by tick number — ticks 1-4 half, 5-8 full, 9-12 3/2 (the +1
+-- keeps a 0.5 from being lost at ticks 1-4), 13-14 (glyphed only)
+-- double. No PreventDefaultAction: the rescaled amount is what the
+-- default tick then deals. ev1 fires at the head of the periodic tick,
+-- before the default damage is computed, with TickCount already
+-- incremented (spells.go fireAuraPeriodicTick twin). Deviation: C++
+-- latches on reapply too (REAL_OR_REAPPLY); the Go apply hook is
+-- fresh-only, so a refresh keeps the old latched base — same DBC
+-- value, immaterial unless spellmods changed the apply amount
+-- mid-fight. DORMANT until Spell.dbc ships the 980 rows.
+local function curseOfAgonyApply(event, aura, target)
+    aura:SetScriptValue("tickAmount", aura:GetAmount(0))
+end
+
+local function curseOfAgonyTick(event, aura, target)
+    local base = aura:GetScriptValue("tickAmount")
+    if base == nil then
+        return
+    end
+    local tick = aura:GetTickNumber()
+    if tick == 1 then
+        aura:SetAmount(math.floor(base / 2), 0)
+    elseif tick == 5 then
+        aura:SetAmount(base, 0)
+    elseif tick == 9 then
+        aura:SetAmount(math.floor((base + 1) * 3 / 2), 0)
+    elseif tick == 13 then
+        aura:SetAmount(base * 2, 0)
+    end
+end
+
+for _, spellId in ipairs(SPELL_WARLOCK_CURSE_OF_AGONY_RANKS) do
+    RegisterAuraEvent(spellId, 2, curseOfAgonyApply)
+    RegisterAuraEvent(spellId, 1, curseOfAgonyTick)
+end
