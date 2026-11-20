@@ -54485,8 +54485,9 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// CalcValue (the Acherus teleport spell). PreventHitDefaultEffect
 		// is vacuous: the generic script-effect leg casts nothing by
 		// default. The
-		// OnCheckCast class gate stays out: no check-cast bridge in the
-		// player path, and the spell is DK-gated by learning. Self-only,
+		// OnCheckCast class gate lives in Lua (spell_dk.lua ev8 — the
+		// fireSpellCheckCast site runs after the Go gates); the spell is
+		// DK-gated by learning. Self-only,
 		// so the hit target is the caster's session. No Lua ev5 port: Go
 		// owns the arm (the 63975 precedent) — one must not be added now
 		// that the ev5 player-path site is live in finishSpellCast

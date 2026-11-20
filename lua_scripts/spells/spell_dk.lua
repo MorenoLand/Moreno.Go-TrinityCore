@@ -2,7 +2,7 @@
 -- src/server/scripts/Spells/spell_dk.cpp.
 --
 -- PORTED (tick 294, RegisterAuraEvent):
---   spell_dk_presence (spell_dk.cpp:1859-1989): the three presence auras
+--   spell_dk_presence (spell_dk.cpp:1859-1965): the three presence auras
 --   48266 (Blood), 48263 (Frost), 48265 (Unholy). One mode-2 handler per
 --   ID runs all three legs, branching on aura:GetAuraId(), because C++
 --   registers all three AfterEffectApply handlers on each presence
@@ -44,12 +44,13 @@
 --   Mode 2 fires on fresh apply only; the C++ legs are all
 --   AURA_EFFECT_HANDLE_REAL, so this matches C++ (no reapply leg).
 -- STAY-OUT (tick 294): every other spell_dk class — no proc hook
---   (OnEffectProc/CheckProc), absorb/CalcAmount/ManaShield hooks
---   absent, or SpellScript-only with no RegisterSpellScript in the
---   engine. spell_dk_death_and_decay ranks 1-2 (43265/49938) are
+--   (OnEffectProc/CheckProc), or SpellScript-only with no
+--   RegisterSpellScript in the engine. The old "absorb/CalcAmount
+--   hooks absent" clause is stale: ev9/10/11 are live and
+--   anti_magic_shell_self (48707) is PORTED below (this tick). spell_dk_death_and_decay ranks 1-2 (43265/49938) are
 --   PORTED below (ev1, tick 547); ranks 3-4 (49939/49940) stay out —
 --   consecutive IDs with no in-tree citation.
---   spell_dk_blood_tap needs the rune system; spell_dk_hysteria
+--   spell_dk_blood_tap is GO-COVERED (runes.go twin); spell_dk_hysteria
 --   (49016, ev1 self-damage) and spell_dk_death_grip_initial
 --   (49576, ev8 only — ev5 dummy leg Go-owned, e40198fa)
 --   are PORTED below — the tick-294
@@ -81,10 +82,9 @@
 --   pestilence (50842, tick 567) stays out — no aura donePct/
 --   critChance/ChangeAmount bridges for the disease copy legs (the
 --   ev5 player path itself is live since a910c39d, so that old
---   clause is stale). spell_dk_rune_tap_party (59754, tick 569)
---   stays out —
---   the OnObjectAreaTargetSelect fire site is creature-path only, no
---   player-path twin. Rime (49188), scent_of_blood_trigger (49004)
+--   clause is stale). spell_dk_rune_tap_party (59754) is PORTED below (ev7, this
+--   tick) — the tick-569 "creature-path only" stay-out is stale:
+--   the player path fires ev7 (lua_spell.go:1181). Rime (49188), scent_of_blood_trigger (49004)
 --   and sudden_doom (49018) are PORTED below (ev6, ticks 568/570/571).
 --   Vendetta (49015) is PORTED below (ev6, tick 573). Threat of
 --   Thassarian (65661, tick 572) is PORTED below (ev6, this tick) —
@@ -511,13 +511,13 @@ local SPELL_DK_SCENT_OF_BLOOD_TRIGGER = 49004 -- spell_dk.cpp:2225
 -- does not stack onto an existing aura. No PreventDefaultAction: the
 -- DBC default trigger still fires after (the handler returns nothing).
 -- Distinct from the talent aura 50421, whose Go leg lives in procs.go.
--- BINDING NOTE (2026-11-19): no spell_script_names row for -49004 in
--- TDB 25101 or 26091 (only 50421 spell_dk_scent_of_blood is bound),
--- so the C++ script never fires on a stock TDB. Registration KEPT:
--- the class + //-49004 comment (spell_dk.cpp:2224-2225) + AddSC
--- registration (:3251) are the port's authority, and the missing row
--- is a TDB data gap, not a code gap. DORMANT until Spell.dbc ships
--- the 49004 proc entry.
+-- BINDING NOTE (2026-11-19, corrected this tick): the AC file HAS
+-- (-49004,'spell_dk_scent_of_blood_trigger') — the "no row in TDB
+-- 25101 or 26091" claim is stale against this AC file (which also
+-- carries a second -49004 row for spell_gen_proc_from_direct_damage).
+-- Registration KEPT: the class + //-49004 comment (spell_dk.cpp:2224-2225)
+-- + AddSC registration (:3251) are the port's authority. DORMANT until
+-- Spell.dbc ships the 49004 proc entry.
 local function scentOfBloodTriggerProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
     if effectIndex ~= nil and effectIndex ~= 0 then
         return
@@ -971,3 +971,90 @@ local function frostFeverDispel(event, aura, target, dispeller)
 end
 
 RegisterAuraEvent(SPELL_DK_FROST_FEVER, 5, frostFeverDispel)
+
+-- PORTED (this tick, RegisterAuraEvent 11/9/10 + RegisterSpellEvent 7):
+--   spell_dk_anti_magic_shell_self (48707, spell_dk.cpp:303-365): Load
+--   prices absorbPct (EFFECT_0) and hpPct (EFFECT_1) with CalcValue
+--   (caster); CalculateAmount EFFECT_0 SPELL_AURA_SCHOOL_ABSORB =
+--   caster CountPctFromMaxHealth(hpPct); Absorb EFFECT_0 =
+--   min(pct(damage, absorbPct), target CountPctFromMaxHealth(hpPct));
+--   AfterEffectAbsorb casts 49088 (SPELL_DK_RUNIC_POWER_ENERGIZE,
+--   spell_dk.cpp:79) on the target with BP0 = 20% of the absorbed
+--   amount, triggered (aurEff overload). Lua: ev11 writes the pool
+--   (effectIndex guard 0 — the fire site runs once per effect in the
+--   mask, spells.go:36504); ev9 returns the absorb (numeric return
+--   rewrites; registering ev9 defers the aura out of the generic pool
+--   leg, absorption.go:892); ev10 casts 49088 via CastCustomSpell
+--   (triggered). absorbPct/hpPct ride GetSpellEffectCalcValue, the
+--   no-caster DBC read — identical unless the DBC row carries
+--   per-level scaling (rogue cheat-death precedent). DORMANT until
+--   Spell.dbc ships the 48707 row (pct and pool read 0 without it).
+--   AC (48707,'spell_dk_anti_magic_shell_self').
+--   spell_dk_rune_tap_party (59754, spell_dk.cpp:2164-2190):
+--   OnObjectAreaTargetSelect EFFECT_0 TARGET_UNIT_CASTER_AREA_PARTY
+--   removes the caster from the party list. The player path fires ev7
+--   (firePlayerSpellTargetSelects, lua_spell.go:1181, called from
+--   spells.go:13814 + :27730); a friendly-area effect is not
+--   pre-stripped of the caster, so the hook's Remove takes effect.
+--   DORMANT until Spell.dbc ships the 59754 row. AC
+--   (59754,'spell_dk_rune_tap_party').
+local SPELL_DK_ANTI_MAGIC_SHELL_SELF = 48707 -- spell_dk.cpp:303
+local SPELL_DK_RUNIC_POWER_ENERGIZE = 49088 -- spell_dk.cpp:79
+local SPELL_DK_RUNE_TAP_PARTY = 59754 -- spell_dk.cpp:2164
+
+local function antiMagicShellSelfCalcAmount(event, aura, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local hpPct = aura:GetSpellEffectCalcValue(SPELL_DK_ANTI_MAGIC_SHELL_SELF, 1)
+    if hpPct == nil or hpPct <= 0 then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil then
+        caster = target
+    end
+    aura:SetAmount(caster:CountPctFromMaxHealth(hpPct), 0)
+end
+
+local function antiMagicShellSelfAbsorb(event, aura, target, damage, absorbAmount)
+    if target == nil or damage == nil or damage <= 0 then
+        return 0
+    end
+    local absorbPct = aura:GetSpellEffectCalcValue(SPELL_DK_ANTI_MAGIC_SHELL_SELF, 0)
+    if absorbPct == nil or absorbPct <= 0 then
+        return 0
+    end
+    local hpPct = aura:GetSpellEffectCalcValue(SPELL_DK_ANTI_MAGIC_SHELL_SELF, 1)
+    if hpPct == nil or hpPct <= 0 then
+        return 0
+    end
+    local pctAbsorb = math.floor(damage * absorbPct / 100)
+    local pool = target:CountPctFromMaxHealth(hpPct)
+    if pctAbsorb > pool then
+        return pool
+    end
+    return pctAbsorb
+end
+
+local function antiMagicShellSelfAfterAbsorb(event, aura, target, damage, absorbAmount)
+    if target == nil or absorbAmount == nil or absorbAmount <= 0 then
+        return
+    end
+    target:CastCustomSpell(target, SPELL_DK_RUNIC_POWER_ENERGIZE, true, math.floor(absorbAmount * 20 / 100))
+end
+
+local function runeTapPartyTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        targets:Remove(caster)
+    end
+end
+
+RegisterAuraEvent(SPELL_DK_ANTI_MAGIC_SHELL_SELF, 11, antiMagicShellSelfCalcAmount)
+RegisterAuraEvent(SPELL_DK_ANTI_MAGIC_SHELL_SELF, 9, antiMagicShellSelfAbsorb)
+RegisterAuraEvent(SPELL_DK_ANTI_MAGIC_SHELL_SELF, 10, antiMagicShellSelfAfterAbsorb)
+RegisterSpellEvent(SPELL_DK_RUNE_TAP_PARTY, 7, runeTapPartyTargets)
