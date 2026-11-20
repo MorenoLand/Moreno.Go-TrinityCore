@@ -81,9 +81,10 @@ func (s *Server) grantChannelDeathItems(ctx context.Context, auras []*activeAura
 		}
 		// AuraEffect::HandleChannelDeathItem fires only on removal with
 		// AURA_REMOVE_BY_DEATH (SpellAuraEffects.cpp:4692); death-persistent
-		// auras are never stripped by RemoveAllAurasOnDeath, so the handler
-		// never fires for them — exclude them from the pre-strip set.
-		if spellDeathPersistent(s.Data, aura.SpellID) {
+		// and passive auras are never stripped by RemoveAllAurasOnDeath, so
+		// the handler never fires for them — exclude them from the
+		// pre-strip set.
+		if spellDeathPersistent(s.Data, aura.SpellID) || spellIsPassive(s.Data, aura.SpellID) {
 			continue
 		}
 		spell, found, err := s.Data.Spell(aura.SpellID)
@@ -168,8 +169,9 @@ func isCharmFamilyAura(auraType uint32) bool {
 // (Unit.cpp:8916, before RemoveAllControlled) already removed by type
 // with no death-persistence check — the sweep's strip of a vehicle aura
 // models ExitVehicle, not the death strip, and the remove funnel then
-// runs the wasControlVehicle exit tail. Go holds
-// no passive aura instances, so only the death-persistent gate is modeled.
+// runs the wasControlVehicle exit tail. Passive auras reach the stores through creature casts (charm re-casts
+// the creature's passive template spells, creaturemotion.go), so the
+// passive gate is live here too.
 // Records are matched on aura.CasterGUID == casterGUID, which creature casts
 // set to the motion GUID (boss_ai.go:1063) and player casts to the player
 // GUID. The per-caster merge deviation is parked: a same-spell record from
@@ -195,7 +197,7 @@ func (s *Server) sweepOwnedAurasOnDeath(casterGUID uint64) {
 		var strip []uint32
 		if sess.activeAuras != nil {
 			for id, aura := range sess.activeAuras {
-				if aura == nil || aura.CasterGUID != casterGUID || (spellDeathPersistent(s.Data, id) && !isCharmFamilyAura(aura.AuraType) && aura.AuraType != spellAuraControlVehicle) {
+				if aura == nil || aura.CasterGUID != casterGUID || ((spellIsPassive(s.Data, id) || spellDeathPersistent(s.Data, id)) && !isCharmFamilyAura(aura.AuraType) && aura.AuraType != spellAuraControlVehicle) {
 					continue
 				}
 				strip = append(strip, id)
@@ -216,7 +218,7 @@ func (s *Server) sweepOwnedAurasOnDeath(casterGUID uint64) {
 	if s.activeCreatureAuras != nil {
 		for key, auras := range s.activeCreatureAuras {
 			for id, aura := range auras {
-				if aura == nil || aura.CasterGUID != casterGUID || (spellDeathPersistent(s.Data, id) && !isCharmFamilyAura(aura.AuraType) && aura.AuraType != spellAuraControlVehicle) {
+				if aura == nil || aura.CasterGUID != casterGUID || ((spellIsPassive(s.Data, id) || spellDeathPersistent(s.Data, id)) && !isCharmFamilyAura(aura.AuraType) && aura.AuraType != spellAuraControlVehicle) {
 					continue
 				}
 				cstrip = append(cstrip, ownedStrip{key: key, id: id})

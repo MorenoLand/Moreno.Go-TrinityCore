@@ -36043,7 +36043,8 @@ func (s *Server) clearCreatureAuras(key creatureAuraKey) {
 
 // clearCreatureAurasOnDeath mirrors Unit::RemoveAllAurasOnDeath (Unit.cpp)
 // for creature targets: death-persistent auras
-// (SPELL_ATTR3_DEATH_PERSISTENT) survive the strip; everything else goes
+// (SPELL_ATTR3_DEATH_PERSISTENT) and passive auras (SPELL_ATTR0_PASSIVE,
+// Unit.cpp:4360) survive the strip; everything else goes
 // through the creature remove funnel, so the remove legs (taunt/charm/
 // vehicle/phase/feign-death drops, linked-trigger drops, the quest-tame
 // final, speed recompute, the aura-remove broadcast) run on death exactly
@@ -36058,7 +36059,7 @@ func (s *Server) clearCreatureAurasOnDeath(key creatureAuraKey) {
 	if s.activeCreatureAuras != nil {
 		if auras, ok := s.activeCreatureAuras[key]; ok {
 			for id, aura := range auras {
-				if aura == nil || spellDeathPersistent(s.Data, id) {
+				if aura == nil || spellDeathPersistent(s.Data, id) || spellIsPassive(s.Data, id) {
 					continue
 				}
 				strip = append(strip, id)
@@ -36158,13 +36159,34 @@ func spellDeathPersistent(data *wotlk.Store, spellID uint32) bool {
 	return false
 }
 
+// spellIsPassive mirrors SpellInfo::IsPassive (SpellInfo.cpp:1166):
+// SPELL_ATTR0_PASSIVE auras survive Unit::RemoveAllAurasOnDeath
+// (Unit.cpp:4360/4369) alongside death-persistent ones. Passive
+// instances do reach the aura stores — a creature re-casts its passive
+// template spells on charm (creaturemotion.go) and creature-cast aura
+// spells land through the apply funnels with no passive gate — so the
+// exemption is live, not vacuous. A missing DBC row degrades to
+// non-passive, matching the strip-everything behavior elsewhere.
+func spellIsPassive(data *wotlk.Store, spellID uint32) bool {
+	if data == nil {
+		return false
+	}
+	if spell, found, _ := data.Spell(spellID); found {
+		return spell.Attributes&spellAttributePassive != 0
+	}
+	return false
+}
+
 // clearDeathAuras mirrors the Unit::RemoveAllAurasOnDeath strip
-// (Unit.cpp:4353): death-persistent auras are kept; everything else goes
-// through the remove funnel with AURA_REMOVE_BY_DEATH, so the mode-gated
-// remove arms (the Improved-SR party strip, the linked-cast death gate)
-// see deaths exactly as C++ _UnapplyAura reports them. Go holds no passive
-// aura instances, so the passive exemption is vacuous. Death call sites use
-// this instead of clearActiveAuras; logout/GM strips keep the full clear.
+// (Unit.cpp:4353): death-persistent and passive auras are kept; everything
+// else goes through the remove funnel with AURA_REMOVE_BY_DEATH, so the
+// mode-gated remove arms (the Improved-SR party strip, the linked-cast
+// death gate) see deaths exactly as C++ _UnapplyAura reports them.
+// Learned player passives live in the spell list, not the aura store, but
+// a passive aura can still reach activeAuras through a creature cast
+// (boss_ai.go owner-session arm), so the passive exemption is live.
+// Death call sites use this instead of clearActiveAuras; logout/GM strips
+// keep the full clear.
 func (s *session) clearDeathAuras() {
 	if s == nil {
 		return
@@ -36181,7 +36203,7 @@ func (s *session) clearDeathAuras() {
 				delete(s.activeAuras, id)
 				continue
 			}
-			if spellDeathPersistent(data, id) {
+			if spellDeathPersistent(data, id) || spellIsPassive(data, id) {
 				continue
 			}
 			strip = append(strip, id)
