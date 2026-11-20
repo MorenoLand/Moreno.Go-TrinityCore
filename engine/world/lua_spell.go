@@ -254,6 +254,31 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 		}
 		return []any{p.spell.Effects[index].ChainAmplitude}, nil
 	}
+	// GetEffectType([effectIndex]) is SpellInfo::Effects[eff].Effect
+	// (SpellInfo.h, the DBC effect id: SPELL_EFFECT_DUMMY = 3,
+	// SPELL_EFFECT_SCRIPT_EFFECT = 77, SharedDefines.h:814/888).
+	// The session-builder twin of the creature-path method
+	// (lua_spell.go:656): the creature builder has carried it since
+	// the despawn_self port, but the session builder never did, so
+	// player-cast scripts gating on the effect kind — gen5000Gold
+	// (46642) and genStand (37752) in spell_generic.lua — called a
+	// nil method on the player path. Default effect 0; an unknown
+	// spell, an out-of-range index, or a missing row reads 0, which
+	// matches no gated effect kind.
+	methods["GetEffectType"] = func(_ context.Context, args []any) ([]any, error) {
+		index := 0
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaInt64Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		if index < 0 || index >= len(p.spell.Effects) {
+			return []any{uint32(0)}, nil
+		}
+		return []any{p.spell.Effects[index].Effect}, nil
+	}
 	// SetEffectValue(value) is SpellScript::SetEffectValue
 	// (SpellScript.cpp:677-686): writes m_spell->damage for the
 	// effect/target the launch-target fire is currently on. A no-op

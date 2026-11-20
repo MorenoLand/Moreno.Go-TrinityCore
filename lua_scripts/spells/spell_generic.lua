@@ -2105,3 +2105,210 @@ local function registerTournamentPennant()
     end
 end
 registerTournamentPennant()
+
+-- PORTED (this tick, strip extension): three more
+-- spell_generic.cpp classes, each verified name-by-name
+-- vs C++ + bridges (per-port comments below). All 8
+-- registered IDs are TDB-bound in 26091 (42292/59752
+-- spell_pvp_trinket_shared_cd, 7744
+-- spell_wotf_shared_cd, 57669/61782
+-- spell_gen_replenishment, 50630/63109/68576
+-- spell_gen_eject_all_passengers). All three are
+-- DORMANT until Spell.dbc ships the rows (no seed
+-- rows for any of the 8 IDs; seed axis parked). One
+-- more table local: the file sits at 198/200
+-- main-chunk locals after STRIP10, now 199 — the
+-- registrations below are individual calls, never a
+-- top-level loop, so no further locals are added.
+local SPELL_GEN_STRIP11 = {
+    pvpTrinket = { 42292, 59752 }, -- spell_generic.cpp:4453
+    pvpTrinketTrigger = 72752, -- spell_generic.cpp:3342
+    wotf = 7744, -- spell_generic.cpp:4454
+    wotfTrigger = 72757, -- spell_generic.cpp:3343
+    replenishment = { 57669, 61782 }, -- spell_generic.cpp:4439
+    ejectAllPassengers = { 50630, 63109, 68576 }, -- spell_generic.cpp:3615
+}
+
+-- PORTED (this tick, RegisterSpellEvent AfterCast = 9):
+--   spell_pvp_trinket_wotf_shared_cd::HandleScript
+--   (spell_generic.cpp:3356-3384): AfterCast, the
+--   caster casts the trigger spell non-triggered — the
+--   C++ workaround so the client gets SMSG_SPELL_GO
+--   and registers the shared cooldown. 42292/59752
+--   (Medallion of the Alliance/Horde) trigger 72752;
+--   7744 (Will of the Forsaken) triggers 72757
+--   (registered C++:4453-4454 under
+--   spell_pvp_trinket_shared_cd / spell_wotf_shared_cd;
+--   TDB 26091 binds the trinket/WotF IDs, not the
+--   trigger IDs — the AC rows binding 72752/72757 to
+--   the class name are dead, that name is registered
+--   nowhere). AfterCast fires on the player path in
+--   finishSpellCast (spells.go:20524/20691, both
+--   branches). Gap (fidelity caveat, documented):
+--   player CastSpell ignores the triggered arg —
+--   castSpellDirect always rides the triggered funnel
+--   (spells.go:24800-24801) — so the non-triggered
+--   nuance cannot be expressed from Lua; server-side
+--   cooldown application is unaffected, and the
+--   triggered funnel sends SMSG_SPELL_GO when the
+--   spell has a visual / is channeled / has speed
+--   (spells.go:27696-27706). No Go leg exists for
+--   72752/72757; spells.go:7657 only handles the
+--   42292/59752 mechanic immunity.
+RegisterSpellEvent(SPELL_GEN_STRIP11.pvpTrinket[1], 9, function(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        caster:CastSpell(nil, SPELL_GEN_STRIP11.pvpTrinketTrigger, true)
+    end
+end)
+RegisterSpellEvent(SPELL_GEN_STRIP11.pvpTrinket[2], 9, function(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        caster:CastSpell(nil, SPELL_GEN_STRIP11.pvpTrinketTrigger, true)
+    end
+end)
+RegisterSpellEvent(SPELL_GEN_STRIP11.wotf, 9, function(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        caster:CastSpell(nil, SPELL_GEN_STRIP11.wotfTrigger, true)
+    end
+end)
+
+-- PORTED (this tick, RegisterSpellEvent
+--   OnObjectAreaTargetSelect = 7):
+--   spell_gen_replenishment::RemoveInvalidTargets
+--   (spell_generic.cpp:3015-3037): EFFECT_ALL,
+--   TARGET_UNIT_CASTER_AREA_RAID. In an arena the
+--   caster is the only target (targets.clear +
+--   push_back(caster)); otherwise non-mana targets
+--   drop (ReplenishmentCheck: ToUnit fails, or
+--   GetPowerType() != POWER_MANA) and, past 10
+--   targets, the list sorts by mana pct ascending
+--   (PowerPctOrderPred, ascending by default,
+--   Unit.h:1858-1861) and resizes to 10. The ev7
+--   hook fires per selecting effect on the player
+--   path (firePlayerSpellTargetSelects, lua_spell.go)
+--   and the triggered funnel (spells.go:27660 block),
+--   with args (event, spell, effectIndex, targets);
+--   Replenishment is proc-cast (procs.go:5385-5401,
+--   boss_ai.go:11544-11553). GetPowerType reads the
+--   player bridge (lua_player.go:431) and the generic
+--   object fallback on creature targets (object.go:203,
+--   Fields PowerType, lua_creature_events.go:8031);
+--   GetPowerPct(0) reads the player bridge
+--   (lua_player.go:1489) and the same fallback on
+--   creatures (current-type power pct, which is the
+--   mana pct once the power-type gate has passed).
+--   InArena lives on the player surface
+--   (lua_player.go:5112); the caster is the session
+--   player (lua_spell.go:192). The aura half
+--   (DoEffectCalcAmount, 0.2%/0.25% of max mana)
+--   stays out — no CalcAmount hook exists (E5).
+RegisterSpellEvent(SPELL_GEN_STRIP11.replenishment[1], 7, function(event, spell, effectIndex, targets)
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:GetTypeId() == TYPEID_PLAYER and caster:InArena() then
+        targets:Clear()
+        targets:Add(caster)
+        return
+    end
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if target ~= nil and target:GetPowerType() == 0 then
+            table.insert(kept, { unit = target, pct = target:GetPowerPct(0) })
+        else
+            targets:Remove(target)
+        end
+    end
+    if #kept > 10 then
+        table.sort(kept, function(a, b) return a.pct < b.pct end)
+        for i = 11, #kept do
+            targets:Remove(kept[i].unit)
+        end
+    end
+end)
+RegisterSpellEvent(SPELL_GEN_STRIP11.replenishment[2], 7, function(event, spell, effectIndex, targets)
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:GetTypeId() == TYPEID_PLAYER and caster:InArena() then
+        targets:Clear()
+        targets:Add(caster)
+        return
+    end
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if target ~= nil and target:GetPowerType() == 0 then
+            table.insert(kept, { unit = target, pct = target:GetPowerPct(0) })
+        else
+            targets:Remove(target)
+        end
+    end
+    if #kept > 10 then
+        table.sort(kept, function(a, b) return a.pct < b.pct end)
+        for i = 11, #kept do
+            targets:Remove(kept[i].unit)
+        end
+    end
+end)
+
+-- PORTED (this tick, RegisterSpellEvent AfterHit = 3):
+--   spell_gen_eject_all_passengers::RemoveVehicleAuras
+--   (spell_generic.cpp:3620-3627): AfterHit, the hit
+--   unit's vehicle kit RemoveAllPassengers(). ev3
+--   fires once per unit hit target with args (event,
+--   spell, hitTarget) (lua_spell.go:906). GetVehicleKit
+--   lives on both surfaces (lua_player.go:3637,
+--   lua_creature_events.go:4011); kit:GetPassenger(seat)
+--   returns nil for unknown seats (lua_vehicle.go:129)
+--   and passenger:ExitVehicle() on both surfaces
+--   (lua_player.go:3760, lua_creature_events.go:4163).
+--   Delta (only approximation): no
+--   RemoveAllPassengers/seat-count bridge exists, so
+--   the port loops seats 0..7 with a nil-skip — the
+--   eject_passenger precedent (same file) uses the
+--   same kit calls. Exiting seat by seat while
+--   iterating is safe: GetPassenger reads the live
+--   kit per seat.
+RegisterSpellEvent(SPELL_GEN_STRIP11.ejectAllPassengers[1], 3, function(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    local kit = hitTarget:GetVehicleKit()
+    if kit == nil then
+        return
+    end
+    for seat = 0, 7 do
+        local passenger = kit:GetPassenger(seat)
+        if passenger ~= nil then
+            passenger:ExitVehicle()
+        end
+    end
+end)
+RegisterSpellEvent(SPELL_GEN_STRIP11.ejectAllPassengers[2], 3, function(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    local kit = hitTarget:GetVehicleKit()
+    if kit == nil then
+        return
+    end
+    for seat = 0, 7 do
+        local passenger = kit:GetPassenger(seat)
+        if passenger ~= nil then
+            passenger:ExitVehicle()
+        end
+    end
+end)
+RegisterSpellEvent(SPELL_GEN_STRIP11.ejectAllPassengers[3], 3, function(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    local kit = hitTarget:GetVehicleKit()
+    if kit == nil then
+        return
+    end
+    for seat = 0, 7 do
+        local passenger = kit:GetPassenger(seat)
+        if passenger ~= nil then
+            passenger:ExitVehicle()
+        end
+    end
+end)
