@@ -9435,13 +9435,16 @@ func (s *session) creatureCharmerOrOwnerGUID(guid uint64) uint64 {
 // the pet shape keeps armGUID on the list GUID while the player shape remaps
 // the caster GUID to reflectSourceGUID. The PreprocessSpellHit arms read
 // _spellHitTarget, the caster for a clean reflect, so the immunity arm
-// resolves against casterGUID for a reflected entry. Residual: a reflected
-// entry whose ReflectResult is IMMUNE (bounced at launch) has a null
+// resolves against casterGUID for a reflected entry. A reflected entry
+// whose ReflectResult is IMMUNE (bounced at launch) has a null
 // _spellHitTarget in C++ (PreprocessTarget, Spell.cpp:2350-2351), so no
-// arrival LOGMISS arms run on it — the pet shape cannot tell it apart from
-// a clean reflect from the set alone, so a pet that gains immunity or starts
-// evading mid-flight sends one extra arrival LOGMISS for such an entry.
-func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64, casterGUID uint64, reflected map[uint64]bool) []uint64 {
+// arrival LOGMISS arms run on it — the pet shape threads the launch
+// reflect status (reflectedStatus, from the launch reflected map) so a
+// bounced entry skips the evade/immunity arms while keeping the
+// DoTargetSpellHit silent arms; the player shape passes nil, since it
+// never carries a bounced entry (retarget skipped on bounce, AoE trips
+// drop bounced entries at roll time).
+func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64, casterGUID uint64, reflected map[uint64]bool, reflectedStatus map[uint64]uint8) []uint64 {
 	if len(targets) == 0 {
 		return targets
 	}
@@ -9453,8 +9456,12 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		// identity arm. The PreprocessSpellHit arms below are the
 		// exception: they run on _spellHitTarget, which a clean reflect
 		// resolves to the caster (PreprocessTarget, Spell.cpp:2350-2357)
-		// and a missed reflect leaves null — bounced reflects never
-		// reach this function (nil hitTargets at launch). The evade arm
+		// and a missed reflect leaves null — the player shape never
+		// carries one (a bounced reflect yields nil hitTargets at
+		// launch; its AoE trips drop bounced entries at roll time),
+		// but the pet shape keeps reflector GUIDs in the list, so a
+		// bounced entry DOES reach this function with a null
+		// _spellHitTarget. The evade arm
 		// is vacuous for a player caster (ToCreature null), the
 		// NON_ATTACKABLE and duel-end arms are skipped by the
 		// m_caster != unit gate, and only immunity evaluates, on the
@@ -9462,6 +9469,13 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		// chain primary shares the cast with unreflected jumps, whose
 		// _spellHitTarget is themselves.
 		reflectedEntry := isReflected && ((reflected != nil && reflected[guid]) || (reflected == nil && guid == casterGUID))
+		// A bounced reflect (ReflectResult != NONE) leaves
+		// _spellHitTarget null (PreprocessTarget, Spell.cpp:2350),
+		// so no PreprocessSpellHit arm runs on it at arrival — only
+		// the DoTargetSpellHit silent arms below. The pet shape
+		// carries the launch status in reflectedStatus (the player
+		// shape passes nil: it never carries a bounced entry).
+		bouncedReflect := reflectedEntry && reflectedStatus != nil && reflectedStatus[guid] != protocol.SpellMissNone
 		armGUID := guid
 		if reflectedEntry && reflected == nil {
 			armGUID = reflectSourceGUID
@@ -9481,12 +9495,12 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		if reflectedEntry && reflected != nil {
 			evadeGUID = casterGUID
 		}
-		if s.server != nil && s.player != nil && (!reflectedEntry || reflected != nil) && (uint16(evadeGUID>>48) == 0xF130 || uint16(evadeGUID>>48) == 0xF140 || uint16(evadeGUID>>48) == 0xF150) &&
+		if !bouncedReflect && s.server != nil && s.player != nil && (!reflectedEntry || reflected != nil) && (uint16(evadeGUID>>48) == 0xF130 || uint16(evadeGUID>>48) == 0xF140 || uint16(evadeGUID>>48) == 0xF150) &&
 			s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, evadeGUID) {
 			s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
 			continue
 		}
-		if s.server != nil {
+		if s.server != nil && !bouncedReflect {
 			// PreprocessSpellHit runs on _spellHitTarget: the caster for a
 			// reflected entry, the unit itself otherwise. The LOGMISS
 			// packet still names the TargetInfo unit (Spell.cpp:2370),
@@ -20603,17 +20617,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.spendCastItemCharges(ctx, spell, castItemGUID, castItemEntry)
 		// SpellEvent::Execute's first DELAYED tick re-plans at
 		// GetDelayStart() + GetDelayMoment() (Spell.cpp:7640-7646), where
-		// GetDelayMoment is the minimum targetInfo.TimeDelay across ALL
-		// targets (Spell.cpp:2167-2168) — not the explicit target's travel
-		// time.
-		minDelayMs := -1
-		for _, ht := range hitTargets {
-			if tdm := s.spellTargetTimeDelayMs(ctx, spell, ht); minDelayMs < 0 || tdm < minDelayMs {
-				minDelayMs = tdm
-			}
-		}
-		timeDelayMs := minDelayMs
-		if timeDelayMs < 0 {
+		// GetDelayMoment is m_delayMoment: the dst delay when the spell
+		// has a destination (SelectSpellTargets :838-839 overrides the
+		// per-target minimum), else the minimum targetInfo.TimeDelay
+		// across ALL targets (Spell.cpp:2167-2168) — not the explicit
+		// target's travel time. spellDelayMomentMs carries both arms;
+		// it also skips the caster in the minimum (AddUnitTarget's
+		// m_caster != target leg, Spell.cpp:2156-2169), where the old
+		// hand-rolled loop let a self hit zero the delay outright.
+		timeDelayMs := int(s.spellDelayMomentMs(ctx, spell, target, hitTargets))
+		if timeDelayMs <= 0 {
 			// No resolved hit targets: fall back to the explicit target's
 			// travel time.
 			timeDelayMs = s.spellTargetTimeDelayMs(ctx, spell, targetGUID)
@@ -20680,7 +20693,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// cast-time hit list at missile arrival — immunity gained
 				// mid-flight, death, sanctuary, or a vanished/evading target
 				// drops the hit.
-				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, isReflected, reflectSourceGUID, s.playerGUID, nil)
+				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, isReflected, reflectSourceGUID, s.playerGUID, nil, nil)
 				reflectedAoETrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAoETrips, launchMs, true)
 				reflectedAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAllyTrips, launchMs, true)
 				refCenteredAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, refCenteredAllyTrips, launchMs, true)
@@ -20695,10 +20708,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// remap applies here (isReflected=false). A member dropped
 				// here takes no effects at arrival, matching a dropped
 				// hitTargets member.
-				friendlyEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyEffectTargets, launchMs, false, 0, s.playerGUID, nil)
-				refCenteredFriendlyTargets = s.revalidateDelayedHitTargets(context.Background(), spell, refCenteredFriendlyTargets, launchMs, false, 0, s.playerGUID, nil)
-				friendlyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyConeEffectTargets, launchMs, false, 0, s.playerGUID, nil)
-				enemyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, enemyConeEffectTargets, launchMs, false, 0, s.playerGUID, nil)
+				friendlyEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyEffectTargets, launchMs, false, 0, s.playerGUID, nil, nil)
+				refCenteredFriendlyTargets = s.revalidateDelayedHitTargets(context.Background(), spell, refCenteredFriendlyTargets, launchMs, false, 0, s.playerGUID, nil, nil)
+				friendlyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyConeEffectTargets, launchMs, false, 0, s.playerGUID, nil, nil)
+				enemyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, enemyConeEffectTargets, launchMs, false, 0, s.playerGUID, nil, nil)
 				// Spell::handle_delayed (Spell.cpp:3631): UpdatePointers
 				// re-derives the dest from the transport's current
 				// position at missile arrival, so a delayed dest lands
@@ -20771,8 +20784,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			//   - Per-target TimeDelay waves: C++ staggers multi-target
 			//     landings by distance (single_missile when HasDst(),
 			//     else per-target t_offset waves with next_time
-			//     rescheduling); Go fires one timer on the explicit
-			//     target's travel time and lands all targets together.
+			//     rescheduling); Go fires one timer at m_delayMoment
+			//     (the dst delay when HasDst, else the minimum target
+			//     delay) and lands all targets together — the wave
+			//     staggering itself stays open.
 			//   - m_UniqueGOTargetInfo recheck: Go has no gameobject/corpse/
 			//     item target containers (unit targets only).
 			//   - handle_delayed's DoProcessTargetContainer(delayedTargets)
@@ -21042,9 +21057,11 @@ func (s *session) fireSpellLinkedTriggers(ctx context.Context, spellID uint32, t
 // C++ authority: Spell::finish (Spell.cpp:3978-3983) calls AttackStop().
 // spellDelayMomentMs mirrors Spell::m_delayMoment as written into the
 // SMSG_SPELL_GO missile-trajectory block (Spell.cpp:4369-4373): the
-// CalculateDelayMomentForDst value (Spell.cpp:839-855) minimized across the
-// per-target TimeDelays (Spell.cpp:2166-2168). The traj branch divides the
-// 2D caster->dst distance by the horizontal speed (m_speed * cos(elevation),
+// CalculateDelayMomentForDst value (Spell.cpp:839-855) OVERRIDES the
+// per-target minimum when the spell has a destination — SelectSpellTargets
+// (Spell.cpp:838-839) assigns m_delayMoment = dstDelay unconditionally
+// when it is nonzero, it does not minimize the two. The traj branch divides
+// the 2D caster->dst distance by the horizontal speed (m_speed * cos(elevation),
 // SpellCastTargets::GetSpeedXY, Spell.h:206); the non-traj branch uses the
 // spell's DBC speed over the 3D caster->dst distance. Per-target delays only
 // apply when the spell has DBC speed (Spell.cpp:2156), and the caster itself
@@ -21078,6 +21095,13 @@ func (s *session) spellDelayMomentMs(ctx context.Context, spell wotlk.Spell, tar
 			dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
 			delayMoment = uint64(math.Floor(dist / float64(spell.Speed) * 1000.0))
 		}
+	}
+	// Spell::SelectSpellTargets (Spell.cpp:838-839): a nonzero dst delay
+	// replaces m_delayMoment outright — with single_missile (HasDst,
+	// Spell.cpp:3656) every target lands on the first delayed tick, so the
+	// per-target minimum never applies to a dst spell.
+	if delayMoment != 0 {
+		return delayMoment
 	}
 	if spell.Speed > 0 {
 		for _, ht := range hitTargets {

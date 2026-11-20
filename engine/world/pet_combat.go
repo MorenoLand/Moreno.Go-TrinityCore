@@ -3790,6 +3790,61 @@ func (s *session) petSpellTargetTimeDelayMs(ctx context.Context, spell wotlk.Spe
 	return int(math.Floor(float64(dist) / float64(spell.Speed) * 1000.0))
 }
 
+// petDelayMomentMs mirrors Spell::m_delayMoment for a pet caster
+// (Spell::SelectSpellTargets, Spell.cpp:838-839;
+// CalculateDelayMomentForDst, Spell.cpp:839-855): the dst delay
+// overrides the per-target minimum when the spell has a destination —
+// it is not minimized against it. The traj branch divides the 2D
+// pet->dst distance by the horizontal speed (m_speed * cos(elevation));
+// the non-traj branch uses the spell's DBC speed over the 3D pet->dst
+// distance. The traj source is the pet's live position (m_src defaults
+// to the caster; the pet path carries no ReadSrc refinement — the
+// player twin's, spells.go spellDelayMomentMs). Per-target delays only
+// apply when the spell has DBC speed (Spell.cpp:2156), and the pet
+// itself is skipped (m_caster != target).
+func (s *session) petDelayMomentMs(ctx context.Context, spell wotlk.Spell, motion *creatureMotion, target protocol.SpellTargetData, hitTargets []uint64) uint64 {
+	var delayMoment uint64
+	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		if target.TrajSpeed != 0 {
+			speedXY := float64(target.TrajSpeed) * math.Cos(float64(target.TrajElevation))
+			if speedXY > 0 {
+				dx := float64(target.Destination.X - motion.X)
+				dy := float64(target.Destination.Y - motion.Y)
+				dist2d := math.Sqrt(dx*dx + dy*dy)
+				delayMoment = uint64(math.Floor(dist2d / speedXY * 1000.0))
+			}
+		} else if spell.Speed > 0 {
+			dx := float64(target.Destination.X - motion.X)
+			dy := float64(target.Destination.Y - motion.Y)
+			dz := float64(target.Destination.Z - motion.Z)
+			dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
+			delayMoment = uint64(math.Floor(dist / float64(spell.Speed) * 1000.0))
+		}
+	}
+	// Spell::SelectSpellTargets (Spell.cpp:838-839): a nonzero dst delay
+	// replaces m_delayMoment outright — with single_missile (HasDst,
+	// Spell.cpp:3656) every target lands on the first delayed tick, so the
+	// per-target minimum never applies to a dst spell.
+	if delayMoment != 0 {
+		return delayMoment
+	}
+	if spell.Speed > 0 {
+		for _, ht := range hitTargets {
+			if ht == motion.GUID {
+				continue
+			}
+			tdm := s.petSpellTargetTimeDelayMs(ctx, spell, motion, ht)
+			if tdm < 0 {
+				continue
+			}
+			if delayMoment == 0 || uint64(tdm) < delayMoment {
+				delayMoment = uint64(tdm)
+			}
+		}
+	}
+	return delayMoment
+}
+
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
@@ -5317,12 +5372,25 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// resolver applies to its returned target. Applied to the GO
 		// copy only, so the cast's own target struct keeps the packet
 		// flag the traj arm already consumed.
+		// Spell::SendSpellGo (Spell.cpp:4369-4373): the missile-trajectory
+		// block carries Pitch = the client-supplied elevation and
+		// TravelTime = m_delayMoment — the pet twin of the player path's
+		// goExtras arm (spells.go:14297). The nearby broadcast carries
+		// the same block: SendSpellGo writes one packet per observer.
+		var petGoExtras protocol.SpellGoTrailerExtras
+		if target.TrajSpeed != 0 {
+			castFlags |= protocol.SpellCastFlagAdjustMissile
+			petGoExtras.Trajectory = &protocol.SpellGoMissileTrajectory{
+				Pitch:      target.TrajElevation,
+				TravelTime: uint32(s.petDelayMomentMs(ctx, spell, motion, target, hitTargets)),
+			}
+		}
 		goTarget := finalizeSessionSrcTarget(spell, spellGoPacketTarget(spell, target), target.Flags&protocol.SpellTargetFlagSourceLocation != 0, motion.X, motion.Y, motion.Z)
-		goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, packetHits, missStatus, goTarget, power)
+		goPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags, stamp, packetHits, missStatus, goTarget, power, petGoExtras)
 		if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPacket, true); err != nil {
 			return false
 		}
-		nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, goTarget)
+		nearbyPacket := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, goTarget, nil, petGoExtras)
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
 		// Twin of the boss_ai.go arm: Spell::handle_immediate
 		// (Spell.cpp:3493) sends MSG_CHANNEL_START after SendSpellGo
@@ -6836,20 +6904,23 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	// Spell::_cast (Spell.cpp:3473-3500) delayed branch, pet-path twin of
 	// finishSpellCast: Speed > 0 and not channeled defers the HIT phase to
-	// the minimum target TimeDelay (GetDelayMoment, Spell.cpp:2167-2168); a
-	// reflected primary takes the return trip (outbound + half,
-	// Spell.cpp:2184). The arrival tick revalidates the hit list
-	// (handle_delayed, Spell.cpp:3645-3663) and drops the cast when the pet
-	// despawned mid-flight (despawned pet's event dies — the
-	// ProcReflectDelayed arm's precedent above).
+	// m_delayMoment (GetDelayMoment — the dst delay when HasDst, else the
+	// minimum target TimeDelay, Spell.cpp:2167-2168); a reflected primary
+	// takes the return trip (outbound + half, Spell.cpp:2184). The arrival
+	// tick revalidates the hit list (handle_delayed, Spell.cpp:3645-3663)
+	// and drops the cast when the pet despawned mid-flight (despawned pet's
+	// event dies — the ProcReflectDelayed arm's precedent above).
 	if spell.Speed > 0 && !isChanneledSpell(spell) {
-		timeDelayMs := -1
-		for _, ht := range hitTargets {
-			if tdm := s.petSpellTargetTimeDelayMs(ctx, spell, motion, ht); timeDelayMs < 0 || tdm < timeDelayMs {
-				timeDelayMs = tdm
-			}
-		}
-		if timeDelayMs < 0 {
+		// SpellEvent's first DELAYED tick fires at m_delayMoment
+		// (Spell.cpp:7640-7646). petDelayMomentMs carries the dst
+		// override (SelectSpellTargets :838-839) and skips the pet in
+		// the minimum (AddUnitTarget's m_caster != target leg,
+		// Spell.cpp:2156-2169), where the old hand-rolled loop let a
+		// self hit zero the delay outright.
+		timeDelayMs := int(s.petDelayMomentMs(ctx, spell, motion, target, hitTargets))
+		if timeDelayMs <= 0 {
+			// No resolved hit targets: fall back to the explicit target's
+			// travel time.
 			timeDelayMs = s.petSpellTargetTimeDelayMs(ctx, spell, motion, targetGUID)
 		}
 		if reflectedSet[targetGUID] {
@@ -6890,7 +6961,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// (immunity/evade read the pet, death/sanctuary read the
 				// reflector). reflectSourceGUID is unused in this shape —
 				// there is no caster-GUID entry to remap — so it stays 0.
-				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, len(reflectedSet) > 0, 0, motion.GUID, reflectedSet)
+				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, len(reflectedSet) > 0, 0, motion.GUID, reflectedSet, launchReflected)
 				runPetEffects(context.Background())
 			})
 		} else {
