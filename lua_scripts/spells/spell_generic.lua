@@ -1909,3 +1909,199 @@ RegisterSpellEvent(SPELL_GEN_STRIP8.bonked, 3, function(event, spell, hitTarget)
     hitTarget:CastSpell(hitTarget, SPELL_GEN_STRIP8.bonkedDefeat, true)
     hitTarget:RemoveAurasDueToSpell(SPELL_GEN_STRIP8.bonked)
 end)
+
+-- PORTED (this tick): three spell_generic.cpp classes, each
+-- verified name-by-name vs C++ + bridges (per-port comments
+-- below). All 3 registered IDs are TDB-bound in 26091
+-- (spell_script_names: 35201 spell_gen_paralytic_poison,
+-- 45472 spell_gen_parachute, 27539 spell_gen_obsidian_armor);
+-- all three are DORMANT until Spell.dbc ships the rows. The
+-- IDs live in one table local: the file sits at 195/200
+-- main-chunk locals, so new consts are grouped and handlers
+-- are inline (function-scope locals do not count toward
+-- the 200).
+local SPELL_GEN_STRIP9 = {
+    obsidianArmor = 27539, -- spell_generic.cpp:2481
+    obsidianArmorSpells = { [1] = 27536, [2] = 27533, [3] = 27538, [4] = 27534, [5] = 27535, [6] = 27540 }, -- spell_generic.cpp:2473-2478
+    paralyticPoison = 35201, -- spell_generic.cpp:2643
+    paralysis = 35202, -- spell_generic.cpp:2640
+    parachute = 45472, -- spell_generic.cpp:2712
+    parachuteBuff = 44795, -- spell_generic.cpp:2709
+}
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_gen_obsidian_armor::CheckProc + OnProc
+--   (spell_generic.cpp:2500-2541): 27539, EFFECT_0 DUMMY.
+--   CheckProc gates on the proc event carrying a damage
+--   spell (GetSpellId() == 0 vetoes, the no-DamageInfo
+--   twin; black_magic / adaptive_warding precedent) and
+--   on the first school in the event mask not being
+--   NORMAL (GetFirstSchoolInMask: lowest set bit, the
+--   adaptive_warding bit32 loop). The school picks the
+--   triggered self-cast: holy 27536, fire 27533, nature
+--   27538, frost 27534, shadow 27535, arcane 27540 (C++
+--   CastSpell(target, id, aurEff) rides
+--   CastSpellExtraArgs(aurEff) = TRIGGERED_FULL_MASK,
+--   SpellDefines.h:166). Return true on every path is
+--   the PreventDefaultAction twin. DORMANT until
+--   Spell.dbc ships the 27539 row.
+RegisterAuraEvent(SPELL_GEN_STRIP9.obsidianArmor, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if target == nil then
+        return true
+    end
+    local mask = procEvent:GetSchoolMask()
+    local school = 0
+    for i = 0, 6 do
+        if bit32.band(mask, bit32.lshift(1, i)) ~= 0 then
+            school = i
+            break
+        end
+    end
+    local spellId = SPELL_GEN_STRIP9.obsidianArmorSpells[school]
+    if spellId == nil then
+        return true
+    end
+    target:CastSpell(target, spellId, true)
+    return true
+end)
+
+-- PORTED (this tick, RegisterAuraEvent OnRemove = 3):
+--   spell_gen_paralytic_poison::HandleStun
+--   (spell_generic.cpp:2652-2659): 35201, EFFECT_0
+--   PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL. Only when
+--   the remove mode is AURA_REMOVE_BY_EXPIRE does the
+--   target cast 35202 triggered on nil (C++ CastSpell
+--   (nullptr, SPELL_PARALYSIS, aurEff) rides
+--   CastSpellExtraArgs(aurEff) = TRIGGERED_FULL_MASK,
+--   SpellDefines.h:166; the whisper_gulch nil-target
+--   idiom). GetRemoveMode() == 4 is the Go EXPIRE value
+--   (lua_aura.go:403-411: the Go auraRemoveMode iota
+--   carries the C++ SpellAuraDefines.h:61-69 values in
+--   the same order, NOT C++'s 5). No PreventDefaultAction
+--   in C++, so the handler returns nothing. DORMANT
+--   until Spell.dbc ships the 35201 row.
+RegisterAuraEvent(SPELL_GEN_STRIP9.paralyticPoison, 3, function(event, aura, target)
+    if aura:GetRemoveMode() ~= 4 then
+        return
+    end
+    target:CastSpell(nil, SPELL_GEN_STRIP9.paralysis, true)
+end)
+
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_gen_parachute::HandleEffectPeriodic
+--   (spell_generic.cpp:2720-2734): 45472, EFFECT_0
+--   PERIODIC_DUMMY. If the target is a player and is
+--   falling, the aura removes itself (RemoveAurasDueToSpell
+--   45472) and the player self-casts the buff 44795
+--   triggered (C++ CastSpell(target, SPELL_PARACHUTE_BUFF,
+--   true)). IsFalling lives on the player surface only
+--   (lua_player.go:932), matching the C++ ToPlayer()
+--   gate, so the type check comes first. No
+--   PreventDefaultAction in C++, so the handler returns
+--   nothing. DORMANT until Spell.dbc ships the 45472 row.
+RegisterAuraEvent(SPELL_GEN_STRIP9.parachute, 1, function(event, aura, target)
+    if target == nil or target:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    if target:IsFalling() then
+        target:RemoveAurasDueToSpell(SPELL_GEN_STRIP9.parachute)
+        target:CastSpell(target, SPELL_GEN_STRIP9.parachuteBuff, true)
+    end
+end)
+
+-- PORTED (this tick, strip extension): two more
+-- spell_generic.cpp classes, each verified name-by-name
+-- vs C++ + bridges (per-port comments below). All 31
+-- registered IDs are TDB-bound in 26091 (62863
+-- spell_gen_tournament_duel; all 30 pennant IDs
+-- spell_gen_tournament_pennant — the coordinator's "29
+-- IDs" count is wrong, the ranges hold 3+6+6+3+12=30).
+-- Both are DORMANT until Spell.dbc ships the rows. One
+-- more table local: the file sits at 196/200
+-- main-chunk locals after STRIP9, now 197.
+local SPELL_GEN_STRIP10 = {
+    tournamentDuel = 62863, -- spell_generic.cpp:3250
+    onTournamentMount = 63034, -- spell_generic.cpp:3245
+    mountedDuel = 62875, -- spell_generic.cpp:3246
+    tournamentPennant = { 62594, 62595, 62596, 63394, 63395, 63396, 63397, 63398, 63399, 63401, 63402, 63403, 63404, 63405, 63406, 63421, 63422, 63423, 63425, 63426, 63427, 63428, 63429, 63430, 63431, 63432, 63433, 63434, 63435, 63436 }, -- spell_generic.cpp:3286
+}
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget
+--   = 5):
+--   spell_gen_tournament_duel::HandleScriptEffect
+--   (spell_generic.cpp:3260-3277): 62863, EFFECT_0
+--   SCRIPT_EFFECT. The caster is the tournament mount
+--   (creature spell surface: spell:GetCaster() returns
+--   the motion creature, lua_spell.go:738); its charmer
+--   is the rider. If the hit target is a player carrying
+--   63034 and riding a vehicle base, the rider casts
+--   62875 triggered on them. Otherwise, if the hit unit
+--   is a mount whose charmer is a player carrying 63034,
+--   the rider casts 62875 triggered on that charmer
+--   (the C++ unit branch checks no vehicle base). No
+--   GetHitPlayer bridge exists and none is needed: the
+--   branches split on hitTarget:GetTypeId() (the
+--   genStand precedent). GetCharmer lives on the
+--   creature surface only (lua_creature_events.go:721),
+--   which is exactly the surface the mount caster and
+--   the hit mount carry. DORMANT until Spell.dbc ships
+--   the 62863 row.
+RegisterSpellEvent(SPELL_GEN_STRIP10.tournamentDuel, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local rider = caster:GetCharmer()
+    if rider == nil then
+        return
+    end
+    if hitTarget:GetTypeId() == TYPEID_PLAYER then
+        if hitTarget:HasAura(SPELL_GEN_STRIP10.onTournamentMount) and hitTarget:GetVehicleBase() ~= nil then
+            rider:CastSpell(hitTarget, SPELL_GEN_STRIP10.mountedDuel, true)
+        end
+    else
+        local charmer = hitTarget:GetCharmer()
+        if charmer ~= nil and charmer:GetTypeId() == TYPEID_PLAYER and charmer:HasAura(SPELL_GEN_STRIP10.onTournamentMount) then
+            rider:CastSpell(charmer, SPELL_GEN_STRIP10.mountedDuel, true)
+        end
+    end
+end)
+
+-- PORTED (this tick, RegisterAuraEvent OnApply = 2):
+--   spell_gen_tournament_pennant::HandleApplyEffect
+--   (spell_generic.cpp:3292-3301): 30 IDs, EFFECT_0
+--   DUMMY. Load() admits player casters only; on
+--   apply, if the caster has no vehicle base the caster
+--   strips the pennant from themselves
+--   (RemoveAurasDueToSpell(GetId()), the captured
+--   spellId here). Gap (minor, documented): C++
+--   registers REAL_OR_REAPPLY_MASK but Go ev2 does not
+--   re-fire on reapply/refresh, so a pennant refreshed
+--   while dismounted would not self-strip; first-apply
+--   behavior (the common case) is exact. The loop lives
+--   inside a local function: the file sits at 197/200
+--   main-chunk locals, and a top-level generic for adds
+--   5 active locals (3 hidden controls + 2 loop vars),
+--   which would breach the 200 limit — function-scope
+--   locals do not count. DORMANT until Spell.dbc ships
+--   the 30 rows.
+local function registerTournamentPennant()
+    for _, spellId in ipairs(SPELL_GEN_STRIP10.tournamentPennant) do
+        RegisterAuraEvent(spellId, 2, function(event, aura, target)
+            local caster = aura:GetCaster()
+            if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+                return
+            end
+            if caster:GetVehicleBase() == nil then
+                caster:RemoveAurasDueToSpell(spellId)
+            end
+        end)
+    end
+end
+registerTournamentPennant()
