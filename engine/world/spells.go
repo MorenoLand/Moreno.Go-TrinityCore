@@ -40202,6 +40202,22 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			if mergeResistDirty {
 				_ = targetSess.calculatePlayerStats(ctx, targetSess.player)
 			}
+			// AuraScript::DoEffectCalcAmount (AuraEffect::CalculateAmount,
+			// SpellAuraEffects.cpp:425-539): a re-cast's first effect
+			// refreshes its amount through SetStackAmount, which C++
+			// recalculates via CalculateAmount, so the hook re-runs for
+			// this effect — the firstMerge twin of the later-effects
+			// branch above. Synthetic effects (effIndex -1) carry none.
+			if effIndex >= 0 && s.server != nil && s.server.hasAuraCalcAmountHook(spell.ID) {
+				var mergeMap, mergeInst uint32
+				targetSess.playerStateMu.Lock()
+				if targetSess.player != nil {
+					mergeMap, mergeInst = targetSess.player.Map, targetSess.player.InstanceID
+				}
+				targetSess.playerStateMu.Unlock()
+				mergeRef := &luaAuraRef{server: s.server, spellID: spell.ID, player: targetSess, mapID: mergeMap, instanceID: mergeInst}
+				s.server.fireAuraCalcAmount(ctx, spell.ID, mergeRef.luaAuraObject(), targetSess.luaPlayer(), effIndex)
+			}
 			// AuraEffect::ChangeAmount -> CalculateSpellMod
 			// (SpellAuraEffects.cpp:657-683): the merged aura's refreshed
 			// amounts update the registered modifier values, no re-register.
@@ -41853,6 +41869,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// return early — so no fresh gate is needed here.
 	if s.server != nil {
 		auraRef := &luaAuraRef{server: s.server, spellID: spell.ID, creatureKey: targetKey, mapID: targetKey.Map, instanceID: targetKey.InstanceID}
+		// AuraScript::DoEffectCalcAmount (AuraEffect::CalculateAmount,
+		// SpellAuraEffects.cpp:425-539), creature-target twin of the
+		// player fresh leg above: runs per effect while the aura is
+		// created, before the OnApply handler below. Synthetic effects
+		// (effIndex -1) carry none.
+		if effIndex >= 0 && s.server.hasAuraCalcAmountHook(spell.ID) {
+			s.server.fireAuraCalcAmount(ctx, spell.ID, auraRef.luaAuraObject(), s.server.luaUnitObjectForGUID(targetKey.Map, targetKey.InstanceID, targetGUID), effIndex)
+		}
 		s.server.fireAuraApply(ctx, spell.ID, auraRef.luaAuraObject(), s.server.luaUnitObjectForGUID(targetKey.Map, targetKey.InstanceID, targetGUID))
 	}
 }
