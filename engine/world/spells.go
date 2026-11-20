@@ -14398,7 +14398,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// the helper's Executing shield covers the causing cast itself, as in C++
 	// where the launching spell is still PREPARING, and every interrupt spell
 	// is instant so the PREPARING + cast-time leg cannot select it) and
-	// leap-back (138; fall-info reset only — JumpTo has no Go spline model).
+	// leap-back (138; fall-info reset plus the caster's JumpTo packet, one
+	// per reflected trip like C++'s per-target LAUNCH arm).
 	// Single-target reflects need no pass: their hitTargets entry already is
 	// the caster, so the applyEffects base arms cover them.
 	if len(reflectedAoETrips) > 0 {
@@ -14411,6 +14412,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectLeapBack:
 				if effectHasAreaEnemyLeg(eff) && s.player != nil {
 					s.lastFallTime, s.lastFallZ = 0, s.player.Z
+					for range areaEnemyTrips(eff, reflectedAoETrips) {
+						s.jumpToSpellTarget(ctx, spell, eff, uint32(s.player.Level), s.playerGUID)
+					}
 				}
 			}
 		}
@@ -18110,8 +18114,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// LAUNCH_TARGET arm: the player caster's fall info resets
 				// (Player::SetFallInformation(0, z)) only when the effect has
 				// a unit target — Spell::EffectLeapBack returns early on
-				// !unitTarget. Unit::JumpTo has no Go spline model
-				// (documented no-bridge, boss_ai.go).
+				// !unitTarget. Each unit target also JumpTo's
+				// (jumpToSpellTarget below).
 				// Per-effect target list (Spell.cpp:758-779), same switch as
 				// the heal arms: a friendly-area leap-back effect has a unit
 				// target when its own ally selection is non-empty, not when
@@ -18161,6 +18165,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				if hasUnitTarget && s.player != nil {
 					s.lastFallTime, s.lastFallZ = 0, s.player.Z
+				}
+				for _, effectTarget := range leapBackList {
+					s.jumpToSpellTarget(effCtx, spell, eff, casterLevel, effectTarget)
 				}
 			case spellEffectPullTowards: // 124: SPELL_EFFECT_PULL_TOWARDS (EffectPullTowards, SpellEffects.cpp:4667)
 				// Per-effect target list (Spell.cpp:758-779), same switch as
@@ -30034,12 +30041,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// LAUNCH_TARGET per unit target; like the charge and
 				// interrupt arms above, the LAUNCH leg has no separate
 				// launch-phase home on this path, so it rides the
-				// miss-filtered target list. The JumpTo spline has no Go
-				// model (documented no-bridge, boss_ai.go), but the
-				// fall-information leg ports: the player caster's fall
-				// info resets (0, caster Z), idempotent across targets,
-				// mirroring the client arm's has-unit-target gate.
-				if s.player != nil {
+				// miss-filtered target list. The JumpTo leg ports via
+				// jumpToSpellTarget (player targets take the
+				// SMSG_MOVE_KNOCK_BACK packet, creature targets the
+				// MoveJumpTo spline); the fall-information leg resets
+				// the player caster's fall info (0, caster Z) only
+				// when the effect has a unit target, mirroring the
+				// client arm's has-unit-target gate.
+				s.jumpToSpellTarget(ctx, spell, eff, casterLevel, effectTarget)
+				if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 && s.player != nil {
 					s.lastFallTime, s.lastFallZ = 0, s.player.Z
 				}
 			} else if eff.Effect == spellEffectPlaySound {
@@ -56248,6 +56258,36 @@ func (s *session) handleEffectChargeDest(ctx context.Context, target protocol.Sp
 		return
 	}
 	s.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, s.player.Orientation, true)
+}
+
+// jumpToSpellTarget runs the Unit::JumpTo leg of Spell::EffectLeapBack
+// (SpellEffects.cpp:4593, Unit.cpp:12950) for one unit target: player
+// targets take the SMSG_MOVE_KNOCK_BACK packet (sendJumpToKnockBack,
+// direction from the target's own orientation plus the forward/
+// backward angle), creature targets the MoveJumpTo spline
+// (jumpToCreatureTarget). Speeds are MiscValue/10 and the
+// CalcValue/10; forward is SpellIconID != 1891 (Disengage jumps
+// backward). GO targets are not units and take neither leg. No
+// root/stun gate, no interrupt, no boss gate — EffectLeapBack has
+// none, unlike EffectKnockBack.
+func (s *session) jumpToSpellTarget(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, casterLevel uint32, targetGUID uint64) {
+	_ = ctx
+	if s == nil || s.server == nil || targetGUID == 0 || uint16(targetGUID>>48) == 0xF110 {
+		return
+	}
+	speedXY := float32(eff.MiscValue) / 10
+	speedZ := float32(eff.CalcValueForLevel(spell, casterLevel)) / 10
+	forward := spell.SpellIconID != 1891
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		s.server.sendJumpToKnockBack(targetSess, targetGUID, targetSess.player.Orientation, forward, speedXY, speedZ)
+		return
+	}
+	if s.player == nil {
+		return
+	}
+	if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
+		s.server.jumpToCreatureTarget(tm, forward, speedXY, speedZ)
+	}
 }
 
 // handleEffectKnockBack mirrors Spell::EffectKnockBack (SpellEffects.cpp:4552-4592),

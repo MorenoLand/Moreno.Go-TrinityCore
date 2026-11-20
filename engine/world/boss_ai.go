@@ -4073,15 +4073,17 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// caster: the movement arms, grouped with the other effect-grouped
 	// arms above. The EffectCharge (:4493) and EffectChargeDest (:4528)
 	// LAUNCH legs ride the pre-pass above. Gated on spellKnown like the
-	// tail. EffectLeapBack
-	// (:4593) stays out: its target jumps via the unbridged JumpTo
-	// spline and its only portable leg (the caster fall-information
-	// reset) is player-caster-only, like the jump 41/42 no-ops.
+	// tail. EffectLeapBack (:4593) rides creatureEffectLeapBack below —
+	// player targets take the SMSG_MOVE_KNOCK_BACK packet, creature
+	// targets the MoveJumpTo spline; the caster fall-information reset
+	// is player-caster-only and stays out on this path.
 	if spellKnown {
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectLeap:
 				s.creatureEffectLeap(ctx, m, hasDest, destX, destY, destZ, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectLeapBack:
+				s.creatureEffectLeapBack(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectTeleportUnitsFaceCaster:
 				s.creatureEffectTeleUnitsFaceCaster(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectPullTowards:
@@ -6253,6 +6255,60 @@ func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion,
 	}
 }
 
+// sendJumpToKnockBack mirrors the player arm of Unit::JumpTo
+// (Unit.cpp:12950-12972): the SMSG_MOVE_KNOCK_BACK packet carrying the
+// target's own orientation plus the forward/backward angle (forward is
+// false only for Disengage, SpellIconID 1891), the horizontal speed,
+// and the negated vertical speed. Unlike Unit::KnockbackFrom there is
+// no root/stun gate, no non-melee interrupt, no charmer arm and no
+// flying re-enable leg — JumpTo sends the packet bare.
+func (s *Server) sendJumpToKnockBack(targetSess *session, guid uint64, orientation float32, forward bool, speedXY, speedZ float32) {
+	if s == nil || targetSess == nil {
+		return
+	}
+	angle := float64(0)
+	if !forward {
+		angle = math.Pi
+	}
+	vcos := math.Cos(angle + float64(orientation))
+	vsin := math.Sin(angle + float64(orientation))
+	packet := protocol.NewBuffer(32)
+	packet.WritePackedGUID(guid)
+	packet.WriteU32(0)
+	packet.WriteF32(float32(vcos))
+	packet.WriteF32(float32(vsin))
+	packet.WriteF32(speedXY)
+	packet.WriteF32(-speedZ)
+	_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_KNOCK_BACK), packet.Bytes(), true)
+}
+
+// jumpToCreatureTarget mirrors the creature arm of Unit::JumpTo via
+// MotionMaster::MoveJumpTo (MotionMaster.cpp:763-777): the flight is
+// dist = 2 * (speedZ / gravity) * speedXY along the target's own
+// orientation plus the forward/backward angle (GetNearPoint2D with a
+// null searcher adds no reach), Z kept — the UpdateAllowedPositionZ
+// ground clamp has no Go model, the charge/pull snap precedent —
+// launched as a parabolic spline (EVENT_JUMP 1004) like the charge
+// arm's creatureEffectJump. MoveJumpTo returns early for players;
+// the caller routes player targets to sendJumpToKnockBack.
+func (s *Server) jumpToCreatureTarget(tm *creatureMotion, forward bool, speedXY, speedZ float32) {
+	if s == nil || tm == nil {
+		return
+	}
+	angle := float32(0)
+	if !forward {
+		angle = math.Pi
+	}
+	const jumpToGravity = 19.29110527038574
+	s.motionMu.Lock()
+	ox, oy, oz, orientation := tm.X, tm.Y, tm.Z, tm.Orientation
+	s.motionMu.Unlock()
+	dist := 2 * (float64(speedZ) / jumpToGravity) * float64(speedXY)
+	destX := ox + float32(dist*math.Cos(float64(orientation+angle)))
+	destY := oy + float32(dist*math.Sin(float64(orientation+angle)))
+	s.launchCreatureJumpSpline(tm, destX, destY, oz, speedXY, speedZ, 1004)
+}
+
 // knockBackCreatureTarget mirrors MotionMaster::MoveKnockbackFrom
 // (MotionMaster.cpp:735) for a creature hit target, shared by the creature
 // and player caster twins (the boss gate already ran at the call site).
@@ -7988,13 +8044,53 @@ func (s *Server) creatureEffectJumpDest(ctx context.Context, m *creatureMotion, 
 	s.launchCreatureJumpSpline(m, dx, dy, dz, speedXY, speedZ, 1004)
 }
 
+// creatureEffectLeapBack mirrors Spell::EffectLeapBack
+// (SpellEffects.cpp:4593) for a creature caster: the LAUNCH_TARGET arm
+// jumping each hit target via Unit::JumpTo — player targets take the
+// SMSG_MOVE_KNOCK_BACK packet (sendJumpToKnockBack), creature targets
+// the MoveJumpTo spline (jumpToCreatureTarget). Speeds are MiscValue/10
+// and the CalcValue/10, forward is SpellIconID != 1891 (Disengage jumps
+// backward). No root/stun gate, no boss gate and no interrupt leg —
+// EffectLeapBack has none, unlike EffectKnockBack. The caster
+// fall-information leg is player-caster-only, so it stays out on this
+// path. Target filtering mirrors creatureEffectJump (evaded/immune/
+// missed skipped, reflected resolves to the caster).
+func (s *Server) creatureEffectLeapBack(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	speedXY := float32(eff.MiscValue) / 10
+	speedZ := float32(eff.CalcValueForLevel(spell, uint32(m.Level))) / 10
+	forward := spell.SpellIconID != 1891
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
+			s.sendJumpToKnockBack(targetSess, guid, targetSess.player.Orientation, forward, speedXY, speedZ)
+			continue
+		}
+		if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+			s.jumpToCreatureTarget(tm, forward, speedXY, speedZ)
+		}
+	}
+}
+
 // creatureEffectPullTowards mirrors Spell::EffectPullTowards
 // (SpellEffects.cpp:4667) for a creature caster: the HIT_TARGET arm pulling
 // each hit target to the caster's first-collision position (caster reach
-// along the caster-to-target line). The JumpTo spline speeds have no Go
-// model, so the target snaps like the teleport arm, keeping its z and
-// orientation like the player helper; the <0.001 distance early-out is
-// C++-exact.
+// along the caster-to-target line). The target snaps like the teleport
+// arm, keeping its z and orientation like the player helper; the <0.001
+// distance early-out is C++-exact. (The JumpTo leg —
+// sendJumpToKnockBack/jumpToCreatureTarget — now exists via the
+// LeapBack port; the PullTowards JumpTo-with-dest arm is the next unit.)
 func (s *Server) creatureEffectPullTowards(ctx context.Context, m *creatureMotion, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
