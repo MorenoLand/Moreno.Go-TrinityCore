@@ -1128,10 +1128,10 @@ end
 --   precedent); player CastSpellAoF takes no triggered arg, so the
 --   45669 missile lands non-triggered (same known-limit class as the
 --   file header note). The 45669 triggered sibling
---   (spell_midsummer_fling_torch_triggered, HandleTriggerMissile) stays
---   out: its PreventHitEffect leg is unmodeled on the player/funnel
---   path (runtime.go contract — no prevent record threaded there), so
---   the >3yd missile suppression would not take. Binding 46747 (AC
+--   (spell_midsummer_fling_torch_triggered, HandleTriggerMissile) is
+--   PORTED below (ev4; the funnel threads the prevent record and its
+--   TRIGGER_MISSILE leg consults it, so the >3yd missile suppression
+--   takes). Binding 46747 (AC
 --   sql:1284 + TDB 26091:1177; AC also binds 45671 to this class name,
 --   contradicting the C++ '// 46747 - Fling torch' comment and TDB,
 --   which bind 45671 to the catch class below — AC row is a data
@@ -1312,14 +1312,41 @@ RegisterSpellEvent(SPELL_JUGGLE_TORCH_MISSED, 7, flingTorchMissedFilter)
 --   triple (same values C++ reads). Binding 45819 (TDB 26091 + 25101
 --   'spell_midsummer_juggle_torch'; AC renames it
 --   'spell_midsummer_juggling_torch').
--- STAYS OUT (re-verified this tick against the CURRENT runtime):
---   45669 fling_torch_triggered — the >3yd leg needs PreventHitEffect
---   on the player/funnel path, which threads no prevent record
---   (lua_spell.go session builder; the live TriggerMissile arm in
---   spells.go:16365 would still fire, so an ev4 port would double
---   the missile + 45676). No GetHitDest bridge either (GetExplTargetDest
---   is the cast-level twin). 45676 fling_torch_missed is PORTED above
---   (ev7; the player twin firePlayerSpellTargetSelects now exists).
+-- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
+--   spell_midsummer_fling_torch_triggered (45669, spell_holiday.cpp:1808-1834,
+--   register :1974): EFFECT_0 TRIGGER_MISSILE. If the hit dest is more
+--   than 3.0 yards from the caster (2D), the default missile is vetoed
+--   and the caster casts 45676 (Juggle Torch Missed) at the expl-target
+--   dest, non-triggered, and loses the 45693 torches-caught aura.
+--   Deltas: GetHitDest has no bridge, so the distance is computed
+--   from GetX/GetY + the expl-target dest triple (45819 precedent);
+--   the funnel threads the prevent record and its TRIGGER_MISSILE leg
+--   consults it, so the veto takes — the ev4 fire runs ahead of the
+--   missile leg on both the funnel and finishSpellCast paths, which
+--   overturns the stay-out note. Binding 45669 (TDB-only). DORMANT
+--   until Spell.dbc ships the 45669 row.
+local function flingTorchTriggeredHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local destX, destY, destZ = spell:GetExplTargetDest()
+    if destX == nil then
+        return
+    end
+    local dx = destX - caster:GetX()
+    local dy = destY - caster:GetY()
+    if math.sqrt(dx * dx + dy * dy) > 3.0 then
+        spell:PreventHitEffect(0)
+        caster:CastSpellAoF(destX, destY, destZ, SPELL_JUGGLE_TORCH_MISSED)
+        caster:RemoveAura(SPELL_TORCHES_CAUGHT)
+    end
+end
+
+RegisterSpellEvent(SPELL_FLING_TORCH_TRIGGERED, 4, flingTorchTriggeredHit)
 local MIDSUMMER_TORCH = {
     TARGET_INDICATOR_COSMETIC = 46901, -- spell_holiday.cpp:1500
     TARGET_INDICATOR = 45723, -- spell_holiday.cpp:1501

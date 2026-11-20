@@ -10342,11 +10342,11 @@ func (s *session) fireSpellScriptPreprocessTwins(ctx context.Context, spell wotl
 // loop in Spell::_handle_immediate_phase). C++ runs that loop for every
 // cast before the target container, so the all-miss early returns call it
 // here, ahead of the twins, instead of dropping it with the effects loop.
-func (s *session) fireSpellScriptEffectHitNoTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, castTimeMs int32, target protocol.SpellTargetData, castItemGUID uint64) {
+func (s *session) fireSpellScriptEffectHitNoTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, castTimeMs int32, target protocol.SpellTargetData, castItemGUID uint64, prevent *spellEffectPreventState) {
 	if s.server == nil {
 		return
 	}
-	spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
+	spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0, prevent: prevent})
 	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -14462,7 +14462,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// precedes the twins: the HIT-mode loop (:3722-3730) runs before
 		// the target container (:3601). The channel starts first (above).
 		startChannelIfChanneled()
-		s.fireSpellScriptEffectHitNoTarget(ctx, spell, spellID, castTimeMs, target, castItemGUID)
+		s.fireSpellScriptEffectHitNoTarget(ctx, spell, spellID, castTimeMs, target, castItemGUID, nil)
 		s.fireSpellScriptPreprocessTwins(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}, nil)
 		fireLaunchMissNodmgProcs(ctx)
 		return
@@ -14675,7 +14675,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// the normal path (twins, then effects, then procs). OnEffectHit
 			// precedes the twins: the HIT-mode loop (:3722-3730) runs before
 			// the target container (:3601).
-			s.fireSpellScriptEffectHitNoTarget(effCtx, spell, spellID, castTimeMs, target, castItemGUID)
+			s.fireSpellScriptEffectHitNoTarget(effCtx, spell, spellID, castTimeMs, target, castItemGUID, nil)
 			s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}, nil)
 			fireLaunchMissNodmgProcs(effCtx)
 			return
@@ -16483,7 +16483,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if triggered, found, err := s.server.Data.Spell(eff.TriggerSpell); err == nil && found {
 					firesPerTarget = spellNeedsToBeTriggeredByCaster(triggered, spell)
 				}
-				if firesPerTarget {
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4/ev5
+				// handler's veto suppresses the per-target trigger leg,
+				// mirroring the creature twin at boss_ai.go:3367. (The
+				// once-per-cast LAUNCH arm already ran ahead of ev4.)
+				if firesPerTarget && !prevent.defaultPrevented(effectIndex) {
 					// Per-effect target list (Spell.cpp:758-779), same switch as
 					// the heal arms: a friendly-area trigger effect fires on its
 					// own ally selection, not the merged enemy list, with one
@@ -16659,11 +16664,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						missileTargets = append(missileTargets, guid)
 					}
 				}
-					// SpellScript::PreventHitEffect (SpellScript.cpp) skips
-					// the default handler for this effect: an ev4 handler's
-					// veto suppresses the missile leg (and its reflected
-					// trips), mirroring the creature twin at boss_ai.go:4111
-					// (midsummer fling-torch 45669).
+				// SpellScript::PreventHitEffect (SpellScript.cpp) skips
+				// the default handler for this effect: an ev4 handler's
+				// veto suppresses the missile leg (and its reflected
+				// trips), mirroring the creature twin at boss_ai.go:4111
+				// (midsummer fling-torch 45669).
 				if !prevent.defaultPrevented(effectIndex) {
 					// An empty filtered list must not fall into the helper's empty-list caster arm when the cast had GO-only picks.
 					if len(missileList) == 0 || len(missileTargets) > 0 {
@@ -17269,175 +17274,182 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.executeSpellMaxHealthHeal(effCtx, s.playerGUID, spellID, eff.CalcValueForLevel(spell, casterLevel))
 				}
 			case 6, 27, 35: // Apply Aura
-				durationMs, periodMs, amount := s.auraEffectParams(spell, eff, effectIndex)
-				schoolMask := spell.SchoolMask
-				if schoolMask == 0 {
-					schoolMask = 1
-				}
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4/ev5
+				// handler's veto suppresses the aura application (and its
+				// chain-jump / reflected-trip legs), mirroring the creature
+				// twin at boss_ai.go:9283/9360/9564.
+				if !prevent.defaultPrevented(effectIndex) {
+					durationMs, periodMs, amount := s.auraEffectParams(spell, eff, effectIndex)
+					schoolMask := spell.SchoolMask
+					if schoolMask == 0 {
+						schoolMask = 1
+					}
 
-				// Per-effect target list (Spell.cpp:758-779): a
-				// friendly-area aura effect applies to its own ally
-				// selection, not the merged enemy list — the same switch
-				// as the heal arms above. For a pure friendly-area spell
-				// hitTargets already is that selection.
-				friendlyAuraEffect := effectHasFriendlyAreaLeg(eff)
-				auraList := hitTargets
-				friendlyAuraList := friendlyAreaSpell
-				// Ref-centered leg (37/61): the aura applies to its own
-				// ref-centered ally selection, not the merged enemy list
-				// and not the caster-centered friendly list — the same
-				// switch as the heal arms above. The pure-ref fallback
-				// (no friendly-area effect in the spell) rides
-				// friendlyEffectTargets, which already holds the ref
-				// list there.
-				auraSwitched := friendlyEffectTargets != nil && (friendlyAuraEffect ||
-					(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff)))
-				auraRefCentered := refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff)
-				if auraRefCentered {
-					auraSwitched = true
-				}
-				auraCone := friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff)
-				auraEnemyCone := enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff)
-				if auraSwitched {
-					auraList = friendlyEffectTargets
+					// Per-effect target list (Spell.cpp:758-779): a
+					// friendly-area aura effect applies to its own ally
+					// selection, not the merged enemy list — the same switch
+					// as the heal arms above. For a pure friendly-area spell
+					// hitTargets already is that selection.
+					friendlyAuraEffect := effectHasFriendlyAreaLeg(eff)
+					auraList := hitTargets
+					friendlyAuraList := friendlyAreaSpell
+					// Ref-centered leg (37/61): the aura applies to its own
+					// ref-centered ally selection, not the merged enemy list
+					// and not the caster-centered friendly list — the same
+					// switch as the heal arms above. The pure-ref fallback
+					// (no friendly-area effect in the spell) rides
+					// friendlyEffectTargets, which already holds the ref
+					// list there.
+					auraSwitched := friendlyEffectTargets != nil && (friendlyAuraEffect ||
+						(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff)))
+					auraRefCentered := refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff)
 					if auraRefCentered {
-						auraList = refCenteredFriendlyTargets
+						auraSwitched = true
 					}
-					// Spell::PreprocessTarget (Spell.cpp:2350): a reflected ally's
-					// _spellHitTarget is the caster — the aura lands on the
-					// caster once per reflected ally; the ally itself takes
-					// nothing. The append only ever writes past the switched
-					// list's length, never into its visible contents, and
-					// each arm rebuilds auraList fresh.
-					auraTrips := reflectedAllyTrips
-					if auraRefCentered {
-						auraTrips = refCenteredAllyTrips
+					auraCone := friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff)
+					auraEnemyCone := enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff)
+					if auraSwitched {
+						auraList = friendlyEffectTargets
+						if auraRefCentered {
+							auraList = refCenteredFriendlyTargets
+						}
+						// Spell::PreprocessTarget (Spell.cpp:2350): a reflected ally's
+						// _spellHitTarget is the caster — the aura lands on the
+						// caster once per reflected ally; the ally itself takes
+						// nothing. The append only ever writes past the switched
+						// list's length, never into its visible contents, and
+						// each arm rebuilds auraList fresh.
+						auraTrips := reflectedAllyTrips
+						if auraRefCentered {
+							auraTrips = refCenteredAllyTrips
+						}
+						for range auraTrips {
+							auraList = append(auraList, s.playerGUID)
+						}
+						friendlyAuraList = true
 					}
-					for range auraTrips {
-						auraList = append(auraList, s.playerGUID)
+					if auraCone && !auraSwitched {
+						auraList = friendlyConeEffectTargets
 					}
-					friendlyAuraList = true
-				}
-				if auraCone && !auraSwitched {
-					auraList = friendlyConeEffectTargets
-				}
-				if auraEnemyCone && !auraSwitched {
-					auraList = enemyConeEffectTargets
-				}
-				auraList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, auraList)
-				// Self-cast kept-target join (Spell.cpp:1558
-				// SelectImplicitTargetObjectTargets): a self-cast-only spell
-				// (every ImplicitTargetA == TARGET_UNIT_CASTER) whose B slot
-				// is a TARGET-reference unit type carries that effect's bit
-				// on the kept explicit target's TargetInfo alongside the
-				// caster's, so the aura lands on both. The finishSpellCast
-				// self-cast shortcut appends only the caster to hitTargets,
-				// and the ladder below forces every entry to the caster on
-				// self-cast spells, so without this join the kept target
-				// took nothing and the caster took the aura once. The join
-				// is per-effect: an effect whose B slot is not a
-				// TARGET-reference unit type keeps the caster-only list, so
-				// its TargetA caster leg never over-hits the kept target.
-				// explicitAreaJoin is the explicit target for a non-list
-				// spell (the list branch is vacuous here: a self-cast-only
-				// spell carries no area/friendly-list/nearby selection).
-				selfCastKeptTarget := uint64(0)
-				if isSelfCastOnly(spell) && !isReflected && !auraSwitched &&
-					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
-					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
-					uint16(explicitAreaJoin>>48) != 0xF110 {
-					selfCastKeptTarget = explicitAreaJoin
-					inList := false
-					for _, guid := range auraList {
-						if guid == selfCastKeptTarget {
-							inList = true
+					if auraEnemyCone && !auraSwitched {
+						auraList = enemyConeEffectTargets
+					}
+					auraList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, auraList)
+					// Self-cast kept-target join (Spell.cpp:1558
+					// SelectImplicitTargetObjectTargets): a self-cast-only spell
+					// (every ImplicitTargetA == TARGET_UNIT_CASTER) whose B slot
+					// is a TARGET-reference unit type carries that effect's bit
+					// on the kept explicit target's TargetInfo alongside the
+					// caster's, so the aura lands on both. The finishSpellCast
+					// self-cast shortcut appends only the caster to hitTargets,
+					// and the ladder below forces every entry to the caster on
+					// self-cast spells, so without this join the kept target
+					// took nothing and the caster took the aura once. The join
+					// is per-effect: an effect whose B slot is not a
+					// TARGET-reference unit type keeps the caster-only list, so
+					// its TargetA caster leg never over-hits the kept target.
+					// explicitAreaJoin is the explicit target for a non-list
+					// spell (the list branch is vacuous here: a self-cast-only
+					// spell carries no area/friendly-list/nearby selection).
+					selfCastKeptTarget := uint64(0)
+					if isSelfCastOnly(spell) && !isReflected && !auraSwitched &&
+						isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+						explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+						uint16(explicitAreaJoin>>48) != 0xF110 {
+						selfCastKeptTarget = explicitAreaJoin
+						inList := false
+						for _, guid := range auraList {
+							if guid == selfCastKeptTarget {
+								inList = true
+							}
+						}
+						if !inList {
+							joined := make([]uint64, len(auraList), len(auraList)+1)
+							copy(joined, auraList)
+							auraList = append(joined, selfCastKeptTarget)
 						}
 					}
-					if !inList {
-						joined := make([]uint64, len(auraList), len(auraList)+1)
-						copy(joined, auraList)
-						auraList = append(joined, selfCastKeptTarget)
-					}
-				}
-				for _, effectTarget := range auraList {
-					auraTarget := s.playerGUID
-					if selfCastKeptTarget != 0 && effectTarget == selfCastKeptTarget {
-						auraTarget = effectTarget
-					} else if isHarmfulSpell(spell) && isAreaEnemySpell(spell) && effectTarget != 0 && effectTarget != s.playerGUID {
-						auraTarget = effectTarget
-					} else if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) || isReflected {
-						auraTarget = s.playerGUID
-					} else if ((friendlyAuraList && (friendlyAuraEffect || auraSwitched)) || auraCone || auraEnemyCone) && effectTarget != 0 {
-						// Effect on its own list (friendly-area or ref-centered):
-						// the entry IS
-						// the unitTarget (SpellEffects.cpp:1233 EffectApplyAura
-						// applies to unitTarget). Without this the ladder fell
-						// through to the caster, so a party/raid buff landed
-						// on the caster once per ally and never on the allies.
-						auraTarget = effectTarget
-					} else if eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) {
-						if effectTarget != 0 && effectTarget != s.playerGUID {
+					for _, effectTarget := range auraList {
+						auraTarget := s.playerGUID
+						if selfCastKeptTarget != 0 && effectTarget == selfCastKeptTarget {
+							auraTarget = effectTarget
+						} else if isHarmfulSpell(spell) && isAreaEnemySpell(spell) && effectTarget != 0 && effectTarget != s.playerGUID {
+							auraTarget = effectTarget
+						} else if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) || isReflected {
+							auraTarget = s.playerGUID
+						} else if ((friendlyAuraList && (friendlyAuraEffect || auraSwitched)) || auraCone || auraEnemyCone) && effectTarget != 0 {
+							// Effect on its own list (friendly-area or ref-centered):
+							// the entry IS
+							// the unitTarget (SpellEffects.cpp:1233 EffectApplyAura
+							// applies to unitTarget). Without this the ladder fell
+							// through to the caster, so a party/raid buff landed
+							// on the caster once per ally and never on the allies.
+							auraTarget = effectTarget
+						} else if eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) {
+							if effectTarget != 0 && effectTarget != s.playerGUID {
+								auraTarget = effectTarget
+							}
+						} else if eff.ImplicitTargetA == 21 {
+							if effectTarget != 0 {
+								auraTarget = effectTarget
+							}
+						} else if effectTarget != 0 && effectTarget != s.playerGUID && isHarmfulSpell(spell) {
 							auraTarget = effectTarget
 						}
-					} else if eff.ImplicitTargetA == 21 {
-						if effectTarget != 0 {
-							auraTarget = effectTarget
+						// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
+						// a target that passed the aura-scale min-level check gets
+						// the aura from the rank-appropriate SpellInfo with that
+						// rank's basepoints (DoTargetSpellHit creates the aura from
+						// hitInfo.AuraSpellInfo, Spell.cpp:2858-2861).
+						effSpell, effEff := spell, eff
+						tgtDurationMs, tgtPeriodMs, tgtAmount := durationMs, periodMs, amount
+						if ds, ok := auraScaleDownranks[auraTarget]; ok {
+							effSpell = ds
+							if effectIndex < len(ds.Effects) {
+								effEff = ds.Effects[effectIndex]
+							}
+							tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff, effectIndex)
 						}
-					} else if effectTarget != 0 && effectTarget != s.playerGUID && isHarmfulSpell(spell) {
-						auraTarget = effectTarget
-					}
-					// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
-					// a target that passed the aura-scale min-level check gets
-					// the aura from the rank-appropriate SpellInfo with that
-					// rank's basepoints (DoTargetSpellHit creates the aura from
-					// hitInfo.AuraSpellInfo, Spell.cpp:2858-2861).
-					effSpell, effEff := spell, eff
-					tgtDurationMs, tgtPeriodMs, tgtAmount := durationMs, periodMs, amount
-					if ds, ok := auraScaleDownranks[auraTarget]; ok {
-						effSpell = ds
-						if effectIndex < len(ds.Effects) {
-							effEff = ds.Effects[effectIndex]
+						// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
+						if uint16(auraTarget>>48) == 0xF110 {
+							continue
 						}
-						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff, effectIndex)
+						s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
 					}
-					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
-					if uint16(auraTarget>>48) == 0xF110 {
-						continue
-					}
-					s.applyAuraToTarget(effCtx, auraTarget, effSpell, effEff, effectIndex, tgtDurationMs, tgtPeriodMs, tgtAmount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
-				}
-				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
-				// reflected chain jump resolves its unit to the caster, so a
-				// hostile-targeted aura from a reflected jump lands on the
-				// caster — the same victim-selection arms as the loop above.
-				// Per-effect mask analog of the damage jump arm
-				// (Spell.cpp:7717-7725): a reflected jump's TargetInfo
-				// carries only the chain effect's bit, so a non-chain aura
-				// effect sharing the cast takes nothing from the jump.
-				if _, _, _, chainEffectMask := chainSpellJumps(s, spell); len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
-					chainEffectMask == 1<<uint(effectIndex) &&
-					(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
-					s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
-				}
-				// Spell::DoProcessTargetContainer (Spell.cpp:3554-3563) + PreprocessTarget
-				// reflect arm (Spell.cpp:2350-2357): each reflected AoE target keeps its
-				// own TargetInfo whose _spellHitTarget is the caster, so the aura effect
-				// lands on the caster once per reflected target — but only when the
-				// reflected target's EffectMask carries this effect's bit
-				// (DoProcessTargetContainer fires an effect only for TargetInfos
-				// carrying it, Spell.cpp:3561). An AoE reflector was selected by
-				// the spell's area-enemy effects, so the trip fires only for an
-				// aura effect that is itself area-enemy (the same per-effect
-				// selection spellAreaEnemyTargets uses, including the 27/18 arm);
-				// a single-target (6/21) or friendly aura sharing the cast takes
-				// nothing from the trip, whatever the spell-level gates say.
-				// (A merged entry — the reflector also being this effect's explicit
-				// target — still rides the trip loop's caster arm only via the
-				// explicit rejoin, and stays residual.)
-				if isHarmfulSpell(spell) &&
-					(isAreaEnemyTargetType(eff.ImplicitTargetA) || (isAreaEnemyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) || (eff.Effect == 27 && (eff.ImplicitTargetA == 18 || eff.ImplicitTargetB == 18))) {
-					for range reflectedAoETrips {
+					// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
+					// reflected chain jump resolves its unit to the caster, so a
+					// hostile-targeted aura from a reflected jump lands on the
+					// caster — the same victim-selection arms as the loop above.
+					// Per-effect mask analog of the damage jump arm
+					// (Spell.cpp:7717-7725): a reflected jump's TargetInfo
+					// carries only the chain effect's bit, so a non-chain aura
+					// effect sharing the cast takes nothing from the jump.
+					if _, _, _, chainEffectMask := chainSpellJumps(s, spell); len(reflectedJumpIndexes) > 0 && isHarmfulSpell(spell) &&
+						chainEffectMask == 1<<uint(effectIndex) &&
+						(isAreaEnemySpell(spell) || eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) || eff.ImplicitTargetA == 21) {
 						s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
+					}
+					// Spell::DoProcessTargetContainer (Spell.cpp:3554-3563) + PreprocessTarget
+					// reflect arm (Spell.cpp:2350-2357): each reflected AoE target keeps its
+					// own TargetInfo whose _spellHitTarget is the caster, so the aura effect
+					// lands on the caster once per reflected target — but only when the
+					// reflected target's EffectMask carries this effect's bit
+					// (DoProcessTargetContainer fires an effect only for TargetInfos
+					// carrying it, Spell.cpp:3561). An AoE reflector was selected by
+					// the spell's area-enemy effects, so the trip fires only for an
+					// aura effect that is itself area-enemy (the same per-effect
+					// selection spellAreaEnemyTargets uses, including the 27/18 arm);
+					// a single-target (6/21) or friendly aura sharing the cast takes
+					// nothing from the trip, whatever the spell-level gates say.
+					// (A merged entry — the reflector also being this effect's explicit
+					// target — still rides the trip loop's caster arm only via the
+					// explicit rejoin, and stays residual.)
+					if isHarmfulSpell(spell) &&
+						(isAreaEnemyTargetType(eff.ImplicitTargetA) || (isAreaEnemyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) || (eff.Effect == 27 && (eff.ImplicitTargetA == 18 || eff.ImplicitTargetB == 18))) {
+						for range reflectedAoETrips {
+							s.applyAuraToTarget(effCtx, s.playerGUID, spell, eff, effectIndex, durationMs, periodMs, amount, schoolMask, castMerged, false, s.playerGUID, false, 0, false, nil)
+						}
 					}
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self + dead-target request chain
@@ -18326,69 +18338,76 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				s.handleEffectPlayMusic(eff, musicList)
 			case spellEffectScriptEffect: // 77: SPELL_EFFECT_SCRIPT_EFFECT (EffectScriptEffect, SpellEffects.cpp:3604)
-				// C++ runs the generic-family arms at SPELL_EFFECT_HANDLE_HIT_TARGET.
-				// Per-effect target list (Spell.cpp:758-779), same switch as
-				// the heal arms: a friendly-area script effect runs on its
-				// own ally selection, not the merged enemy list.
-				scriptList := hitTargets
-				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
-					scriptList = friendlyEffectTargets
-				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
-					scriptList = refCenteredFriendlyTargets
-				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
-					scriptList = friendlyEffectTargets
-				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
-					scriptList = friendlyConeEffectTargets
-				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
-					scriptList = enemyConeEffectTargets
-				}
-				scriptList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, scriptList)
-				// Self-cast kept-target join (Spell.cpp:1558
-				// SelectImplicitTargetObjectTargets): the kept explicit target carries
-				// this effect's bit alongside the caster when its B slot is a
-				// TARGET-reference unit type; the friendly/ref-centered switches above
-				// cannot fire for such an effect, so the flat list is this effect's list here.
-				if isSelfCastOnly(spell) && !isReflected &&
-					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
-					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
-					uint16(explicitAreaJoin>>48) != 0xF110 {
-					inKeptList := false
-					for _, guid := range scriptList {
-						if guid == explicitAreaJoin {
-							inKeptList = true
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4/ev5
+				// handler's veto suppresses the script-effect leg (and its
+				// reflected trips), mirroring the creature twin at
+				// boss_ai.go:4173.
+				if !prevent.defaultPrevented(effectIndex) {
+					// C++ runs the generic-family arms at SPELL_EFFECT_HANDLE_HIT_TARGET.
+					// Per-effect target list (Spell.cpp:758-779), same switch as
+					// the heal arms: a friendly-area script effect runs on its
+					// own ally selection, not the merged enemy list.
+					scriptList := hitTargets
+					if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+						scriptList = friendlyEffectTargets
+					} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+						scriptList = refCenteredFriendlyTargets
+					} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+						scriptList = friendlyEffectTargets
+					} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+						scriptList = friendlyConeEffectTargets
+					} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
+						scriptList = enemyConeEffectTargets
+					}
+					scriptList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, scriptList)
+					// Self-cast kept-target join (Spell.cpp:1558
+					// SelectImplicitTargetObjectTargets): the kept explicit target carries
+					// this effect's bit alongside the caster when its B slot is a
+					// TARGET-reference unit type; the friendly/ref-centered switches above
+					// cannot fire for such an effect, so the flat list is this effect's list here.
+					if isSelfCastOnly(spell) && !isReflected &&
+						isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+						explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+						uint16(explicitAreaJoin>>48) != 0xF110 {
+						inKeptList := false
+						for _, guid := range scriptList {
+							if guid == explicitAreaJoin {
+								inKeptList = true
+							}
+						}
+						if !inKeptList {
+							joinedKept := make([]uint64, len(scriptList), len(scriptList)+1)
+							copy(joinedKept, scriptList)
+							scriptList = append(joinedKept, explicitAreaJoin)
 						}
 					}
-					if !inKeptList {
-						joinedKept := make([]uint64, len(scriptList), len(scriptList)+1)
-						copy(joinedKept, scriptList)
-						scriptList = append(joinedKept, explicitAreaJoin)
+					for _, effectTarget := range scriptList {
+						if effectTarget == 0 {
+							continue
+						}
+						s.handleEffectScriptEffect(effCtx, spellID, spell, eff, effectTarget)
 					}
-				}
-				for _, effectTarget := range scriptList {
-					if effectTarget == 0 {
-						continue
+					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+					// HIT_TARGET arm runs on the caster once per reflected target.
+					// Arm-by-arm safety: Mug (41931) and RP-GG drop (57349) are
+					// caster-inventory arms in C++ (SpellEffects.cpp:3654-3685,
+					// 3718-3725), so each trip faithfully consumes/destroys once
+					// more; Shadow Flame is target-gated (alive, no cloak) and fires
+					// on the caster; Burn self-gates (unitTarget != m_caster) and
+					// the RP-GG pickup is creature-only, so both no-op on trips;
+					// Stoneclaw casts on the hit unit's totems, i.e. the caster's.
+					// Draw soul / flame burst trips run on the caster (self-heal /
+					// self-cast, the per-hit-target arms with hit unit = caster);
+					// judgement trips cast primer + judgement on the caster.
+					for range areaEnemyTrips(eff, reflectedAoETrips) {
+						s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
 					}
-					s.handleEffectScriptEffect(effCtx, spellID, spell, eff, effectTarget)
-				}
-				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
-				// HIT_TARGET arm runs on the caster once per reflected target.
-				// Arm-by-arm safety: Mug (41931) and RP-GG drop (57349) are
-				// caster-inventory arms in C++ (SpellEffects.cpp:3654-3685,
-				// 3718-3725), so each trip faithfully consumes/destroys once
-				// more; Shadow Flame is target-gated (alive, no cloak) and fires
-				// on the caster; Burn self-gates (unitTarget != m_caster) and
-				// the RP-GG pickup is creature-only, so both no-op on trips;
-				// Stoneclaw casts on the hit unit's totems, i.e. the caster's.
-				// Draw soul / flame burst trips run on the caster (self-heal /
-				// self-cast, the per-hit-target arms with hit unit = caster);
-				// judgement trips cast primer + judgement on the caster.
-				for range areaEnemyTrips(eff, reflectedAoETrips) {
-					s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
-				}
-				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
-				// is the caster, so the arm runs on the caster once per trip.
-				for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
-					s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
+					// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+					// is the caster, so the arm runs on the caster once per trip.
+					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
+					}
 				}
 			case spellEffectSummonRafFriend: // 152: SPELL_EFFECT_SUMMON_RAF_FRIEND (EffectSummonRaFFriend, SpellEffects.cpp:5727)
 				// Same SelectEffectTypeImplicitTargets special case as effect
@@ -18898,58 +18917,65 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerDrain), drainLog)
 				}
 			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2: // 140/141/160: SPELL_EFFECT_FORCE_CAST* (EffectForceCast, SpellEffects.cpp:1048)
-				// Per-effect target list (Spell.cpp:758-779), same switch as
-				// the heal arms: a friendly-area force-cast effect runs on its
-				// own ally selection, not the merged enemy list.
-				forceList := hitTargets
-				if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
-					forceList = friendlyEffectTargets
-				} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
-					forceList = refCenteredFriendlyTargets
-				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
-					forceList = friendlyEffectTargets
-				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
-					forceList = friendlyConeEffectTargets
-				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
-					forceList = enemyConeEffectTargets
-				}
-				forceList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, forceList)
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4/ev5
+				// handler's veto suppresses the force-cast leg (and its
+				// reflected trips), mirroring the creature twin at
+				// boss_ai.go:4008.
+				if !prevent.defaultPrevented(effectIndex) {
+					// Per-effect target list (Spell.cpp:758-779), same switch as
+					// the heal arms: a friendly-area force-cast effect runs on its
+					// own ally selection, not the merged enemy list.
+					forceList := hitTargets
+					if friendlyEffectTargets != nil && effectHasFriendlyAreaLeg(eff) {
+						forceList = friendlyEffectTargets
+					} else if refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
+						forceList = refCenteredFriendlyTargets
+					} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
+						forceList = friendlyEffectTargets
+					} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+						forceList = friendlyConeEffectTargets
+					} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
+						forceList = enemyConeEffectTargets
+					}
+					forceList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, forceList)
 
-				// Self-cast kept-target join (Spell.cpp:1558
-				// SelectImplicitTargetObjectTargets): the kept explicit target carries
-				// this effect's bit alongside the caster when its B slot is a
-				// TARGET-reference unit type; the friendly/ref-centered switches above
-				// cannot fire for such an effect, so the flat list is this effect's list here.
-				if isSelfCastOnly(spell) && !isReflected &&
-					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
-					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
-					uint16(explicitAreaJoin>>48) != 0xF110 {
-					inKeptList := false
-					for _, guid := range forceList {
-						if guid == explicitAreaJoin {
-							inKeptList = true
+					// Self-cast kept-target join (Spell.cpp:1558
+					// SelectImplicitTargetObjectTargets): the kept explicit target carries
+					// this effect's bit alongside the caster when its B slot is a
+					// TARGET-reference unit type; the friendly/ref-centered switches above
+					// cannot fire for such an effect, so the flat list is this effect's list here.
+					if isSelfCastOnly(spell) && !isReflected &&
+						isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+						explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+						uint16(explicitAreaJoin>>48) != 0xF110 {
+						inKeptList := false
+						for _, guid := range forceList {
+							if guid == explicitAreaJoin {
+								inKeptList = true
+							}
+						}
+						if !inKeptList {
+							joinedKept := make([]uint64, len(forceList), len(forceList)+1)
+							copy(joinedKept, forceList)
+							forceList = append(joinedKept, explicitAreaJoin)
 						}
 					}
-					if !inKeptList {
-						joinedKept := make([]uint64, len(forceList), len(forceList)+1)
-						copy(joinedKept, forceList)
-						forceList = append(joinedKept, explicitAreaJoin)
+					s.handleEffectForceCast(effCtx, spell, spellID, eff, forceList)
+					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+					// HIT_TARGET arm runs on the caster once per reflected
+					// target, so the caster is forced to cast the triggered
+					// spell on itself (unitTarget == m_caster in C++). The
+					// forced casts ride the triggered funnel, never this
+					// dispatch, so no trip recursion.
+					for range areaEnemyTrips(eff, reflectedAoETrips) {
+						s.handleEffectForceCast(effCtx, spell, spellID, eff, []uint64{s.playerGUID})
 					}
-				}
-				s.handleEffectForceCast(effCtx, spell, spellID, eff, forceList)
-				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
-				// HIT_TARGET arm runs on the caster once per reflected
-				// target, so the caster is forced to cast the triggered
-				// spell on itself (unitTarget == m_caster in C++). The
-				// forced casts ride the triggered funnel, never this
-				// dispatch, so no trip recursion.
-				for range areaEnemyTrips(eff, reflectedAoETrips) {
-					s.handleEffectForceCast(effCtx, spell, spellID, eff, []uint64{s.playerGUID})
-				}
-				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
-				// is the caster, so the arm runs on the caster once per trip.
-				for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
-					s.handleEffectForceCast(effCtx, spell, spellID, eff, []uint64{s.playerGUID})
+					// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
+					// is the caster, so the arm runs on the caster once per trip.
+					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
+						s.handleEffectForceCast(effCtx, spell, spellID, eff, []uint64{s.playerGUID})
+					}
 				}
 			case spellEffectSelfResurrect: // 94: SPELL_EFFECT_SELF_RESURRECT (EffectSelfResurrect, SpellEffects.cpp:4429)
 				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
@@ -28096,6 +28122,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// value (Spell.cpp:2377/2547). The client-path twin lives in
 	// finishSpellCast above.
 	hitDamage := &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}
+	// spellEffectPreventState for this cast: the ev4 hook fire below
+	// records PreventHitDefaultEffect / PreventHitEffect calls here,
+	// and the TRIGGER_MISSILE arm below consults it before running
+	// (the finishSpellCast twin above; midsummer fling-torch 45669).
+	prevent := &spellEffectPreventState{}
 	// SpellScript OnEffectHit (Spell.cpp:3722-3730, the HIT-mode
 	// HandleEffects loop in Spell::_handle_immediate_phase, which runs
 	// before DoProcessTargetContainer): fires once per non-zero effect
@@ -28105,7 +28136,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// the twins, like the client path (the creature path fires it
 	// unconditionally in boss_ai.go; the client path fires it in
 	// applyEffects and on both all-miss early returns).
-	s.fireSpellScriptEffectHitNoTarget(ctx, spell, spellID, int32(triggeredCastTimeMs), spellTarget, castItemGUID)
+	s.fireSpellScriptEffectHitNoTarget(ctx, spell, spellID, int32(triggeredCastTimeMs), spellTarget, castItemGUID, prevent)
 	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334-2381) runs
 	// its SpellScript hooks before the per-effect DoTargetSpellHit
 	// loop (Spell.cpp:2384) deals any damage — pass 1 of
@@ -29799,7 +29830,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// runTriggerMissileEffect on the triggered path too (the HIT
 				// arm needs an empty target list, which this path never
 				// produces — targetGUID is always resolved here).
-				s.runTriggerMissileEffect(ctx, spell, eff, []uint64{effectTarget})
+				// SpellScript::PreventHitEffect (SpellScript.cpp) skips
+				// the default handler for this effect: an ev4 handler's
+				// veto suppresses the missile leg, mirroring the
+				// finishSpellCast twin (midsummer fling-torch 45669).
+				if !prevent.defaultPrevented(effectIndex) {
+					s.runTriggerMissileEffect(ctx, spell, eff, []uint64{effectTarget})
+				}
 			} else if eff.Effect == spellEffectThreat {
 				// Spell::EffectThreat (SpellEffects.cpp:3470): the threat is
 				// `damage` (the HandleEffects CalculateDamage value).
