@@ -456,6 +456,8 @@ type creatureMotion struct {
 
 	ThreatMgr           *ThreatManager
 	extraAttacks        uint32 // Unit::m_extraAttacks (Unit.h:802) — banked SPELL_EFFECT_ADD_EXTRA_ATTACKS swings, the creature twin of session.extraAttacks
+	comboPoints         int8   // Unit::m_comboPoints (Unit.h:1580) — banked combo points from SPELL_EFFECT_ADD_COMBO_POINTS gains, the creature twin of session.comboPoints; no client packet rides it (Unit::SendComboPoints is player-only, Unit.cpp:10689)
+	comboTarget         uint64 // Unit::m_comboTarget — GUID the banked combo points sit on
 	BossAI              BossAI
 	ScriptName          string
 	Name                string
@@ -7247,7 +7249,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 					// Spell::CheckCast combo-point tail arm (Spell.cpp:6186-6209), same
 					// twin: the inline cast is non-triggered, so the gate applies.
-					if !s.creatureComboPointsPreCast(motion, spellInfo, false) {
+					if !s.creatureComboPointsPreCast(motion, spellInfo, target.GUID, false) {
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
@@ -8607,7 +8609,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// AI spell carrying a trigger effect previously
 			// triggered nothing server-side (non-victim casts ride
 			// castCreatureSpellInternal, which already runs this
-			// pre-pass). Interrupt 68 (LAUNCH_TARGET) + charge 96 (LAUNCH_TARGET movement; its HIT attack leg is player-caster-only) + charge-dest 149 (LAUNCH) ride the same pre-pass via their twins.
+			// pre-pass). Interrupt 68 (LAUNCH_TARGET) + charge 96 (LAUNCH_TARGET movement; its HIT attack leg is player-caster-only) + charge-dest 149 (LAUNCH) + jump 41 (LAUNCH_TARGET) + jump-dest 42 (LAUNCH) ride the same pre-pass via their twins.
 			if inlineSpellKnown {
 				launchReflected := make(map[uint64]uint8, len(reflectedSet))
 				for guid := range reflectedSet {
@@ -8631,6 +8633,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectCharge(ctx, motion, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), launchReflected, evadedSet, immuneSet, missSet)
 					case spellEffectChargeDest:
 						s.creatureEffectChargeDest(ctx, motion, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+					case spellEffectJump:
+						s.creatureEffectJump(ctx, motion, inlineSpell, i, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), launchReflected, evadedSet, immuneSet, missSet)
+					case spellEffectJumpDest:
+						s.creatureEffectJumpDest(ctx, motion, inlineSpell, i, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
 					}
 				}
 			}
@@ -8774,7 +8780,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if spellInfo.SchoolMask != 0 {
 						schoolMask = uint8(spellInfo.SchoolMask)
 					}
-					damage, leechDamage, hasDBCSpell = creatureSpellDamage(s, spellInfo, motion.Level, false, nil)
+					damage, leechDamage, hasDBCSpell = creatureSpellDamage(s, spellInfo, motion.Level, false, nil, motion)
 				}
 			}
 			if !hasDBCSpell {
@@ -10667,20 +10673,27 @@ func (s *Server) scaledEffectValue(spell wotlk.Spell, effect wotlk.SpellEffect, 
 	return value
 }
 
-func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, controlledByPlayer bool, overrides map[int]int32) (uint32, uint32, bool) {
+func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, controlledByPlayer bool, overrides map[int]int32, m *creatureMotion) (uint32, uint32, bool) {
 	var damage, leechDamage uint32
 	found := false
+	// Spell::EffectWeaponDmg (SpellEffects.cpp:3171-3469) accumulation:
+	// fixedBonus sums the 58/17/121 CalcValues, pctMod compounds the 31
+	// CalcValues; the Unit::CalculateDamage weapon base rolls once below.
+	// The old code summed only the CalcValues, so every creature-cast
+	// weapon-damage spell — Mandokir 15284/16856/24407, Nefarian 20691,
+	// Moroes 9080, Kurinnaxx 25814 — dealt the flat bonus with no weapon
+	// damage at all.
+	var fixedBonus int32
+	pctMod := 1.0
+	hasWeapon := false
 	for i, effect := range spell.Effects {
 		switch effect.Effect {
-		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg, spellEffectHealthLeech:
-			// C++ owners: EffectSchoolDMG (SpellEffectsHandlers 2),
-			// EffectWeaponDmg (handlers 17/31/58/121). Effect 87
-			// (SPELL_EFFECT_GAMEOBJECT_DAMAGE) was wrongly grouped here —
-			// EffectGameObjectDamage (SpellEffects.cpp:5424) requires
-			// gameObjTarget and never damages units. Effect 121
-			// (NORMALIZED_WEAPON_DMG) was missing though EffectWeaponDmg
-			// handles it and it damages the unit (player path groups all
-			// four at spells.go:13112).
+		case spellEffectSchoolDamage, spellEffectHealthLeech:
+			// C++ owner: EffectSchoolDMG (SpellEffectsHandlers 2).
+			// Effect 87 (SPELL_EFFECT_GAMEOBJECT_DAMAGE) was wrongly
+			// grouped here — EffectGameObjectDamage
+			// (SpellEffects.cpp:5424) requires gameObjTarget and never
+			// damages units.
 			// EffectHealthLeech (handler 9,
 			// SpellEffects.cpp:1513-1553) belongs here too: HandleEffects
 			// resets damage = CalculateDamage(i) per effect (Spell.cpp:
@@ -10716,9 +10729,131 @@ func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, contr
 					leechDamage += scaled
 				}
 			}
+		case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectNormalizedWeaponDmg:
+			// Spell::EffectWeaponDmg fixed_bonus arm
+			// (SpellEffects.cpp:3396-3405): the 58/17/121 CalcValues sum
+			// into fixed_bonus, added to the weapon base in the sequence
+			// pass below; the NPC scale rides each value like the school
+			// arm above, so the flat part is unchanged from before.
+			found = true
+			hasWeapon = true
+			value := effect.CalcValueForLevel(spell, casterLevel)
+			if overrides != nil {
+				if rewritten, ok := overrides[i]; ok {
+					value = rewritten
+				}
+			}
+			if value > 0 {
+				scale := float64(1)
+				if s != nil {
+					scale = s.npcEffectValueScale(spell, effect, casterLevel, controlledByPlayer)
+				}
+				fixedBonus += int32(float64(value) * scale)
+			}
+		case spellEffectWeaponPercentDamage:
+			// Spell::EffectWeaponDmg weaponDamagePercentMod arm
+			// (SpellEffects.cpp:3406-3414): the 31 CalcValue compounds
+			// the multiplier ApplyPct-style, raw like the player path —
+			// it multiplies the weapon damage, it is not a flat value.
+			found = true
+			hasWeapon = true
+			value := effect.CalcValueForLevel(spell, casterLevel)
+			if overrides != nil {
+				if rewritten, ok := overrides[i]; ok {
+					value = rewritten
+				}
+			}
+			if value > 0 {
+				pctMod *= 1 + float64(value)/100
+			}
 		}
 	}
+	if hasWeapon {
+		// addPctMods gate (SpellEffects.cpp:3424-3426): the
+		// UNIT_MOD_DAMAGE_* TOTAL_PCT fold rides fixed_bonus and the
+		// weapon base when the spell is physical-school without
+		// ATTR6_LIMIT_PCT_DAMAGE_MODS; otherwise C++ defers the pct
+		// legs to Unit::MeleeDamageBonusDone and CalculateDamage
+		// re-derives without the fold (Unit.cpp:2334).
+		addPctMods := spell.AttributesEx6&spellAttr6LimitPctDamageMods == 0 && spell.SchoolMask&spellSchoolMaskNormal != 0
+		if addPctMods {
+			if m != nil && m.DamageMainhandPct != 0 && m.DamageMainhandPct != 1.0 {
+				fixedBonus = int32(float64(fixedBonus) * m.DamageMainhandPct)
+			}
+		}
+		wd := int64(creatureWeaponDamageRoll(m, casterLevel, addPctMods))
+		// "Sequence is important" (SpellEffects.cpp:3440): each
+		// 58/17/121 effect adds the total fixed_bonus, each 31 effect
+		// multiplies by the compounded weaponDamagePercentMod.
+		for _, effect := range spell.Effects {
+			switch effect.Effect {
+			case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectNormalizedWeaponDmg:
+				wd += int64(fixedBonus)
+			case spellEffectWeaponPercentDamage:
+				wd = int64(float64(wd) * pctMod)
+			}
+		}
+		if wd < 0 {
+			wd = 0
+		}
+		damage += uint32(wd)
+	}
 	return damage, leechDamage, found
+}
+
+// creatureWeaponDamageRoll mirrors Unit::CalculateDamage (Unit.cpp:2334)
+// on the non-normalized path for a creature caster: urand over the folded
+// UNIT_FIELD_MINDAMAGE/MAXDAMAGE range — Go's motion.Min/MaxDamage, the
+// same roll the melee swing uses (executeCreatureMeleeSwing), with the
+// same level-based fallback when the template range is unset. The
+// TOTAL_PCT fold rides the roll like the fields (UpdateDamagePhysical,
+// StatSystem.cpp:1508-1555) when addPctMods holds; without it C++
+// re-derives the base without the fold (Unit::CalculateDamage,
+// Unit.cpp:2334). The 13/79 MeleeDamageBonusDone folds stay out
+// — they ride the later pipeline legs in C++, which this path does not
+// model for any spell type. The normalized re-derivation
+// (Creature::CalculateMinMaxDamage, StatSystem.cpp:1075) collapses to the
+// same roll for creatures: GetAPMultiplier returns attackTime/1000 for
+// non-players regardless of normalized, and BaseVariance has no Go model
+// (template default 1.0).
+func creatureWeaponDamageRoll(m *creatureMotion, casterLevel uint32, addPctMods bool) uint32 {
+	if m == nil {
+		return 0
+	}
+	var lo, hi float64
+	if m.MinDamage > 0 && m.MaxDamage >= m.MinDamage {
+		lo, hi = float64(m.MinDamage), float64(m.MaxDamage)
+	} else {
+		lvl := float64(casterLevel)
+		if lvl < 1 {
+			lvl = 1
+		}
+		attSpeed := float64(m.AttackTime) / 1000.0
+		if attSpeed <= 0 {
+			attSpeed = 2.0
+		}
+		lo = lvl * 0.75 * attSpeed
+		hi = lvl * 1.25 * attSpeed
+		if lo < 1 {
+			lo = 1
+		}
+		if hi < lo {
+			hi = lo + 1
+		}
+	}
+	roll := lo
+	if hi > lo {
+		roll = lo + rand.Float64()*(hi-lo)
+	}
+	if addPctMods {
+		if pct := m.DamageMainhandPct; pct != 0 && pct != 1.0 {
+			roll *= pct
+		}
+	}
+	if roll < 0 {
+		roll = 0
+	}
+	return uint32(roll)
 }
 
 // leechHealBasis scales a post-mitigation damage total down to the leech

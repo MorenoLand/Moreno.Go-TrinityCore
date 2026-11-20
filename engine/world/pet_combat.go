@@ -4076,9 +4076,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		return true
 	}
 	// Spell::CheckCast combo-point tail arm (Spell.cpp:6186-6209), same
-	// twin: pet combo points bank on the session only, so the gate fails
-	// whenever it applies; triggered pet casts skip it via the full mask.
-	if !s.server.creatureComboPointsPreCast(motion, spell, triggered) {
+	// twin: the gate reads the motion bank, like the wild-creature twin;
+	// triggered pet casts skip it via the full mask.
+	if !s.server.creatureComboPointsPreCast(motion, spell, targetGUID, triggered) {
 		return true
 	}
 	// spell_hun_pet_carrion_feeder::CheckIfCorpseNear
@@ -5189,7 +5189,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// position is available here. Interrupt 68 (LAUNCH_TARGET,
 	// SpellEffects.cpp:3511) + charge 96 (LAUNCH_TARGET movement; its
 	// HIT attack leg is player-caster-only) + charge-dest 149 (LAUNCH,
-	// :4528) ride their twins. The reflected map mirrors the inline
+	// :4528) + jump 41 (LAUNCH_TARGET, :1159) + jump-dest 42 (LAUNCH,
+	// :1179) ride their twins. The reflected map mirrors the inline
 	// launch map: reflectedSet keys at None, trip statuses overriding
 	// — a clean reflect retargets charge to the pet, a bounced reflect
 	// skips, and interrupt skips every reflected target (its twin
@@ -5212,6 +5213,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.creatureEffectCharge(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectChargeDest:
 			s.server.creatureEffectChargeDest(ctx, motion, hasDest, dx, dy, dz)
+		case spellEffectJump:
+			s.server.creatureEffectJump(ctx, motion, spell, i, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		case spellEffectJumpDest:
+			s.server.creatureEffectJumpDest(ctx, motion, spell, i, hasDest, dx, dy, dz)
 		case spellEffectApplyAura:
 			// spell_warl_seduction::HandleDummy
 			// (spell_warlock.cpp:1125-1135): the EFFECT_0 APPLY_AURA
@@ -5797,7 +5802,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 	}
-	damage, _, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true, nil)
+	damage, _, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true, nil, motion)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
 	// an area-selected target takes only the effects that selected it, so
 	// the damage leg fans out to the area hits only when a damage effect

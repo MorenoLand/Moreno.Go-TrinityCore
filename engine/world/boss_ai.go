@@ -2202,10 +2202,10 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		}
 		// Spell::CheckCast combo-point tail arm (Spell.cpp:6186-6209),
 		// the last CheckCast gate: a REQ_COMBO_POINTS spell fizzles
-		// when the creature caster banks no combo point (never, on this
-		// path). Placed after the aura-bounced tail, matching C++
+		// when the creature caster banks no combo point on the spell's
+		// target. Placed after the aura-bounced tail, matching C++
 		// order, ahead of the prepare stealth-break arm.
-		if !s.creatureComboPointsPreCast(m, spellInfo, triggered) {
+		if !s.creatureComboPointsPreCast(m, spellInfo, targetGUID, triggered) {
 			return
 		}
 		// Spell::prepare stealth-break arm (Spell.cpp:3180-3191, gated by
@@ -3352,12 +3352,14 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		}
 	}
 	// Spell::EffectTriggerSpell (SpellEffects.cpp:823) + EffectCharge
-	// (:4493) + EffectChargeDest (:4528) for a creature caster: the
+	// (:4493) + EffectChargeDest (:4528) + EffectJump (:1159) +
+	// EffectJumpDest (:1179) for a creature caster: the
 	// LAUNCH pre-pass. C++ runs HandleLaunchPhase before the hit phase
 	// (Spell.cpp:7687), so the trigger-spell LAUNCH_TARGET/LAUNCH arms
 	// and the charge LAUNCH_TARGET/LAUNCH movement legs land before every
-	// HIT/HIT_TARGET arm below; the interrupt arm above is the other
-	// launch-phase member. The trigger cases move here from the
+	// HIT/HIT_TARGET arm below; the interrupt arm above and the jump
+	// arms in this switch are the other launch-phase members. The
+	// trigger cases move here from the
 	// effect-grouped block below and the charge legs from the movement
 	// block, unchanged. Gated on spellKnown like the tail.
 	if spellKnown {
@@ -3371,6 +3373,10 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				s.creatureEffectCharge(ctx, m, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectChargeDest:
 				s.creatureEffectChargeDest(ctx, m, hasDest, destX, destY, destZ)
+			case spellEffectJump:
+				s.creatureEffectJump(ctx, m, spellInfo, i, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+			case spellEffectJumpDest:
+				s.creatureEffectJumpDest(ctx, m, spellInfo, i, hasDest, destX, destY, destZ)
 			}
 		}
 	}
@@ -3695,6 +3701,25 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				continue
 			}
 			s.creatureEffectAddExtraAttacks(ctx, m, spellInfo, spellInfo.Effects[i], i, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		}
+	}
+	// Spell::EffectAddComboPoints (SpellEffects.cpp:3781-3789) for a
+	// creature caster: the HIT_TARGET arm, once per hit target per
+	// add-combo-points effect, grouped with the other effect-grouped arms
+	// above (C++ runs effects in index order; documented approximation).
+	// The gain banks on the Spell, not the motion — the per-target gain
+	// accumulates into the cast-local comboTarget/comboGain pair (a new
+	// target restarts the bank, the same target accumulates, Spell.h:515-522)
+	// and the grant lands in _handle_finish_phase at the tail below.
+	// Gated on spellKnown like the tail.
+	var comboTarget uint64
+	var comboGain int8
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect != spellEffectAddComboPoints {
+				continue
+			}
+			s.creatureEffectAddComboPoints(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets, &comboTarget, &comboGain)
 		}
 	}
 	// Spell::EffectDummy (SpellEffects.cpp:792) for a creature caster:
@@ -4430,6 +4455,16 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	if spellKnown {
 		s.fireSpellAfterCast(ctx, spellID, s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage}))
 	}
+	// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the combo-point
+	// legs run before the extra-attacks spend below, matching C++ order
+	// (the take lands before the gain). didHit rides the miss filter: no
+	// take when the explicit unit target dodged, evaded, or was immune
+	// (Spell.cpp:2605-2607, the session twin's latch); a cast with no
+	// explicit unit target always takes.
+	if spellKnown {
+		didHit := targetGUID == 0 || (missTargets[targetGUID] == protocol.SpellMissNone && !evadedTargets[targetGUID] && !immuneTargets[targetGUID])
+		s.finishCreatureComboPoints(m, spellInfo, targetGUID, comboTarget, comboGain, didHit, triggered)
+	}
 	// Spell::_handle_finish_phase (Spell.cpp:3753-3761): a finished cast
 	// whose spell carries SPELL_EFFECT_ADD_EXTRA_ATTACKS spends the
 	// caster's pending extra attacks as extra base-attack swings against
@@ -5014,6 +5049,107 @@ func (s *Server) creatureEffectAddExtraAttacks(ctx context.Context, m *creatureM
 		if banked {
 			s.sendCreatureExtraAttacksLog(m, spell.ID, effectIndex, guid, uint32(damage))
 		}
+	}
+}
+
+// creatureEffectAddComboPoints mirrors Spell::EffectAddComboPoints
+// (SpellEffects.cpp:3781-3789) for a creature caster: the HIT_TARGET arm.
+// The effect's damage is the per-target gain (CalcValue at the caster's
+// level; damage <= 0 gains nothing); each hit unit target is a separate
+// gain into the cast-local bank — a new target restarts it, the same
+// target accumulates (Spell::AddComboPointGain, Spell.h:515-522) — and
+// the grant lands in _handle_finish_phase at the tail, never here.
+func (s *Server) creatureEffectAddComboPoints(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, comboTarget *uint64, comboGain *int8) {
+	if s == nil || m == nil || comboTarget == nil || comboGain == nil {
+		return
+	}
+	_ = ctx
+	gain := int8(eff.CalcValueForLevel(spell, uint32(m.Level)))
+	if gain <= 0 {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if guid != *comboTarget {
+			*comboTarget = guid
+			*comboGain = gain
+		} else {
+			*comboGain += gain
+		}
+	}
+}
+
+// grantCreatureComboPoints mirrors Unit::AddComboPoints (Unit.cpp:10655-10673)
+// for a creature caster: a new target resets the bank to count, the same
+// target adds clamped 0-5. No client packet rides it — Unit::SendComboPoints
+// (Unit.cpp:10689) sends SMSG_UPDATE_COMBO_POINTS to players only. The
+// holder reverse index stays out: Go keeps no creature holder registry
+// (the session sweep covers players only).
+func (s *Server) grantCreatureComboPoints(m *creatureMotion, targetGUID uint64, count int8) {
+	if s == nil || m == nil || count == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if targetGUID != 0 && targetGUID != m.comboTarget {
+		m.comboTarget = targetGUID
+		m.comboPoints = count
+		return
+	}
+	total := int16(m.comboPoints) + int16(count)
+	if total > 5 {
+		total = 5
+	}
+	if total < 0 {
+		total = 0
+	}
+	m.comboPoints = int8(total)
+}
+
+// clearCreatureComboPoints mirrors Unit::ClearComboPoints (Unit.cpp:10674-10685)
+// for a creature caster, minus the holder removal (no creature holder
+// registry): the RETAIN_COMBO_POINTS auras go, then the bank and its
+// target both clear.
+func (s *Server) clearCreatureComboPoints(m *creatureMotion) {
+	if s == nil || m == nil || m.comboTarget == 0 {
+		return
+	}
+	s.removeCreatureAurasByType(creatureAuraKeyForMotion(m), spellAuraRetainComboPoints)
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	m.comboPoints = 0
+	m.comboTarget = 0
+}
+
+// finishCreatureComboPoints mirrors the combo-point legs of
+// Spell::_handle_finish_phase (Spell.cpp:3737-3752) for a creature caster:
+// the take lands before the gain, matching the C++
+// ClearComboPoints-then-AddComboPoints order. The take runs only for a
+// non-triggered cast whose explicit unit target hit (Spell.cpp:2605-2607,
+// the session twin's didHit latch); creature casts carry no cast item, so
+// the m_CastItem arm of the prepare-time reset (Spell.cpp:3097) is
+// structural. The gain removes RETAIN_COMBO_POINTS auras unless the cast
+// spell itself carries the aura, then banks the points on the motion.
+func (s *Server) finishCreatureComboPoints(m *creatureMotion, spell wotlk.Spell, targetGUID uint64, comboTarget uint64, comboGain int8, didHit bool, triggered bool) {
+	if s == nil || m == nil {
+		return
+	}
+	if didHit && !triggered && spellNeedsComboPoints(spell) && !s.creatureCasterIgnoresAuraState(m, spell) {
+		s.clearCreatureComboPoints(m)
+	}
+	if comboTarget != 0 && comboGain > 0 {
+		if !spellHasAura(spell, spellAuraRetainComboPoints) {
+			s.removeCreatureAurasByType(creatureAuraKeyForMotion(m), spellAuraRetainComboPoints)
+		}
+		s.grantCreatureComboPoints(m, comboTarget, comboGain)
 	}
 }
 
@@ -7747,6 +7883,105 @@ func (s *Server) creatureEffectChargeDest(ctx context.Context, m *creatureMotion
 	s.syncCreatureVehiclePassengers(m)
 }
 
+// calculateCreatureJumpSpeeds mirrors Spell::CalculateJumpSpeeds
+// (SpellEffects.cpp:1131-1157) for a creature caster: the horizontal speed
+// is the template run speed (base 7.0 times the banked speed_run) tripled
+// by the effect's ValueMultiplier (calcValueMultiplier twin, <= 0 reads 1),
+// capped by the live run speed quadrupled with a 28 floor; the vertical
+// speed comes from the parabolic height clamped between MiscValue/10
+// (floor 0.5) and MiscValueB/10 (ceiling 1000), gravity 19.29110527
+// (MovementUtil.cpp:23). A zero distance still jumps (duration 0 takes
+// the minimum height, like C++).
+func (s *Server) calculateCreatureJumpSpeeds(m *creatureMotion, spell wotlk.Spell, effIndex int, dist float32) (speedXY, speedZ float32) {
+	if s == nil || m == nil || effIndex < 0 || effIndex >= len(spell.Effects) {
+		return 0, 0
+	}
+	runSpeed := creatureRunVelocity(float64(m.BaseRunRate))
+	multiplier := calcValueMultiplier(spell, effIndex, s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID))
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	speedXY = runSpeed * 3 * multiplier
+	capSpeed := float32(28)
+	if live := s.creatureRunSpeedRate(creatureAuraKeyForMotion(m), m) * creatureBaseRunSpeed * 4; live > capSpeed {
+		capSpeed = live
+	}
+	if speedXY > capSpeed {
+		speedXY = capSpeed
+	}
+	const gravity = 19.29110527
+	eff := spell.Effects[effIndex]
+	minHeight := float32(0.5)
+	if eff.MiscValue != 0 {
+		minHeight = float32(eff.MiscValue) / 10
+	}
+	maxHeight := float32(1000)
+	if eff.MiscValueB != 0 {
+		maxHeight = float32(eff.MiscValueB) / 10
+	}
+	duration := dist / speedXY
+	durationSqr := duration * duration
+	var height float32
+	switch {
+	case durationSqr < minHeight*8/gravity:
+		height = minHeight
+	case durationSqr > maxHeight*8/gravity:
+		height = maxHeight
+	default:
+		height = gravity * durationSqr / 8
+	}
+	speedZ = float32(math.Sqrt(float64(2 * gravity * height)))
+	return speedXY, speedZ
+}
+
+// creatureEffectJump mirrors Spell::EffectJump (SpellEffects.cpp:1159-1177)
+// for a creature caster: the LAUNCH_TARGET arm jumping the caster to each
+// hit target's position at the CalculateJumpSpeeds speeds. The IsInFlight
+// gate is vacuous (creature motions carry no flight state, like the leap
+// arm). The jump rides launchCreatureJumpSpline, whose landing gate fires
+// MovementInform(EFFECT_MOTION_TYPE, EVENT_JUMP 1004, SharedDefines.h:3343)
+// like the C++ GenericMovementGenerator finalize.
+func (s *Server) creatureEffectJump(ctx context.Context, m *creatureMotion, spell wotlk.Spell, effIndex int, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	_ = ctx
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		tx, ty, tz, _, ok := s.creatureTargetPosition(m, guid)
+		if !ok {
+			continue
+		}
+		dist := float32(math.Hypot(float64(m.X-tx), float64(m.Y-ty)))
+		speedXY, speedZ := s.calculateCreatureJumpSpeeds(m, spell, effIndex, dist)
+		s.launchCreatureJumpSpline(m, tx, ty, tz, speedXY, speedZ, 1004)
+	}
+}
+
+// creatureEffectJumpDest mirrors Spell::EffectJumpDest
+// (SpellEffects.cpp:1179-1197) for a creature caster: the LAUNCH
+// once-per-effect caster arm jumping to the cast's resolved destination.
+// The dest orientation is uncarried on this path
+// (protocol.SpellTargetLocation has X/Y/Z only, like the leap arm), so
+// the MoveJump hasOrientation arm stays unmodeled.
+func (s *Server) creatureEffectJumpDest(ctx context.Context, m *creatureMotion, spell wotlk.Spell, effIndex int, hasDest bool, dx, dy, dz float32) {
+	if s == nil || m == nil || !hasDest {
+		return
+	}
+	_ = ctx
+	dist := float32(math.Hypot(float64(m.X-dx), float64(m.Y-dy)))
+	speedXY, speedZ := s.calculateCreatureJumpSpeeds(m, spell, effIndex, dist)
+	s.launchCreatureJumpSpline(m, dx, dy, dz, speedXY, speedZ, 1004)
+}
+
 // creatureEffectPullTowards mirrors Spell::EffectPullTowards
 // (SpellEffects.cpp:4667) for a creature caster: the HIT_TARGET arm pulling
 // each hit target to the caster's first-collision position (caster reach
@@ -10114,7 +10349,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 	if s == nil || m == nil {
 		return 0, nil
 	}
-	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed, nil)
+	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed, nil, m)
 	if !found {
 		return 0, nil
 	}
@@ -10161,7 +10396,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 		targetBase, targetLeechBase := baseDamage, baseLeechDamage
 		if launch != nil {
 			if ov := launch.overridesForTarget(guid); len(ov) > 0 {
-				if d, ld, ok := creatureSpellDamage(s, spell, m.Level, m.Charmed, ov); ok {
+				if d, ld, ok := creatureSpellDamage(s, spell, m.Level, m.Charmed, ov, m); ok {
 					targetBase, targetLeechBase = d, ld
 				}
 			}
@@ -10391,7 +10626,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 	if s == nil || m == nil {
 		return 0, nil
 	}
-	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed, nil)
+	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed, nil, m)
 	if !found {
 		return 0, nil
 	}
@@ -10439,7 +10674,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		targetBase, targetLeechBase := baseDamage, baseLeechDamage
 		if launch != nil {
 			if ov := launch.overridesForTarget(guid); len(ov) > 0 {
-				if d, ld, ok := creatureSpellDamage(s, spell, m.Level, m.Charmed, ov); ok {
+				if d, ld, ok := creatureSpellDamage(s, spell, m.Level, m.Charmed, ov, m); ok {
 					targetBase, targetLeechBase = d, ld
 				}
 			}
@@ -13130,9 +13365,9 @@ func stealableAuraRecord(s *Server, aura *activeAura, dispelMask uint32) bool {
 // SPELL_ATTR1_REQ_COMBO_POINTS1|2 needs at least one banked combo point,
 // against the explicit unit target when the spell needs one, banked points
 // regardless of target otherwise (Unit::GetComboPoints, Unit.h:1579-1580).
-// Creature motions carry no combo-point bank — combo gains apply through
-// the session bank only — so both branches read zero and the gate fails
-// whenever it applies. It does not apply to triggered casts: Go's
+// Creature motions bank combo points on the motion (comboPoints/comboTarget),
+// fed by the finish-phase grant of effect-80 gains, so the gate reads the
+// live bank (Unit::GetComboPoints, Unit.h:1579-1580). It does not apply to triggered casts: Go's
 // triggered flag models TRIGGERED_FULL_MASK (SpellDefines.h:153), which
 // carries TRIGGERED_IGNORE_COMBO_POINTS (0x40), so Spell::prepare clears
 // m_needComboPoints (Spell.cpp:3097); creature casts carry no cast item,
@@ -13141,7 +13376,7 @@ func stealableAuraRecord(s *Server, aura *activeAura, dispelMask uint32) bool {
 // creatureCasterIgnoresAuraState twin, matching the session gate. The
 // npcbot leg (GetCreatureComboPoints) stays vacuous: Go has no npcbot
 // model, like every other npcbot leg on this path.
-func (s *Server) creatureComboPointsPreCast(m *creatureMotion, spell wotlk.Spell, triggered bool) bool {
+func (s *Server) creatureComboPointsPreCast(m *creatureMotion, spell wotlk.Spell, targetGUID uint64, triggered bool) bool {
 	if s == nil || m == nil || !spellNeedsComboPoints(spell) {
 		return true
 	}
@@ -13151,7 +13386,14 @@ func (s *Server) creatureComboPointsPreCast(m *creatureMotion, spell wotlk.Spell
 	if s.creatureCasterIgnoresAuraState(m, spell) {
 		return true
 	}
-	return false
+	s.motionMu.Lock()
+	points := m.comboPoints
+	target := m.comboTarget
+	s.motionMu.Unlock()
+	if spellNeedsExplicitUnitTarget(spell) && targetGUID != 0 && target != targetGUID {
+		return false
+	}
+	return points > 0
 }
 
 // creatureSpellHistoryReady mirrors the unit-cooldown arm of
