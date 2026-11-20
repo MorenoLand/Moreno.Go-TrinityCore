@@ -167,3 +167,70 @@ end
 for _, auraId in ipairs(SPELL_GEN_STRIP13.mossCoveredFeet) do
     RegisterAuraEvent(auraId, 6, SPELL_GEN_STRIP13.mossCoveredFeetProc)
 end
+
+-- C++ spell_gen_summon_elemental::AfterApply + AfterRemove
+-- (spell_generic.cpp:3156-3197): 40132 earth / 40133 fire,
+-- EFFECT_1 SPELL_AURA_DUMMY REAL. AfterApply: the aura caster's
+-- owner casts the summoned elemental (earth 19704, fire 8985)
+-- triggered on itself. AfterRemove: the owner player RemovePet —
+-- STAYS OUT, no RemovePet bridge anywhere in engine/ (grep
+-- zero hits; the only RemovePet matches are comments and
+-- RemovePetitionsAndSigns). Apply leg only. Registration map
+-- from the AC spell_script_names rows (TDB 26091 has no rows
+-- for 40132/40133): 40132 -> spell_gen_summon_earth_elemental,
+-- 40133 -> spell_gen_summon_fire_elemental. Bridges: aura
+-- GetCaster (lua_aura.go:339, resolves via
+-- luaUnitObjectForGUID); creature-surface GetOwner
+-- (lua_creature_events.go:702) returns the owning player
+-- session object; player CastSpell (lua_player.go:3805).
+-- C++ registers AfterEffectApply with AURA_EFFECT_HANDLE_REAL
+-- (fresh applies only), matching Go ev2. DORMANT until
+-- Spell.dbc ships the 40132/40133 rows (not in
+-- tools/spelldbc_seed/main.go; seed axis parked).
+-- C++ spell_gen_animal_blood::OnRemove
+-- (spell_generic.cpp:175-204): 46221, EFFECT_0
+-- PERIODIC_TRIGGER_SPELL REAL. On remove the aura owner
+-- casts Spawn Blood Pool 63471 triggered on itself (ev3).
+-- The OnApply dedupe leg STAYS OUT: it enumerates the
+-- owner's auras via GetOwnedAura/RemoveOwnedAura, and
+-- neither has a Lua bridge — without it, duplicate 46221
+-- auras (e.g. from different casters) each spawn a pool on
+-- remove, where C++ keeps only one. TDB 26091 + AC bind
+-- 46221 to spell_gen_animal_blood. DORMANT until Spell.dbc
+-- ships the 46221 row (not in tools/spelldbc_seed/main.go).
+local SPELL_GEN_STRIP14 = {
+    summonElemental = {
+        [40132] = 19704, -- earth, spell_generic.cpp:4446
+        [40133] = 8985, -- fire, spell_generic.cpp:4447
+    },
+    animalBlood = 46221, -- spell_generic.cpp:175
+    spawnBloodPool = 63471, -- spell_generic.cpp:170
+
+    summonElementalApply = function(event, aura, target)
+        local summonedId = SPELL_GEN_STRIP14.summonElemental[aura:GetAuraId()]
+        if summonedId == nil then
+            return
+        end
+        local caster = aura:GetCaster()
+        if caster == nil then
+            return
+        end
+        local owner = caster:GetOwner()
+        if owner == nil then
+            return
+        end
+        owner:CastSpell(owner, summonedId, true)
+    end,
+
+    animalBloodRemoved = function(event, aura, target)
+        if target == nil then
+            return
+        end
+        target:CastSpell(target, SPELL_GEN_STRIP14.spawnBloodPool, true)
+    end,
+}
+
+for auraId in pairs(SPELL_GEN_STRIP14.summonElemental) do
+    RegisterAuraEvent(auraId, 2, SPELL_GEN_STRIP14.summonElementalApply)
+end
+RegisterAuraEvent(SPELL_GEN_STRIP14.animalBlood, 3, SPELL_GEN_STRIP14.animalBloodRemoved)
