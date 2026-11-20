@@ -21578,6 +21578,31 @@ func (s *session) sacredShieldCalcBonus(spell wotlk.Spell, casterLevel uint32) (
 	return bonus, dampenPct, iccPct
 }
 
+// isFireFrostWardSpellID reports whether spellID is a Fire Ward (543
+// chain) or Frost Ward (6143 chain) rank — TDB spell_ranks chains
+// R1-R7, bound by (-543)/(-6143) to spell_mage_fire_frost_ward
+// (spell_mage.cpp:625-626).
+func isFireFrostWardSpellID(spellID uint32) bool {
+	switch spellID {
+	case 543, 8457, 8458, 10223, 10225, 27128, 43010,
+		6143, 8461, 8462, 10177, 28609, 32796, 43012:
+		return true
+	}
+	return false
+}
+
+// fireFrostWardCalcBonus mirrors spell_mage_fire_frost_ward::CalculateAmount
+// (spell_mage.cpp:645-659): the DoEffectCalcAmount leg on EFFECT_0
+// SPELL_AURA_SCHOOL_ABSORB — +80.68% of the caster's
+// SpellBaseHealingBonusDone for the ward's school, times the
+// spellpower-coefficient level penalty (the Sacred Shield
+// sacredShieldCalcBonus precedent, same twin). C++ sets
+// canBeRecalculated = false; auraEffectCanBeRecalculated already
+// excludes SCHOOL_ABSORB (69), so no mask change is needed.
+func (s *session) fireFrostWardCalcBonus(spell wotlk.Spell, casterLevel uint32) int32 {
+	return int32(0.8068 * float64(s.spellBaseHealingBonusDone(uint32(spell.SchoolMask))) * spellCoefficientLevelFactor(spell, casterLevel))
+}
+
 // dummyAuraAmountByIcon mirrors Unit::GetDummyAuraEffect(family, icon, 0): the
 // first live DUMMY aura on the caster whose spell matches the family and icon.
 func (s *session) dummyAuraAmountByIcon(family, iconID uint32) (int32, bool) {
@@ -27561,6 +27586,29 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		goHitTargets = append(goHitTargets, guid)
 	}
+	// SpellScript OnObjectAreaTargetSelect (Spell.cpp:1227, fired
+	// from SelectImplicitAreaTargets inside SelectTargets at :3410):
+	// the triggered path shares _cast with the client path, so the
+	// hook fires here too — after target selection and the miss roll,
+	// before SendSpellGo, the finishSpellCast position. The base list
+	// is selectionTargets (the effect loop's own seed: hitTargets
+	// minus chain jumps, which thread back per effect below), not
+	// hitTargets, so a hook's rewrite never leaks chain jumps into
+	// non-chaining effects; GO primaries are stripped, like the
+	// client fire which runs before the GO join. The returned map
+	// threads into the per-effect seed below; the effect loop drops
+	// missed entries, matching the client path. The reflected-ally
+	// trips ride nil — the triggered path retargets reflected
+	// targets to the caster in the roll, so there is no ally-trip
+	// list to join.
+	triggeredFireBase := make([]uint64, 0, len(selectionTargets))
+	for _, guid := range selectionTargets {
+		if uint16(guid>>48) == 0xF110 {
+			continue
+		}
+		triggeredFireBase = append(triggeredFireBase, guid)
+	}
+	triggeredTargetSelectFiltered := s.firePlayerSpellTargetSelects(ctx, spell, spellID, int32(triggeredCastTimeMs), spellTarget, castItemGUID, triggeredFireBase, triggeredFriendlyEffectTargets, triggeredRefCenteredFriendlyTargets, triggeredFriendlyConeEffectTargets, triggeredEnemyConeEffectTargets, nil, nil)
 	// SpellScript OnCast (Spell.cpp:3432, CallScriptOnCastHandlers):
 	// the triggered path shares _cast with the client path, so the hook
 	// fires here too — after target selection, before SendSpellGo.
@@ -28068,6 +28116,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			sharedSeed = false
 		} else if triggeredEnemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 			seedTargets = triggeredEnemyConeEffectTargets
+			sharedSeed = false
+		}
+		// OnObjectAreaTargetSelect rewrites (the triggered-path fire
+		// above): the hook's per-effect list replaces the seed, and
+		// the list is no longer the shared seed, so the nearby-pick
+		// strip below skips it while the caster/explicit rejoin legs
+		// still run after it — the playerSpellTargetSelectFiltered
+		// contract from the client path.
+		if list, ok := triggeredTargetSelectFiltered[effectIndex]; ok {
+			seedTargets = list
 			sharedSeed = false
 		}
 		// Spell::SelectSpellTargets per-effect masks (Spell.cpp:758-779;
@@ -36068,6 +36126,20 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 			sacredShieldCalc = true
 		}
 	}
+	// spell_mage_fire_frost_ward::CalculateAmount (spell_mage.cpp:645-659):
+	// the DoEffectCalcAmount leg on EFFECT_0 SPELL_AURA_SCHOOL_ABSORB.
+	// Computed before castMu is taken — the bonus fold locks the caster's
+	// castMu itself (the charge fold above follows the same pattern). A
+	// creature caster has no Go healing-bonus model, so the leg only fires
+	// on a self-cast by the session player; otherwise the DBC base stands.
+	var wardBonus int32
+	wardCalc := false
+	if isFireFrostWardSpellID(spellID) && casterGUID == s.playerGUID && s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found && len(sp.Effects) > 0 && sp.Effects[0].Aura == SpellAuraSchoolAbsorb {
+			wardBonus = s.fireFrostWardCalcBonus(sp, uint32(casterLevel))
+			wardCalc = true
+		}
+	}
 	s.castMu.Lock()
 	if s.activeAuras == nil {
 		s.activeAuras = make(map[uint32]*activeAura)
@@ -36165,6 +36237,11 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 						total := rolled + sacredShieldBonus
 						total += total * sacredShieldDampen / 100
 						total += total * sacredShieldICC / 100
+						amounts[index] = total
+						effectAmount = uint32(total)
+					}
+					if wardCalc && index == 0 {
+						total := rolled + wardBonus
 						amounts[index] = total
 						effectAmount = uint32(total)
 					}
@@ -39644,6 +39721,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				total += total * dampenPct / 100
 				total += total * iccPct / 100
 				amount = uint32(total)
+			}
+		}
+		if isFireFrostWardSpellID(spell.ID) && effIndex == 0 && eff.Aura == SpellAuraSchoolAbsorb {
+			// spell_mage_fire_frost_ward::CalculateAmount (spell_mage.cpp:645-659):
+			// the DoEffectCalcAmount leg on EFFECT_0 — s is the caster session
+			// here, so the caster's bonuses fold into the applied amount. A
+			// creature or otherwise non-player caster has no Go healing-bonus
+			// model, so the DBC base stands there.
+			if s.player != nil && casterGUID == s.playerGUID {
+				amount = uint32(int32(amount) + s.fireFrostWardCalcBonus(spell, uint32(s.player.Level)))
 			}
 		}
 

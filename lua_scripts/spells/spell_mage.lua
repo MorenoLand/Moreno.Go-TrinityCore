@@ -96,9 +96,12 @@
 --   with no RegisterSpellScript in the engine, or cross-script state
 --   (arcane_missiles / missile_barrage_proc share a flag no Lua leg
 --   can set). Notable: ice_barrier (absorb + GetDummyAuraEffect
---   not on the aura-hook surface), fire_frost_ward (absorb).
+--   not on the aura-hook surface).
 --   (Ignite left this list this tick: GetSpellMaxTicks + the new
---   aura:GetRank bridge cover its rank/max-ticks math.)
+--   aura:GetRank bridge cover its rank/max-ticks math. fire_frost_ward
+--   left this list this tick: the ev9 absorb port + the Go
+--   CalculateAmount leg cover arms 1-2; only the AfterEffectAbsorb
+--   Trigger arm stays out.)
 
 local SPELL_MAGE_FROSTFIRE_BOLT = 44614
 local SPELL_MAGE_FROSTFIRE_BOLT_R2 = 47610
@@ -111,9 +114,59 @@ local SPELL_MAGE_COMBUSTION_PROC = 28682
 local SPELL_MAGE_COMBUSTION = 11129
 local SPELL_MAGE_FINGERS_OF_FROST = 74396
 local SPELL_MAGE_FINGERS_OF_FROST_AURASTATE_AURA = 44544
+local SPELL_MAGE_FIRE_WARD = 543 -- spell_mage.cpp:627 (class spell_mage_fire_frost_ward)
+local SPELL_MAGE_FIRE_WARD_RANKS = { 543, 8457, 8458, 10223, 10225, 27128, 43010 } -- TDB spell_ranks chain for 543
+local SPELL_MAGE_FROST_WARD = 6143 -- spell_mage.cpp:627
+local SPELL_MAGE_FROST_WARD_RANKS = { 6143, 8461, 8462, 10177, 28609, 32796, 43012 } -- TDB spell_ranks chain for 6143
+local SPELL_MAGE_FROST_WARDING_R1 = 11189 -- spell_mage.cpp:39
+local SPELL_MAGE_FROST_WARDING_TRIGGERED = 57776 -- spell_mage.cpp:40
 
 local AURA_REMOVE_BY_ENEMY_SPELL = 3
 local AURA_REMOVE_BY_EXPIRE = 4
+
+-- C++ spell_mage_fire_frost_ward::Absorb (spell_mage.cpp:661-679):
+-- EFFECT_0 OnEffectAbsorb. When the holder carries the Frost
+-- Warding talent aura (any rank; EFFECT_0 presence via
+-- GetAuraEffectOfRankedSpell), the talent's EFFECT_1 live amount is
+-- the roll chance (C++ reads EFFECT_1 CalcValue of the same spell)
+-- and a passed roll negates the full remaining damage and casts the
+-- triggered leg 57776 on the holder with BP0 = damage, triggered.
+-- BOUNDED DEVIATION: Go clamps the returned amount to the live pool
+-- and consumes it; C++ AbsorbDamage bypasses the pool
+-- (absorbAmount = 0 + PreventDefaultAction leaves the ward intact).
+-- The damage outcome is exact only when damage <= pool, and the ward
+-- is consumed faster than C++ in all cases. A failed roll or no
+-- talent aura returns nil, keeping the default pool absorb. The
+-- AfterEffectAbsorb Trigger arm (Incanter's Absorption 44394 -> 44413)
+-- stays out: no AuraEventAfterEffectAbsorb bridge. The CalculateAmount
+-- SP leg is the Go arm in spells.go (fireFrostWardCalcBonus).
+-- DORMANT until Spell.dbc ships the 543/6143, 57776 and 11189 rows.
+local function fireFrostWardAbsorb(event, aura, target, damage, absorbAmount)
+    if target == nil or damage == nil or damage == 0 then
+        return nil
+    end
+    if target:GetAuraEffectOfRankedSpell(SPELL_MAGE_FROST_WARDING_R1, 0) == nil then
+        return nil
+    end
+    local chance = target:GetAuraEffectOfRankedSpell(SPELL_MAGE_FROST_WARDING_R1, 1)
+    if chance == nil or chance <= 0 then
+        return nil
+    end
+    if math.random(0, 99) >= chance then
+        return nil
+    end
+    target:CastCustomSpell(target, SPELL_MAGE_FROST_WARDING_TRIGGERED, true, damage)
+    return damage
+end
+
+-- TDB spell_ranks chains + (-543)/(-6143) all-ranks bindings: all
+-- fourteen ranks on the same rank-agnostic handler.
+for _, spellId in ipairs(SPELL_MAGE_FIRE_WARD_RANKS) do
+    RegisterAuraEvent(spellId, 9, fireFrostWardAbsorb)
+end
+for _, spellId in ipairs(SPELL_MAGE_FROST_WARD_RANKS) do
+    RegisterAuraEvent(spellId, 9, fireFrostWardAbsorb)
+end
 
 local function frostfireBoltApply(event, aura, target)
     local caster = aura:GetCaster()
@@ -448,8 +501,8 @@ RegisterAuraEvent(SPELL_MAGE_MASTER_OF_ELEMENTS_AURA, 6, masterOfElementsProc)
 --   1463 — no DBC proc entry can enable it. The HandleProc Arcane
 --   Surge 37436 leg needs a mana-shield proc leg in the Go loops
 --   first; the CalculateAmount spellpower leg and the incanter's-
---   absorption Trigger leg stay out with it (SpellBaseHealing-
---   BonusDone / GetAuraEffectOfRankedSpell unbridged).
+--   absorption Trigger leg stay out with it (no Go CalculateAmount
+--   leg yet; no AfterEffectAbsorb bridge for the Trigger arm).
 --   613 empowered_fire PORTED this tick (ev6, above): CheckProc
 --   (proc spell is Ignite 12654 via procEvent:GetSpellId) +
 --   HandleProc (BP0 = pct(GetCreateMana, CalcValue of 67545),
@@ -457,9 +510,13 @@ RegisterAuraEvent(SPELL_MAGE_MASTER_OF_ELEMENTS_AURA, 6, masterOfElementsProc)
 --   non-triggered; Lua CastCustomSpell rides the triggered-only
 --   funnel (same as ignite). DORMANT until Spell.dbc ships the
 --   31656 proc entry.
---   614 fire_frost_ward STAYS OUT — CalculateAmount needs
---   SpellBaseHealingBonusDone + level penalty; Absorb needs
---   OnEffectAbsorb + GetAuraEffectOfRankedSpell. Both unbridged.
+--   614 fire_frost_ward PORTED this tick (ev9 absorb, above; Go
+--   CalculateAmount leg in spells.go): the Frost Warding roll reads
+--   the talent's EFFECT_1 live amount rank-aware; the Trigger arm
+--   (Incanter's Absorption) stays out — no AfterEffectAbsorb bridge.
+--   BOUNDED DEVIATION: Go consumes the ward pool on a Frost Warding
+--   absorb; C++ bypasses it. DORMANT until Spell.dbc ships the
+--   543/6143, 57776 and 11189 rows.
 --   615 hot_streak PORTED this tick (ev6, above): the ev6
 --   effectIndex 8th arg gates the EFFECT_1 counter arm to
 --   EFFECT_0, so the counter doubles once per crit. DORMANT until
