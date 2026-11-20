@@ -193,6 +193,16 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 	methods["GetCastTime"] = luaNoArgs(func() any { return castTimeMs })
 	methods["GetPowerCost"] = luaNoArgs(func() any { return powerCost })
 	methods["GetDuration"] = luaNoArgs(func() any { return durationMs })
+	// GetStackAmount is SpellInfo::StackAmount (Spell.dbc field 49,
+	// CumulativeAura, DBCStructure.h:1440): the stack ceiling the spell
+	// applies at, read from the loaded row. It is the DBC value, not the
+	// live count (aura:GetStackAmount is the live one): a spell with no
+	// DBC row reads 0, so ports guard on a positive value. Backs the
+	// decay-over-time spell half (spell_generic.cpp:1331-1335, which
+	// sets the hit aura to this value) and the landmine knockback
+	// achievement gate (the >= 10 stack check needs the ceiling to stay
+	// exact when the pre-cast read is compensated by one).
+	methods["GetStackAmount"] = luaNoArgs(func() any { return p.spell.StackAmount })
 	// GetEffectValue(effectIndex) is SpellScript::GetEffectValue
 	// (SpellScript.cpp:666-677): m_spell->damage, the per-effect value
 	// HandleEffects computes as damage = CalculateDamage(i)
@@ -584,6 +594,10 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 	methods["GetEntry"] = luaNoArgs(func() any { return spellID })
 	methods["GetCastTime"] = luaNoArgs(func() any { return castTimeMs })
 	methods["GetDuration"] = luaNoArgs(func() any { return durationMs })
+	// GetStackAmount is SpellInfo::StackAmount (Spell.dbc field 49,
+	// CumulativeAura, DBCStructure.h:1440): the session builder's twin
+	// (same contract: the DBC stack ceiling, 0 without a row).
+	methods["GetStackAmount"] = luaNoArgs(func() any { return spell.StackAmount })
 	// GetCastItem is the creature-path twin of the session builder's
 	// method (SpellScript::GetCastItem, SpellScript.cpp:688-691):
 	// creatures never cast from an item, so m_CastItem is always null
