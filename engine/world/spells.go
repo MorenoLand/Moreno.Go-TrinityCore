@@ -4577,6 +4577,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			Target:               castTarget,
 			SelectionOrientation: s.player.Orientation,
 			Taking:               &spellModTakingContext{applied: make(map[*activeAura]struct{})},
+			// Spell::prepare (Spell.cpp:3093) freezes m_powerCost once;
+			// cost is the prepare-time CalcPowerCost computed for the
+			// CheckCast(true) validation above, so the completion
+			// revalidation and TakePower below reuse it instead of
+			// recomputing against auras that may have changed mid-cast.
+			PowerCost:       cost,
+			PowerCostFrozen: true,
 		}
 		castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 			s.castMu.Lock()
@@ -10580,6 +10587,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// finishes; power drained mid-cast must fail the cast, not clamp to zero.
 	pType := spell.PowerType
 	cost := s.calculateSpellPowerCost(spell)
+	// Spell::prepare (Spell.cpp:3093) freezes m_powerCost once and both
+	// CheckPower (Spell.cpp:6653/6674) and TakePower (Spell.cpp:4852-4871)
+	// reuse it, so a cost-modifying aura applied or removed mid-cast
+	// cannot change what this completion revalidates against or deducts
+	// below. A cast-bar cast carries the frozen value on its state
+	// (completedCast, claimed at the head above), as does a queued
+	// on-next-swing cast on its fabricated state (frozen at queue
+	// time); instant and funnel casts build no state, so they
+	// recompute — same-tick, no mid-cast window exists for them.
+	if completedCast != nil && completedCast.PowerCostFrozen {
+		cost = completedCast.PowerCost
+	}
 	// The health arm of CheckPower (Spell.cpp:6651-6656) is part of that
 	// revalidation: a health cost drained mid-cast fails with
 	// SPELL_FAILED_CASTER_AURASTATE, ahead of the rune/power arms per C++
@@ -20497,7 +20516,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// tick compares against the cast-time anchor, not the (slightly
 			// later) timer-fire time.
 			launchMs := gameTimeMS() - uint32(timeDelayMs)
-			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
+			// Spell::cancel's DELAYED arm (Spell.cpp:3220-3225) needs a
+			// handle on the in-flight missile: register the arrival
+			// timer on the session BEFORE arming it, so the closure
+			// can never fire before its entry exists. The entry is
+			// keyed by castID — the same slot the cancel arm's
+			// packets name — and the closure drops it on arrival; a
+			// teleport/logout cancel stops the timer and deletes the
+			// entry, so the closure returns without running effects.
+			delayedEntry := &delayedCastEntry{spellID: spellID}
+			s.castMu.Lock()
+			if s.delayedCasts == nil {
+				s.delayedCasts = make(map[uint8]*delayedCastEntry)
+			}
+			s.delayedCasts[castID] = delayedEntry
+			s.castMu.Unlock()
+			delayedEntry.timer = time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
+				// A missile cancelled mid-flight (teleport/logout)
+				// has no entry: its effects never run.
+				s.castMu.Lock()
+				if s.delayedCasts[castID] != delayedEntry {
+					s.castMu.Unlock()
+					return
+				}
+				delete(s.delayedCasts, castID)
+				s.castMu.Unlock()
 				// Spell::handle_delayed (Spell.cpp:3640): the delayed phase
 				// re-arms the taking window on the SAME Spell object — the
 				// cast-phase m_appliedMods registrations survive, so the
@@ -20594,8 +20637,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			//     in C++ only to anchor t_offset for the wave staggering,
 			//     and without waves the first handle_delayed tick finishes
 			//     (return 0). SpellEvent::Abort's cancel-on-non-FINISHED
-			//     leg is structural — Go has no per-cast object to cancel
-			//     once the arrival timer is in flight.
+			//     leg is bridged: the arrival timer rides the session's
+			//     delayedCasts registry, and the withDelayed=true arms
+			//     (teleport/logout, interruptDelayedCasts) stop it
+			//     before its effects run.
 			//   - The commented-out channeled arm inside that block
 			//     (Spell.cpp:7599-7624) is dead code upstream (commented out
 			//     in C++); nothing to bridge.
@@ -33608,6 +33653,11 @@ type queuedNextSwing struct {
 	WireObjectGUID uint64
 	CastItemGUID   uint64
 	CastItemEntry  uint32
+	// PowerCost is the frozen prepare-time m_powerCost (Spell.cpp:3093):
+	// swing-time cast() reuses the same Spell object without re-running
+	// prepare, so the queued spell validates and deducts against the
+	// queue-time cost, not a swing-time recompute.
+	PowerCost uint32
 }
 
 // isNextMeleeSwingSpell mirrors SpellInfo::IsNextMeleeSwingSpell
@@ -33690,7 +33740,7 @@ func (s *session) queueNextSwingSpell(ctx context.Context, castID uint8, spellID
 	}
 	s.castMu.Lock()
 	old := s.nextSwing
-	s.nextSwing = &queuedNextSwing{CastID: castID, SpellID: spellID, Spell: spell, Target: target, WireObjectGUID: wireObjectGUID, CastItemGUID: castItemGUID, CastItemEntry: castItemEntry}
+	s.nextSwing = &queuedNextSwing{CastID: castID, SpellID: spellID, Spell: spell, Target: target, WireObjectGUID: wireObjectGUID, CastItemGUID: castItemGUID, CastItemEntry: castItemEntry, PowerCost: s.calculateSpellPowerCost(spell)}
 	s.castMu.Unlock()
 	if old != nil {
 		// Spell::cancel PREPARING arm (Spell.cpp:3218-3224) without the
@@ -33735,14 +33785,15 @@ func (s *session) cancelNextSwingSpell() {
 // swing (Unit.cpp:2151-2152: "melee attack spell cast at main hand attack
 // only - no normal melee dmg dealt"), running the C++ cast(false) path —
 // _cast revalidates CheckCast and takes power at swing time, not at queue
-// time. The fabricated activeCastState carries the PrepareTriggersExecutedOnHit
+// time, but against the frozen queue-time m_powerCost carried on the
+// queued state (Spell.cpp:3093), not a swing-time recompute. The fabricated activeCastState carries the PrepareTriggersExecutedOnHit
 // snapshot (Spell.cpp:3430) through finishSpellCast; it is never stored in
 // s.activeCast, so the deferred activeCast cleanup is a no-op and a running
 // cast bar in another container is undisturbed. C++ extra attacks (!extra,
 // Unit.cpp:2151) don't consume the slot — Go has no extra-attack model, so
 // every main-hand swing consumes.
 func (s *session) finishNextSwingCast(ctx context.Context, q *queuedNextSwing) {
-	swingCast := &activeCastState{CastID: q.CastID, SpellID: q.SpellID, SelectionOrientation: s.player.Orientation}
+	swingCast := &activeCastState{CastID: q.CastID, SpellID: q.SpellID, SelectionOrientation: s.player.Orientation, PowerCost: q.PowerCost, PowerCostFrozen: true}
 	s.finishSpellCast(ctx, q.CastID, q.SpellID, q.Spell, q.Target, q.WireObjectGUID, q.CastItemGUID, q.CastItemEntry, swingCast)
 }
 
@@ -33782,6 +33833,50 @@ func (s *session) interruptCurrentCast() {
 		return
 	}
 	s.castMu.Unlock()
+}
+
+// interruptDelayedCasts mirrors the DELAYED arm of Spell::cancel
+// (Spell.cpp:3220-3225): SendInterrupted(0), then
+// SendCastResult(SPELL_FAILED_INTERRUPTED), effects never run. It is
+// the withDelayed=true half of Unit::InterruptNonMeleeSpells
+// (Unit.cpp:3212-3222): InterruptSpell only reaches a DELAYED spell
+// when withDelayed is set (Unit.cpp:3140-3150), and the only callers
+// that set it are Player::TeleportTo (Player.cpp:1842) and
+// Unit::CleanupBeforeRemoveFromMap (Unit.cpp:9829) — death runs
+// withDelayed=false (Unit.cpp:3212-3225) and must NOT call this, so
+// an in-flight missile still lands on a caster who died mid-flight.
+// No GCD cancel: only the PREPARING arm cancels the GCD (the DELAYED
+// arm is the fallthrough target, not the source). Stops every
+// registered arrival timer and drops the registry; an arrival
+// closure whose entry is gone returns without running effects.
+// Cancelled missiles are sent in castID order for determinism.
+func (s *session) interruptDelayedCasts() {
+	if s == nil {
+		return
+	}
+	s.castMu.Lock()
+	if len(s.delayedCasts) == 0 {
+		s.castMu.Unlock()
+		return
+	}
+	type cancelledDelayed struct {
+		castID  uint8
+		spellID uint32
+	}
+	cancelled := make([]cancelledDelayed, 0, len(s.delayedCasts))
+	for castID, entry := range s.delayedCasts {
+		if entry.timer != nil {
+			entry.timer.Stop()
+		}
+		cancelled = append(cancelled, cancelledDelayed{castID: castID, spellID: entry.spellID})
+	}
+	s.delayedCasts = nil
+	s.castMu.Unlock()
+	sort.Slice(cancelled, func(i, j int) bool { return cancelled[i].castID < cancelled[j].castID })
+	for _, c := range cancelled {
+		s.sendInterrupted(c.castID, c.spellID, 0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(c.castID, c.spellID, spellFailedInterrupted), true)
+	}
 }
 
 // cancelAutoRepeatOnInterrupt mirrors the CURRENT_AUTOREPEAT_SPELL arm of
@@ -33979,12 +34074,17 @@ func (s *session) stopSpellLifecycle() {
 	// Go has no SPELL_STATE_DELAYED for the generic slot (missile
 	// flight is not a spell state here), so a non-executing
 	// activeCast is exactly PREPARING, and the refund is not
-	// gated on the DELAYED fallthrough.
+	// gated on the DELAYED fallthrough. In-flight missiles ride
+	// the session's delayedCasts registry instead, and the
+	// withDelayed=true logout arm cancels them right after the
+	// preparing leg — the generic slot holds one spell, PREPARING
+	// or DELAYED, never both.
 	if havePrep {
 		s.cancelGlobalCooldown(prepSpellID)
 		s.sendInterrupted(prepCastID, prepSpellID, 0)
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(prepCastID, prepSpellID, spellFailedInterrupted), true)
 	}
+	s.interruptDelayedCasts()
 	if hadAutoRepeat {
 		buf := protocol.NewBuffer(9)
 		buf.WritePackedGUID(s.playerGUID)

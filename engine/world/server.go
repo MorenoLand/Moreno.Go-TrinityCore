@@ -832,7 +832,8 @@ type session struct {
 	afkChainDeadline   time.Time // wall-clock fire time of the pending Idle->Inactive or Inactive->kick step; zero when no step is pending. Kept across logout so login can resume the countdown (negative auras keep counting down while logged out, Player.cpp _LoadAuras) or drop the aura when the deadline passed offline
 	targetGlyphSlot    uint8
 	activeCast         *activeCastState
-	nextSwing          *queuedNextSwing // CURRENT_MELEE_SPELL slot (Unit.h:572), castMu-guarded like activeCast
+	delayedCasts       map[uint8]*delayedCastEntry // in-flight missiles (SPELL_STATE_DELAYED, Spell.cpp:3220), castMu-guarded like activeCast; keyed by castID, stopped by the withDelayed=true interrupt arms (teleport/logout)
+	nextSwing          *queuedNextSwing            // CURRENT_MELEE_SPELL slot (Unit.h:572), castMu-guarded like activeCast
 	summonExpire       time.Time
 	summonerGUID       uint64
 	summonMap          uint32
@@ -875,6 +876,17 @@ type session struct {
 	timedQuests   map[uint32]struct{}
 	warden        *wardenSession
 	playerStateMu sync.RWMutex
+}
+
+// delayedCastEntry is one in-flight missile (SPELL_STATE_DELAYED):
+// the finishSpellCast delayed branch's arrival timer plus the ids
+// the Spell::cancel DELAYED arm's packets need. Registered on the
+// session before the timer arms, so the arrival closure can never
+// fire before its entry exists; a cancelled entry makes the closure
+// return without running effects.
+type delayedCastEntry struct {
+	timer   *time.Timer
+	spellID uint32
 }
 
 type activeCastState struct {
@@ -921,6 +933,15 @@ type activeCastState struct {
 	// takingContextForActiveSpell). Created with the cast state so
 	// registrations accumulate across ticks like the channel's.
 	Taking *spellModTakingContext
+	// PowerCost is the frozen prepare-time m_powerCost (Spell.cpp:3093:
+	// prepare fills it once from CalcPowerCost; CheckCast(false) at
+	// _cast time and TakePower both reuse it, so a cost-modifying aura
+	// applied or removed mid-cast cannot change what the cast
+	// validates against or deducts). PowerCostFrozen marks a state
+	// that carries one; instant casts never build a state, so
+	// finishSpellCast recomputes there — same-tick, no window.
+	PowerCost       uint32
+	PowerCostFrozen bool
 }
 
 func (s *Server) playerSessionForGUID(guid uint64) *session {

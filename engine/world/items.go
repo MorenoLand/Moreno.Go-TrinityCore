@@ -5123,6 +5123,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				InterruptFlg:         spell.InterruptFlags,
 				Target:               castTarget,
 				SelectionOrientation: s.player.Orientation,
+				// Spell::prepare (Spell.cpp:3093) zeroes m_powerCost for
+				// item casts; the completion power arms are gated on the
+				// cast-item marker anyway, so the frozen 0 only
+				// documents that C++ never charges an item cast.
+				PowerCost:       0,
+				PowerCostFrozen: true,
 			}
 			castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 				s.castMu.Lock()

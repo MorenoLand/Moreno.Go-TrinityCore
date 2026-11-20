@@ -428,6 +428,12 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		}
 		if !teleToSpell {
 			s.interruptCurrentCast()
+			// Player::TeleportTo (Player.cpp:1842) runs
+			// InterruptNonMeleeSpells(true): the DELAYED arm of
+			// Spell::cancel (Spell.cpp:3220-3225) stops in-flight
+			// missiles too, so a missile cast before the teleport
+			// never lands after it.
+			s.interruptDelayedCasts()
 			s.interruptCurrentChannel()
 			s.cancelAutoRepeatOnInterrupt()
 		}
