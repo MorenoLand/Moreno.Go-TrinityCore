@@ -727,6 +727,14 @@ func finalizeSessionSrcTarget(spell wotlk.Spell, target protocol.SpellTargetData
 	if spellHasImplicitSrcCasterTarget(spell) {
 		target.Flags |= protocol.SpellTargetFlagSourceLocation
 		target.Source = protocol.SpellTargetLocation{X: casterX, Y: casterY, Z: casterZ}
+		// The 22 arm replaces the packet src with the caster position
+		// (SetSrc, Spell.cpp:930-936): the packet src's transport
+		// association dies with it, so a later UpdatePointers twin
+		// must not re-derive the caster src from the packet offset.
+		// The dest side clears the same way when a seed replaces the
+		// packet dest (target_dest_targets.go, no-dest-family return).
+		target.SrcTransportGUID = 0
+		target.SrcTransportOffset = [3]float32{}
 		return target
 	}
 	if spellExplicitSourceLocationNeeded(spell) {

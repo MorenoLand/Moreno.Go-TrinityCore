@@ -2333,6 +2333,62 @@ func (s *Server) relocateSpellTargetDest(target protocol.SpellTargetData) protoc
 	return target
 }
 
+// relocateSpellSrcFromTransport is the Spell::UpdatePointers src leg
+// (SpellCastTargets::Update, Spell.cpp:480-491): when the src carries a
+// transport GUID, the packet X/Y/Z are offsets relative to the transport
+// (Spell.cpp:140-146), so the world position is the transport's current
+// position plus the offset rotated by the transport's orientation
+// (Position::RelocateOffset, Position.cpp:36-42). The input is the offset
+// form; the output is world coords with the transport GUID cleared, so
+// the traj arms and the START/GO packets (which send Source X/Y/Z
+// verbatim) see world coordinates. A src with no transport GUID passes
+// through unchanged; a transport that no longer resolves leaves the src
+// untouched, matching C++'s Update (which relocates only when the
+// transport resolves).
+func (s *Server) relocateSpellSrcFromTransport(src protocol.SpellTargetLocation) protocol.SpellTargetLocation {
+	if s == nil || src.Transport == 0 {
+		return src
+	}
+	spawn, ok := s.transportSpawnForGUID(src.Transport)
+	if !ok {
+		return src
+	}
+	offX, offY, offZ := src.X, src.Y, src.Z
+	cosO := math.Cos(float64(spawn.Orientation))
+	sinO := math.Sin(float64(spawn.Orientation))
+	src.X = spawn.X + float32(float64(offX)*cosO-float64(offY)*sinO)
+	src.Y = spawn.Y + float32(float64(offY)*cosO+float64(offX)*sinO)
+	src.Z = spawn.Z + offZ
+	src.Transport = 0
+	return src
+}
+
+// relocateSpellTargetSrc re-derives a target's source from its preserved
+// transport offset (SpellTargetData.SrcTransportGUID/Offset, the C++
+// SpellDestination _transportGUID/_transportOffset) at an UpdatePointers
+// twin — the finish head (Spell.cpp:3284), the delayed arrival
+// (Spell.cpp:3631), and the update tick (Spell.cpp:3797). A target with
+// no transport src passes through unchanged.
+func (s *Server) relocateSpellTargetSrc(target protocol.SpellTargetData) protocol.SpellTargetData {
+	if target.SrcTransportGUID == 0 {
+		return target
+	}
+	relocated := s.relocateSpellSrcFromTransport(protocol.SpellTargetLocation{
+		Transport: target.SrcTransportGUID,
+		X:         target.SrcTransportOffset[0],
+		Y:         target.SrcTransportOffset[1],
+		Z:         target.SrcTransportOffset[2],
+	})
+	// A transport that vanished mid-cast leaves the source at its last
+	// world position: the helper returns the offset form untouched on
+	// lookup failure (Transport still set), and overwriting the world
+	// coords with offsets would misplace the trajectory origin.
+	if relocated.Transport == 0 {
+		target.Source = relocated
+	}
+	return target
+}
+
 func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server.Data == nil {
 		return true
@@ -2392,6 +2448,19 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		target.DestTransportGUID = target.Destination.Transport
 		target.DestTransportOffset = [3]float32{target.Destination.X, target.Destination.Y, target.Destination.Z}
 		target.Destination = s.server.relocateSpellDestFromTransport(target.Destination)
+	}
+	// SpellCastTargets::Read (Spell.cpp:140-146) + Update (Spell.cpp:480-491):
+	// a packet src with a transport GUID carries transport-relative
+	// offsets, not world coordinates. Resolve to the transport's current
+	// position now (the Read→Update pass) and keep the offset on the
+	// target for the UpdatePointers re-relocation twins (finish head,
+	// delayed arrival, update tick). The traj arms and the delay leg read
+	// Source/ReadSrc as world coords, so the offset form must never
+	// survive past this point.
+	if packetHasSrc && target.Source.Transport != 0 {
+		target.SrcTransportGUID = target.Source.Transport
+		target.SrcTransportOffset = [3]float32{target.Source.X, target.Source.Y, target.Source.Z}
+		target.Source = s.server.relocateSpellSrcFromTransport(target.Source)
 	}
 	if clientCastFlags&0x02 != 0 {
 		// SpellCastTargets m_elevation / m_speed (HandleClientCastFlags,
@@ -4693,8 +4762,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				}
 				// Spell::update (Spell.cpp:3797): UpdatePointers runs on
 				// every tick, so the in-flight dest tracks the transport
-				// instead of freezing at its prepare-time position.
+				// instead of freezing at its prepare-time position. The
+				// src tracks it the same way (SpellCastTargets::Update,
+				// Spell.cpp:480-491).
 				cur.Target = s.server.relocateSpellTargetDest(cur.Target)
+				cur.Target = s.server.relocateSpellTargetSrc(cur.Target)
 				targetGUID := cur.Target.UnitGUID
 				s.castMu.Unlock()
 				// Spell::update (Spell.cpp:3805-3811):
@@ -10556,8 +10628,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// dest from the transport's current position before the effects run,
 	// so a cast started on a moving transport lands where the transport
 	// is now, not where it was at prepare time. The instant, bar, item,
-	// and queued-swing paths all funnel through here.
+	// and queued-swing paths all funnel through here. The src is
+	// re-derived the same way (SpellCastTargets::Update, Spell.cpp:480-491).
 	target = s.server.relocateSpellTargetDest(target)
+	target = s.server.relocateSpellTargetSrc(target)
 	// Spell::m_hitMask (Spell.cpp:2603): each Spell object accumulates its
 	// targets' proc hit masks for the FINISH/CAST-phase proc events; the
 	// save/reset/restore mirrors that per-cast lifetime across nested
@@ -20964,7 +21038,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// re-derives the dest from the transport's current
 				// position at missile arrival, so a delayed dest lands
 				// where the transport is now, not where it was at cast.
+				// The src is re-derived the same way
+				// (SpellCastTargets::Update, Spell.cpp:480-491).
 				target = s.server.relocateSpellTargetDest(target)
+				target = s.server.relocateSpellTargetSrc(target)
 				// Swap the due subsets in for this wave's effects, then
 				// restore the pending lists for the next wave. The
 				// applyEffects miss filter mutates hitTargets, so the
@@ -49760,6 +49837,22 @@ func (s *session) handleUpdateMissileTrajectory(ctx context.Context, payload []b
 	if cast := s.activeCast; cast != nil && !cast.Cancelled && guid == s.playerGUID && cast.SpellID == spellID &&
 		cast.Target.Flags&protocol.SpellTargetFlagSourceLocation != 0 && cast.Target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
 		cast.Target.Source.X, cast.Target.Source.Y, cast.Target.Source.Z = fireX, fireY, fireZ
+		// SpellCastTargets::ModSrc (Spell.cpp:382) → SpellDestination::Relocate
+		// (Spell.cpp:94-100): the client's new fire point keeps the
+		// transport association — the offset is adjusted to the new world
+		// position, so later UpdatePointers twins re-derive from it instead
+		// of overwriting the steered fire point with the pre-steer src. A
+		// transport that no longer resolves drops the association, leaving
+		// the fire point as a fixed world src.
+		if cast.Target.SrcTransportGUID != 0 {
+			if spawn, ok := s.server.transportSpawnForGUID(cast.Target.SrcTransportGUID); ok {
+				ox, oy, oz, _ := CalculatePassengerOffset(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, fireX, fireY, fireZ, 0)
+				cast.Target.SrcTransportOffset = [3]float32{ox, oy, oz}
+			} else {
+				cast.Target.SrcTransportGUID = 0
+				cast.Target.SrcTransportOffset = [3]float32{}
+			}
+		}
 		cast.Target.Destination.X, cast.Target.Destination.Y, cast.Target.Destination.Z = impactX, impactY, impactZ
 		// SpellCastTargets::ModDst (Spell.cpp:433-437) → SpellDestination::Relocate
 		// (Spell.cpp:94-100): the client's new impact point keeps the

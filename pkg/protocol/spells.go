@@ -136,6 +136,20 @@ type SpellTargetData struct {
 	// transport GUID cleared once relocated.
 	DestTransportGUID   uint64
 	DestTransportOffset [3]float32
+	// SrcTransportGUID/SrcTransportOffset are the source twin of the dest
+	// fields above (SpellCastTargets::Update, Spell.cpp:480-491): when the
+	// client packet's src carries a transport GUID, its X/Y/Z are
+	// transport-relative offsets (Spell.cpp:140-146), and the world src is
+	// re-derived from the transport's current position at every
+	// UpdatePointers twin (Spell.cpp:7331-7389). Source.X/Y/Z hold the
+	// relocated world coords; the offset rides here so the twins can
+	// re-derive them. The traj arms read Source/ReadSrc as world coords
+	// (Spell.cpp:839-847, :1635), so an unrelocated offset-form src would
+	// misplace the trajectory origin and the delay leg. Never written to
+	// the wire: WriteSpellTargetData sends Source X/Y/Z verbatim, which
+	// hold world coords with the transport GUID cleared once relocated.
+	SrcTransportGUID   uint64
+	SrcTransportOffset [3]float32
 }
 
 type SpellMissStatus struct {

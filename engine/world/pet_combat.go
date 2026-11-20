@@ -3931,6 +3931,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		target.Flags &^= protocol.SpellTargetFlagDestLocation | protocol.SpellTargetFlagSourceLocation
 		target.Destination = protocol.SpellTargetLocation{}
 		target.Source = protocol.SpellTargetLocation{}
+		// The stripped src/dest drop their transport associations with
+		// the positions: a stale offset would re-derive a zeroed Source
+		// at the arrival twin (SpellCastTargets::Update, Spell.cpp:480-491).
+		target.DestTransportGUID = 0
+		target.DestTransportOffset = [3]float32{}
+		target.SrcTransportGUID = 0
+		target.SrcTransportOffset = [3]float32{}
 	}
 	targetGUID := target.UnitGUID
 	explicitUnitTarget := targetGUID != 0
@@ -7122,9 +7129,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					// and the real landing is the single-timer branch
 					// below — but the call keeps the tick faithful if
 					// that ever changes. dx/dy/dz track the dest by the
-					// same delta so dest-based effects follow it.
+					// same delta so dest-based effects follow it. The src
+					// re-derives on the same tick (SpellCastTargets::Update,
+					// Spell.cpp:480-491); a transport src is always HasSrc,
+					// so on this branch it is a no-op the same way.
 					prevDest := target.Destination
 					target = s.server.relocateSpellTargetDest(target)
+					target = s.server.relocateSpellTargetSrc(target)
 					if hasDest {
 						dx += target.Destination.X - prevDest.X
 						dy += target.Destination.Y - prevDest.Y
@@ -7213,8 +7224,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// re-derives the dest from the transport's current
 				// position at missile arrival, so a delayed dest lands
 				// where the transport is now, not where it was at cast.
+				// The src is re-derived the same way
+				// (SpellCastTargets::Update, Spell.cpp:480-491).
 				prevDest := target.Destination
 				target = s.server.relocateSpellTargetDest(target)
+				target = s.server.relocateSpellTargetSrc(target)
 				if hasDest {
 					dx += target.Destination.X - prevDest.X
 					dy += target.Destination.Y - prevDest.Y

@@ -3640,7 +3640,16 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		target.DestTransportOffset = [3]float32{target.Destination.X, target.Destination.Y, target.Destination.Z}
 		target.Destination = s.server.relocateSpellDestFromTransport(target.Destination)
 	}
-
+	// Source twin of the dest block above (Spell.cpp:140-146 + Update,
+	// Spell.cpp:480-491): a packet src with a transport GUID carries
+	// transport-relative offsets. Resolve now and keep the offset for
+	// the UpdatePointers re-relocation twins; the traj arms and the
+	// delay leg read Source/ReadSrc as world coords.
+	if packetHasSrc && target.Source.Transport != 0 {
+		target.SrcTransportGUID = target.Source.Transport
+		target.SrcTransportOffset = [3]float32{target.Source.X, target.Source.Y, target.Source.Z}
+		target.Source = s.server.relocateSpellSrcFromTransport(target.Source)
+	}
 	// HandleClientCastFlags (SpellHandler.cpp:50-72): castFlags & 0x02 carries
 	// elevation, speed, and an optional embedded movement block AFTER the
 	// targets block. C++ routes the movement block through

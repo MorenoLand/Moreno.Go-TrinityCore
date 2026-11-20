@@ -3961,6 +3961,16 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		target.DestTransportOffset = [3]float32{target.Destination.X, target.Destination.Y, target.Destination.Z}
 		target.Destination = s.server.relocateSpellDestFromTransport(target.Destination)
 	}
+	// Source twin of the dest block above (Spell.cpp:140-146 + Update,
+	// Spell.cpp:480-491): a packet src with a transport GUID carries
+	// transport-relative offsets. Resolve now and keep the offset for
+	// the UpdatePointers re-relocation twin at delayed arrival; the pet
+	// traj seed (petDestTrajOptions) reads Source as world coords.
+	if target.Source.Transport != 0 {
+		target.SrcTransportGUID = target.Source.Transport
+		target.SrcTransportOffset = [3]float32{target.Source.X, target.Source.Y, target.Source.Z}
+		target.Source = s.server.relocateSpellSrcFromTransport(target.Source)
+	}
 	if castFlags&0x02 != 0 {
 		// HandleClientCastFlags (SpellHandler.cpp:50-72, via
 		// PetHandler.cpp:775-778): elevation/speed feed
