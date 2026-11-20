@@ -3432,11 +3432,14 @@ func (s *Server) armCastCreatureReflectProcDelayed(ctx context.Context, motion *
 			rsess.consumeReflectAuraCharge()
 		} else {
 			// Creature reflector: the taken-side proc loop runs for any
-			// Unit reflector (ProcReflectDelayed::Execute, Spell.cpp:2076-2078).
+			// Unit reflector (ProcReflectDelayed::Execute, Spell.cpp:2076-2078),
+			// then the same charge arm over activeCreatureAuras. Both arms
+			// die with the reflector — the C++ event lives on its event
+			// list, so a despawned reflector drops no charge.
 			if rm := s.findCreatureMotion(reflectCreatureKey.Map, reflectCreatureKey.InstanceID, reflectorGUID); rm != nil {
 				s.procCreatureReflectTakenAuraTriggers(context.Background(), rm, attackerGUID, spell, false)
+				s.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 			}
-			s.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 		}
 	})
 }

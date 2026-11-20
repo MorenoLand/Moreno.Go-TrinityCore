@@ -12019,11 +12019,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Creature reflector: the taken-side proc loop runs for
 				// any Unit reflector (ProcReflectDelayed::Execute,
 				// Spell.cpp:2076-2078), then the same charge arm over
-				// activeCreatureAuras.
+				// activeCreatureAuras. Both arms die with the
+				// reflector — the C++ event lives on its event list,
+				// so a despawned reflector drops no charge.
 				if rm := s.server.findCreatureMotion(reflectCreatureKey.Map, reflectCreatureKey.InstanceID, reflectorGUID); rm != nil {
 					s.server.procCreatureReflectTakenAuraTriggers(context.Background(), rm, procCasterGUID, procSpell, procTriggered)
+					s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 				}
-				s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 			}
 		})
 		// Spell::AddUnitTarget (Spell.cpp:2178): ReflectResult is the caster's
@@ -27810,9 +27812,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						// ProcReflectDelayed charge arm (Spell.cpp:2181).
 						rsess.consumeReflectAuraCharge()
 					} else {
-						// Creature reflector: the same arrival charge arm
-						// over activeCreatureAuras.
-						s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
+						// Creature reflector: the taken-side proc loop
+						// runs for any Unit reflector
+						// (ProcReflectDelayed::Execute, Spell.cpp:2076-2078),
+						// then the same arrival charge arm over
+						// activeCreatureAuras. Both arms die with the
+						// reflector — the C++ event lives on its event
+						// list, so a despawned reflector procs nothing
+						// and drops no charge.
+						if rm := s.server.findCreatureMotion(reflectCreatureKey.Map, reflectCreatureKey.InstanceID, reflectorGUID); rm != nil {
+							s.server.procCreatureReflectTakenAuraTriggers(context.Background(), rm, s.playerGUID, spell, procTriggered)
+							s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
+						}
 					}
 				})
 			}
@@ -35605,8 +35616,8 @@ func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, 
 				}
 				if rm := s.server.findCreatureMotion(reflectCreatureKey.Map, reflectCreatureKey.InstanceID, reflectorGUID); rm != nil {
 					s.server.procCreatureReflectTakenAuraTriggers(context.Background(), rm, procCasterGUID, procSpell, procTriggered)
+					s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 				}
-				s.server.consumeCreatureReflectAuraCharge(reflectCreatureKey)
 			})
 		}
 	}
