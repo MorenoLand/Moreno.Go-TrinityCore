@@ -62,8 +62,11 @@
 --   is modeled by never consuming it. The astral shift aura CheckProc
 --   arm stays out.
 --   spell_sha_bloodlust::ApplyDebuff (spell_shaman.cpp:313-319): the
---   AfterHit arm — each hit target gains Sated 57724, triggered. The
---   RemoveInvalidTargets arm has no Go hook.
+--   AfterHit arm — each hit target gains Sated 57724, triggered (Go:
+--   bloodlustAfterHit, spells.go:54037). The RemoveInvalidTargets arm
+--   is PORTED below (ev7, 2026-11-20 shaman fold); the tick-295
+--   "no Go hook" note is superseded by firePlayerSpellTargetSelects.
+--   The heroism twin (32182 / Exhaustion 57723) is ported the same way.
 --
 -- PORTED (census rows 261-265, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_sha_mana_tide_totem_SpellScript::HandleDummy
@@ -133,10 +136,11 @@
 --   glyphs, imp water shield, lightning overload/shield, nature
 --   guardian, static shock, windfury),
 --   absorb/calc arms (shadow ward twin, rend twin), SpellScript-only
---   (chain heal, cleansing pulse, earthen power, fire nova,
---   healing/mana spring totem, heroism, lava lash, stoneclaw,
---   thunderstorm), and the t3 8p
---   self-remove (family-flag GetAuraEffect overload unbridged).
+--   (chain heal, cleansing pulse, earthen power,
+--   healing/mana spring totem, lava lash, stoneclaw,
+--   thunderstorm). Fire nova (both arms), the heroism filter, and the
+--   t3 8p self-remove are PORTED below (2026-11-20 shaman fold);
+--   the tick-295 stay-outs for them are superseded.
 --   Astral shift aura is proc, not the visual dummy above; the 51474
 --   absorb leg is Go-ported above.
 --
@@ -218,10 +222,11 @@
 --   either — base 20% + Blessing of the Eternals EFFECT_1 when the
 --   proc target is below 35% health, expressed as the ev6 inverted
 --   veto.
---   763 fire_nova — CheckCast PORTED ev8 (fireNovaCheckCast, this file):
---   fire totem via GetTotem(0) + GetSpellMaxRangeForTarget bridge
---   (lua_player.go). HandleDummy stays out: it needs spell-side
---   GetSpellWithRank (aura-side only); player-cast ev5 gap.
+--   763 fire_nova — CheckCast PORTED ev8 (fireNovaCheckCast, this file)
+--   and HandleDummy PORTED ev5 (fireNovaDummy, 2026-11-20 shaman fold):
+--   the rank-matched triggered nova rides an entry-keyed TDB rank table
+--   (1535 + 8349 chains); the tick-295 stay-out ("spell-side
+--   GetSpellWithRank; player-cast ev5 gap") is superseded on both counts.
 --   764 flame_shock — PORTED below (mode 5, R1 Lava Flows only);
 --   the tick-295 stay-out is superseded: mode 5 + explicit-rank
 --   GetSpellWithRank are live, and the 64694 chain resolves through
@@ -1194,3 +1199,120 @@ end
 for _, spellId in ipairs(SPELL_SHAMAN_FLAME_SHOCK_RANKS) do
     RegisterAuraEvent(spellId, 5, flameShockDispel)
 end
+
+-- PORTED (2026-11-20 shaman fold, RegisterAuraEvent OnPeriodic = 1):
+--   spell_sha_t3_8p_bonus (28820, spell_shaman.cpp:2141-2160):
+--   OnEffectPeriodic EFFECT_1 PERIODIC_TRIGGER_SPELL. PreventDefaultAction
+--   (the unconditional true return) on every tick, then remove the aura
+--   unless the holder still carries a Lightning Shield
+--   (GetAuraEffect PROC_TRIGGER_SPELL, SHAMAN, 0x400, 0, 0). No caster
+--   filter on the C++ lookup, so none is passed here (unlike the
+--   static-shock port, which passes the actor GUID). The tick-295
+--   stay-out ("family-flag GetAuraEffect overload unbridged") is
+--   superseded: GetAuraEffectSpellIdByFamily is live (lua_player.go:3557).
+--   Residual caveat: the Go true return suppresses the whole aura tick,
+--   while C++ vetoes only EFFECT_1's default; if EFFECT_0 is independently
+--   periodic with its own default leg, this over-suppresses (unverifiable
+--   without Spell.dbc). DORMANT until Spell.dbc ships the 28820 row.
+local SPELL_SHAMAN_T3_8P_BONUS = 28820 -- spell_shaman.cpp:2141 (class spell_sha_t3_8p_bonus)
+
+local function t3_8pBonusTick(event, aura, target)
+    if target:GetAuraEffectSpellIdByFamily(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0x400, 0, 0) == nil then
+        aura:Remove()
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_T3_8P_BONUS, 1, t3_8pBonusTick)
+
+-- PORTED (2026-11-20 shaman fold, RegisterSpellEvent OnObjectAreaTargetSelect = 7):
+--   spell_sha_bloodlust::RemoveInvalidTargets (spell_shaman.cpp:307-311)
+--   and spell_sha_heroism::RemoveInvalidTargets (spell_shaman.cpp:1110-1113):
+--   OnObjectAreaTargetSelect, EFFECT_ALL, TARGET_UNIT_CASTER_AREA_RAID —
+--   drop every target carrying Sated (57724) / Exhaustion (57723). No
+--   effectIndex gate: C++ registers EFFECT_ALL, and ev7 fires once per
+--   selecting effect with that effect's list, so the removal lands on
+--   every effect. The tick-295 stay-out ("no Go hook") is superseded:
+--   ev7 fires on the player path (firePlayerSpellTargetSelects,
+--   spells.go:13814) and the filtered lists feed the effect arms
+--   (playerSpellTargetSelectFiltered, spells.go:14924+). The Go AfterHit
+--   legs (bloodlustAfterHit / heroismAfterHit, spells.go:54037/54059)
+--   stay: they cast Sated / Exhaustion per hit target, triggered.
+--   Standing deviation: those legs iterate the raw pre-filter hitTargets,
+--   so an already-Sated / already-Exhausted target still gets its debuff
+--   refreshed where C++ never hits it; the Bloodlust / Heroism buff
+--   itself is correctly withheld by the filter. DORMANT until Spell.dbc
+--   ships the 2825 / 32182 records.
+local SPELL_SHAMAN_BLOODLUST = 2825 -- spell_shaman.cpp:295 (class spell_sha_bloodlust)
+local SPELL_SHAMAN_SATED = 57724 -- spell_shaman.cpp:61
+local SPELL_SHAMAN_HEROISM = 32182 -- spell_shaman.cpp:1096 (class spell_sha_heroism)
+local SPELL_SHAMAN_EXHAUSTION = 57723 -- spell_shaman.cpp:44
+
+local function bloodlustFilter(event, spell, effectIndex, targets)
+    for _, target in ipairs(targets:GetTargets()) do
+        if target ~= nil and target:HasAura(SPELL_SHAMAN_SATED) then
+            targets:Remove(target)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_SHAMAN_BLOODLUST, 7, bloodlustFilter)
+
+local function heroismFilter(event, spell, effectIndex, targets)
+    for _, target in ipairs(targets:GetTargets()) do
+        if target ~= nil and target:HasAura(SPELL_SHAMAN_EXHAUSTION) then
+            targets:Remove(target)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_SHAMAN_HEROISM, 7, heroismFilter)
+
+-- PORTED (2026-11-20 shaman fold, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_sha_fire_nova::HandleDummy (spell_shaman.cpp:644-653):
+--   OnEffectHitTarget EFFECT_0 DUMMY. Per hit unit, if the fire totem
+--   exists the caster casts the rank-matched triggered nova
+--   (GetSpellWithRank(8349, rank)) on the totem, triggered. The
+--   CheckCast arm is already ported above (fireNovaCheckCast, ev8). The
+--   tick-295 stay-out ("needs spell-side GetSpellWithRank; player-cast
+--   ev5 gap") is superseded on both counts: ev5 fires on the player path
+--   (finishSpellCast, spells.go:14934) and the creature path
+--   (boss_ai.go:3562-3565), and the rank map comes from the TDB
+--   spell_ranks chains (1535 chain + 8349 chain, verified) keyed by
+--   spell:GetEntry(). Fidelity deltas: no IsTotem bridge exists, but
+--   GetTotem(0) returns only the fire-slot totem or nil, so the check is
+--   redundant; ev5 fires once per EFFECT_0 hit target exactly like the
+--   C++ arm, and 1535 EFFECT_0 resolves the caster as its hit target in
+--   practice (self-targeted dummy), so one nova per cast — unverifiable
+--   in-tree without Spell.dbc. DORMANT until Spell.dbc ships the
+--   1535 / 8349 rows.
+local SPELL_SHAMAN_FIRE_NOVA_TRIGGERED = { [SPELL_SHAMAN_FIRE_NOVA_R1] = 8349, [SPELL_SHAMAN_FIRE_NOVA_R2] = 8502, [SPELL_SHAMAN_FIRE_NOVA_R3] = 8503, [SPELL_SHAMAN_FIRE_NOVA_R4] = 11306, [SPELL_SHAMAN_FIRE_NOVA_R5] = 11307, [SPELL_SHAMAN_FIRE_NOVA_R6] = 25535, [SPELL_SHAMAN_FIRE_NOVA_R7] = 25537, [SPELL_SHAMAN_FIRE_NOVA_R8] = 61650, [SPELL_SHAMAN_FIRE_NOVA_R9] = 61654 } -- TDB spell_ranks, 8349 chain (8349 r1, 8502 r2, 8503 r3, 11306 r4, 11307 r5, 25535 r6, 25537 r7, 61650 r8, 61654 r9)
+
+local function fireNovaDummy(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local totem = caster:GetTotem(TOTEM_SLOT_FIRE)
+    if totem == nil then
+        return
+    end
+    local triggered = SPELL_SHAMAN_FIRE_NOVA_TRIGGERED[spell:GetEntry()]
+    if triggered == nil then
+        return
+    end
+    caster:CastSpell(totem, triggered, true)
+end
+
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R1, 5, fireNovaDummy)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R2, 5, fireNovaDummy)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R3, 5, fireNovaDummy)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R4, 5, fireNovaDummy)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R5, 5, fireNovaDummy)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R6, 5, fireNovaDummy)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R7, 5, fireNovaDummy)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R8, 5, fireNovaDummy)
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R9, 5, fireNovaDummy)

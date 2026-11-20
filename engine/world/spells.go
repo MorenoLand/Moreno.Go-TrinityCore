@@ -54028,9 +54028,12 @@ func (s *session) divineStormAfterHit(ctx context.Context, spellID uint32, spell
 // the RemoveInvalidTargets check is caster-agnostic. Fires once per hit
 // target, after the Lua AfterHit handlers above; miss entries take no
 // cast (C++ GetHitUnit() nil skips). The RemoveInvalidTargets arm (drop
-// Sated holders from the raid list) has no Go hook: the player path has
-// no area-target-select filter site. DORMANT until Spell.dbc ships the
-// 2825 record.
+// Sated holders from the raid list) is ported in Lua
+// (spell_shaman.lua bloodlustFilter, ev7): the filter feeds the effect
+// arms, but this leg iterates the raw pre-filter hitTargets, so an
+// already-Sated target still gets Sated refreshed where C++ never hits
+// it — standing deviation, the buff itself is correctly withheld.
+// DORMANT until Spell.dbc ships the 2825 record.
 func (s *session) bloodlustAfterHit(ctx context.Context, spellID uint32, hitTargets []uint64) {
 	if s == nil || s.player == nil || s.server == nil || spellID != 2825 {
 		return
@@ -54050,8 +54053,9 @@ func (s *session) bloodlustAfterHit(ctx context.Context, spellID uint32, hitTarg
 // the RemoveInvalidTargets check is caster-agnostic. Fires once per hit
 // target, after the Lua AfterHit handlers above; miss entries take no
 // cast (C++ GetHitUnit() nil skips). The RemoveInvalidTargets arm (drop
-// Exhaustion holders from the raid list) has no Go hook: the player path
-// has no area-target-select filter site (the bloodlust 2825 precedent).
+// Exhaustion holders from the raid list) is ported in Lua
+// (spell_shaman.lua heroismFilter, ev7) — same shape as the bloodlust
+// 2825 twin, with the same raw-hitTargets refresh deviation.
 // DORMANT until Spell.dbc ships the 32182 record.
 func (s *session) heroismAfterHit(ctx context.Context, spellID uint32, hitTargets []uint64) {
 	if s == nil || s.player == nil || s.server == nil || spellID != 32182 {
