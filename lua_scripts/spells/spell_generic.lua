@@ -2312,3 +2312,179 @@ RegisterSpellEvent(SPELL_GEN_STRIP11.ejectAllPassengers[3], 3, function(event, s
         end
     end
 end)
+
+-- PORTED (this tick): three more spell_generic.cpp
+-- classes, each verified name-by-name vs C++ +
+-- bridges (per-port comments below). All 10
+-- registered IDs are TDB-bound in 26091 (67039
+-- spell_gen_pony_mount_check, 53475/53487/54015
+-- spell_gen_oracle_wolvar_reputation, 52420/45057/
+-- 71634/71640/75475/75481 spell_item_* under
+-- spell_gen_proc_below_pct_damaged). All three are
+-- DORMANT until Spell.dbc ships the rows: none of
+-- the 10 IDs has a seeded row in seeddbc/Spell.dbc
+-- (1395 rows) or the seedcheck copies, so every
+-- DBC read below is 0 and each handler no-ops
+-- until then; seed axis parked. The file sits at
+-- 199/200 main-chunk locals, so this is the LAST
+-- table local (now 200): the three handlers ride
+-- as table fields, and the registrations below are
+-- individual calls, never a top-level loop, so no
+-- further locals are added. Next tick must split
+-- this file or port with zero-new-local literals.
+local SPELL_GEN_STRIP12 = {
+    ponyMountCheck = 67039, -- spell_generic.cpp:4469
+    oracleWolvarReputation = { 53475, 53487, 54015 }, -- spell_generic.cpp:4423
+    procBelowPctDamaged = { 52420, 45057, 71634, 71640, 75475, 75481 }, -- spell_generic.cpp:4426-4431
+    -- C++ spell_gen_pony_mount_check::HandleEffectPeriodic
+    -- (spell_generic.cpp:4081-4110): 67039 EFFECT_0
+    -- SPELL_AURA_PERIODIC_DUMMY. The aura caster must
+    -- exist; its owner must be a player (GetOwner
+    -- resolves players only, lua_creature_events.go:696,
+    -- so the C++ GetOwner()->ToPlayer() nil leg is the
+    -- nil check) who has achieved PONY_UP 3736
+    -- (spell_generic.cpp:4077; player HasAchieved,
+    -- lua_player.go:6822). While the owner is mounted
+    -- the caster mounts MOUNT_PONY 29736
+    -- (spell_generic.cpp:4078; creature Mount,
+    -- lua_creature_events.go:6990); otherwise, if the
+    -- caster is mounted, it dismounts. Either way the
+    -- caster's MOVE_RUN rate is set to the owner's
+    -- run rate (creature SetSpeedRate,
+    -- lua_creature_events.go:6719; the owner's rate
+    -- reads the new player GetSpeedRate bridge,
+    -- lua_player.go — Unit::GetSpeedRate, Unit.h:1543,
+    -- the m_speed_rate multiplier, read as
+    -- movementSpeeds()[mt] / playerBaseMoveSpeed[mt]).
+    -- The ev1 periodic hook fires with (event, aura,
+    -- target); the arm uses the caster, not the
+    -- target, exactly like C++.
+    ponyMountCheckTick = function(event, aura, target)
+        local caster = aura:GetCaster()
+        if caster == nil then
+            return
+        end
+        local owner = caster:GetOwner()
+        if owner == nil or not owner:HasAchieved(3736) then
+            return
+        end
+        if owner:IsMounted() then
+            caster:Mount(29736)
+            caster:SetSpeedRate(1, owner:GetSpeedRate(1))
+        elseif caster:IsMounted() then
+            caster:Dismount()
+            caster:SetSpeedRate(1, owner:GetSpeedRate(1))
+        end
+    end,
+    -- C++ spell_gen_oracle_wolvar_reputation::HandleDummy
+    -- (spell_generic.cpp:2565-2596): OnEffectHit EFFECT_0
+    -- SPELL_EFFECT_DUMMY, Load-gated on a player caster.
+    -- EFFECT_0 CalcValue is the faction id, EFFECT_1
+    -- CalcValue the rep value (SpellInfo.cpp:402,
+    -- CalcValueForLevel at the caster's level — the
+    -- spell:GetEffectValue twin, lua_spell.go:217,
+    -- memoized per effect, 0 with no DBC row). When the
+    -- player's current standing with the faction is
+    -- below the value, it is set to the value
+    -- (ReputationMgr::SetReputation absolute write;
+    -- player GetReputation / SetReputation,
+    -- lua_player.go:6869/5078). The factionId == 0
+    -- guard is the dormant no-op (no DBC row reads 0)
+    -- and the C++ sFactionStore-lookup leg has no Go
+    -- twin — the DBC values for these three spells are
+    -- real factions. The ev4 hook fires once per
+    -- non-zero effect with args (event, spell,
+    -- effectIndex) on the player path (spells.go:14858
+    -- block, fireSpellScriptEffectHitNoTarget), the
+    -- creature path (boss_ai.go:3500) and the funnel
+    -- (spells.go:10354); the effectIndex == 0 guard
+    -- keeps it to the registered EFFECT_0, and the
+    -- caster gate is the C++ Load() twin
+    -- (TYPEID_PLAYER local, this file:436).
+    oracleWolvarReputationHit = function(event, spell, effectIndex)
+        if effectIndex ~= 0 then
+            return
+        end
+        local caster = spell:GetCaster()
+        if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+            return
+        end
+        local factionId = spell:GetEffectValue(0)
+        if factionId == 0 then
+            return
+        end
+        local repChange = spell:GetEffectValue(1)
+        if caster:GetReputation(factionId) < repChange then
+            caster:SetReputation(factionId, repChange)
+        end
+    end,
+    -- C++ spell_gen_proc_below_pct_damaged::CheckProc
+    -- (spell_generic.cpp:2667-2690): DoCheckProc only, no
+    -- OnProc arm — the default leg is the DBC trigger
+    -- cast. The proc passes only when the event carries
+    -- damage (no DamageInfo, or zero damage, returns
+    -- false) and the action target's health after that
+    -- damage is strictly below EFFECT_0 CalcValue
+    -- percent: HealthBelowPctDamaged(pct, damage)
+    -- (Unit.h:873) = int64(health) - int64(damage) <
+    -- CountPctFromMaxHealth(pct), the floor(maxHealth *
+    -- pct / 100) the decimation port (spell_warlock.lua)
+    -- already uses as the HealthBelowPct proxy. The
+    -- ev6 proc hook has no separate CheckProc hook, so
+    -- the gate is the inverted veto (runtime.go:524):
+    -- return true (PreventDefaultAction, skipping the
+    -- default trigger cast) when the gate FAILS, and
+    -- fall through when it passes. DELTA (documented):
+    -- the Go ev6 hook fires after the proc gates
+    -- (flags, chance roll, charge/cooldown consumption,
+    -- runtime.go:500-503; procs.go:4018-4021), so a
+    -- vetoed proc still spends a charge, while C++
+    -- CheckProc gates before consumption — the veto
+    -- suppresses only the default trigger leg, the
+    -- proc_charge_drop_only precedent in this file.
+    -- The action target
+    -- rides procEvent:GetActionTarget()
+    -- (lua_aura.go:1394; procActionTargetGUID, procs.go:
+    -- the holder on taken events, the victim on done
+    -- ones — the C++ GetActionTarget twin), falling
+    -- back to the aura holder when it does not resolve.
+    -- The pct == 0 guard is the dormant no-op (no DBC
+    -- row reads 0; with pct 0 the C++ gate would fire
+    -- only on overkill, which is not the real-Dbc
+    -- behaviour). No effect-index gate: C++ CheckProc
+    -- is aura-wide, not per-effect. DORMANT until
+    -- Spell.dbc ships the proc entries for these six
+    -- item auras (soul_harvesters_charm 52420,
+    -- commendation_of_kaelthas 45057, corpse_tongue_coin
+    -- 71634, corpse_tongue_coin_heroic 71640,
+    -- petrified_twilight_scale 75475,
+    -- petrified_twilight_scale_heroic 75481).
+    procBelowPctDamagedProc = function(event, aura, target, actor, procTarget, damage, procEvent)
+        if procEvent == nil or damage == nil or damage == 0 then
+            return true
+        end
+        local pct = aura:GetSpellEffectCalcValue(aura:GetAuraId(), 0)
+        if pct == 0 then
+            return true
+        end
+        local victim = procEvent:GetActionTarget() or target
+        if victim == nil then
+            return true
+        end
+        if victim:GetHealth() - damage < math.floor(victim:GetMaxHealth() * pct / 100) then
+            return
+        end
+        return true
+    end,
+}
+
+RegisterAuraEvent(SPELL_GEN_STRIP12.ponyMountCheck, 1, SPELL_GEN_STRIP12.ponyMountCheckTick)
+RegisterSpellEvent(SPELL_GEN_STRIP12.oracleWolvarReputation[1], 4, SPELL_GEN_STRIP12.oracleWolvarReputationHit)
+RegisterSpellEvent(SPELL_GEN_STRIP12.oracleWolvarReputation[2], 4, SPELL_GEN_STRIP12.oracleWolvarReputationHit)
+RegisterSpellEvent(SPELL_GEN_STRIP12.oracleWolvarReputation[3], 4, SPELL_GEN_STRIP12.oracleWolvarReputationHit)
+RegisterAuraEvent(SPELL_GEN_STRIP12.procBelowPctDamaged[1], 6, SPELL_GEN_STRIP12.procBelowPctDamagedProc)
+RegisterAuraEvent(SPELL_GEN_STRIP12.procBelowPctDamaged[2], 6, SPELL_GEN_STRIP12.procBelowPctDamagedProc)
+RegisterAuraEvent(SPELL_GEN_STRIP12.procBelowPctDamaged[3], 6, SPELL_GEN_STRIP12.procBelowPctDamagedProc)
+RegisterAuraEvent(SPELL_GEN_STRIP12.procBelowPctDamaged[4], 6, SPELL_GEN_STRIP12.procBelowPctDamagedProc)
+RegisterAuraEvent(SPELL_GEN_STRIP12.procBelowPctDamaged[5], 6, SPELL_GEN_STRIP12.procBelowPctDamagedProc)
+RegisterAuraEvent(SPELL_GEN_STRIP12.procBelowPctDamaged[6], 6, SPELL_GEN_STRIP12.procBelowPctDamagedProc)

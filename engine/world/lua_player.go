@@ -5784,6 +5784,24 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.movementSpeeds()[mt]}, nil
 	}
+	// GetSpeedRate is Unit::GetSpeedRate (Unit.h:1543): the
+	// m_speed_rate multiplier for a move type. Go stores no separate
+	// rate field: movementSpeeds() (movement_speed.go) is already the
+	// rate * playerBaseMoveSpeed product (Unit::GetSpeed,
+	// Unit.cpp:8811-8814), so the rate is the quotient. A type >=
+	// MAX_MOVE_TYPE (9) errors, mirroring the GetSpeed gate. Backs
+	// the pony-mount-check arm (spell_generic.cpp:4095-4102), which
+	// copies the owner's run rate onto the pony.
+	methods["GetSpeedRate"] = func(_ context.Context, args []any) ([]any, error) {
+		mt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if mt >= 9 {
+			return nil, fmt.Errorf("GetSpeedRate requires a valid UnitMoveType, got %d", mt)
+		}
+		return []any{s.movementSpeeds()[mt] / playerBaseMoveSpeed[mt]}, nil
+	}
 	// GetMovementType is UnitMethods::GetMovementType
 	// (UnitMethods.h:1430-1444) for players: client-driven movement
 	// aside, the observable generators are the in-flight script spline
