@@ -130,8 +130,8 @@ end
 RegisterAuraEvent(SPELL_WARRIOR_DAMAGE_SHIELD, 6, damageShieldProc)
 
 local SPELL_WARRIOR_SUDDEN_DEATH_R1 = 29723 -- spell_warrior.cpp:57
-local SPELL_WARRIOR_SUDDEN_DEATH_R2 = 29724
-local SPELL_WARRIOR_SUDDEN_DEATH_R3 = 29725
+local SPELL_WARRIOR_SUDDEN_DEATH_R2 = 29725
+local SPELL_WARRIOR_SUDDEN_DEATH_R3 = 29724
 local SPELL_WARRIOR_BLOODSURGE_R1 = 46913 -- spell_warrior.cpp:39
 local SPELL_WARRIOR_BLOODSURGE_R2 = 46914
 local SPELL_WARRIOR_BLOODSURGE_R3 = 46915
@@ -149,8 +149,9 @@ local SPELL_WARRIOR_EXECUTE_GCD_REDUCED = 71069 -- spell_warrior.cpp:47
 -- aura effect). The IsRankOf branch is decided by which spell id the
 -- handler is registered for. TDB binds all ranks (-29723, -46913), so
 -- R2/R3 register the same factory: Sudden Death 29724/29725, Bloodsurge
--- 46914/46915 (sequential ranks; 46915 corroborated as R3 by
--- bot_warrior_ai.cpp:117 — its 29724-is-R3 label is wrong). DORMANT
+-- 46914/46915 (sequential ranks; 29724 is R3 and 46915 is R3 per
+-- bot_warrior_ai.cpp:113/117, corroborated by Wowhead proc chances
+-- 29723=3%/29725=6%/29724=9%). DORMANT
 -- until Spell.dbc ships the proc entries.
 local function extraProc(gcdReduced)
     return function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)

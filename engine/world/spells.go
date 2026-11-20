@@ -39786,9 +39786,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// is above 75% health (targetHasAuraState twin of HasAuraState
 	// HEALTH_ABOVE_75_PERCENT). Adjusted here, before the
 	// player/creature split, so both branches and both merge arms take
-	// the bonused amount; the caster must be the session player (the
-	// Load() TYPEID_PLAYER gate — creature-cast Rend has no weapon
-	// damage model here). No Lua calc-amount hook exists, so this rides
+	// the bonused amount; the caster must be the session player (a Go
+	// funnel limitation — C++ spell_warr_rend has no Load() and reads
+	// GetCaster() for any unit; the weapon-damage/AP model here lives on
+	// the session player). No Lua calc-amount hook exists, so this rides
 	// the Go apply funnel with the guardian-spirit/mixology legs.
 	// canBeRecalculated=false in C++: the amount is fixed at apply,
 	// which the Go funnel already does. DORMANT until Spell.dbc ships

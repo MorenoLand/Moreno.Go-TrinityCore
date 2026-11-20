@@ -9,10 +9,14 @@
 --   (C++ urand picks uniformly). The mode gate is
 --   Aura:GetRemoveMode (new tick 198: SpellAuraDefines.h:61-69
 --   values).
--- KNOWN LIMIT: player:CastSpell ignores the triggered flag
--- (lua_player.go:2577 -> castSpellDirect), so a player caster's
--- triggered self-cast lands non-triggered; pre-existing bridge gap,
--- same as all prior player-target ports.
+-- KNOWN LIMIT (corrected 2026-11-20, D1: the old note had this
+-- backwards): player:CastSpell ALWAYS rides castSpellDirect, the
+-- triggered pipeline (lua_player.go:3822-3835) — the triggered
+-- argument is never even read. A port passing true matches C++
+-- exactly; a port passing false still lands TRIGGERED on the
+-- player path (no non-triggered player-cast path exists). The one
+-- casualty is chum_the_water (non-triggered in C++); the
+-- creature-path CastSpell DOES honor the flag.
 
 local SPELL_FUMPING = 39238 -- spell_quest.cpp:2630
 local SPELL_SUMMON_SAND_GNOME = 39240 -- spell_quest.cpp:2626
@@ -296,8 +300,9 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 --   full mask is the SetUInt32Value twin, lua_creature_events.go:6130),
 --   health is set to half max and mana to 75% of max.
 --   spell_q12659_ahunaes_knife (spell_quest.cpp:888-924): EFFECT_0
---   DUMMY OnEffectHitTarget, same ev4 + spell:GetTarget() route.
---   Caster-is-player Load gate is an explicit GetTypeId()==4 check.
+--   DUMMY OnEffectHitTarget, ev5 (live registration; the old ev4-route
+--   note was stale). Caster-is-player Load gate is an explicit
+--   GetTypeId()==4 check.
 --   The hit creature despawns, then the caster takes Scalps kill
 --   credit 28622.
 --   spell_q9452_cast_net (spell_quest.cpp:1123-1169): EFFECT_0 DUMMY
@@ -312,8 +317,8 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 --   spells target friendly/helpless units, so a miss is
 --   near-impossible. C++ PreventHitDefaultEffect has no ev4 twin
 --   (notification-only); the q9452 dummy effect has no Go default leg
---   to suppress. KNOWN LIMIT: player:CastSpell ignores the triggered
---   flag (see header note above), same as all prior player ports.
+--   to suppress. The triggered self-cast (29869) rides castSpellDirect
+--   and lands triggered, matching C++ (see corrected header note).
 --
 -- PORTED (tick 2026-11-12, hunt-resolved bindings 48917/32146/54190/
 --   66741 — see the HUNT block at the end of the file):
@@ -333,18 +338,17 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 --   only — STAYS OUT, TDB-verified tick 2026-11-12: no 'cast_net' row
 --   in TDB 335.26091 spell_script_names (nor any AC row), so the
 --   binding spell is unidentifiable from C++ (no comment, no enum);
---   secondary: ev5-only + GO targets never fire (spells.go), which
---   also blocks the q9452 HandleActiveObject leg (:1157) and the
---   q14076 GO leg.
---   spell_q1846_bending_shinbone (spell_quest.cpp:96-120): binding
---   8856 resolved (AC 'spell_q1846_bending_shinbone'; TDB 335.26091
---   renames it 'spell_undercity_bending_shinbone') but the arm
---   STAYS OUT — EFFECT_0 SCRIPT_EFFECT targets the item
---   (GetHitItem, no Lua bridge anywhere in engine/; zero hits) and
---   the ev5 loop fires per unit GUID only (spells.go:14735), so an
---   item-only spell never reaches the hook; the 20% roll + triggered
---   self-cast 8854/8855 legs are unreachable from Lua. Divergence
---   triage, tick 2026-11-12.
+--   secondary: ev5-only + GO targets never fire (spells.go). The
+--   q14076 GO leg has since PORTED via ev4 (tick 2026-11-20); the
+--   q9452 HandleActiveObject leg (:1157) is HELD, not blocked by ev5 —
+--   it ports via ev4 too, but C++ PreventHitDefaultEffect has no
+--   player-path twin, so landing it needs 29866 EFFECT_1's MiscValue
+--   first (unverifiable in-tree and on Wowhead; a Disturb/Open value
+--   would double-Use the school GO via the Go default leg).
+--   spell_q1846_bending_shinbone (spell_quest.cpp:96-120): PORTED
+--   tick 2026-11-20 via the ev4 no-target path (see the handler
+--   above) — the 2026-11-12 STAY-OUT (ev5-only reasoning) is
+--   overturned; the item GUID rides the spell object into ev4.
 --   Census go_hit/lua_hit true on 691/693/694/695/696/697/698/699 are
 --   phantoms (zero class-name hits in engine/ + lua_scripts/).
 
@@ -394,6 +398,44 @@ local function castNetHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_CAST_NET, 4, castNetHit)
+
+-- PORTED (tick 2026-11-20, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q1846_bending_shinbone (spell_quest.cpp:96-120): EFFECT_0
+--   SCRIPT_EFFECT. The arm is reachable via ev4 on the no-target path:
+--   an item-target cast holds no unit/GO target, so finishSpellCast
+--   early-returns (spells.go:14440-14468) and fireSpellScriptEffectHitNoTarget
+--   fires ev4 once per non-zero effect with the item GUID on the spell
+--   object (spells.go:10340-10357). C++ gate mirrored exactly: proceed
+--   with an item target, else only for a player caster (creatures hold
+--   no items, so the non-player-with-item branch is unreachable).
+--   20% roll: self-cast 8854 else 8855, triggered. Binding 8856 per AC
+--   'spell_q1846_bending_shinbone' + TDB 'spell_undercity_bending_shinbone'.
+--   DORMANT until Spell.dbc ships the 8856 row.
+
+local SPELL_BENDING_SHINBONE = 8856 -- spell_quest.cpp:96 (class spell_q1846_bending_shinbone)
+local SPELL_BENDING_SHINBONE1 = 8854 -- spell_quest.cpp:92
+local SPELL_BENDING_SHINBONE2 = 8855 -- spell_quest.cpp:93
+
+local function bendingShinboneHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local target = spell:GetTarget()
+    if target == nil and caster:GetTypeId() ~= 4 then
+        return
+    end
+    if math.random(1, 100) <= 20 then
+        caster:CastSpell(caster, SPELL_BENDING_SHINBONE1, true)
+    else
+        caster:CastSpell(caster, SPELL_BENDING_SHINBONE2, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_BENDING_SHINBONE, 4, bendingShinboneHit)
 
 -- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHit = 4):
 --   spell_q11010_q11102_q11023_choose_loc (spell_quest.cpp:1624-1660):
@@ -1233,10 +1275,12 @@ RegisterSpellEvent(SPELL_PLANT_ALLIANCE_BATTLE_STANDARD, 5, plantBattleStandardH
 --   lua_spell.go:195), despawns after 2s.
 --   spell_q14112_14145_chum_the_water (spell_quest.cpp:1083-1116):
 --   EFFECT_0 SCRIPT_EFFECT ev5, binding 66741. Caster self-casts
---   RAND(66737, 66738, 66739, 66740), NON-triggered in C++ — the
---   player:CastSpell flag is ignored on the player path (see header
---   note), so it lands non-triggered, matching C++; a creature
---   caster passes false explicitly.
+--   RAND(66737, 66738, 66739, 66740), NON-triggered in C++ — but the
+--   port passes false on a player path that always lands TRIGGERED
+--   (D1, see header note): flag fidelity is wrong, exact on the
+--   creature path only. Impact nil in practice (instant, costless
+--   quest summons; no cast-time/power/reagent legs to skip); the
+--   fix is bridge-side (no non-triggered player-cast path exists).
 --   spell_q12987_read_pronouncement (spell_quest.cpp:1244-1280):
 --   AuraScript AfterEffectApply, EFFECT_0 SPELL_AURA_NONE, binding
 --   56278. The player target's nearest Ice Spike Bunny 30215 within
@@ -1737,12 +1781,13 @@ RegisterAuraEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_59579, 3, burstAtTheSeams59579Re
 --   e40198fa). Binding 51858 is the `// 51858 - Siphon of Acherus`
 --   comment (:2317).
 --
--- STAY OUT (same tick):
+-- GO-COVERED (corrected 2026-11-20; the STAY-OUT was stale):
 --   spell_q12308_escape_from_silverbrook_summon_worgen
---   (spell_quest.cpp:2274-2317): OnDestinationTargetSelect
---   (EFFECT_0 TARGET_DEST_CASTER_SUMMON) — no bridge, same as the
---   59303 armored-decoy leg. Binding 48681 is the `// 48681`
---   comment (:2273).
+--   (spell_quest.cpp:2274-2317): the OnDestinationTargetSelect
+--   ModDest leg (+20Z, CalcRadius + frand angle + orientation) IS in
+--   Go (target_dest_targets.go:518-541, 48681 case, exact vs C++
+--   :2283-2290); a Lua handler would double-fire. Binding 48681 is
+--   the `// 48681` comment (:2273).
 
 local function burst52510KnockbackHit(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 1 then
@@ -2002,10 +2047,10 @@ RegisterSpellEvent(HUNT.SPELL_JUMP_JETS, 1, jumpJetsHit)
 --   binding 66512 per TDB 335.26091 spell_script_names
 --   ('spell_icecrown_pound_drum'). 50% roll: the caster self-casts
 --   SPELL_SUMMON_DEEP_JORMUNGAR (66510) else SPELL_STORMFORGED_MOLE_MACHINE
---   (66492), both TRIGGERED. STAYS OUT: the EFFECT_0 ACTIVATE_OBJECT leg
---   (GetHitGObj()->SetLootState(GO_JUST_DEACTIVATED)) — the ev5 fire site
---   never fires for GO targets (spells.go) and GetHitGObj is unbridged,
---   though GameObject:SetLootState itself is live (lua_objects.go:4324).
+--   (66492), both TRIGGERED. The EFFECT_0 ACTIVATE_OBJECT leg
+--   (GetHitGObj()->SetLootState(GO_JUST_DEACTIVATED)) is PORTED tick
+--   2026-11-20 via ev4 (see poundDrumGOLEGHit below) — the ev5-only
+--   STAY-OUT is overturned; ev4 fires for GO-target casts.
 
 local function poundDrumHit(event, spell)
     local caster = spell:GetCaster()
@@ -2020,6 +2065,33 @@ local function poundDrumHit(event, spell)
 end
 
 RegisterSpellEvent(HUNT.SPELL_POUND_DRUM, 1, poundDrumHit)
+
+-- PORTED (tick 2026-11-20, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q14076_14092_pound_drum GO leg (spell_quest.cpp:1196-1203):
+--   EFFECT_0 ACTIVATE_OBJECT OnEffectHitTarget, GetHitGObj()->
+--   SetLootState(GO_JUST_DEACTIVATED) only. Reachable via ev4: the wire
+--   GO joins hitTargets when the explicit object-target mask includes
+--   the GO flag (spells.go:13825-13838) and ev4 fires once per non-zero
+--   effect on the normal path (spells.go:14846-14861) with the GO GUID
+--   as target (spell:GetTarget() returns the GO for 0xF110 GUIDs,
+--   lua_spell.go:383-385); ev5 never fires for GO targets but ev4 does.
+--   No PreventHitDefaultEffect in C++, so the Go default ACTIVATE_OBJECT
+--   leg running alongside matches C++ exactly. GO_JUST_DEACTIVATED = 3
+--   (GameObject.h LootState enum). Binding 66512 per TDB
+--   'spell_icecrown_pound_drum'. DORMANT until Spell.dbc ships 66512.
+
+local function poundDrumGOLEGHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local target = spell:GetTarget()
+    if target == nil or target:GetObjectType() ~= "GameObject" then
+        return
+    end
+    target:SetLootState(3)
+end
+
+RegisterSpellEvent(HUNT.SPELL_POUND_DRUM, 4, poundDrumGOLEGHit)
 
 -- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHit = 4):
 --   spell_q13086_cannons_target (spell_quest.cpp:1957-1980): EFFECT_0 DUMMY
