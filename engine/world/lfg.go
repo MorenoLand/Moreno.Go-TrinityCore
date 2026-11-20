@@ -4541,8 +4541,9 @@ func (s *session) hasCharmedCreature() bool {
 // UNIT_STATE_JUMPING arm has no Go producer to flag: MoveJumpTo
 // early-returns for players (MotionMaster.cpp:763), Unit::JumpTo(float)
 // for a player sends a knockback packet (Unit.cpp:12950-12966, covered
-// by the client's falling flags), EffectJump/JumpDest are Go no-ops
-// (spells.go) so no spline window ever opens, and the script MoveJump
+// by the client's falling flags), EffectJump/JumpDest launch the player
+// spline (spells.go) but stamp only the script-move type, never a
+// jumping flag, and the script MoveJump
 // player sites (Isle of Conquest, Maexxna web-wrap, Flame Leviathan
 // throw-passenger) are unported; spline falling is likewise
 // player-vacuous (SetFall producers are creature-only / MoveFall

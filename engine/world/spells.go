@@ -18007,11 +18007,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.handleEffectLeap(effCtx, s.playerGUID, target)
 				}
-			case spellEffectJump, spellEffectJumpDest: // 41/42: EffectJump/EffectJumpDest (SpellEffects.cpp:1159-1197)
-				// Both arms are Unit::MoveJump spline motion with no other
-				// effect; Go has no MotionMaster spline model (documented
-				// no-bridge, boss_ai.go), so the dispatch deliberately runs
-				// nothing.
+			case spellEffectJump: // 41: SPELL_EFFECT_JUMP (EffectJump, SpellEffects.cpp:1159-1177)
+				jumpList := playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, hitTargets)
+				for _, effectTarget := range jumpList {
+					if effectTarget == 0 {
+						continue
+					}
+					s.handleEffectJump(effCtx, spell, effectIndex, effectTarget)
+				}
+				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
+				// reflected spell's caster is the reflector, which Go
+				// never re-casts from — the creature-arm convention
+				// (boss_ai.go) resolves the trip to the caster, so the
+				// caster hops in place (duration 0 takes the minimum
+				// height, like C++).
+				for range areaEnemyTrips(eff, reflectedAoETrips) {
+					s.handleEffectJump(effCtx, spell, effectIndex, s.playerGUID)
+				}
+			case spellEffectJumpDest: // 42: SPELL_EFFECT_JUMP_DEST (EffectJumpDest, SpellEffects.cpp:1179-1197)
+				// LAUNCH once per effect: the HasDst gate is the cast's
+				// resolved destination (the leap arm's gate).
+				if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+					s.handleEffectJumpDest(effCtx, spell, effectIndex, target.Destination.X, target.Destination.Y, target.Destination.Z)
+				}
 			case spellEffectTeleportUnitsFaceCaster: // 43: SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER (EffectTeleUnitsFaceCaster, SpellEffects.cpp:2618)
 				// Per-effect target list (Spell.cpp:758-779), same switch as
 				// the heal arms: a friendly-area teleport effect runs on its
@@ -28233,6 +28251,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				s.handleEffectActivateRune(spell, eff, effectIndex)
 			}
 		}
+		if eff.Effect == spellEffectJumpDest {
+			// Spell::EffectJumpDest (SpellEffects.cpp:1179) runs at
+			// SPELL_EFFECT_HANDLE_LAUNCH — the client launch block's
+			// per-index arm, mirrored here so a triggered jump-dest
+			// spell launches the caster to the resolved destination
+			// instead of falling through. The HasDst gate is the
+			// spellTarget dest-location flag (the leap arm's gate).
+			if spellTarget.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+				s.handleEffectJumpDest(ctx, spell, effectIndex, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+			}
+		}
 		// Spell::SelectEffectTypeImplicitTargets special case (Spell.cpp:1708-1746):
 		// effects 85 (SUMMON_PLAYER) and 152 (SUMMON_RAF_FRIEND) target the
 		// caster's *selection*, never the wire target, and run once per effect.
@@ -29976,6 +30005,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// a triggered leap with no dest-family implicit target
 				// moves nothing.
 				s.handleEffectLeap(ctx, effectTarget, spellTarget)
+			} else if eff.Effect == spellEffectJump {
+				// Spell::EffectJump (SpellEffects.cpp:1159) runs at
+				// LAUNCH_TARGET per unit target: the caster jumps to the
+				// hit target's position. The client arm's helper over
+				// the single miss-filtered target (its in-flight gate
+				// rides along); reflected targets resolve to the caster
+				// in the fan-out above, so they hop in place like the
+				// client arm's reflected trips.
+				s.handleEffectJump(ctx, spell, effectIndex, effectTarget)
 			} else if eff.Effect == spellEffectTeleportUnitsFaceCaster {
 				// Spell::EffectTeleUnitsFaceCaster (SpellEffects.cpp:2618)
 				// runs at HIT_TARGET per unit target: the target teleports
@@ -53295,6 +53333,106 @@ func (s *session) handleEffectLeap(ctx context.Context, targetGUID uint64, targe
 		return
 	}
 	targetSess.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, targetSess.player.Orientation, true)
+}
+
+// calculatePlayerJumpSpeeds mirrors Spell::CalculateJumpSpeeds
+// (SpellEffects.cpp:1131-1157) for a player caster: the horizontal speed
+// is the player base run speed (7.0, playerBaseMoveSpeed[MOVE_RUN]) tripled
+// by the effect's ValueMultiplier (calcValueMultiplier twin, <= 0 reads 1),
+// capped by the live run speed quadrupled with a 28 floor; the vertical
+// speed comes from the parabolic height clamped between MiscValue/10
+// (floor 0.5) and MiscValueB/10 (ceiling 1000), gravity 19.29110527
+// (MovementUtil.cpp:23). A zero distance still jumps (duration 0 takes
+// the minimum height, like C++). The creature twin is
+// calculateCreatureJumpSpeeds (boss_ai.go).
+func (s *session) calculatePlayerJumpSpeeds(spell wotlk.Spell, effIndex int, dist float32) (speedXY, speedZ float32) {
+	if s == nil || s.player == nil || effIndex < 0 || effIndex >= len(spell.Effects) {
+		return 0, 0
+	}
+	runSpeed := playerBaseMoveSpeed[moveTypeRun]
+	multiplier := calcValueMultiplier(spell, effIndex, s)
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	speedXY = runSpeed * 3 * multiplier
+	capSpeed := float32(28)
+	if live := s.movementSpeeds()[moveTypeRun] * 4; live > capSpeed {
+		capSpeed = live
+	}
+	if speedXY > capSpeed {
+		speedXY = capSpeed
+	}
+	const gravity = 19.29110527
+	eff := spell.Effects[effIndex]
+	minHeight := float32(0.5)
+	if eff.MiscValue != 0 {
+		minHeight = float32(eff.MiscValue) / 10
+	}
+	maxHeight := float32(1000)
+	if eff.MiscValueB != 0 {
+		maxHeight = float32(eff.MiscValueB) / 10
+	}
+	duration := dist / speedXY
+	durationSqr := duration * duration
+	var height float32
+	switch {
+	case durationSqr < minHeight*8/gravity:
+		height = minHeight
+	case durationSqr > maxHeight*8/gravity:
+		height = maxHeight
+	default:
+		height = gravity * durationSqr / 8
+	}
+	speedZ = float32(math.Sqrt(float64(2 * gravity * height)))
+	return speedXY, speedZ
+}
+
+// handleEffectJump mirrors Spell::EffectJump (SpellEffects.cpp:1159-1177)
+// for a player caster: the LAUNCH_TARGET arm jumping the caster to the
+// hit target's position at the CalculateJumpSpeeds speeds. The IsInFlight
+// gate is the session's in-flight flag. The jump rides
+// launchPlayerJumpSpline, whose landing gate fires MovementInform(EFFECT,
+// EVENT_JUMP 1004) like the C++ GenericMovementGenerator finalize; the
+// creature twin is creatureEffectJump (boss_ai.go). A reflected trip
+// resolves to the caster (the creature-arm convention), so the caster
+// hops in place.
+func (s *session) handleEffectJump(ctx context.Context, spell wotlk.Spell, effectIndex int, targetGUID uint64) {
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 || s.inFlight {
+		return
+	}
+	_ = ctx
+	var tx, ty, tz float32
+	var ok bool
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		tx, ty, tz, ok = ts.player.X, ts.player.Y, ts.player.Z, true
+	} else if motion := s.findCreatureMotion(targetGUID); motion != nil {
+		s.server.motionMu.Lock()
+		tx, ty, tz = motion.X, motion.Y, motion.Z
+		s.server.motionMu.Unlock()
+		ok = true
+	}
+	if !ok {
+		return
+	}
+	dist := float32(math.Hypot(float64(s.player.X-tx), float64(s.player.Y-ty)))
+	speedXY, speedZ := s.calculatePlayerJumpSpeeds(spell, effectIndex, dist)
+	s.launchPlayerJumpSpline(tx, ty, tz, speedXY, speedZ)
+}
+
+// handleEffectJumpDest mirrors Spell::EffectJumpDest
+// (SpellEffects.cpp:1179-1197) for a player caster: the LAUNCH
+// once-per-effect caster arm jumping to the cast's resolved destination.
+// The dest orientation is uncarried on this path
+// (protocol.SpellTargetLocation has X/Y/Z only, like the leap arm), so
+// the MoveJump hasOrientation arm stays unmodeled.
+func (s *session) handleEffectJumpDest(ctx context.Context, spell wotlk.Spell, effectIndex int, dx, dy, dz float32) {
+	if s == nil || s.player == nil || s.server == nil || s.inFlight {
+		return
+	}
+	_ = ctx
+	dist := float32(math.Hypot(float64(s.player.X-dx), float64(s.player.Y-dy)))
+	speedXY, speedZ := s.calculatePlayerJumpSpeeds(spell, effectIndex, dist)
+	s.launchPlayerJumpSpline(dx, dy, dz, speedXY, speedZ)
 }
 
 // teleportEffectUnitTargets is the Spell::EffectTeleportUnits
