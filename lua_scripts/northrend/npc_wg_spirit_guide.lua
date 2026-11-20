@@ -1,5 +1,5 @@
 -- Wintergrasp spirit guides — Lua port of npc_wg_spirit_guideAI in
--- src/server/scripts/Northrend/zone_wintergrasp.cpp (class :202-257; AI struct :207-251).
+-- src/server/scripts/Northrend/zone_wintergrasp.cpp (class :202-262; AI struct :207-256).
 -- Entries (TDB-verified with ScriptName 'npc_wg_spirit_guide':
 -- no C++ NPC_ constant exists for these — the wg_queue
 -- wowhead-only precedent, never guessed): 31841
@@ -11,7 +11,10 @@ local NPC_WG_SPIRIT_GUIDE_ALLIANCE = 31842
 local SPELL_CHANNEL_SPIRIT_HEAL = 22011
 
 -- GUID-keyed CreateLuaEvent timers, seeded on events 5/23
--- (cancel-first) and cancelled on events 2/4.
+-- (cancel-first) and cancelled on event 4 only: C++ UpdateAI runs
+-- regardless of combat state, so a LeaveCombat (event 2) cancel
+-- would kill the chain whenever the guide is attacked and survives
+-- (the wg_queue cancel-on-4-only pattern).
 local timers = {}
 
 local function cancelTimers(guid)
@@ -69,7 +72,6 @@ end
 for _, entry in ipairs({NPC_WG_SPIRIT_GUIDE_HORDE, NPC_WG_SPIRIT_GUIDE_ALLIANCE}) do
     RegisterCreatureEvent(entry, 5, spiritGuideSeed)
     RegisterCreatureEvent(entry, 23, spiritGuideSeed)
-    RegisterCreatureEvent(entry, 2, spiritGuideCancel)
     RegisterCreatureEvent(entry, 4, spiritGuideCancel)
 end
 

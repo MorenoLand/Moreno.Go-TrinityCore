@@ -480,6 +480,23 @@ func (s *session) luaPlayer() *scripting.Object {
 		defer wg.mu.Unlock()
 		return wg.DefenderTeam
 	})
+	// GetWGVehicleCounts is BattlefieldWG::GetData for the vehicle
+	// counters (BattlefieldWG.h:94-97: BATTLEFIELD_WG_DATA_MAX_VEHICLE_A/H
+	// and BATTLEFIELD_WG_DATA_VEHICLE_A/H): four return values, current
+	// Horde, max Horde, current Alliance, max Alliance. The Go counts
+	// live in wgBattlegroundState (battleground_wg.go:327-330); the max
+	// counts are maintained by updateVehicleLimits from workshop
+	// control, the current counts by the build paths. Backs the
+	// demolisher-engineer CanBuild port (zone_wintergrasp.cpp:178-199).
+	methods["GetWGVehicleCounts"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil {
+			return []any{uint32(0), uint32(0), uint32(0), uint32(0)}, nil
+		}
+		wg := s.server.getOrCreateWGState()
+		wg.mu.Lock()
+		defer wg.mu.Unlock()
+		return []any{wg.VehiclesHorde, wg.MaxVehiclesHorde, wg.VehiclesAlliance, wg.MaxVehiclesAlliance}, nil
+	}
 	// SetFactionForRace is Player::SetFactionForRace (Player.cpp:6636):
 	// m_team + UNIT_FIELD_FACTIONTEMPLATE from the GIVEN race's
 	// ChrRaces row (0 when the row is missing). Go stores the race
