@@ -16962,7 +16962,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 20425 && effectIndex == 0 && len(hitTargets) > 0 {
 						value := eff.CalcValueForLevel(spell, casterLevel)
 						if value > 0 {
-							for _, guid := range hitTargets {
+							judgementList := playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, hitTargets)
+							for _, guid := range judgementList {
 								if guid == 0 {
 									continue
 								}
@@ -17073,7 +17074,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// over the hit targets (C++ fires per hit target).
 					// DORMANT until Spell.dbc ships the 5938 record.
 					if spellID == 5938 && effectIndex == 0 && len(hitTargets) > 0 {
-						for _, guid := range hitTargets {
+						shivList := playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, hitTargets)
+						for _, guid := range shivList {
 							if guid == 0 {
 								continue
 							}
@@ -17922,7 +17924,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// executor model — explicit no-op so the effect stops hitting
 				// the unhandled-effect debug arm.
 			case spellEffectLeap: // 29: SPELL_EFFECT_LEAP (EffectLeap, SpellEffects.cpp:4334)
-				for _, effectTarget := range hitTargets {
+				leapList := playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, hitTargets)
+				for _, effectTarget := range leapList {
 					if effectTarget == 0 {
 						continue
 					}
