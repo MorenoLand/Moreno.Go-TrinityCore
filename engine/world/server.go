@@ -887,6 +887,11 @@ type session struct {
 type delayedCastEntry struct {
 	timer   *time.Timer
 	spellID uint32
+	// pet marks a server-driven pet missile: the client never saw a cast
+	// start for it (no SMSG_SPELL_START on the pet path), so the cancel
+	// arms stop the timer but send no CAST_FAILED for it — the registry
+	// key for a pet entry is minted, not client-issued.
+	pet bool
 }
 
 type activeCastState struct {

@@ -14479,6 +14479,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// nothing on either side, mirroring the shared funnels' targetCantProc
 	// gate. The live-hit guard keeps the arm once per TargetInfo: a GUID still
 	// in hitTargets already fired through the hit path.
+	// Per-target missile waves (Spell::handle_delayed, Spell.cpp:3629-3713):
+	// the delayed arrival runs one handle_delayed tick per distinct target
+	// TimeDelay. The driver below sets waveDueMissStatus to the miss entries
+	// due in the current wave (delay <= t_offset) before each applyEffects
+	// call, so the per-target hook/proc legs fire in the miss's own wave
+	// instead of once per wave for every miss; effectHitFired guards the
+	// HIT-mode OnEffectHit loop (Spell.cpp:3722-3730), which C++ runs once
+	// on the first delayed tick. On the immediate path the driver never
+	// sets them, so the miss list stays whole and the HIT loop fires once.
+	waveDueMissStatus := missStatus
+	effectHitFired := false
+	// m_immediateHandled twin (Spell::handle_delayed, Spell.cpp:3645-3648):
+	// _handle_immediate_phase runs once, on the first delayed tick, so the
+	// HANDLE_HIT / LAUNCH legs in the switch below fire once per cast, not
+	// once per wave. Set when applyEffects returns (defer at its top), so a
+	// later wave's call skips them; the immediate and single-timer paths
+	// call applyEffects once, so the flag never changes their behavior.
+	immediateHandled := false
 	fireLaunchMissNodmgProcs := func(effCtx context.Context) {
 		hasExplicitEffects := false
 		for _, eff := range spell.Effects {
@@ -14492,8 +14510,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		for _, guid := range hitTargets {
 			liveHits[guid] = struct{}{}
 		}
-		seen := make(map[uint64]struct{}, len(missStatus))
-		for _, miss := range missStatus {
+		seen := make(map[uint64]struct{}, len(waveDueMissStatus))
+		for _, miss := range waveDueMissStatus {
 			guid := miss.TargetGUID
 			if guid == 0 {
 				continue
@@ -14655,7 +14673,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// the applyEffects closure captures it; the delayed branch's
 	// arrival closure reads the same record.
 	prevent := &spellEffectPreventState{}
+	// waveTargetSnapshot holds the delayed cast's FULL target lists for the
+	// per-target wave arrival ticks (Spell::handle_delayed, Spell.cpp:3629-3697):
+	// each wave re-derives its due subset from these snapshots, and the AoE-cap
+	// divisor (Spell.cpp:7761, m_UniqueTargetInfo.size() at launch) counts the
+	// whole cast, not the wave. Nil on the immediate and single-timer paths.
+	var waveSnap *waveTargetSnapshot
 	applyEffects := func(effCtx context.Context) {
+		// The immediate phase runs once per cast (immediateHandled above).
+		defer func() { immediateHandled = true }()
 		// Spell::CalculateDamage (Spell.cpp:6456) -> WorldObject::CalculateSpellDamage
 		// (Object.cpp:2271) -> SpellEffectInfo::CalcValue (SpellInfo.cpp:402): the
 		// per-(target, effect) damage value. CalcValueForLevel is the Go twin:
@@ -14813,9 +14839,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// carries AURA_INTERRUPT_FLAG_TALK in the DBC, cc_break.go:45) and the
 		// victim engages the caster. The resisted target is already filtered
 		// from hitTargets above, so this runs on the miss entries, outside
-		// the per-effect loop.
+		// the per-effect loop. The wave's due misses only: a resisted
+		// target reveals in its own arrival wave (handle_delayed runs
+		// DoDamageAndTriggers per due TargetInfo).
 		if s.spellIsPickpocket(spell) {
-			for _, miss := range missStatus {
+			for _, miss := range waveDueMissStatus {
 				if miss.Reason == protocol.SpellMissResist && uint16(miss.TargetGUID>>48) == 0xF130 {
 					s.removeAurasWithInterruptFlags(auraInterruptFlagTalk)
 					if s.server != nil {
@@ -14824,7 +14852,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 		}
-		if len(hitTargets) == 0 && !isReflected {
+		// The partitions and trips are TargetInfos too (Spell.cpp:758-779),
+		// so a wave whose due members are partition- or trip-only must run
+		// their effects, not take this return. The hook-rewritten filtered
+		// lists derive from those lists, so they are empty whenever these
+		// are; a wave with due targets but an empty merged list still
+		// proceeds to the normal path, where the per-member miss gates
+		// skip the missed entries.
+		if len(hitTargets) == 0 && len(friendlyEffectTargets) == 0 && len(refCenteredFriendlyTargets) == 0 && len(friendlyConeEffectTargets) == 0 && len(enemyConeEffectTargets) == 0 && len(reflectedAoETrips) == 0 && len(reflectedAllyTrips) == 0 && len(refCenteredAllyTrips) == 0 && !isReflected {
 			// PreprocessTarget still runs in C++ for the miss entries
 			// (Spell.cpp:2334-2381): the BeforeHit/OnHit twins fire here
 			// for them before the return — hitTargets is empty so only
@@ -14835,9 +14870,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// no-damage arm (Spell.cpp:2560-2575), the same order as
 			// the normal path (twins, then effects, then procs). OnEffectHit
 			// precedes the twins: the HIT-mode loop (:3722-3730) runs before
-			// the target container (:3601).
-			s.fireSpellScriptEffectHitNoTarget(effCtx, spell, spellID, castTimeMs, target, castItemGUID, nil)
-			s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}, nil)
+			// the target container (:3601). The HIT-mode loop fires once
+			// per cast (effectHitFired also guards the normal-path
+			// OnEffectHit block); the twins fire for this wave's due
+			// misses only, so a miss-only wave never re-fires an
+			// earlier wave's misses.
+			if !effectHitFired {
+				effectHitFired = true
+				s.fireSpellScriptEffectHitNoTarget(effCtx, spell, spellID, castTimeMs, target, castItemGUID, nil)
+			}
+			s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, waveDueMissStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}, nil)
 			fireLaunchMissNodmgProcs(effCtx)
 			return
 		}
@@ -15016,8 +15058,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// runs before the per-target DoProcessTargetContainer loop)
 		// fires once per non-zero effect with no unit target, with the
 		// effect index. Placed ahead of the effects loop below, matching
-		// C++ order (the HIT phase precedes the target loop).
-		{
+		// C++ order (the HIT phase precedes the target loop). The
+		// HIT phase runs once per cast: on the delayed path it fires
+		// on the first wave only (the m_immediateHandled arm of the
+		// first handle_delayed tick, Spell.cpp:3645-3648), guarded
+		// here and in the all-miss early return above.
+		if !effectHitFired {
+			effectHitFired = true
 			effectSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0, prevent: prevent})
 			for effectIndex, eff := range spell.Effects {
 				if eff.Effect == 0 {
@@ -15030,7 +15077,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// BeforeHit/OnHit twins fire here, ahead of the damage arms
 		// (fireSpellScriptPreprocessTwins above; moved 2026-11-09, the
 		// creature-caster twin moved the same day in boss_ai.go).
-		spellObj := s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, hitDamage, prevent)
+		spellObj := s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, waveDueMissStatus, hitDamage, prevent)
 		// SpellScript OnEffectHitTarget (Spell.cpp:2909,
 		// CallScriptEffectHandlers in SPELL_EFFECT_HANDLE_HIT_TARGET mode
 		// from Spell::DoSpellEffectHit, called per (effect, unit target)
@@ -15498,6 +15545,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// another effect's selection (Holy Nova class: the
 					// caster sits in the heal partition, not the damage
 					// list, yet C++ counts that TargetInfo).
+					// Per-target waves run applyEffects once per wave with the
+					// wave's due subset in the captured lists; the divisor
+					// still counts the whole cast (Spell.cpp:7761), so a wave
+					// tick reads the launch-time snapshot instead. dmgList
+					// still counts too (countCap dedupes): the explicit-target
+					// rejoin (explicitAreaJoin) can put a TargetInfo in
+					// dmgList that rides no snapshot list, and dropping it
+					// would undercount the divisor by one.
+					capHitTargets, capFriendly, capRefCentered := hitTargets, friendlyEffectTargets, refCenteredFriendlyTargets
+					capAoETrips, capAllyTrips, capRefTrips := reflectedAoETrips, reflectedAllyTrips, refCenteredAllyTrips
+					if waveSnap != nil {
+						capHitTargets, capFriendly, capRefCentered = waveSnap.hitTargets, waveSnap.friendlyEffectTargets, waveSnap.refCenteredFriendlyTargets
+						capAoETrips, capAllyTrips, capRefTrips = waveSnap.reflectedAoETrips, waveSnap.reflectedAllyTrips, waveSnap.refCenteredAllyTrips
+					}
 					seenCap := make(map[uint64]struct{})
 					countCap := func(guid uint64) {
 						// m_UniqueTargetInfo holds unit targets only (Spell.cpp:7761);
@@ -15512,13 +15573,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for _, guid := range dmgList {
 						countCap(guid)
 					}
-					for _, guid := range hitTargets {
+					for _, guid := range capHitTargets {
 						countCap(guid)
 					}
-					for _, guid := range friendlyEffectTargets {
+					for _, guid := range capFriendly {
 						countCap(guid)
 					}
-					for _, guid := range refCenteredFriendlyTargets {
+					for _, guid := range capRefCentered {
 						countCap(guid)
 					}
 					for guid := range missedTargets {
@@ -15530,13 +15591,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for guid := range refCenteredMissGUIDs {
 						countCap(guid)
 					}
-					for _, guid := range reflectedAoETrips {
+					for _, guid := range capAoETrips {
 						countCap(guid)
 					}
-					for _, guid := range reflectedAllyTrips {
+					for _, guid := range capAllyTrips {
 						countCap(guid)
 					}
-					for _, guid := range refCenteredAllyTrips {
+					for _, guid := range capRefTrips {
 						countCap(guid)
 					}
 					for _, guid := range wireReflectedGUIDs {
@@ -17762,39 +17823,43 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				glyphPropID := uint16(eff.MiscValue)
 				s.applyGlyph(effCtx, castID, spell, s.targetGlyphSlot, glyphPropID)
 			case 56: // SPELL_EFFECT_SUMMON_PET
-				// Spell::EffectSummonPet (SpellEffects.cpp:3102) logs the
-				// summoned pet via ExecuteLogEffectSummonObject.
-				if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue), sessionDestSnapshot{}); guid != 0 {
-					s.sendSummonObjectLog(spellID, eff.Effect, guid)
+				if !immediateHandled {
+					// Spell::EffectSummonPet (SpellEffects.cpp:3102) logs the
+					// summoned pet via ExecuteLogEffectSummonObject.
+					if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue), sessionDestSnapshot{}); guid != 0 {
+						s.sendSummonObjectLog(spellID, eff.Effect, guid)
+					}
 				}
 			case 28: // SPELL_EFFECT_SUMMON
-				// Spell::EffectSummonType (SpellEffects.cpp:2194-2405) HIT arm.
-				// A zero entry returns silently (SpellEffects.cpp:2199-2200), and
-				// a missing SummonProperties.dbc row logs and returns
-				// (SpellEffects.cpp:2202-2208). The SUMMON_TYPE_TOTEM/LIGHTWELL
-				// arm summons via Map::SummonCreature (SpellEffects.cpp:2319-2342);
-				// its Go twin is summonTotem, already run for totem spells in the
-				// post-loop (plus summonSessionNoSlotTotem for TOTEM-title
-				// spells outside totemDefinitions) — routing those through handleSummonPet would mint a
-				// permanent character_pet row (and a bogus PetGUID) on every totem
-				// cast. Lightwell has no Go twin and stays a documented no-bridge;
-				// every other title takes the guardian/pet path.
-				if eff.MiscValue != 0 {
-					summonTitle := uint32(0)
-					summonPropsKnown := true
-					if s.server != nil && s.server.Data != nil {
-						if props, found, err := s.server.Data.SummonProperties(uint32(eff.MiscValueB)); err == nil {
-							if !found {
-								s.debug("EffectSummonType: unhandled summon type", "miscValueB", eff.MiscValueB)
-								summonPropsKnown = false
-							} else {
-								summonTitle = props.Title
+				if !immediateHandled {
+					// Spell::EffectSummonType (SpellEffects.cpp:2194-2405) HIT arm.
+					// A zero entry returns silently (SpellEffects.cpp:2199-2200), and
+					// a missing SummonProperties.dbc row logs and returns
+					// (SpellEffects.cpp:2202-2208). The SUMMON_TYPE_TOTEM/LIGHTWELL
+					// arm summons via Map::SummonCreature (SpellEffects.cpp:2319-2342);
+					// its Go twin is summonTotem, already run for totem spells in the
+					// post-loop (plus summonSessionNoSlotTotem for TOTEM-title
+					// spells outside totemDefinitions) — routing those through handleSummonPet would mint a
+					// permanent character_pet row (and a bogus PetGUID) on every totem
+					// cast. Lightwell has no Go twin and stays a documented no-bridge;
+					// every other title takes the guardian/pet path.
+					if eff.MiscValue != 0 {
+						summonTitle := uint32(0)
+						summonPropsKnown := true
+						if s.server != nil && s.server.Data != nil {
+							if props, found, err := s.server.Data.SummonProperties(uint32(eff.MiscValueB)); err == nil {
+								if !found {
+									s.debug("EffectSummonType: unhandled summon type", "miscValueB", eff.MiscValueB)
+									summonPropsKnown = false
+								} else {
+									summonTitle = props.Title
+								}
 							}
 						}
-					}
-					if summonPropsKnown && summonTitle != summonTitleTotem && summonTitle != summonTitleLightwell {
-						if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue), sessionDestSnapshotAt(sessionDestSnapshots, effectIndex)); guid != 0 {
-							s.sendSummonObjectLog(spellID, eff.Effect, guid)
+						if summonPropsKnown && summonTitle != summonTitleTotem && summonTitle != summonTitleLightwell {
+							if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue), sessionDestSnapshotAt(sessionDestSnapshots, effectIndex)); guid != 0 {
+								s.sendSummonObjectLog(spellID, eff.Effect, guid)
+							}
 						}
 					}
 				}
@@ -18686,9 +18751,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectCreateItem: // 24: SPELL_EFFECT_CREATE_ITEM
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff, casterLevel)
 			case spellEffectSummonChangeItem: // 34: SPELL_EFFECT_SUMMON_CHANGE_ITEM (EffectSummonChangeItem, SpellEffects.cpp:2061)
-				s.handleEffectSummonChangeItem(effCtx, castItemGUID, spell, eff)
+				if !immediateHandled {
+					s.handleEffectSummonChangeItem(effCtx, castItemGUID, spell, eff)
+				}
 			case spellEffectTransmitted: // 50: SPELL_EFFECT_TRANS_DOOR (EffectTransmitted, SpellEffects.cpp:4927)
-				s.handleEffectTransmitted(effCtx, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots), spell, eff)
+				if !immediateHandled {
+					s.handleEffectTransmitted(effCtx, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots), spell, eff)
+				}
 			case spellEffectCreateItem2: // 157: SPELL_EFFECT_CREATE_ITEM_2 (EffectCreateItem2, SpellEffects.cpp:1688)
 				s.handleEffectCreateItem(effCtx, targetGUID, spell, eff, casterLevel)
 			case spellEffectPull: // 70: SPELL_EFFECT_PULL — EffectPull calls EffectNULL (SpellEffects.cpp:2541-2545), no-op
@@ -19172,10 +19241,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// not per unit target.
 				s.handleEffectSelfResurrect(effCtx, spell, eff)
 			case spellEffectChargeDest: // 149: SPELL_EFFECT_CHARGE_DEST (EffectChargeDest, SpellEffects.cpp:4528)
-				// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on the caster.
-				// No reflected AoE trip: a LAUNCH arm runs once per cast,
-				// never per TargetInfo, and the base case already runs it.
-				s.handleEffectChargeDest(effCtx, target)
+				if !immediateHandled {
+					// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on the caster.
+					// No reflected AoE trip: a LAUNCH arm runs once per cast,
+					// never per TargetInfo, and the base case already runs it.
+					s.handleEffectChargeDest(effCtx, target)
+				}
 			case spellEffectKnockBack, spellEffectKnockBackDest: // 98/144: SPELL_EFFECT_KNOCK_BACK* (EffectKnockBack, SpellEffects.cpp:4552)
 				// Per-effect target list (Spell.cpp:758-779), same switch as
 				// the heal arms: a friendly-area knockback effect runs on its
@@ -19740,10 +19811,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.handleEffectSanctuary(effCtx, []uint64{s.playerGUID})
 				}
 			case spellEffectSummonObjectWild: // 76: SPELL_EFFECT_SUMMON_OBJECT_WILD (EffectSummonObjectWild, SpellEffects.cpp:3552)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
-				// a wild (ownerless) game object spawns at the effect's
-				// own dest slot (Spell.cpp:5159) for the spell's duration.
-				s.handleEffectSummonObjectWild(effCtx, spell, eff, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots))
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+					// a wild (ownerless) game object spawns at the effect's
+					// own dest slot (Spell.cpp:5159) for the spell's duration.
+					s.handleEffectSummonObjectWild(effCtx, spell, eff, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots))
+				}
 			case spellEffectActivateObject: // 86: SPELL_EFFECT_ACTIVATE_OBJECT (EffectActivateObject, SpellEffects.cpp:3938)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per
 				// gameobject target (GOTargetInfo::DoTargetSpellHit,
@@ -19899,14 +19972,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.handleEffectInebriate(effCtx, spell, eff, []uint64{s.playerGUID}, castItemEntry, casterLevel)
 				}
 			case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
-				// 104-107: SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (EffectSummonObject,
-				// SpellEffects.cpp:4215). C++ runs this once at
-				// SPELL_EFFECT_HANDLE_HIT on the caster: the caster's object slot
-				// is cleared (despawning the old GO, with the recast null-spell-id
-				// arm), then a fresh GO spawns at the effect's own dest slot
-				// (Spell.cpp:5159, or a close point) with the caster's faction, the spell's duration
-				// and spell id, and the slot takes the new GUID.
-				s.handleEffectSummonObject(effCtx, spell, eff, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots))
+				if !immediateHandled {
+					// 104-107: SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (EffectSummonObject,
+					// SpellEffects.cpp:4215). C++ runs this once at
+					// SPELL_EFFECT_HANDLE_HIT on the caster: the caster's object slot
+					// is cleared (despawning the old GO, with the recast null-spell-id
+					// arm), then a fresh GO spawns at the effect's own dest slot
+					// (Spell.cpp:5159, or a close point) with the caster's faction, the spell's duration
+					// and spell id, and the slot takes the new GUID.
+					s.handleEffectSummonObject(effCtx, spell, eff, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots))
+				}
 			case spellEffectSkill: // 118: SPELL_EFFECT_SKILL (EffectSkill, SpellEffects.cpp:4486)
 				// The C++ body is a single debug log line ("WORLD: SkillEFFECT")
 				// — explicit no-op so the effect stops hitting the
@@ -19965,11 +20040,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.handleEffectUnlearnSpecialization(effCtx, eff, []uint64{s.playerGUID})
 				}
 			case spellEffectTriggerRitualOfSummoning: // 151: SPELL_EFFECT_TRIGGER_SPELL_2 (EffectTriggerRitualOfSummoning, SpellEffects.cpp:1106)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
-				// finish() the current spell, then trigger-cast the effect's
-				// TriggerSpell with no target (m_caster->CastSpell(nullptr, id,
-				// false)).
-				s.handleEffectTriggerRitualOfSummoning(effCtx, eff)
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+					// finish() the current spell, then trigger-cast the effect's
+					// TriggerSpell with no target (m_caster->CastSpell(nullptr, id,
+					// false)).
+					s.handleEffectTriggerRitualOfSummoning(effCtx, eff)
+				}
 			case spellEffectAllowRenamePet: // 159: SPELL_EFFECT_ALLOW_RENAME_PET (EffectRenamePet, SpellEffects.cpp:5525)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: a hunter pet target gains the UNIT_CAN_BE_RENAMED
@@ -20311,7 +20388,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// IMMUNE/IMMUNE2 — immune targets still fire on-hit triggers.
 			// Go's hitTargets exclude misses, so the immune miss entries
 			// fire here with the full effect mask.
-			for _, miss := range missStatus {
+			for _, miss := range waveDueMissStatus {
 				if miss.Reason == protocol.SpellMissImmune || miss.Reason == protocol.SpellMissImmune2 {
 					s.fireHitTriggerSpells(effCtx, spell, spellID, hitEffMask, completedCast.HitTriggers, miss.TargetGUID)
 				}
@@ -20642,20 +20719,101 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// floor(dist / Speed * 1000) with no upper bound — the delay event
 		// simply re-plans at GetDelayStart() + GetDelayMoment() for the
 		// true minimum (Spell.cpp:7596-7650).
-		if timeDelayMs > 0 {
-			// DoTargetSpellHit (Spell.cpp:2403) reconstructs the launch time
-			// as GameTimeMS - TimeDelay; capture it here so the arrival
-			// tick compares against the cast-time anchor, not the (slightly
-			// later) timer-fire time.
-			launchMs := gameTimeMS() - uint32(timeDelayMs)
+		// Per-target TimeDelay waves (Spell::handle_delayed, Spell.cpp:3629-3713):
+		// the wave schedule is the sorted distinct per-entry TimeDelay over
+		// every TargetInfo the cast carries — the merged hit list, the four
+		// per-effect partitions, the three reflected-trip lists, the
+		// hook-rewritten filtered lists, and the miss entries (a miss is a
+		// TargetInfo too; its wave runs PreprocessTarget for it). A delay of
+		// 0 (the caster itself, or a target inside the 5-yard floor at
+		// extreme Speed) lands on the first wave, so it schedules nothing.
+		// HasDst makes single_missile (Spell.cpp:3656): every target lands
+		// on the first tick at the dst delay. When no entry carries a
+		// positive delay, the old single-timer fallback (the explicit
+		// target's travel time, or the immediate path when even that is
+		// zero) is preserved.
+		tripSet := make(map[uint64]struct{}, len(reflectedAoETrips)+len(reflectedAllyTrips)+len(refCenteredAllyTrips))
+		for _, trips := range [][]uint64{reflectedAoETrips, reflectedAllyTrips, refCenteredAllyTrips} {
+			for _, guid := range trips {
+				tripSet[guid] = struct{}{}
+			}
+		}
+		// delayOf is the per-entry TimeDelay (Spell.cpp:2156-2184):
+		// floor(dist / Speed * 1000) with the 5-yard floor, 0 for the
+		// caster itself, plus half again for a reflected entry (the
+		// return trip, Spell.cpp:2184) — the reflected primary's caster
+		// entry measures against the reflector, and a trip member against
+		// its own reflector. Memoized at schedule time: C++ stores the
+		// TimeDelay in the TargetInfo at selection, so a wave's split must
+		// never recompute it from a target that has since moved.
+		delayByGUID := make(map[uint64]int)
+		delayOf := func(guid uint64) int {
+			if d, ok := delayByGUID[guid]; ok {
+				return d
+			}
+			var d int
+			if isReflected && guid == s.playerGUID {
+				travelMs := s.spellTargetTimeDelayMs(ctx, spell, reflectSourceGUID)
+				d = travelMs + (travelMs >> 1)
+			} else {
+				d = s.spellTargetTimeDelayMs(ctx, spell, guid)
+				if _, ok := tripSet[guid]; ok {
+					d += d >> 1
+				}
+			}
+			delayByGUID[guid] = d
+			return d
+		}
+		waveDelaySet := make(map[int]struct{})
+		collectDelays := func(guids []uint64) {
+			for _, guid := range guids {
+				if d := delayOf(guid); d > 0 {
+					waveDelaySet[d] = struct{}{}
+				}
+			}
+		}
+		collectDelays(hitTargets)
+		collectDelays(friendlyEffectTargets)
+		collectDelays(refCenteredFriendlyTargets)
+		collectDelays(friendlyConeEffectTargets)
+		collectDelays(enemyConeEffectTargets)
+		collectDelays(reflectedAoETrips)
+		collectDelays(reflectedAllyTrips)
+		collectDelays(refCenteredAllyTrips)
+		for _, list := range targetSelectFiltered {
+			collectDelays(list)
+		}
+		for _, miss := range missStatus {
+			if d := delayOf(miss.TargetGUID); d > 0 {
+				waveDelaySet[d] = struct{}{}
+			}
+		}
+		// single_missile (Spell.cpp:3656): HasDst lands every target on
+		// the first tick, whatever its TimeDelay.
+		singleMissile := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+		var waveDelays []int
+		if singleMissile {
+			waveDelays = []int{timeDelayMs}
+		} else {
+			waveDelays = make([]int, 0, len(waveDelaySet))
+			for d := range waveDelaySet {
+				waveDelays = append(waveDelays, d)
+			}
+			sort.Ints(waveDelays)
+		}
+		if len(waveDelays) == 0 && timeDelayMs > 0 {
+			waveDelays = []int{timeDelayMs}
+		}
+		if len(waveDelays) > 0 {
 			// Spell::cancel's DELAYED arm (Spell.cpp:3220-3225) needs a
 			// handle on the in-flight missile: register the arrival
 			// timer on the session BEFORE arming it, so the closure
 			// can never fire before its entry exists. The entry is
 			// keyed by castID — the same slot the cancel arm's
-			// packets name — and the closure drops it on arrival; a
-			// teleport/logout cancel stops the timer and deletes the
-			// entry, so the closure returns without running effects.
+			// packets name — and the last wave drops it; a
+			// teleport/logout cancel stops the outstanding wave timer
+			// and deletes the entry, so the closure returns without
+			// running effects.
 			delayedEntry := &delayedCastEntry{spellID: spellID}
 			s.castMu.Lock()
 			if s.delayedCasts == nil {
@@ -20663,7 +20821,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			s.delayedCasts[castID] = delayedEntry
 			s.castMu.Unlock()
-			delayedEntry.timer = time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
+			// Snapshot the launch-time target lists for the AoE-cap
+			// divisor: HandleLaunchPhase runs at _cast time
+			// (Spell.cpp:3465), so DoEffectOnLaunchTarget counts
+			// m_UniqueTargetInfo.size() over the whole cast
+			// (Spell.cpp:7761), not the wave's due subset. Copied:
+			// runWave rebinds the captured lists per wave, and the
+			// snapshot must keep the launch-time members.
+			waveSnap = &waveTargetSnapshot{
+				hitTargets:                 append([]uint64(nil), hitTargets...),
+				friendlyEffectTargets:      append([]uint64(nil), friendlyEffectTargets...),
+				refCenteredFriendlyTargets: append([]uint64(nil), refCenteredFriendlyTargets...),
+				reflectedAoETrips:          append([]uint64(nil), reflectedAoETrips...),
+				reflectedAllyTrips:         append([]uint64(nil), reflectedAllyTrips...),
+				refCenteredAllyTrips:       append([]uint64(nil), refCenteredAllyTrips...),
+			}
+			var runWave func(waveIdx int)
+			runWave = func(waveIdx int) {
+				tOffset := waveDelays[waveIdx]
 				// A missile cancelled mid-flight (teleport/logout)
 				// has no entry: its effects never run.
 				s.castMu.Lock()
@@ -20671,12 +20846,58 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.castMu.Unlock()
 					return
 				}
-				delete(s.delayedCasts, castID)
 				s.castMu.Unlock()
+				// DoTargetSpellHit (Spell.cpp:2403) reconstructs the launch
+				// time as GameTimeMS - TimeDelay; the wave's anchor is the
+				// cast-time launch (fire time minus this wave's offset),
+				// not the timer-fire time.
+				launchMs := gameTimeMS() - uint32(tOffset)
+				// handle_delayed's remove_if partition (Spell.cpp:3659-3675):
+				// due entries (TimeDelay <= t_offset, or all of them when
+				// single_missile) move into this tick's container; the rest
+				// stay for later waves and are rechecked then. The split
+				// runs on the pending lists, so a target revalidation drops
+				// in this wave never reappears in a later one.
+				splitDue := func(list []uint64) (due, pending []uint64) {
+					for _, guid := range list {
+						if singleMissile || delayOf(guid) <= tOffset {
+							due = append(due, guid)
+						} else {
+							pending = append(pending, guid)
+						}
+					}
+					return due, pending
+				}
+				dueHit, pendingHit := splitDue(hitTargets)
+				dueFriendly, pendingFriendly := splitDue(friendlyEffectTargets)
+				dueRefCentered, pendingRefCentered := splitDue(refCenteredFriendlyTargets)
+				dueFriendlyCone, pendingFriendlyCone := splitDue(friendlyConeEffectTargets)
+				dueEnemyCone, pendingEnemyCone := splitDue(enemyConeEffectTargets)
+				dueAoETrips, pendingAoETrips := splitDue(reflectedAoETrips)
+				dueAllyTrips, pendingAllyTrips := splitDue(reflectedAllyTrips)
+				dueRefTrips, pendingRefTrips := splitDue(refCenteredAllyTrips)
+				dueFiltered := make(map[int][]uint64, len(targetSelectFiltered))
+				pendingFiltered := make(map[int][]uint64, len(targetSelectFiltered))
+				for idx, list := range targetSelectFiltered {
+					dueFiltered[idx], pendingFiltered[idx] = splitDue(list)
+				}
+				// The wave's due misses, for the per-target hook/proc legs
+				// inside applyEffects (twins, pickpocket reveal, immune
+				// triggers, no-damage procs): a miss fires in its own wave,
+				// like its PreprocessTarget in C++. A fresh slice per wave:
+				// aliasing missStatus and appending would overwrite the
+				// cast-time list.
+				dueMiss := make([]protocol.SpellMissStatus, 0, len(missStatus))
+				for _, miss := range missStatus {
+					if singleMissile || delayOf(miss.TargetGUID) <= tOffset {
+						dueMiss = append(dueMiss, miss)
+					}
+				}
+				waveDueMissStatus = dueMiss
 				// Spell::handle_delayed (Spell.cpp:3640): the delayed phase
 				// re-arms the taking window on the SAME Spell object — the
-				// cast-phase m_appliedMods registrations survive, so the
-				// arrival tick pushes the captured cast context instead of
+				// cast-phase m_appliedMods registrations survive, so each
+				// wave pushes the captured cast context instead of
 				// opening a fresh registry (REQ_SPELLMOD procs at missile
 				// arrival see the cast-time registrations). The deferred
 				// end mirrors the tail (Spell.cpp:3697).
@@ -20685,18 +20906,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// Spell::m_hitMask (Spell.cpp:2603): the arrival tick is the
 				// delayed leg of the same Spell object, so the accumulator
 				// resets here too — the missile may land long after other
-				// casts ran on this session.
+				// casts ran on this session. The defer restores it after
+				// the last wave's finish legs, so the finish legs see the
+				// reset mask exactly like the single-timer arrival did.
 				prevProcHitMask := s.castProcHitMask
 				s.castProcHitMask = 0
 				defer func() { s.castProcHitMask = prevProcHitMask }()
 				// Spell::handle_delayed (Spell.cpp:3645-3663): revalidate the
 				// cast-time hit list at missile arrival — immunity gained
 				// mid-flight, death, sanctuary, or a vanished/evading target
-				// drops the hit.
-				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, isReflected, reflectSourceGUID, s.playerGUID, nil, nil)
-				reflectedAoETrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAoETrips, launchMs, true)
-				reflectedAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAllyTrips, launchMs, true)
-				refCenteredAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, refCenteredAllyTrips, launchMs, true)
+				// drops the hit. Only this wave's due entries are checked;
+				// the pending lists keep their members for their own waves.
+				dueHit = s.revalidateDelayedHitTargets(context.Background(), spell, dueHit, launchMs, isReflected, reflectSourceGUID, s.playerGUID, nil, nil)
+				dueAoETrips = s.revalidateReflectedAreaTrips(context.Background(), spell, dueAoETrips, launchMs, true)
+				dueAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, dueAllyTrips, launchMs, true)
+				dueRefTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, dueRefTrips, launchMs, true)
 				// Spell::handle_delayed (Spell.cpp:3645-3671) moves every due
 				// TargetInfo out of m_UniqueTargetInfo — the per-effect
 				// friendly/ref partitions are TargetInfos too, not just the
@@ -20708,16 +20932,44 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// remap applies here (isReflected=false). A member dropped
 				// here takes no effects at arrival, matching a dropped
 				// hitTargets member.
-				friendlyEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyEffectTargets, launchMs, false, 0, s.playerGUID, nil, nil)
-				refCenteredFriendlyTargets = s.revalidateDelayedHitTargets(context.Background(), spell, refCenteredFriendlyTargets, launchMs, false, 0, s.playerGUID, nil, nil)
-				friendlyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyConeEffectTargets, launchMs, false, 0, s.playerGUID, nil, nil)
-				enemyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, enemyConeEffectTargets, launchMs, false, 0, s.playerGUID, nil, nil)
+				dueFriendly = s.revalidateDelayedHitTargets(context.Background(), spell, dueFriendly, launchMs, false, 0, s.playerGUID, nil, nil)
+				dueRefCentered = s.revalidateDelayedHitTargets(context.Background(), spell, dueRefCentered, launchMs, false, 0, s.playerGUID, nil, nil)
+				dueFriendlyCone = s.revalidateDelayedHitTargets(context.Background(), spell, dueFriendlyCone, launchMs, false, 0, s.playerGUID, nil, nil)
+				dueEnemyCone = s.revalidateDelayedHitTargets(context.Background(), spell, dueEnemyCone, launchMs, false, 0, s.playerGUID, nil, nil)
 				// Spell::handle_delayed (Spell.cpp:3631): UpdatePointers
 				// re-derives the dest from the transport's current
 				// position at missile arrival, so a delayed dest lands
 				// where the transport is now, not where it was at cast.
 				target = s.server.relocateSpellTargetDest(target)
+				// Swap the due subsets in for this wave's effects, then
+				// restore the pending lists for the next wave. The
+				// applyEffects miss filter mutates hitTargets, so the
+				// restore reads the saved pending slices, never the
+				// post-effects values.
+				hitTargets, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets = dueHit, dueFriendly, dueRefCentered, dueFriendlyCone, dueEnemyCone
+				reflectedAoETrips, reflectedAllyTrips, refCenteredAllyTrips = dueAoETrips, dueAllyTrips, dueRefTrips
+				targetSelectFiltered = dueFiltered
 				applyEffects(context.Background())
+				hitTargets, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets = pendingHit, pendingFriendly, pendingRefCentered, pendingFriendlyCone, pendingEnemyCone
+				reflectedAoETrips, reflectedAllyTrips, refCenteredAllyTrips = pendingAoETrips, pendingAllyTrips, pendingRefTrips
+				targetSelectFiltered = pendingFiltered
+				waveDueMissStatus = missStatus
+				if waveIdx+1 < len(waveDelays) {
+					// SpellEvent::Execute (Spell.cpp:7640-7646): re-add at
+					// GetDelayStart() + n_offset — the next distinct
+					// TimeDelay, measured from this wave's offset.
+					nextDelay := waveDelays[waveIdx+1] - tOffset
+					delayedEntry.timer = time.AfterFunc(time.Duration(nextDelay)*time.Millisecond, func() { runWave(waveIdx + 1) })
+					return
+				}
+				// Last wave (next_time == 0): the entry drops and the
+				// finish phase runs — the combo legs, extra-attacks spend,
+				// finish procs, potion flush and attack stop below
+				// (Spell::_handle_finish_phase, Spell.cpp:3737-3752, and
+				// Spell::finish, Spell.cpp:3959-3983).
+				s.castMu.Lock()
+				delete(s.delayedCasts, castID)
+				s.castMu.Unlock()
 				// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the
 				// combo legs run at the last delayed tick (next_time == 0)
 				// on this branch too — the take lands before the gain,
@@ -20753,7 +21005,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// finishChannel.
 				s.updatePotionCooldown(ctx, spell)
 				s.stopAttackOnSpellFinish(spell)
-			})
+			}
+		// The AoE-cap divisor counts the whole cast (Spell.cpp:7761), not
+		// the wave: snapshot the launch-time lists before the first wave
+		// swaps in its due subset. Copies: the wave closures reassign the
+		// captured lists, and applyEffects filters them in place.
+		waveSnap = &waveTargetSnapshot{
+			hitTargets:                 append([]uint64(nil), hitTargets...),
+			friendlyEffectTargets:      append([]uint64(nil), friendlyEffectTargets...),
+			refCenteredFriendlyTargets: append([]uint64(nil), refCenteredFriendlyTargets...),
+			reflectedAoETrips:          append([]uint64(nil), reflectedAoETrips...),
+			reflectedAllyTrips:         append([]uint64(nil), reflectedAllyTrips...),
+			refCenteredAllyTrips:       append([]uint64(nil), refCenteredAllyTrips...),
+		}
+		delayedEntry.timer = time.AfterFunc(time.Duration(waveDelays[0])*time.Millisecond, func() { runWave(0) })
 			// Spell::handle_delayed (Spell.cpp:3629) no-bridge legs, noted:
 			//   - UpdatePointers() fail -> finish(false): the arrival closure
 			//     revalidates hitTargets (revalidateDelayedHitTargets:
@@ -20784,10 +21049,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			//   - Per-target TimeDelay waves: C++ staggers multi-target
 			//     landings by distance (single_missile when HasDst(),
 			//     else per-target t_offset waves with next_time
-			//     rescheduling); Go fires one timer at m_delayMoment
-			//     (the dst delay when HasDst, else the minimum target
-			//     delay) and lands all targets together — the wave
-			//     staggering itself stays open.
+			//     rescheduling); the wave branch above bridges them, and
+			//     this single timer is only the HasDst (single_missile)
+			//     or empty-plan fallback, where every target lands on
+			//     the first tick by construction.
 			//   - m_UniqueGOTargetInfo recheck: Go has no gameobject/corpse/
 			//     item target containers (unit targets only).
 			//   - handle_delayed's DoProcessTargetContainer(delayedTargets)
@@ -21142,6 +21407,50 @@ func (s *session) spellTargetTimeDelayMs(ctx context.Context, spell wotlk.Spell,
 		}
 	}
 	return int(math.Floor(float64(dist) / float64(spell.Speed) * 1000.0))
+}
+
+// waveTargetSnapshot holds the delayed cast's full target lists at launch so
+// a per-target wave tick counts the whole cast for the AoE-cap divisor
+// (Spell::DoEffectOnLaunchTarget, Spell.cpp:7761) instead of its own wave.
+type waveTargetSnapshot struct {
+	hitTargets, friendlyEffectTargets, refCenteredFriendlyTargets []uint64
+	reflectedAoETrips, reflectedAllyTrips, refCenteredAllyTrips   []uint64
+}
+
+// spellDelayedWaveDue returns the members of list whose TimeDelay has
+// elapsed at t_offset (Spell::handle_delayed, Spell.cpp:3665-3671:
+// single_missile || target.TimeDelay <= t_offset). A GUID missing from the
+// plan (no list carried it at arm time) is treated as due rather than
+// dropped, so a straggler still lands instead of vanishing.
+func spellDelayedWaveDue(list []uint64, delay map[uint64]int, tOffset int) []uint64 {
+	if len(list) == 0 {
+		return list
+	}
+	due := make([]uint64, 0, len(list))
+	for _, guid := range list {
+		if d, ok := delay[guid]; !ok || d <= tOffset {
+			due = append(due, guid)
+		}
+	}
+	return due
+}
+
+// spellDelayedWaveDuePos is spellDelayedWaveDue for the pet path's
+// area position lists: the same due rule keyed on the entry GUID.
+func spellDelayedWaveDuePos(list []*playerPos, delay map[uint64]int, tOffset int) []*playerPos {
+	if len(list) == 0 {
+		return list
+	}
+	due := make([]*playerPos, 0, len(list))
+	for _, pos := range list {
+		if pos == nil {
+			continue
+		}
+		if d, ok := delay[pos.GUID]; !ok || d <= tOffset {
+			due = append(due, pos)
+		}
+	}
+	return due
 }
 
 func (s *session) stopAttackOnSpellFinish(spell wotlk.Spell) {
@@ -34028,6 +34337,14 @@ func (s *session) interruptDelayedCasts() {
 	for castID, entry := range s.delayedCasts {
 		if entry.timer != nil {
 			entry.timer.Stop()
+		}
+		// A pet missile's timer stops like any other, but the client
+		// never saw a cast start for it (no SMSG_SPELL_START on the
+		// pet path, and its registry key is minted server-side), so no
+		// SMSG_SPELL_FAILURE / SMSG_CAST_FAILED goes out for it — the
+		// failure packets name a castID the client never issued.
+		if entry.pet {
+			continue
 		}
 		cancelled = append(cancelled, cancelledDelayed{castID: castID, spellID: entry.spellID})
 	}

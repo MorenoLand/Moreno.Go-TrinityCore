@@ -3790,6 +3790,52 @@ func (s *session) petSpellTargetTimeDelayMs(ctx context.Context, spell wotlk.Spe
 	return int(math.Floor(float64(dist) / float64(spell.Speed) * 1000.0))
 }
 
+// petDelayedWavePlan groups a pet cast's targets into arrival waves
+// (Spell::handle_delayed, Spell.cpp:3629-3697): sorted unique per-target
+// TimeDelays, with the per-GUID delay map. A reflected entry takes the
+// half return trip (Spell.cpp:2184); the pet list holds reflector GUIDs,
+// so reflectedSet keys the reflected entries directly. Nil when the spell
+// has a destination (single_missile, Spell.cpp:3656) or no targets carry
+// a delay.
+func (s *session) petDelayedWavePlan(ctx context.Context, spell wotlk.Spell, motion *creatureMotion, target protocol.SpellTargetData, hitTargets []uint64, filtered map[int][]uint64, reflectedSet map[uint64]bool) ([]int, map[uint64]int) {
+	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		return nil, nil
+	}
+	delay := make(map[uint64]int)
+	add := func(list []uint64) {
+		for _, guid := range list {
+			if guid == 0 {
+				continue
+			}
+			if _, ok := delay[guid]; ok {
+				continue
+			}
+			d := s.petSpellTargetTimeDelayMs(ctx, spell, motion, guid)
+			if reflectedSet[guid] {
+				d += d >> 1
+			}
+			delay[guid] = d
+		}
+	}
+	add(hitTargets)
+	for _, list := range filtered {
+		add(list)
+	}
+	if len(delay) == 0 {
+		return nil, nil
+	}
+	seen := make(map[int]struct{}, len(delay))
+	times := make([]int, 0, len(delay))
+	for _, d := range delay {
+		if _, ok := seen[d]; !ok {
+			seen[d] = struct{}{}
+			times = append(times, d)
+		}
+	}
+	sort.Ints(times)
+	return times, delay
+}
+
 // petDelayMomentMs mirrors Spell::m_delayMoment for a pet caster
 // (Spell::SelectSpellTargets, Spell.cpp:838-839;
 // CalculateDelayMomentForDst, Spell.cpp:839-855): the dst delay
@@ -5419,7 +5465,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// (Spell.cpp:2167-2168) arrival tick. The _cast tail after it
 	// (cooldown, spell_linked, modOwner, cast-phase procs) runs at cast
 	// time on both branches, like the player twin.
-	runPetEffects := func(effCtx context.Context) {
+	runPetEffects := func(effCtx context.Context, firstWave bool) {
 		s.server.maybeCreditDungeonEncounterSpellCast(effCtx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		// Spell::EffectActivateObject (SpellEffects.cpp:3938) +
 		// EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) +
@@ -5443,35 +5489,42 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				s.server.creatureEffectGameObjectSetDestructionStateMasked(effCtx, motion, target, spell.Effects[i], i, hitTargets, goEffectMasks)
 			}
 		}
-		// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject
-		// (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927)
-		// on the pet path, same dispatch-ahead-of-damage position as the
-		// inline block: all four are SPELL_EFFECT_HANDLE_HIT arms, once per
-		// cast on the caster, not per hit target (the summon-type helper
-		// itself keeps only the 28 effect). Previously a pet-cast spell
-		// carrying any of these effects summoned or transmitted nothing
-		// server-side (non-pet creature casts ride the twin).
-		for i := range spell.Effects {
-			switch spell.Effects[i].Effect {
-			case spellEffectTransmitted:
-				s.server.creatureEffectTransmitted(effCtx, motion, creatureEffectDestTarget(target, motion, i, destSnapshots), spell, spell.Effects[i])
+		// Per-target waves (Spell::handle_delayed, Spell.cpp:3651-3655):
+		// _handle_immediate_phase runs on the FIRST delayed tick only,
+		// ahead of that tick's target recheck — so the HANDLE_HIT dest
+		// legs below (summon/transmitted, once per cast) fire on wave 1
+		// and never repeat on later waves.
+		if firstWave {
+			// Spell::EffectSummonType (SpellEffects.cpp:2194) + EffectSummonObject
+			// (:4215) + EffectSummonObjectWild (:3552) + EffectTransmitted (:4927)
+			// on the pet path, same dispatch-ahead-of-damage position as the
+			// inline block: all four are SPELL_EFFECT_HANDLE_HIT arms, once per
+			// cast on the caster, not per hit target (the summon-type helper
+			// itself keeps only the 28 effect). Previously a pet-cast spell
+			// carrying any of these effects summoned or transmitted nothing
+			// server-side (non-pet creature casts ride the twin).
+			for i := range spell.Effects {
+				switch spell.Effects[i].Effect {
+				case spellEffectTransmitted:
+					s.server.creatureEffectTransmitted(effCtx, motion, creatureEffectDestTarget(target, motion, i, destSnapshots), spell, spell.Effects[i])
+				}
 			}
-		}
-		s.server.creatureEffectSummonType(effCtx, motion, spell, destSnapshots)
-		// Spell::EffectSummonPet (SpellEffects.cpp:3017) on the pet path,
-		// same dispatch-ahead-of-damage position as the summon-type block:
-		// the HIT arm, once per cast on the caster — a pet caster is never
-		// a player, so C++ always takes the ownerless SummonGuardian leg
-		// (properties 67) via the shared helper; the totem owner-player leg
-		// stays out inside it. Previously a pet-cast spell carrying effect
-		// 56 summoned nothing server-side.
-		s.server.creatureEffectSummonPet(effCtx, motion, spell, hasDest, dx, dy, dz)
-		for i := range spell.Effects {
-			switch spell.Effects[i].Effect {
-			case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
-				s.server.creatureEffectSummonObject(effCtx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
-			case spellEffectSummonObjectWild:
-				s.server.creatureEffectSummonObjectWild(effCtx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
+			s.server.creatureEffectSummonType(effCtx, motion, spell, destSnapshots)
+			// Spell::EffectSummonPet (SpellEffects.cpp:3017) on the pet path,
+			// same dispatch-ahead-of-damage position as the summon-type block:
+			// the HIT arm, once per cast on the caster — a pet caster is never
+			// a player, so C++ always takes the ownerless SummonGuardian leg
+			// (properties 67) via the shared helper; the totem owner-player leg
+			// stays out inside it. Previously a pet-cast spell carrying effect
+			// 56 summoned nothing server-side.
+			s.server.creatureEffectSummonPet(effCtx, motion, spell, hasDest, dx, dy, dz)
+			for i := range spell.Effects {
+				switch spell.Effects[i].Effect {
+				case spellEffectSummonObjectSlot1, spellEffectSummonObjectSlot2, spellEffectSummonObjectSlot3, spellEffectSummonObjectSlot4:
+					s.server.creatureEffectSummonObject(effCtx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
+				case spellEffectSummonObjectWild:
+					s.server.creatureEffectSummonObjectWild(effCtx, motion, spell, spell.Effects[i], i, hasDest, destSnapshots)
+				}
 			}
 		}
 		// Spell::EffectCreateTamedPet (SpellEffects.cpp:5362) on the pet
@@ -6904,12 +6957,14 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	}
 	// Spell::_cast (Spell.cpp:3473-3500) delayed branch, pet-path twin of
 	// finishSpellCast: Speed > 0 and not channeled defers the HIT phase to
-	// m_delayMoment (GetDelayMoment — the dst delay when HasDst, else the
-	// minimum target TimeDelay, Spell.cpp:2167-2168); a reflected primary
-	// takes the return trip (outbound + half, Spell.cpp:2184). The arrival
-	// tick revalidates the hit list (handle_delayed, Spell.cpp:3645-3663)
-	// and drops the cast when the pet despawned mid-flight (despawned pet's
-	// event dies — the ProcReflectDelayed arm's precedent above).
+	// the per-target wave ticks (each TargetInfo at its own TimeDelay,
+	// handle_delayed, Spell.cpp:3629-3697) — a dst spell lands every
+	// target on the first tick (single_missile, Spell.cpp:3656); a
+	// reflected primary takes the return trip (outbound + half,
+	// Spell.cpp:2184). Each arrival tick revalidates the hit list
+	// (handle_delayed, Spell.cpp:3645-3663) and drops the cast when the
+	// pet despawned mid-flight (despawned pet's event dies — the
+	// ProcReflectDelayed arm's precedent above).
 	if spell.Speed > 0 && !isChanneledSpell(spell) {
 		// SpellEvent's first DELAYED tick fires at m_delayMoment
 		// (Spell.cpp:7640-7646). petDelayMomentMs carries the dst
@@ -6923,14 +6978,189 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// travel time.
 			timeDelayMs = s.petSpellTargetTimeDelayMs(ctx, spell, motion, targetGUID)
 		}
-		if reflectedSet[targetGUID] {
+		// Spell::handle_delayed (Spell.cpp:3656): single_missile — a
+		// destination spell processes EVERY TargetInfo on the first tick
+		// regardless of TimeDelay, so the return-trip leg never applies
+		// here; the reflected primary lands with the rest at the dst
+		// delay. Without a dst the reflected primary takes the return
+		// trip (outbound + half, Spell.cpp:2184).
+		singleMissile := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+		if reflectedSet[targetGUID] && !singleMissile {
 			travelMs := s.petSpellTargetTimeDelayMs(ctx, spell, motion, targetGUID)
 			timeDelayMs = travelMs + (travelMs >> 1)
 		}
-		if timeDelayMs > 0 {
+		// Spell::cancel's DELAYED arm (Spell.cpp:3220-3225) needs a
+		// handle on the in-flight missile: register the arrival timer
+		// on the session BEFORE arming it, so the closure can never
+		// fire before its entry exists. Pet casts carry no client
+		// castID — executePetSpellWithOptions has no castID parameter,
+		// neither do its callers (pets.go, pet AI, login replay), and
+		// s.activeCast is the owner's own cast — so the key is minted
+		// here as the lowest free uint8 slot in delayedCasts. One entry
+		// covers the whole wave chain; each wave re-arms entry.timer
+		// under castMu, and the teleport/logout/interrupt cancel arms
+		// stop it (interruptDelayedCasts).
+		registerPetMissile := func() (*delayedCastEntry, uint8) {
+			entry := &delayedCastEntry{spellID: spell.ID, pet: true}
+			s.castMu.Lock()
+			defer s.castMu.Unlock()
+			if s.delayedCasts == nil {
+				s.delayedCasts = make(map[uint8]*delayedCastEntry)
+			}
+			for id := 0; id < 256; id++ {
+				if _, taken := s.delayedCasts[uint8(id)]; !taken {
+					s.delayedCasts[uint8(id)] = entry
+					return entry, uint8(id)
+				}
+			}
+			return nil, 0
+		}
+		// petMissileAlive is the arrival-tick entry check (player-twin
+		// shape, spells.go): a cancelled entry returns false and the
+		// wave never runs. The final wave — or a despawned pet's dead
+		// chain — drops the entry, like the player arrival closure. A
+		// nil entry (no free registry slot) runs unregistered, the bare
+		// timer shape.
+		petMissileAlive := func(entry *delayedCastEntry, castID uint8, final bool) bool {
+			if entry == nil {
+				return true
+			}
+			s.castMu.Lock()
+			defer s.castMu.Unlock()
+			if s.delayedCasts[castID] != entry {
+				return false
+			}
+			if final {
+				delete(s.delayedCasts, castID)
+			}
+			return true
+		}
+		// Per-target waves (Spell::handle_delayed, Spell.cpp:3629-3697):
+		// without a destination each TargetInfo lands at its own
+		// TimeDelay — due targets on this tick, the rest re-planned at
+		// GetDelayStart() + next_time (SpellEvent::Execute,
+		// Spell.cpp:7596-7650) — instead of the whole cast landing at
+		// m_delayMoment. The single timer below stays the HasDst
+		// (single_missile) or empty-plan fallback.
+		waveTimes, waveDelay := s.petDelayedWavePlan(ctx, spell, motion, target, hitTargets, petConePart.filtered, reflectedSet)
+		if len(waveTimes) > 0 {
+			snapHitTargets := hitTargets
+			snapFiltered := petConePart.filtered
+			snapAreaHits := areaHits
+			snapAreaCreatureHits := areaCreatureHits
+			snapAreaAllyHits := areaAllyHits
+			snapAreaAllyCreatureHits := areaAllyCreatureHits
+			snapChainHits := chainHits
+			snapChainHitsByEffect := chainHitsByEffect
+			missileEntry, missileCastID := registerPetMissile()
+			var armPetWave func(idx int, delayMs int)
+			armPetWave = func(idx int, delayMs int) {
+				// Arm under castMu: the entry check, the timer
+				// creation and the entry.timer write are atomic
+				// against the cancel path's entry.timer read, so a
+				// cancel either lands before the arm (no arm) or
+				// stops the armed timer — never a bare timer with a
+				// live entry.
+				s.castMu.Lock()
+				if missileEntry != nil && s.delayedCasts[missileCastID] != missileEntry {
+					s.castMu.Unlock()
+					return
+				}
+				timer := time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+					if s.server == nil || s.server.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID) == nil {
+						// Despawned pet's event dies (the
+						// ProcReflectDelayed arm's precedent): drop
+						// the entry so the slot frees and no later
+						// wave arms.
+						petMissileAlive(missileEntry, missileCastID, true)
+						return
+					}
+					if !petMissileAlive(missileEntry, missileCastID, idx == len(waveTimes)-1) {
+						return
+					}
+					// Spell::handle_delayed (Spell.cpp:3640): the delayed
+					// phase re-arms the taking window on the SAME Spell
+					// object, so each wave tick pushes the captured cast
+					// context; the deferred end mirrors the tail
+					// (Spell.cpp:3697). Player-twin shape, spells.go.
+					if petModOwner != nil && petTaking != nil {
+						petModOwner.pushSpellModTaking(petTaking)
+						defer petModOwner.endSpellModTaking()
+					}
+					// Spell::handle_delayed (Spell.cpp:3631): UpdatePointers
+					// re-derives the dest from the transport's current
+					// position on EVERY delayed tick. The player arrival
+					// calls relocateSpellTargetDest once (spells.go); the
+					// pet arrival does it per wave. A transport dest is
+					// always HasDst, so on this branch the relocate is a
+					// no-op (DestTransportGUID is only set with a dest)
+					// and the real landing is the single-timer branch
+					// below — but the call keeps the tick faithful if
+					// that ever changes. dx/dy/dz track the dest by the
+					// same delta so dest-based effects follow it.
+					prevDest := target.Destination
+					target = s.server.relocateSpellTargetDest(target)
+					if hasDest {
+						dx += target.Destination.X - prevDest.X
+						dy += target.Destination.Y - prevDest.Y
+						dz += target.Destination.Z - prevDest.Z
+					}
+					tOffset := waveTimes[idx]
+					// DoTargetSpellHit (Spell.cpp:2403) reconstructs the
+					// launch time as GameTimeMS - TimeDelay per target:
+					// each wave anchors on its own t_offset, so the
+					// sanctuary/death arms compare against the cast-time
+					// launch, not the first wave's.
+					waveLaunchMs := gameTimeMS() - uint32(tOffset)
+					// Spell::handle_delayed (Spell.cpp:3665-3671) moves
+					// every due TargetInfo out of m_UniqueTargetInfo —
+					// the per-effect area/chain lists are TargetInfos
+					// too, not just the wire list — so the wave scopes
+					// them all to the due set: an area/chain member due
+					// on a later wave takes nothing on this one, and a
+					// member dropped by revalidation takes nothing at
+					// all. Every area/chain GUID rides hitTargets, so
+					// the wave plan already carries its delay.
+					hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, spellDelayedWaveDue(snapHitTargets, waveDelay, tOffset), waveLaunchMs, len(reflectedSet) > 0, 0, motion.GUID, reflectedSet, launchReflected)
+					// An empty-but-present key narrows the effect to
+					// nothing this wave (bossConeEffectTargetsFiltered);
+					// dropping the key would fall back to the wave's
+					// cone derivation over the due hit list.
+					dueFiltered := make(map[int][]uint64, len(snapFiltered))
+					for effectIdx, list := range snapFiltered {
+						dueFiltered[effectIdx] = spellDelayedWaveDue(list, waveDelay, tOffset)
+					}
+					petConePart.filtered = dueFiltered
+					areaHits = spellDelayedWaveDuePos(snapAreaHits, waveDelay, tOffset)
+					areaCreatureHits = spellDelayedWaveDue(snapAreaCreatureHits, waveDelay, tOffset)
+					areaAllyHits = spellDelayedWaveDuePos(snapAreaAllyHits, waveDelay, tOffset)
+					areaAllyCreatureHits = spellDelayedWaveDue(snapAreaAllyCreatureHits, waveDelay, tOffset)
+					chainHits = spellDelayedWaveDue(snapChainHits, waveDelay, tOffset)
+					dueChainByEffect := make(map[int][]uint64, len(snapChainHitsByEffect))
+					for effectIdx, jumps := range snapChainHitsByEffect {
+						dueChainByEffect[effectIdx] = spellDelayedWaveDue(jumps, waveDelay, tOffset)
+					}
+					chainHitsByEffect = dueChainByEffect
+					runPetEffects(context.Background(), idx == 0)
+					if idx < len(waveTimes)-1 {
+						armPetWave(idx+1, waveTimes[idx+1]-waveTimes[idx])
+					}
+				})
+				if missileEntry != nil {
+					missileEntry.timer = timer
+				}
+				s.castMu.Unlock()
+			}
+			armPetWave(0, waveTimes[0])
+		} else if timeDelayMs > 0 {
 			launchMs := gameTimeMS() - uint32(timeDelayMs)
-			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
+			missileEntry, missileCastID := registerPetMissile()
+			timer := time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
 				if s.server == nil || s.server.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID) == nil {
+					petMissileAlive(missileEntry, missileCastID, true)
+					return
+				}
+				if !petMissileAlive(missileEntry, missileCastID, true) {
 					return
 				}
 				// Spell::handle_delayed (Spell.cpp:3640): the delayed phase
@@ -6954,6 +7184,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// helpers carry per-target masks; the FINISH/CAST-phase
 				// readers run on the player path only), so there is
 				// nothing to save/restore around the arrival effects.
+				// Spell::handle_delayed (Spell.cpp:3631): UpdatePointers
+				// re-derives the dest from the transport's current
+				// position at missile arrival, so a delayed dest lands
+				// where the transport is now, not where it was at cast.
+				prevDest := target.Destination
+				target = s.server.relocateSpellTargetDest(target)
+				if hasDest {
+					dx += target.Destination.X - prevDest.X
+					dy += target.Destination.Y - prevDest.Y
+					dz += target.Destination.Z - prevDest.Z
+				}
 				// Pet-shape revalidation: the pet list holds reflector GUIDs
 				// (the retarget happens at effect time), so the launch
 				// reflected set identifies reflected entries and the pet
@@ -6962,13 +7203,20 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// reflector). reflectSourceGUID is unused in this shape —
 				// there is no caster-GUID entry to remap — so it stays 0.
 				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, len(reflectedSet) > 0, 0, motion.GUID, reflectedSet, launchReflected)
-				runPetEffects(context.Background())
+				runPetEffects(context.Background(), true)
 			})
+			if missileEntry != nil {
+				s.castMu.Lock()
+				if s.delayedCasts[missileCastID] == missileEntry {
+					missileEntry.timer = timer
+				}
+				s.castMu.Unlock()
+			}
 		} else {
-			runPetEffects(ctx)
+			runPetEffects(ctx, true)
 		}
 	} else {
-		runPetEffects(ctx)
+		runPetEffects(ctx, true)
 	}
 	if !triggered {
 		now := time.Now()
