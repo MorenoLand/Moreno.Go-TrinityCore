@@ -14968,6 +14968,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) && !instaSwitched {
 					instaList = enemyConeEffectTargets
 				}
+				instaList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, instaList)
 				// Caster-targeted instakill in a mixed spell (Spell.cpp:1500
 				// SelectImplicitCasterObjectTargets, same flat-list shape as the
 				// damage caster effect): C++ selects the caster alone for this
@@ -16572,6 +16573,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					extraAttacksList = enemyConeEffectTargets
 				}
+				extraAttacksList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, extraAttacksList)
 				for _, effectTarget := range extraAttacksList {
 					if effectTarget == s.playerGUID && s.grantExtraAttacks(amount) {
 						s.sendExtraAttacksLog(spellID, effectIndex, amount)
@@ -16621,6 +16623,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					missileList = enemyConeEffectTargets
 				}
+				missileList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, missileList)
 				// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16691,6 +16694,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					skillList = enemyConeEffectTargets
 				}
+				skillList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, skillList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -16765,6 +16769,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 						comboList = enemyConeEffectTargets
 					}
+					comboList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, comboList)
 					// Self-cast kept-target join (Spell.cpp:1558
 					// SelectImplicitTargetObjectTargets): the kept explicit target carries
 					// this effect's bit alongside the caster when its B slot is a
@@ -16826,6 +16831,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// ally took nothing; the pet-aura branch below ignores targets, so
 					// the join rides a copy and leaves hitTargets untouched for later effects.
 					raiseTargets := hitTargets
+					raiseTargets = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, raiseTargets)
 					if isSelfCastOnly(spell) && !isReflected &&
 						isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
 						explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
@@ -17149,6 +17155,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					threatList = enemyConeEffectTargets
 				}
+				threatList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, threatList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -17203,6 +17210,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					maxHealthList = enemyConeEffectTargets
 				}
+				maxHealthList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, maxHealthList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -17432,6 +17440,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					teleList = enemyConeEffectTargets
 				}
+				teleList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, teleList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -17583,6 +17592,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					dismissList = enemyConeEffectTargets
 				}
+				dismissList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, dismissList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -17637,6 +17647,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					dispelList = enemyConeEffectTargets
 				}
+				dispelList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, dispelList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
 				// target carries this effect's bit alongside the caster
@@ -17708,6 +17719,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					dispelMechanicList = enemyConeEffectTargets
 				}
+				dispelMechanicList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, dispelMechanicList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
 				// target carries this effect's bit alongside the caster
@@ -17758,6 +17770,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					killCreditList = enemyConeEffectTargets
 				}
+				killCreditList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, killCreditList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -17812,6 +17825,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					killCreditGroupList = enemyConeEffectTargets
 				}
+				killCreditGroupList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, killCreditGroupList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -17952,6 +17966,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					teleList = enemyConeEffectTargets
 				}
+				teleList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, teleList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18018,6 +18033,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					leapBackList = enemyConeEffectTargets
 				}
+				leapBackList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, leapBackList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18074,6 +18090,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					pullList = enemyConeEffectTargets
 				}
+				pullList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, pullList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18131,6 +18148,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					pullDestList = enemyConeEffectTargets
 				}
+				pullDestList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, pullDestList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18185,6 +18203,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					soundList = enemyConeEffectTargets
 				}
+				soundList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, soundList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18232,6 +18251,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					musicList = enemyConeEffectTargets
 				}
+				musicList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, musicList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18271,6 +18291,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					scriptList = enemyConeEffectTargets
 				}
+				scriptList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, scriptList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18363,6 +18384,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					tamedList = enemyConeEffectTargets
 				}
+				tamedList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, tamedList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18529,6 +18551,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					repList = enemyConeEffectTargets
 				}
+				repList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, repList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -18602,6 +18625,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					questList = enemyConeEffectTargets
 				}
+				questList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, questList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -18664,6 +18688,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					leechList = enemyConeEffectTargets
 				}
+				leechList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, leechList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18752,6 +18777,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					drainTargets = enemyConeEffectTargets
 				}
+				drainTargets = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, drainTargets)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -18836,6 +18862,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					forceList = enemyConeEffectTargets
 				}
+				forceList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, forceList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -18907,6 +18934,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					knockList = enemyConeEffectTargets
 				}
+				knockList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, knockList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -18957,6 +18985,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					durabList = enemyConeEffectTargets
 				}
+				durabList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, durabList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -19008,6 +19037,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					questList = enemyConeEffectTargets
 				}
+				questList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, questList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -19059,6 +19089,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					questList = enemyConeEffectTargets
 				}
+				questList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, questList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -19109,6 +19140,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					questList = enemyConeEffectTargets
 				}
+				questList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, questList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -19170,6 +19202,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					removeAuraList = enemyConeEffectTargets
 				}
+				removeAuraList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, removeAuraList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -19224,6 +19257,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					threatPctList = enemyConeEffectTargets
 				}
+				threatPctList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, threatPctList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -19277,6 +19311,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					honorList = enemyConeEffectTargets
 				}
+				honorList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, honorList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -19340,6 +19375,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					distractList = enemyConeEffectTargets
 				}
+				distractList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, distractList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -19398,6 +19434,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					sanctList = enemyConeEffectTargets
 				}
+				sanctList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, sanctList)
 
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -19486,6 +19523,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					enchantList = enemyConeEffectTargets
 				}
+				enchantList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, enchantList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -19552,6 +19590,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					inebriateList = enemyConeEffectTargets
 				}
+				inebriateList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, inebriateList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -19618,6 +19657,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					unlearnList = enemyConeEffectTargets
 				}
+				unlearnList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, unlearnList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
 				// this effect's bit alongside the caster when its B slot is a
@@ -19678,6 +19718,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					renameList = enemyConeEffectTargets
 				}
+				renameList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, renameList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
 				// target carries this effect's bit alongside the caster
@@ -19740,6 +19781,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					redirectList = enemyConeEffectTargets
 				}
+				redirectList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, redirectList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
 				// target carries this effect's bit alongside the caster
@@ -19832,6 +19874,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					envList = enemyConeEffectTargets
 				}
+				envList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, envList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
 				// target carries this effect's bit alongside the caster
@@ -19880,6 +19923,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) {
 					bindList = enemyConeEffectTargets
 				}
+				bindList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, bindList)
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
 				// target carries this effect's bit alongside the caster
