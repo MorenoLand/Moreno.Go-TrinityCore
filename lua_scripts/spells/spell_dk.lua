@@ -400,6 +400,26 @@ end
 RegisterAuraEvent(SPELL_DK_BUTCHERY_R1, 6, butcheryProc)
 RegisterAuraEvent(SPELL_DK_BUTCHERY_R2, 6, butcheryProc)
 
+local SPELL_DK_BLOODWORMS = 49027 -- spell_dk.cpp:562 (class spell_dk_bloodworms)
+
+-- C++ spell_dk_bloodworms_AuraScript::HandleProc (spell_dk.cpp:571-574):
+-- OnEffectProc EFFECT_0 SPELL_AURA_PROC_TRIGGER_SPELL_WITH_VALUE, no
+-- CheckProc, no PreventDefaultAction — the DBC trigger leg still fires;
+-- the whole arm is aurEff->GetBase()->RecalculateAmountOfEffects(),
+-- recomputing every recalculable effect amount from the caster's live
+-- stats (SpellAuras.cpp:1271-1278; SpellAuraEffects.h:68-69), via the
+-- new aura:RecalculateAmountOfEffects bridge (lua_aura.go). DORMANT
+-- until Spell.dbc ships the 49027 proc entry (unseeded; seed axis
+-- parked). TDB 26091 binds (-49027,'spell_dk_bloodworms').
+local function bloodwormsProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 0 then
+        return
+    end
+    aura:RecalculateAmountOfEffects()
+end
+
+RegisterAuraEvent(SPELL_DK_BLOODWORMS, 6, bloodwormsProc)
+
 local SPELL_DK_DEATH_AND_DECAY_R1 = 43265 -- bot_death_knight_ai.cpp:34
 local SPELL_DK_DEATH_AND_DECAY_R2 = 49936
 local SPELL_DK_DEATH_AND_DECAY_R3 = 49937

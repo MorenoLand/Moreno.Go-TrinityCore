@@ -3783,6 +3783,44 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, nil, 0, nil, float32(mod)/10000)
 		return nil, nil
 	}
+	// CastSpellWithMaxTargets(target, spellId, triggered, maxTargets) is
+	// Unit::CastSpell with CastSpellExtraArgs carrying AddSpellMod(
+	// SPELLVALUE_MAX_TARGETS, maxTargets) (Spell.cpp:7883-7885: the
+	// per-cast MaxAffectedTargets override, SpellInfo.cpp:853 default,
+	// Spell.cpp:1207/1293 RandomResize cap) on the player funnel: the
+	// session cast path (castSpellDirectWithOverrides), the player twin
+	// of the creature CastSpellWithMaxTargets bridge. A non-positive
+	// maxTargets leaves the DBC cap unmodified. The value rides the
+	// pending field (the pendingLaunchCritChance precedent) so the
+	// funnel signature stays untouched. A nil/unknown target falls
+	// back to the caster itself (the terestian/akilzon self-cast
+	// arms); the triggered arg is accepted but unmodeled — the player
+	// funnel is triggered-only (CastCustomSpell precedent).
+	methods["CastSpellWithMaxTargets"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 4 {
+			return nil, fmt.Errorf("CastSpellWithMaxTargets requires a target, a spell id, triggered and a max targets value")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		triggered := false
+		if b, ok := args[2].(bool); ok {
+			triggered = b
+		}
+		_ = triggered
+		maxTargets, err := luaInt64Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			targetGUID = state.GUID
+		}
+		s.pendingMaxTargets = int32(maxTargets)
+		s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, nil, 0, nil, 0)
+		return nil, nil
+	}
 	// CastSpellAoF(x, y, z, spellId[, triggered]) is Unit::CastSpell at
 	// a Position (UnitMethods.h:2493-2514) on the player funnel: the
 	// coordinates seed the funnel's explicit destination (InitExplicit

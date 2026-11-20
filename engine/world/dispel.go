@@ -2320,6 +2320,75 @@ func (s *session) recalculateStolenAuraAmounts(spellID uint32, stSpell wotlk.Spe
 	s.castMu.Unlock()
 }
 
+// recalculateLiveAuraAmounts mirrors Aura::RecalculateAmountOfEffects
+// (SpellAuras.cpp:1271-1278) via AuraEffect::RecalculateAmount
+// (SpellAuraEffects.h:68-69): each recalculable effect (its
+// RecalculateMask bit — the CanBeRecalculated twin) recomputes its
+// amount from the aura's stored base amount plus the caster's live
+// stats, through the same CalcValueForBase + periodic-spellpower leg
+// the stolen-aura recalc above uses; a non-recalculable effect keeps
+// its live amount. The caster resolves from the aura's CasterGUID
+// (a pet/totem original caster scales by its own level, the stolen
+// recalc's fallback); an unresolvable caster degrades to the
+// null-caster CalcValue. The mutation rides
+// refreshSkillBonusForAuraAmountChange so skill-bonus arms re-credit
+// on the new amounts. A missing DBC row leaves the amounts untouched
+// — the recalc needs the spell record and never fabricates one.
+// Called from the aura:RecalculateAmountOfEffects Lua bridge, which
+// runs on the owning session's proc flow (the SetAmount precedent:
+// no castMu taken here).
+func (s *session) recalculateLiveAuraAmounts(spellID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	aura := s.activeAuras[spellID]
+	if aura == nil || aura.Stopped || aura.RecalculateMask == 0 {
+		return
+	}
+	sp, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return
+	}
+	var casterSess *session
+	var casterLevel uint32
+	var spellPower uint32
+	if s.server != nil {
+		casterSess = s.server.findSessionByGUID(aura.CasterGUID)
+	}
+	if casterSess != nil && casterSess.player != nil {
+		casterLevel = uint32(casterSess.player.Level)
+		spellPower = casterSess.player.SpellPower
+	} else if m := s.findCreatureMotion(aura.CasterGUID); m != nil && m.PetID != 0 && m.OwnerGUID != 0 && m.Level > 0 {
+		casterLevel = uint32(m.Level)
+	}
+	periodMs := aura.PeriodMs
+	primaryIdx := -1
+	for i, eff := range sp.Effects {
+		if aura.EffectMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		if eff.Aura == aura.AuraType {
+			primaryIdx = i
+		}
+	}
+	s.refreshSkillBonusForAuraAmountChange(aura, func() {
+		for i, eff := range sp.Effects {
+			if aura.EffectMask&(1<<uint(i)) == 0 || aura.RecalculateMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			recomputed := eff.CalcValueForBase(sp, aura.BaseAmounts[i], casterLevel)
+			if spellPower > 0 && periodMs > 0 &&
+				(eff.Aura == spellAuraPeriodicDamage || eff.Aura == spellAuraPeriodicLeech || eff.Aura == spellAuraPeriodicHeal) {
+				recomputed += int32(math.Round(float64(spellPower) * (float64(periodMs) / 15000.0)))
+			}
+			aura.Amounts[i] = recomputed
+			if i == primaryIdx {
+				aura.Amount = uint32(recomputed)
+			}
+		}
+	})
+}
+
 // stolenAuraMergesInto reports whether the stealer-side merge of
 // Unit::RemoveAurasDueToSpellBySteal (Unit.cpp:4002) applies: C++ merges only
 // via unitStealer->GetAura(aura->GetId(), aura->GetCasterGUID()), so both the

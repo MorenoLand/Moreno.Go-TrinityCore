@@ -981,6 +981,21 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return nil, nil
 	}
+	// RecalculateAmountOfEffects() is Aura::RecalculateAmountOfEffects
+	// (SpellAuras.cpp:1271-1278): every recalculable effect recomputes
+	// its amount from the caster's live stats (SpellAuraEffects.h:68-69).
+	// Player-backed auras run the session recalc; creature-backed
+	// auras are a no-op — no creature-side CalcValue recalc infra
+	// exists yet (the Saurfang blood-power leg stays out on this).
+	// A snapshot/pending ref is inert by construction (the resolve
+	// returns a detached record, never the live aura).
+	methods["RecalculateAmountOfEffects"] = func(_ context.Context, args []any) ([]any, error) {
+		if r.player == nil || r.snapshot != nil || r.pending != nil {
+			return nil, nil
+		}
+		r.player.recalculateLiveAuraAmounts(r.spellID)
+		return nil, nil
+	}
 	return &scripting.Object{Type: "Aura", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
 

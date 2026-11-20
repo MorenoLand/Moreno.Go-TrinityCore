@@ -443,6 +443,41 @@ end
 RegisterAuraEvent(SPELL_WARRIOR_SECOND_WIND_R1, 6, secondWindProc)
 RegisterAuraEvent(SPELL_WARRIOR_SECOND_WIND_R2, 6, secondWindProc)
 
+local SPELL_WARRIOR_IMPROVED_SPELL_REFLECTION = 59088 -- spell_warrior.cpp:557 (class spell_warr_improved_spell_reflection)
+local SPELL_WARRIOR_IMPROVED_SPELL_REFLECTION_R2 = 59089 -- bot_warrior_ai.cpp:93 (rank 2; NEG -59088 binding expands via the talent chain, Butchery precedent)
+local SPELL_WARRIOR_IMPROVED_SPELL_REFLECTION_TRIGGER = 59725 -- spell_warrior.cpp:68
+
+-- C++ spell_warr_improved_spell_reflection_AuraScript::HandleProc
+-- (spell_warrior.cpp:572-579): OnEffectProc EFFECT_1 DUMMY, no
+-- CheckProc. PreventDefaultAction (the ev6 true return); the proc
+-- actor (the aura holder on the actor-side event the talent procs
+-- on) self-casts the trigger (59725), triggered (CastSpellExtraArgs
+-- (aurEff) sets TRIGGERED_FULL_MASK, SpellDefines.h:166), with
+-- AddSpellMod(SPELLVALUE_MAX_TARGETS, aurEff->GetAmount()) — the
+-- EFFECT_1 amount is the party-member cap, threaded by the new
+-- player CastSpellWithMaxTargets bridge (lua_player.go; the player
+-- funnel's pendingMaxTargets override, spells.go). The actor falls
+-- back to the holder when the proc object did not resolve.
+-- DORMANT until Spell.dbc ships the 59088/59725 rows (both unseeded;
+-- seed axis parked).
+local function improvedSpellReflectionProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= nil and effectIndex ~= 1 then
+        return
+    end
+    local caster = actor
+    if caster == nil then
+        caster = target
+    end
+    if caster == nil then
+        return true
+    end
+    caster:CastSpellWithMaxTargets(caster, SPELL_WARRIOR_IMPROVED_SPELL_REFLECTION_TRIGGER, true, aura:GetAmount(1))
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARRIOR_IMPROVED_SPELL_REFLECTION, 6, improvedSpellReflectionProc)
+RegisterAuraEvent(SPELL_WARRIOR_IMPROVED_SPELL_REFLECTION_R2, 6, improvedSpellReflectionProc)
+
 
 local SPELL_WARRIOR_DEEP_WOUNDS_R1 = 12162 -- spell_warrior.cpp:42 (class spell_warr_deep_wounds)
 local SPELL_WARRIOR_DEEP_WOUNDS_R2 = 12850 -- spell_warrior.cpp:43

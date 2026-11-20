@@ -449,6 +449,14 @@ func playerIndexedValueBackend(s *session, state *playerState) indexedValueBacke
 			return state.UnitFlags2, true
 		case unitFieldAttackTime, unitFieldAttackTimeOffhand:
 			return 2000, true
+		case unitFieldMinDamage:
+			return math.Float32bits(state.MinDamage), true
+		case unitFieldMaxDamage:
+			return math.Float32bits(state.MaxDamage), true
+		case unitFieldMinOffhandDamage:
+			return math.Float32bits(state.MinOffhandDamage), true
+		case unitFieldMaxOffhandDamage:
+			return math.Float32bits(state.MaxOffhandDamage), true
 		case unitFieldBoundingRadius:
 			return math.Float32bits(0.306349), true
 		case unitFieldCombatReach:

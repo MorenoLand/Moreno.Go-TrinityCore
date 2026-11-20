@@ -25051,6 +25051,19 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if radiusMod > 0 && found {
 		spell.CastRadiusMod = radiusMod
 	}
+	// CastSpellExtraArgs::AddSpellMod(SPELLVALUE_MAX_TARGETS, n)
+	// (Spell.cpp:7883-7885) sets m_spellValue->MaxAffectedTargets,
+	// defaulting to the DBC MaxTargets (SpellInfo.cpp:853) and capping
+	// area-target selection by RandomResize (Spell.cpp:1207/1293);
+	// the Go twin overrides the local copy's MaxTargets the same way
+	// (0 = unmodified), so every selection leg reading it caps at n.
+	// The value rides the pending field (the pendingLaunchCritChance
+	// precedent) so the funnel signature stays untouched; consumed
+	// here so nested triggered casts start plain.
+	if maxTargets := s.pendingMaxTargets; maxTargets > 0 && found {
+		spell.MaxTargets = uint32(maxTargets)
+	}
+	s.pendingMaxTargets = 0
 
 	castID := uint8(0) // C++ m_cast_count stays 0 for triggered casts (Spell.cpp:602; set nonzero only for client-initiated casts, Player.cpp:8251)
 	now := time.Now()
