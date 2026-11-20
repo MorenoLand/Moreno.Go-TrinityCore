@@ -584,8 +584,9 @@ RegisterAuraEvent(SPELL_HUNTER_VIPER_ATTACK_SPEED, 3, viperAttackSpeedRemove)
 --   Howl 24604 buff the pet and its hunter only, never the party
 --   (bpet_hunter.cpp:42/321-324 casts 53434 as the pet, "10% AP
 --   for pet and hunter"). ev7 fires on the creature-cast path
---   only (boss_ai.go:3151); pet casts ride
---   castCreatureSpellInternalWithBasePoints (53478 precedent).
+--   (boss_ai.go:3232) and the pet path (pet_combat.go:5181,
+--   executePetSpellWithOptions fire site); pet casts ride
+--   executePetSpellWithOptions, not castCreatureSpellInternal.
 --   The player-cast leg lives in Go (spells.go): a hunter casting
 --   either spell keeps the caster alone, since a player has no
 --   owner (Unit.h:1147). Furious Howl R2-R6 (64491-64495) ride the

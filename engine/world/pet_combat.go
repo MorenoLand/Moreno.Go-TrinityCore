@@ -5171,6 +5171,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			stampCreatureChannel(motion, spell.ID, channelObj, hasDest, dx, dy, dz, time.Now().Add(time.Duration(dur)*time.Millisecond))
 		}
 	}
+	// SpellScript OnObjectAreaTargetSelect (Spell.cpp:1227) for a pet
+	// caster: the creature-path twin (boss_ai.go:3231) — the hook fires
+	// per selecting effect ahead of the launch arms, so the rewritten
+	// lists are what every effect arm below sees. Gated inside
+	// fireSpellTargetSelects on a registered hook: nil when none is
+	// registered, so the arms keep the flat lists untouched and the
+	// petConePart.filtered map stays nil.
+	if filtered := s.server.fireSpellTargetSelects(ctx, motion, spell.ID, s.server.luaCreatureSpellObject(motion, spell.ID, targetGUID), spell, hitTargets, petConePart); len(filtered) > 0 {
+		petConePart.filtered = filtered
+	}
 	// Spell::HandleLaunchPhase (Spell.cpp:3465, ahead of SendSpellGo at
 	// 3468) for a pet caster: the LAUNCH arms, placed ahead of the GO
 	// packet like the inline pre-pass (creaturemotion.go) — the twin
@@ -5197,9 +5207,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectInterruptCast:
-			s.server.creatureEffectInterruptCast(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectInterruptCast(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectCharge:
-			s.server.creatureEffectCharge(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectCharge(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectChargeDest:
 			s.server.creatureEffectChargeDest(ctx, motion, hasDest, dx, dy, dz)
 		case spellEffectApplyAura:
@@ -5210,7 +5220,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// creature-path twin sits in the boss_ai.go LAUNCH
 			// pre-pass. DORMANT until Spell.dbc ships the 6358 record.
 			if spell.ID == 6358 && i == 0 {
-				s.server.creatureEffectSeduction(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+				s.server.creatureEffectSeduction(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 			}
 		}
 	}
@@ -5349,7 +5359,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		if spell.Effects[i].Effect != spellEffectCreateTamedPet {
 			continue
 		}
-		for _, guid := range hitTargets {
+		for _, guid := range bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart) {
 			if guid == 0 || immuneSet[guid] || evadedSet[guid] || reflectedSet[guid] || missedTarget(guid) {
 				continue
 			}
@@ -5421,7 +5431,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.executePetSpellWithOptions(ctx, motion, triggered, 0, triggerTarget, true)
 		}
 		if needsCaster {
-			for _, guid := range hitTargets {
+			for _, guid := range bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart) {
 				if rt := resolveReflectTarget(guid); rt != 0 && !immuneSet[guid] && !missedTarget(guid) {
 					triggerTarget := target
 					triggerTarget.UnitGUID = rt
@@ -5487,7 +5497,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2:
-			s.server.creatureEffectForceCast(ctx, motion, spell, spell.ID, spell.Effects[i], hitTargets, forceReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectForceCast(ctx, motion, spell, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), forceReflected, evadedSet, immuneSet, petMissVerdicts)
 		}
 	}
 	// Spell::EffectThreat (SpellEffects.cpp:3470) + EffectTaunt (:3131) +
@@ -5509,29 +5519,29 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectThreat:
-			s.server.creatureEffectThreat(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectThreat(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectAttackMe:
-			s.server.creatureEffectTaunt(ctx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectTaunt(ctx, motion, spell.ID, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectTeleportUnits:
-			s.server.creatureEffectTeleportUnits(ctx, motion, hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectTeleportUnits(ctx, motion, hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectKnockBack, spellEffectKnockBackDest:
-			s.server.creatureEffectKnockBack(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectKnockBack(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectResurrect:
-			s.server.creatureEffectResurrect(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectResurrect(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectResurrectNew:
-			s.server.creatureEffectResurrectNew(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectResurrectNew(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectLeap:
-			s.server.creatureEffectLeap(ctx, motion, hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectLeap(ctx, motion, hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectTeleportUnitsFaceCaster:
-			s.server.creatureEffectTeleUnitsFaceCaster(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectTeleUnitsFaceCaster(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectPullTowards:
-			s.server.creatureEffectPullTowards(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectPullTowards(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectPullTowardsDest:
-			s.server.creatureEffectPullTowardsDest(ctx, motion, hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectPullTowardsDest(ctx, motion, hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectDistract:
-			s.server.creatureEffectDistract(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectDistract(ctx, motion, spell, spell.Effects[i], hasDest, dx, dy, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectSanctuary:
-			s.server.creatureEffectSanctuary(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectSanctuary(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		}
 	}
 	// Spell::EffectQuestComplete (SpellEffects.cpp:4371) +
@@ -5551,17 +5561,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectQuestComplete, spellEffectQuestClear, spellEffectQuestFail, spellEffectQuestStart:
-			s.server.creatureEffectQuest(ctx, motion, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectQuest(ctx, motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectReputation:
-			s.server.creatureEffectReputation(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectReputation(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectAddHonor:
-			s.server.creatureEffectAddHonor(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectAddHonor(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectKillCredit, spellEffectKillCreditGroup:
-			s.server.creatureEffectKillCredit(ctx, motion, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectKillCredit(ctx, motion, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectSkillStep:
-			s.server.creatureEffectSkillStep(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectSkillStep(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectEnvironmentalDamage:
-			s.server.creatureEffectEnvironmentalDamage(ctx, motion, spell, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectEnvironmentalDamage(ctx, motion, spell, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		}
 	}
 	// Spell::EffectCreateItem (SpellEffects.cpp:1679) + EffectCreateItem2
@@ -5577,13 +5587,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectCreateItem, spellEffectCreateItem2:
-			s.server.creatureEffectCreateItem(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectCreateItem(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectLearnSpell:
-			s.server.creatureEffectLearnSpell(ctx, motion, spell.ID, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectLearnSpell(ctx, motion, spell.ID, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectPlaySound, spellEffectPlayMusic:
-			s.server.creatureEffectPlaySoundMusic(motion, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectPlaySoundMusic(motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectSendTaxi, spellEffectDiscoverTaxi:
-			s.server.creatureEffectTaxi(ctx, motion, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectTaxi(ctx, motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		}
 	}
 	// Spell::EffectLearnPetSpell (SpellEffects.cpp:3105) +
@@ -5604,29 +5614,29 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectLearnPetSpell:
-			s.server.creatureEffectLearnPetSpell(ctx, motion, spell.ID, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectLearnPetSpell(ctx, motion, spell.ID, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectDismissPet:
-			s.server.creatureEffectDismissPet(ctx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectDismissPet(ctx, motion, spell.ID, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectInebriate:
-			s.server.creatureEffectInebriate(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectInebriate(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectAllowRenamePet:
-			s.server.creatureEffectAllowRenamePet(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectAllowRenamePet(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectTalentSpecSelect:
-			s.server.creatureEffectTalentSpecSelect(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectTalentSpecSelect(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct:
-			s.server.creatureEffectDurabilityDamage(ctx, motion, spell, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectDurabilityDamage(ctx, motion, spell, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectBind:
-			s.server.creatureEffectBind(ctx, motion, spell.Effects[i], hasDest, dx, dy, dz, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectBind(ctx, motion, spell.Effects[i], hasDest, dx, dy, dz, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectEnchantHeldItem:
-			s.server.creatureEffectEnchantHeldItem(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectEnchantHeldItem(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectUnlearnSpecialization:
-			s.server.creatureEffectUnlearnSpecialization(ctx, motion, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectUnlearnSpecialization(ctx, motion, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectCreateRandomItem:
-			s.server.creatureEffectCreateRandomItem(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectCreateRandomItem(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectUntrainTalents:
-			s.server.creatureEffectUntrainTalents(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectUntrainTalents(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectTalentSpecCount:
-			s.server.creatureEffectTalentSpecCount(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectTalentSpecCount(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectForceDeselect:
 			s.server.creatureEffectForceDeselect(ctx, motion)
 		}
@@ -5644,7 +5654,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectScriptEffect:
-			s.server.creatureEffectScriptEffect(ctx, motion, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectScriptEffect(ctx, motion, spell.ID, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		}
 	}
 	// Spell::EffectDummy (SpellEffects.cpp:792) on the pet path, same
@@ -5662,7 +5672,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectDummy:
-			for _, guid := range hitTargets {
+			for _, guid := range bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart) {
 				if guid == 0 || evadedSet[guid] || immuneSet[guid] || petMissVerdicts[guid] != protocol.SpellMissNone {
 					continue
 				}
@@ -5715,19 +5725,19 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	for i := range spell.Effects {
 		switch spell.Effects[i].Effect {
 		case spellEffectHealMaxHealth:
-			s.server.creatureEffectHealMaxHealth(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectHealMaxHealth(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectEnergize:
-			s.server.creatureEffectEnergize(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectEnergize(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectEnergizePct:
-			s.server.creatureEffectEnergizePct(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectEnergizePct(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectPowerDrain:
-			s.server.creatureEffectPowerDrain(ctx, motion, spell, spell.Effects[i], i, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectPowerDrain(ctx, motion, spell, spell.Effects[i], i, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectPowerBurn:
-			s.server.creatureEffectPowerBurn(ctx, motion, spell, spell.Effects[i], i, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectPowerBurn(ctx, motion, spell, spell.Effects[i], i, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectRemoveAura:
-			s.server.creatureEffectRemoveAura(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectRemoveAura(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectModifyThreatPercent:
-			s.server.creatureEffectModifyThreatPercent(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectModifyThreatPercent(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		}
 	}
 	// petObjectWireLeg returns the explicit wire target for a
