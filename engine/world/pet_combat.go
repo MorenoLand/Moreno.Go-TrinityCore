@@ -5466,7 +5466,12 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// (cooldown, spell_linked, modOwner, cast-phase procs) runs at cast
 	// time on both branches, like the player twin.
 	runPetEffects := func(effCtx context.Context, firstWave bool) {
-		s.server.maybeCreditDungeonEncounterSpellCast(effCtx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		// spell_gen_dungeon_credit AfterHit carries a _handled once-per-cast
+		// latch (spell_generic.cpp:1553-1580): the credit fires on the first
+		// delayed tick only, not once per wave.
+		if firstWave {
+			s.server.maybeCreditDungeonEncounterSpellCast(effCtx, motion, spell.ID, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		}
 		// Spell::EffectActivateObject (SpellEffects.cpp:3938) +
 		// EffectGameObjectDamage (:5424) + EffectGameObjectRepair (:5439) +
 		// EffectGameObjectSetDestructionState (:5450) on the pet path, same
@@ -5567,8 +5572,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// The DynObj centers on the 27 effect's own m_destTargets slot
 		// (Spell.cpp:789, 5159), not the spell-final destination: a
 		// dest-family effect after the 27 effect must not move it.
-		dynHasDest, dynX, dynY, dynZ := persistentAreaAuraDest(spell, destSnapshots)
-		s.server.creatureEffectPersistentAreaAura(effCtx, motion, spell, dynHasDest, dynX, dynY, dynZ)
+		// Per-target waves (Spell::handle_delayed, Spell.cpp:3651-3655):
+		// _handle_immediate_phase runs on the first delayed tick only, so
+		// this HIT arm fires on wave 1, not once per wave.
+		if firstWave {
+			dynHasDest, dynX, dynY, dynZ := persistentAreaAuraDest(spell, destSnapshots)
+			s.server.creatureEffectPersistentAreaAura(effCtx, motion, spell, dynHasDest, dynX, dynY, dynZ)
+		}
 
 		// Spell::EffectTriggerMissileSpell (SpellEffects.cpp:996) on the pet
 		// path, same dispatch-ahead-of-damage position as the twin and
@@ -5629,11 +5639,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			if needsCaster && spellEffectProvidedTargetMask(effect)&targetFlagUnitMask != 0 {
 				continue
 			}
-			launchTarget := target
-			if launchTarget.UnitGUID == 0 {
-				launchTarget.UnitGUID = motion.GUID
+			// The once-per-cast HIT leg (SpellEffects.cpp:1024): the
+			// per-target leg above fires per due target; this one fires
+			// once, on the first delayed tick (_handle_immediate_phase,
+			// Spell.cpp:3651-3655).
+			if firstWave {
+				launchTarget := target
+				if launchTarget.UnitGUID == 0 {
+					launchTarget.UnitGUID = motion.GUID
+				}
+				castTriggered(launchTarget)
 			}
-			castTriggered(launchTarget)
 		}
 		// Spell::EffectTriggerRitualOfSummoning (SpellEffects.cpp:1106) on the pet
 		// path, same dispatch-ahead-of-damage position as the twin and inline
@@ -5649,19 +5665,24 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// above. The self-trigger guard matches the trigger-spell arms.
 		// Previously a pet-cast spell carrying effect 151 triggered nothing
 		// server-side.
-		for i := range spell.Effects {
-			effect := spell.Effects[i]
-			if effect.Effect != spellEffectTriggerRitualOfSummoning {
-				continue
+		// Per-target waves (Spell::handle_delayed, Spell.cpp:3651-3655):
+		// _handle_immediate_phase runs on the first delayed tick only, so
+		// this HIT arm fires on wave 1, not once per wave.
+		if firstWave {
+			for i := range spell.Effects {
+				effect := spell.Effects[i]
+				if effect.Effect != spellEffectTriggerRitualOfSummoning {
+					continue
+				}
+				if effect.TriggerSpell == 0 || effect.TriggerSpell == spell.ID {
+					continue
+				}
+				triggered, found, err := s.server.Data.Spell(effect.TriggerSpell)
+				if err != nil || !found {
+					continue
+				}
+				s.executePetSpellWithOptions(effCtx, motion, triggered, 0, protocol.SpellTargetData{}, false)
 			}
-			if effect.TriggerSpell == 0 || effect.TriggerSpell == spell.ID {
-				continue
-			}
-			triggered, found, err := s.server.Data.Spell(effect.TriggerSpell)
-			if err != nil || !found {
-				continue
-			}
-			s.executePetSpellWithOptions(effCtx, motion, triggered, 0, protocol.SpellTargetData{}, false)
 		}
 		// Spell::EffectForceCast (SpellEffects.cpp:1048) on the pet path,
 		// same dispatch-ahead-of-damage position as the twin and inline
@@ -5825,7 +5846,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			case spellEffectTalentSpecCount:
 				s.server.creatureEffectTalentSpecCount(effCtx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 			case spellEffectForceDeselect:
-				s.server.creatureEffectForceDeselect(effCtx, motion)
+				// HIT-only (SpellEffects.cpp:4396): _handle_immediate_phase
+				// runs on the first delayed tick only (Spell.cpp:3651-3655).
+				if firstWave {
+					s.server.creatureEffectForceDeselect(effCtx, motion)
+				}
 			}
 		}
 		// Spell::EffectScriptEffect (SpellEffects.cpp:3604) on the pet

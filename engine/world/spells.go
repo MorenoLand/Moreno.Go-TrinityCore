@@ -16894,7 +16894,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (midsummer fling-torch 45669).
 				if !prevent.defaultPrevented(effectIndex) {
 					// An empty filtered list must not fall into the helper's empty-list caster arm when the cast had GO-only picks.
-					if len(missileList) == 0 || len(missileTargets) > 0 {
+					// The empty-list call is the once-per-cast HIT leg (SpellEffects.cpp:1024-1034): _handle_immediate_phase runs it on the
+					// first delayed tick only (Spell.cpp:3645-3648), so a later wave whose list revalidates empty must not re-fire it.
+					if len(missileTargets) > 0 || (len(missileList) == 0 && !immediateHandled) {
 						s.runTriggerMissileEffect(ctx, spell, eff, missileTargets)
 					}
 					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
@@ -17820,8 +17822,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// rolled CalculateDamage.
 				s.activateSpec(effCtx, uint8(eff.CalcValueForLevel(spell, casterLevel)-1))
 			case 74: // SPELL_EFFECT_APPLY_GLYPH
-				glyphPropID := uint16(eff.MiscValue)
-				s.applyGlyph(effCtx, castID, spell, s.targetGlyphSlot, glyphPropID)
+				if !immediateHandled {
+					glyphPropID := uint16(eff.MiscValue)
+					s.applyGlyph(effCtx, castID, spell, s.targetGlyphSlot, glyphPropID)
+				}
 			case 56: // SPELL_EFFECT_SUMMON_PET
 				if !immediateHandled {
 					// Spell::EffectSummonPet (SpellEffects.cpp:3102) logs the
@@ -17919,7 +17923,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 			case 109: // SPELL_EFFECT_RESURRECT_PET
-				s.handleResurrectPet(effCtx, spellID, eff)
+				if !immediateHandled {
+					s.handleResurrectPet(effCtx, spellID, eff)
+				}
 			case 55: // SPELL_EFFECT_TAMECREATURE
 				s.handleTameCreature(effCtx, spellID, targetGUID)
 			case 135: // SPELL_EFFECT_CALL_PET
@@ -18315,9 +18321,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.handleEffectTeleUnitsFaceCaster(effCtx, s.playerGUID, eff)
 				}
 			case spellEffectStuck: // 84: SPELL_EFFECT_STUCK (EffectStuck, SpellEffects.cpp:3876)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
-				// not per unit target.
-				s.handleEffectStuck(effCtx)
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
+					// not per unit target.
+					s.handleEffectStuck(effCtx)
+				}
 			case spellEffectLeapBack: // 138: SPELL_EFFECT_LEAP_BACK (EffectLeapBack, SpellEffects.cpp:4593)
 				// LAUNCH_TARGET arm: the player caster's fall info resets
 				// (Player::SetFallInformation(0, z)) only when the effect has
@@ -19237,9 +19245,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 			case spellEffectSelfResurrect: // 94: SPELL_EFFECT_SELF_RESURRECT (EffectSelfResurrect, SpellEffects.cpp:4429)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
-				// not per unit target.
-				s.handleEffectSelfResurrect(effCtx, spell, eff)
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
+					// not per unit target.
+					s.handleEffectSelfResurrect(effCtx, spell, eff)
+				}
 			case spellEffectChargeDest: // 149: SPELL_EFFECT_CHARGE_DEST (EffectChargeDest, SpellEffects.cpp:4528)
 				if !immediateHandled {
 					// C++ runs this at SPELL_EFFECT_HANDLE_LAUNCH on the caster.
@@ -19682,15 +19692,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// The C++ body is entirely commented out — explicit no-op so
 				// the effect stops hitting the unhandled-effect debug arm.
 			case spellEffectProficiency: // 60: SPELL_EFFECT_PROFICIENCY (EffectProficiency, SpellEffects.cpp:2172)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the
-				// caster: the spell's EquippedItemSubClass mask is OR'd into
-				// the caster's weapon/armor proficiency and
-				// SMSG_SET_PROFICIENCY is sent when the mask gains a bit.
-				s.handleEffectProficiency(spell, eff)
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the
+					// caster: the spell's EquippedItemSubClass mask is OR'd into
+					// the caster's weapon/armor proficiency and
+					// SMSG_SET_PROFICIENCY is sent when the mask gains a bit.
+					s.handleEffectProficiency(spell, eff)
+				}
 			case spellEffectDestroyAllTotems: // 110: SPELL_EFFECT_DESTROY_ALL_TOTEMS (EffectDestroyAllTotems, SpellEffects.cpp:4820)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
-				// not per unit target.
-				s.handleEffectDestroyAllTotems(effCtx, spell, eff)
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT (caster arm),
+					// not per unit target.
+					s.handleEffectDestroyAllTotems(effCtx, spell, eff)
+				}
 			case spellEffectDistract: // 69: SPELL_EFFECT_DISTRACT (EffectDistract, SpellEffects.cpp:2547)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: an unengaged, non-confused/stunned/fleeing target
@@ -19738,10 +19752,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				s.handleEffectDistract(effCtx, spell, eff, distractList, target)
 			case spellEffectAddFarsight: // 72: SPELL_EFFECT_ADD_FARSIGHT (EffectAddFarsight, SpellEffects.cpp:2580)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
-				// a DYNAMIC_OBJECT_FARSIGHT_FOCUS dynamic object at the effect's
-				// own dest slot becomes the caster's viewpoint.
-				s.handleEffectAddFarsight(effCtx, spell, eff, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots))
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+					// a DYNAMIC_OBJECT_FARSIGHT_FOCUS dynamic object at the effect's
+					// own dest slot becomes the caster's viewpoint.
+					s.handleEffectAddFarsight(effCtx, spell, eff, sessionEffectDestTarget(target, s.player.X, s.player.Y, s.player.Z, effectIndex, sessionDestSnapshots))
+				}
 			case spellEffectUntrainTalents: // 73: SPELL_EFFECT_UNTRAIN_TALENTS (EffectUntrainTalents, SpellEffects.cpp:2606)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET, but only
 				// when the caster is a trainer NPC (m_caster->GetTypeId() !=
@@ -19905,17 +19921,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.handleEffectEnchantHeldItem(effCtx, spell, eff, []uint64{s.playerGUID}, casterLevel)
 				}
 			case spellEffectForceDeselect: // 93: SPELL_EFFECT_FORCE_DESELECT (EffectForceDeselect, SpellEffects.cpp:4396)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
-				// SMSG_BREAK_TARGET + SMSG_CLEAR_TARGET go to hostile players
-				// in visibility range, then attackers that cannot have a
-				// threat list (pets/totems/triggers) stop attacking the caster.
-				s.handleEffectForceDeselect()
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+					// SMSG_BREAK_TARGET + SMSG_CLEAR_TARGET go to hostile players
+					// in visibility range, then attackers that cannot have a
+					// threat list (pets/totems/triggers) stop attacking the caster.
+					s.handleEffectForceDeselect()
+				}
 			case spellEffectCastButtons: // 97: SPELL_EFFECT_CAST_BUTTON (EffectCastButtons, SpellEffects.cpp:5622)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the player
-				// caster: action buttons MiscValue+132 .. +MiscValueB holding
-				// known, off-cooldown, affordable player-totem spells are cast
-				// triggered on the caster.
-				s.handleEffectCastButtons(effCtx, eff)
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the player
+					// caster: action buttons MiscValue+132 .. +MiscValueB holding
+					// known, off-cooldown, affordable player-totem spells are cast
+					// triggered on the caster.
+					s.handleEffectCastButtons(effCtx, eff)
+				}
 			case spellEffectInebriate: // 100: SPELL_EFFECT_INEBRIATE (EffectInebriate, SpellEffects.cpp:4143)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: player targets gain effect damage drunkenness
@@ -20305,16 +20325,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.handleEffectBind(effCtx, eff, target, []uint64{s.playerGUID}, s.playerGUID)
 				}
 			case spellEffectBlock: // 23: SPELL_EFFECT_BLOCK (EffectBlock, SpellEffects.cpp:4325)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
-				// SetCanBlock(true).
-				s.handleEffectBlock()
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on the caster:
+					// SetCanBlock(true).
+					s.handleEffectBlock()
+				}
 			case spellEffectParry: // 22: SPELL_EFFECT_PARRY (EffectParry, SpellEffects.cpp:4316)
-				// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on a player
-				// caster: SetCanParry(true) — not per hit target.
-				if s.player != nil && !s.player.CanParry {
-					s.player.CanParry = true
-					s.updatePlayerParryPercentage(s.player, s.player.Level)
-					s.sendPlayerUpdate()
+				if !immediateHandled {
+					// C++ runs this once at SPELL_EFFECT_HANDLE_HIT on a player
+					// caster: SetCanParry(true) — not per hit target.
+					if s.player != nil && !s.player.CanParry {
+						s.player.CanParry = true
+						s.updatePlayerParryPercentage(s.player, s.player.Level)
+						s.sendPlayerUpdate()
+					}
 				}
 			case spellEffectDuel: // 83: SPELL_EFFECT_DUEL
 				// Spell::EffectDuel (SpellEffects.cpp:3795-3874) — duel
@@ -21006,19 +21030,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.updatePotionCooldown(ctx, spell)
 				s.stopAttackOnSpellFinish(spell)
 			}
-		// The AoE-cap divisor counts the whole cast (Spell.cpp:7761), not
-		// the wave: snapshot the launch-time lists before the first wave
-		// swaps in its due subset. Copies: the wave closures reassign the
-		// captured lists, and applyEffects filters them in place.
-		waveSnap = &waveTargetSnapshot{
-			hitTargets:                 append([]uint64(nil), hitTargets...),
-			friendlyEffectTargets:      append([]uint64(nil), friendlyEffectTargets...),
-			refCenteredFriendlyTargets: append([]uint64(nil), refCenteredFriendlyTargets...),
-			reflectedAoETrips:          append([]uint64(nil), reflectedAoETrips...),
-			reflectedAllyTrips:         append([]uint64(nil), reflectedAllyTrips...),
-			refCenteredAllyTrips:       append([]uint64(nil), refCenteredAllyTrips...),
-		}
-		delayedEntry.timer = time.AfterFunc(time.Duration(waveDelays[0])*time.Millisecond, func() { runWave(0) })
+			delayedEntry.timer = time.AfterFunc(time.Duration(waveDelays[0])*time.Millisecond, func() { runWave(0) })
 			// Spell::handle_delayed (Spell.cpp:3629) no-bridge legs, noted:
 			//   - UpdatePointers() fail -> finish(false): the arrival closure
 			//     revalidates hitTargets (revalidateDelayedHitTargets:
