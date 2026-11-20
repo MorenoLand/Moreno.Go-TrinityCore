@@ -171,7 +171,7 @@ local function lifebloomManaLeg(aura, stack)
     if caster == nil or caster:GetObjectType() ~= "Player" then
         return
     end
-    local manaPct = aura:GetSpellManaCostPercentage(SPELL_DRUID_LIFEBLOOM)
+    local manaPct = aura:GetSpellManaCostPercentage()
     if manaPct == nil or manaPct <= 0 then
         return
     end
