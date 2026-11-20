@@ -5132,7 +5132,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// spent at roll time (petSpellReflectVerdict, the synchronous
 		// path's arrival equivalent), so the timer fires the proc only.
 		reflectorGUID := trip.victimGUID
-		delayMs := s.spellTargetTimeDelayMs(ctx, spell, trip.victimGUID)
+		// ProcReflectDelayed fires at the target's TimeDelay
+		// (Spell.cpp:2181), measured from the caster — the pet, not its
+		// owner (the player helper measures from s.player and returns 0
+		// for the owner).
+		delayMs := s.petSpellTargetTimeDelayMs(ctx, spell, motion, trip.victimGUID)
 		// The creature key resolves now, while the cast ctx is live; the
 		// motion itself resolves at fire time (a despawned reflector's
 		// event dies with it).
@@ -6858,7 +6862,35 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				if s.server == nil || s.server.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID) == nil {
 					return
 				}
-				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, false, 0)
+				// Spell::handle_delayed (Spell.cpp:3640): the delayed phase
+				// re-arms the taking window on the SAME Spell object — the
+				// cast-phase m_appliedMods registrations survive, so the
+				// arrival tick pushes the captured cast context instead of
+				// opening a fresh registry. The launch window closed when
+				// executePetSpellWithOptions returned, so without this the
+				// effect-time ApplySpellMod legs (damage, chain multiplier,
+				// crit chance) would read a nil window: PCT crit/GCD mods
+				// gated on cast-time registration would be skipped and
+				// arrival-time mods would never register into the cast's
+				// registry. The deferred end mirrors the tail
+				// (Spell.cpp:3697). Player-twin shape, spells.go:20637.
+				if petModOwner != nil && petTaking != nil {
+					petModOwner.pushSpellModTaking(petTaking)
+					defer petModOwner.endSpellModTaking()
+				}
+				// Spell::m_hitMask (Spell.cpp:2603): no reset here — the
+				// pet path never reads s.castProcHitMask (its proc
+				// helpers carry per-target masks; the FINISH/CAST-phase
+				// readers run on the player path only), so there is
+				// nothing to save/restore around the arrival effects.
+				// Pet-shape revalidation: the pet list holds reflector GUIDs
+				// (the retarget happens at effect time), so the launch
+				// reflected set identifies reflected entries and the pet
+				// GUID is the caster for the PreprocessSpellHit arms
+				// (immunity/evade read the pet, death/sanctuary read the
+				// reflector). reflectSourceGUID is unused in this shape —
+				// there is no caster-GUID entry to remap — so it stays 0.
+				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, len(reflectedSet) > 0, 0, motion.GUID, reflectedSet)
 				runPetEffects(context.Background())
 			})
 		} else {

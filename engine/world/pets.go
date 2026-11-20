@@ -3950,6 +3950,17 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	if targetErr != nil {
 		return true
 	}
+	// SpellCastTargets::Read (Spell.cpp:159-161) + Update (Spell.cpp:483-491):
+	// a packet dest with a transport GUID carries transport-relative
+	// offsets, not world coordinates. Resolve to the transport's current
+	// position now (the Read→Update pass) and keep the offset on the
+	// target for the UpdatePointers re-relocation twin at delayed
+	// arrival. Player-twin shape, spells.go:2390.
+	if target.Destination.Transport != 0 {
+		target.DestTransportGUID = target.Destination.Transport
+		target.DestTransportOffset = [3]float32{target.Destination.X, target.Destination.Y, target.Destination.Z}
+		target.Destination = s.server.relocateSpellDestFromTransport(target.Destination)
+	}
 	if castFlags&0x02 != 0 {
 		// HandleClientCastFlags (SpellHandler.cpp:50-72, via
 		// PetHandler.cpp:775-778): elevation/speed feed

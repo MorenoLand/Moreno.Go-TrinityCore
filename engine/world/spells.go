@@ -9424,7 +9424,24 @@ func (s *session) creatureCharmerOrOwnerGUID(guid uint64) uint64 {
 //     unit->m_lastSanctuaryTime — Vanish dropping missiles already in
 //     flight; launchMs carries the cast-time anchor) is dropped silently —
 //     the C++ arm notes "No missinfo in that case";
-func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64) []uint64 {
+//
+// Two list shapes: the player twin retargets a reflected primary to the
+// caster at the reflect site, so its list holds the caster GUID and a
+// reflected entry is detected by guid == casterGUID (reflected == nil);
+// the pet path keeps the reflector GUID in the list — the retarget happens
+// at effect time via resolveReflectTarget — and detects reflected entries by
+// membership in the launch reflected set. The DoTargetSpellHit arms (death,
+// sanctuary) read the TargetInfo target, the reflector in both shapes, so
+// the pet shape keeps armGUID on the list GUID while the player shape remaps
+// the caster GUID to reflectSourceGUID. The PreprocessSpellHit arms read
+// _spellHitTarget, the caster for a clean reflect, so the immunity arm
+// resolves against casterGUID for a reflected entry. Residual: a reflected
+// entry whose ReflectResult is IMMUNE (bounced at launch) has a null
+// _spellHitTarget in C++ (PreprocessTarget, Spell.cpp:2350-2351), so no
+// arrival LOGMISS arms run on it — the pet shape cannot tell it apart from
+// a clean reflect from the set alone, so a pet that gains immunity or starts
+// evading mid-flight sends one extra arrival LOGMISS for such an entry.
+func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64, casterGUID uint64, reflected map[uint64]bool) []uint64 {
 	if len(targets) == 0 {
 		return targets
 	}
@@ -9444,17 +9461,28 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		// caster. The gate is per entry, not per cast: a reflected
 		// chain primary shares the cast with unreflected jumps, whose
 		// _spellHitTarget is themselves.
+		reflectedEntry := isReflected && ((reflected != nil && reflected[guid]) || (reflected == nil && guid == casterGUID))
 		armGUID := guid
-		if isReflected && guid == s.playerGUID {
+		if reflectedEntry && reflected == nil {
 			armGUID = reflectSourceGUID
 		}
-		reflectedEntry := isReflected && guid == s.playerGUID
 		tgt, ok := s.getCombatTarget(ctx, armGUID)
 		if !ok {
 			continue
 		}
-		if s.server != nil && s.player != nil && !reflectedEntry && (uint16(armGUID>>48) == 0xF130 || uint16(armGUID>>48) == 0xF140 || uint16(armGUID>>48) == 0xF150) &&
-			s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, armGUID) {
+		// PreprocessSpellHit's evade arm reads _spellHitTarget: the unit
+		// itself for an unreflected entry, the caster for a clean reflect.
+		// The player shape skips it for reflected entries (player caster,
+		// ToCreature null, so the arm is vacuous); the pet shape runs it
+		// on the pet — a controlled pet never evades, so the arm only
+		// fires for a charmed creature mid-evade. The LOGMISS still names
+		// the TargetInfo unit (Spell.cpp:2370), i.e. armGUID.
+		evadeGUID := armGUID
+		if reflectedEntry && reflected != nil {
+			evadeGUID = casterGUID
+		}
+		if s.server != nil && s.player != nil && (!reflectedEntry || reflected != nil) && (uint16(evadeGUID>>48) == 0xF130 || uint16(evadeGUID>>48) == 0xF140 || uint16(evadeGUID>>48) == 0xF150) &&
+			s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, evadeGUID) {
 			s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
 			continue
 		}
@@ -9468,11 +9496,16 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 			// player — so it never fires on a reflected entry.
 			immuneGUID := armGUID
 			if reflectedEntry {
-				immuneGUID = guid
+				immuneGUID = casterGUID
 			}
 			if ts := s.server.findSessionByGUID(immuneGUID); ts != nil && ts.isImmuneToSpell(spell, s) {
 				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissImmune)
-				if !reflectedEntry && ts.player != nil && isHarmfulSpell(spell) {
+				// PreprocessTarget :2354-2357 fires only for a player
+				// caster (TYPEID_PLAYER); a pet caster never puts an
+				// immune player target in combat. casterGUID ==
+				// s.playerGUID is exactly "this session's player is the
+				// caster".
+				if !reflectedEntry && casterGUID == s.playerGUID && ts.player != nil && isHarmfulSpell(spell) {
 					markPlayerInCombat(ctx, ts, s.playerGUID)
 					ts.lastCombatTime = time.Now()
 				}
@@ -9486,13 +9519,13 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		// PreprocessSpellHit runs the immunity arm (Spell.cpp:2720) ahead of
 		// the NON_ATTACKABLE recheck (:2740-2741), so a target both immune
 		// and flagged at arrival reports IMMUNE, not EVADE.
-		if s.server != nil && s.player != nil && !reflectedEntry && armGUID != s.playerGUID &&
+		if s.server != nil && s.player != nil && !reflectedEntry && armGUID != casterGUID &&
 			tgt.UnitFlags&unitFlagNonAttackable != 0 {
 			charmerOrOwner := armGUID
 			if high := uint16(armGUID >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
 				charmerOrOwner = s.creatureCharmerOrOwnerGUID(armGUID)
 			}
-			if charmerOrOwner != s.playerGUID {
+			if charmerOrOwner != casterGUID {
 				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
 				continue
 			}
@@ -9504,7 +9537,7 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		// already dropped flagged targets above); its duel legs are
 		// the new coverage: player target, non-positive spell, caster
 		// friendly, and a decidable !IsValidAssistTarget leg.
-		if !reflectedEntry && guid != s.playerGUID && !spellIsPositive(spell) &&
+		if !reflectedEntry && guid != casterGUID && !spellIsPositive(spell) &&
 			s.triggeredSpeedGatedArrivalDrop(ctx, spell, guid) {
 			s.sendSpellMiss(guid, spell.ID, protocol.SpellMissEvade)
 			continue
@@ -20647,7 +20680,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// cast-time hit list at missile arrival — immunity gained
 				// mid-flight, death, sanctuary, or a vanished/evading target
 				// drops the hit.
-				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, isReflected, reflectSourceGUID)
+				hitTargets = s.revalidateDelayedHitTargets(context.Background(), spell, hitTargets, launchMs, isReflected, reflectSourceGUID, s.playerGUID, nil)
 				reflectedAoETrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAoETrips, launchMs, true)
 				reflectedAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, reflectedAllyTrips, launchMs, true)
 				refCenteredAllyTrips = s.revalidateReflectedAreaTrips(context.Background(), spell, refCenteredAllyTrips, launchMs, true)
@@ -20662,10 +20695,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// remap applies here (isReflected=false). A member dropped
 				// here takes no effects at arrival, matching a dropped
 				// hitTargets member.
-				friendlyEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyEffectTargets, launchMs, false, 0)
-				refCenteredFriendlyTargets = s.revalidateDelayedHitTargets(context.Background(), spell, refCenteredFriendlyTargets, launchMs, false, 0)
-				friendlyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyConeEffectTargets, launchMs, false, 0)
-				enemyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, enemyConeEffectTargets, launchMs, false, 0)
+				friendlyEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyEffectTargets, launchMs, false, 0, s.playerGUID, nil)
+				refCenteredFriendlyTargets = s.revalidateDelayedHitTargets(context.Background(), spell, refCenteredFriendlyTargets, launchMs, false, 0, s.playerGUID, nil)
+				friendlyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyConeEffectTargets, launchMs, false, 0, s.playerGUID, nil)
+				enemyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, enemyConeEffectTargets, launchMs, false, 0, s.playerGUID, nil)
 				// Spell::handle_delayed (Spell.cpp:3631): UpdatePointers
 				// re-derives the dest from the transport's current
 				// position at missile arrival, so a delayed dest lands
