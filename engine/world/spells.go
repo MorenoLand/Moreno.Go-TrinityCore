@@ -2368,7 +2368,14 @@ func (s *Server) relocateSpellSrcFromTransport(src protocol.SpellTargetLocation)
 // SpellDestination _transportGUID/_transportOffset) at an UpdatePointers
 // twin — the finish head (Spell.cpp:3284), the delayed arrival
 // (Spell.cpp:3631), and the update tick (Spell.cpp:3797). A target with
-// no transport src passes through unchanged.
+// no transport src passes through unchanged. The Read-seed src rides
+// along: it is the same C++ m_src field (Read, Spell.cpp:147-155, seeds
+// it; Update, :480-491, re-derives it), and the traj arm (:1635) and
+// the delay leg (:839-847) read it — so on a moving transport it must
+// track the re-derivation instead of freezing at prepare-time coords.
+// The no-packet-src seed needs no twin: Read's else branch leaves the
+// flag clear, so HasSrc is false and C++ Update skips it — Go's frozen
+// seed already matches.
 func (s *Server) relocateSpellTargetSrc(target protocol.SpellTargetData) protocol.SpellTargetData {
 	if target.SrcTransportGUID == 0 {
 		return target
@@ -2385,6 +2392,9 @@ func (s *Server) relocateSpellTargetSrc(target protocol.SpellTargetData) protoco
 	// coords with offsets would misplace the trajectory origin.
 	if relocated.Transport == 0 {
 		target.Source = relocated
+		if target.HasReadSrc {
+			target.ReadSrc = relocated
+		}
 	}
 	return target
 }
