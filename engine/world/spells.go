@@ -17459,6 +17459,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if s.player == nil {
 					break
 				}
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4/ev5
+				// handler's veto suppresses the teleport leg (scroll of
+				// recall 48129/60320/60321 over-level fail).
+				if prevent.defaultPrevented(effectIndex) {
+					break
+				}
 				// Per-effect target list (Spell.cpp:758-779), same switch as
 				// the heal arms: a friendly-area teleport effect gathers its
 				// own ally selection, not the merged enemy list. No ally
@@ -18592,7 +18599,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					os.teachPetSpell(effCtx, eff.TriggerSpell)
 				}
 			case spellEffectResurrect: // 18: SPELL_EFFECT_RESURRECT
-				s.handleEffectResurrect(effCtx, targetGUID, spell, eff)
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4/ev5
+				// handler's veto suppresses the resurrect leg
+				// (defibrillate 8342/22999/54732 fail roll).
+				if !prevent.defaultPrevented(effectIndex) {
+					s.handleEffectResurrect(effCtx, targetGUID, spell, eff)
+				}
 			case spellEffectReputation: // 103: SPELL_EFFECT_REPUTATION (EffectReputation, SpellEffects.cpp:4349-4368)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target, player-only: every player hit target gains the
@@ -28122,9 +28135,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// value (Spell.cpp:2377/2547). The client-path twin lives in
 	// finishSpellCast above.
 	hitDamage := &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}
-	// spellEffectPreventState for this cast: the ev4 hook fire below
-	// records PreventHitDefaultEffect / PreventHitEffect calls here,
-	// and the TRIGGER_MISSILE arm below consults it before running
+	// spellEffectPreventState for this cast: the ev4/ev5 hook fires
+	// below record PreventHitDefaultEffect / PreventHitEffect calls
+	// here, and the default arms below consult it before running
 	// (the finishSpellCast twin above; midsummer fling-torch 45669).
 	prevent := &spellEffectPreventState{}
 	// SpellScript OnEffectHit (Spell.cpp:3722-3730, the HIT-mode
@@ -28159,7 +28172,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// on a miss, since PreprocessTarget calls it before nulling
 	// _spellHitTarget. The missInfo is the C++ SpellMissInfo number.
 	// This twin is new on the funnel: the old tail fired OnHit only.
-	funnelSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID, hitDamage: hitDamage})
+	funnelSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID, hitDamage: hitDamage, prevent: prevent})
 	for _, effectTarget := range goHitTargets {
 		if effectTarget == 0 {
 			continue
@@ -29311,7 +29324,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				s.handleEffectGameObjectSetDestructionStateMasked(ctx, eff, effectIndex, spellTarget, effectGUIDs, goEffectMasks)
 			}
 		}
-		if len(effectTargets) > 0 && eff.Effect == spellEffectTeleportUnits && s.server != nil {
+		// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+		// skips the default handler for this effect: an ev5 handler's
+		// veto suppresses the triggered teleport leg (scroll of recall).
+		if len(effectTargets) > 0 && eff.Effect == spellEffectTeleportUnits && s.server != nil && !prevent.defaultPrevented(effectIndex) {
 			// Spell::EffectTeleportUnits (SpellEffects.cpp:1199) runs at
 			// HIT_TARGET per unit target; the once-per-effect shape here
 			// is the two helpers' split (caster leg + unit-target leg),
@@ -29629,7 +29645,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// filter into this loop (a positive spell never misses a
 				// non-hostile target); the helper's alive/pending gates ride
 				// along. The corpse-target arm has no Go model on either path.
-				s.handleEffectResurrect(ctx, effectTarget, spell, eff)
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev5
+				// handler's veto suppresses the triggered resurrect leg
+				// (defibrillate fail roll).
+				if !prevent.defaultPrevented(effectIndex) {
+					s.handleEffectResurrect(ctx, effectTarget, spell, eff)
+				}
 			} else if eff.Effect == spellEffectResurrectNew {
 				// Spell::EffectResurrectNew (SpellEffects.cpp:246) runs at
 				// SPELL_EFFECT_HANDLE_HIT_TARGET per unit target: flat

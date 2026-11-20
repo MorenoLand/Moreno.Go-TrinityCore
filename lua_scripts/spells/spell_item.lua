@@ -485,6 +485,9 @@ RegisterSpellEvent(23075, 4, itemTriggerSpellHit)
 --   paths including the player path (spells.go:14735); only the
 --   PreventHitDefaultEffect veto (no player-path prevent record)
 --   still blocks 605.
+--   CORRECTION (tick 2026-11-20): PORTED below (ev5, dormant) — the
+--   prevent record is threaded on the player path now and the
+--   RESURRECT arm consults it (spells.go, this tick).
 --   606 spell_item_sunwell_neck PORTED this tick (ev6, dormant) —
 --   CORRECTION to the old note below: the four aura binding IDs are
 --   the `// <id> - Sunwell Exalted ... Neck` comments
@@ -548,6 +551,90 @@ local function createHeartCandyHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_CREATE_HEART_CANDY, 5, createHeartCandyHit)
+
+-- PORTED (tick 2026-11-20, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_defibrillate::HandleScript
+--   (spell_item.cpp:734-742): EFFECT_0 RESURRECT. On the fail roll
+--   (roll_chance_i(_chance)) PreventHitDefaultEffect + the caster
+--   self-casts the fail spell (GetCastItem arg dropped: no item arg
+--   in Go); otherwise the default resurrect leg runs. Bindings 8342 /
+--   22999 / 54732 (AC 'spell_item_goblin_jumper_cables[_xl]' /
+--   'spell_item_gnomish_army_knife'). The veto lands now that the
+--   player path threads a prevent record (spells.go RESURRECT consult,
+--   this tick) -- the S5 STAY-OUT's only gap. One table local: the
+--   file is near the 200 top-level-local limit.
+local DEFIBRILLATE = { -- spell_item.cpp:4316-4318, :710-711
+    { id = 8342, chance = 67, fail = 8338 },
+    { id = 22999, chance = 50, fail = 23055 },
+    { id = 54732, chance = 33, fail = 0 },
+}
+
+local function makeDefibrillateHit(failChance, failSpell)
+    return function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 0 then
+            return
+        end
+        local caster = spell:GetCaster()
+        if caster == nil then
+            return
+        end
+        if math.random(1, 100) <= failChance then
+            spell:PreventHitDefaultEffect(effectIndex)
+            if failSpell ~= 0 then
+                caster:CastSpell(caster, failSpell, true)
+            end
+        end
+    end
+end
+
+for _, defib in ipairs(DEFIBRILLATE) do
+    RegisterSpellEvent(defib.id, 5, makeDefibrillateHit(defib.chance, defib.fail))
+end
+
+-- PORTED (tick 2026-11-20, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_scroll_of_recall::HandleScript
+--   (spell_item.cpp:1728-1762): EFFECT_0 TELEPORT_UNITS, player-only
+--   Load (checked in the handler since Lua has no Load hook). Above
+--   the rank's max safe level the caster self-casts SPELL_LOST
+--   (60444) + the faction fail spell (60323 Alliance / 60328 Horde,
+--   + urand(0, 7)), triggered, then PreventHitDefaultEffect; at or
+--   below it the default teleport leg runs. Bindings 48129 / 60320 /
+--   60321 (AC 'spell_item_scroll_of_recall'). The veto lands now that
+--   the player path threads a prevent record (spells.go TELEPORT_UNITS
+--   consult, this tick) -- the S8 STAY-OUT's only gap. One table local:
+--   the file is near the 200 top-level-local limit.
+local SCROLL_OF_RECALL = { -- spell_item.cpp:1711-1716
+    ranks = { { id = 48129, maxLevel = 40 }, { id = 60320, maxLevel = 70 }, { id = 60321, maxLevel = 80 } },
+    lost = 60444,
+    failAlliance = 60323,
+    failHorde = 60328,
+}
+local TEAM_HORDE = 1 -- player:GetTeam() returns TeamId; ALLIANCE = 0
+
+local function makeScrollOfRecallHit(maxSafeLevel)
+    return function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 0 then
+            return
+        end
+        local caster = spell:GetCaster()
+        if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+            return
+        end
+        if caster:GetLevel() > maxSafeLevel then
+            caster:CastSpell(caster, SCROLL_OF_RECALL.lost, true)
+            local failSpell = SCROLL_OF_RECALL.failAlliance
+            if caster:GetTeam() == TEAM_HORDE then
+                failSpell = SCROLL_OF_RECALL.failHorde
+            end
+            caster:CastSpell(caster, failSpell + math.random(0, 7), true)
+            spell:PreventHitDefaultEffect(effectIndex)
+        end
+    end
+end
+
+for _, rank in ipairs(SCROLL_OF_RECALL.ranks) do
+    RegisterSpellEvent(rank.id, 5, makeScrollOfRecallHit(rank.maxLevel))
+end
 
 -- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_item_reindeer_transformation::HandleDummy
