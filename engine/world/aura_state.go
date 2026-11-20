@@ -366,6 +366,53 @@ func (s *session) hasAuraState(state uint32, spell wotlk.Spell) bool {
 // GUID, so those only match through activeCreatureAuras (noted gap). The
 // SPELL_AURA_ABILITY_IGNORE_AURASTATE bypass reads the caster's own auras
 // (Unit.cpp:5946-5954), so it runs before the target-kind dispatch below.
+// targetMaxHealth resolves a unit GUID to its live effective max health:
+// the session player (target 0 is self, like the apply funnel's own
+// self-target fold), another online player, or a creature motion. 0 when
+// the target cannot be resolved — the caller keeps the DBC amount.
+func (s *session) targetMaxHealth(targetGUID uint64) uint32 {
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		if s.player != nil {
+			return s.player.MaxHealth
+		}
+		return 0
+	}
+	if s.server == nil {
+		return 0
+	}
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		return targetSess.player.MaxHealth
+	}
+	if motion := s.findCreatureMotion(targetGUID); motion != nil {
+		return motion.MaxHealth
+	}
+	return 0
+}
+
+// targetMaxMana resolves a unit GUID to its live effective max mana
+// (POWER_MANA, power index 0): the session player, another online player,
+// or a creature motion. 0 when the target cannot be resolved or has no
+// mana pool — the replenishment leg's Load() gate reads this 0 as
+// "owner power type is not MANA, keep the DBC base".
+func (s *session) targetMaxMana(targetGUID uint64) uint32 {
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		if s.player != nil {
+			return s.player.MaxPowers[0]
+		}
+		return 0
+	}
+	if s.server == nil {
+		return 0
+	}
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		return targetSess.player.MaxPowers[0]
+	}
+	if motion := s.findCreatureMotion(targetGUID); motion != nil {
+		return motion.MaxPowers[0]
+	}
+	return 0
+}
+
 func (s *session) targetHasAuraState(ctx context.Context, targetGUID uint64, state uint32, spell wotlk.Spell) bool {
 	if state == auraStateNone || targetGUID == 0 {
 		return false

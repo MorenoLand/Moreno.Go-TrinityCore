@@ -408,3 +408,11 @@ RegisterSpellEvent(SPELL_GEN_STRIP16.vendorBarkTrigger, 5, SPELL_GEN_STRIP16.ven
 for _, auraId in ipairs(SPELL_GEN_STRIP16.vehicleControlLink) do
     RegisterAuraEvent(auraId, 3, SPELL_GEN_STRIP16.vehicleControlLinkRemoved)
 end
+
+-- NOTE (2026-11-20 fold): spell_gen_gift_of_naaru / lifeblood /
+-- replenishment_aura / vehicle_scaling ride Go funnel legs in
+-- engine/world/spells.go applyAuraToTarget (pre-split) instead of
+-- AuraEvent 11 handlers — a Lua handler would double-apply on top of
+-- the funnel adjustment, and the funnel covers both branches plus
+-- merge/re-cast uniformly. Event 11 stays available for future
+-- CalcAmount ports with no Go leg.

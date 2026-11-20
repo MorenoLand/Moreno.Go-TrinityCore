@@ -237,6 +237,43 @@ func (s *session) loadEquippedItemStats(ctx context.Context, state *playerState)
 	return items, nil
 }
 
+// averageItemLevelIncludingQuality mirrors Player::GetAverageItemLevel
+// (Player.cpp:26726-26744): the mean of GetItemLevelIncludingQuality over
+// the 15 counted equipment slots — all but shirt/body (3), offhand (16),
+// ranged (17) and tabard (18); an empty slot adds 0 but still counts
+// toward the divisor of 15. ItemTemplate::GetItemLevelIncludingQuality
+// (ItemTemplate.cpp:82-103) subtracts 13 from the template item level
+// for poor/normal/uncommon/rare/artifact/heirloom quality, leaves
+// epic/legendary unchanged, and floors at 0. A DB error reads as 0 — the
+// vehicle-scaling leg stays below its base item level then, so the DBC
+// amount stands.
+func (s *session) averageItemLevelIncludingQuality(ctx context.Context) float32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	items, err := s.loadEquippedItemStats(ctx, s.player)
+	if err != nil {
+		return 0
+	}
+	var sum float32
+	for _, item := range items {
+		switch item.Slot {
+		case int64(equipSlotBody), int64(equipSlotOffhand), int64(equipSlotRanged), int64(equipSlotTabard):
+			continue
+		}
+		lvl := float32(item.ItemLevel)
+		switch item.Quality {
+		case 0, 1, 2, 3, 6, 7: // ITEM_QUALITY_POOR/NORMAL/UNCOMMON/RARE/ARTIFACT/HEIRLOOM
+			lvl -= 13
+		}
+		if lvl < 0 {
+			lvl = 0
+		}
+		sum += lvl
+	}
+	return sum / 15
+}
+
 func ResolveEquippedSpellPowerEnchant(enchantment wotlk.SpellItemEnchantmentEntry, level, requiredSkillValue uint32, broken bool) uint32 {
 	return ResolveEquippedItemStatEnchant(enchantment, itemModSpellPower, level, requiredSkillValue, broken)
 }

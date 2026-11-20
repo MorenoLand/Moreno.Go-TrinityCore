@@ -588,16 +588,17 @@ const (
 // the mana-shield loop fires the separate AfterEffectManaShield hook
 // in C++, so mana shield never fires this one.
 const (
-	AuraEventOnPeriodic        = 1
-	AuraEventOnApply           = 2
-	AuraEventOnRemove          = 3
-	AuraEventOnChangeAmount    = 4
-	AuraEventOnDispel          = 5
-	AuraEventOnProc            = 6
-	AuraEventOnBeforeDispel    = 7
-	AuraEventOnCheckAreaTarget = 8
-	AuraEventOnEffectAbsorb    = 9
-	AuraEventAfterEffectAbsorb = 10
+	AuraEventOnPeriodic         = 1
+	AuraEventOnApply            = 2
+	AuraEventOnRemove           = 3
+	AuraEventOnChangeAmount     = 4
+	AuraEventOnDispel           = 5
+	AuraEventOnProc             = 6
+	AuraEventOnBeforeDispel     = 7
+	AuraEventOnCheckAreaTarget  = 8
+	AuraEventOnEffectAbsorb     = 9
+	AuraEventAfterEffectAbsorb  = 10
+	AuraEventOnEffectCalcAmount = 11
 )
 
 // SpellEvents contract for RegisterSpellEvent(spellID, event, fn). There

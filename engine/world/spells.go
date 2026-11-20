@@ -21662,6 +21662,28 @@ func isRendSpellID(spellID uint32) bool {
 	return false
 }
 
+// isGiftOfNaaruSpellID reports whether spellID is a Gift of the Naaru
+// rank — 28880 R1 + 59542-59548 R2-R7, bound to spell_gen_gift_of_naaru
+// (spell_generic.cpp:1814).
+func isGiftOfNaaruSpellID(spellID uint32) bool {
+	switch spellID {
+	case 28880, 59542, 59543, 59544, 59545, 59547, 59548:
+		return true
+	}
+	return false
+}
+
+// isVehicleScalingSpellID reports whether spellID is a vehicle gear-scaling
+// aura — 66668 (SPELL_GEAR_SCALING) + 65266, 65635, 65636, 66666, 66667,
+// bound to spell_gen_vehicle_scaling (spell_generic.cpp:3506).
+func isVehicleScalingSpellID(spellID uint32) bool {
+	switch spellID {
+	case 65266, 65635, 65636, 66666, 66667, 66668:
+		return true
+	}
+	return false
+}
+
 // fireFrostWardCalcBonus mirrors spell_mage_fire_frost_ward::CalculateAmount
 // (spell_mage.cpp:645-659): the DoEffectCalcAmount leg on EFFECT_0
 // SPELL_AURA_SCHOOL_ABSORB — +80.68% of the caster's
@@ -36447,6 +36469,25 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		}
 	}
 	s.castMu.Unlock()
+	// AuraScript::DoEffectCalcAmount (AuraEffect::CalculateAmount,
+	// SpellAuraEffects.cpp:425-539) runs per effect while the aura is
+	// created, before the OnApply handlers and the default effect arms.
+	// The self-cast funnel replaces rather than merges, so every effect's
+	// amount is final here; fires once per effect in the mask, guarded by
+	// the hook check so unscripted auras pay nothing.
+	if s.server != nil && s.server.hasAuraCalcAmountHook(spellID) {
+		var calcMap, calcInst uint32
+		if s.player != nil {
+			calcMap, calcInst = s.player.Map, s.player.InstanceID
+		}
+		calcRef := &luaAuraRef{server: s.server, spellID: spellID, player: s, mapID: calcMap, instanceID: calcInst}
+		for calcIndex := 0; calcIndex < 3; calcIndex++ {
+			if effectMask&(1<<uint(calcIndex)) == 0 {
+				continue
+			}
+			s.server.fireAuraCalcAmount(context.Background(), spellID, calcRef.luaAuraObject(), s.luaPlayer(), calcIndex)
+		}
+	}
 	// AuraEffect::ApplySpellMod on re-apply (SpellAuraEffects.cpp:755): the
 	// replaced aura's modifiers leave before the new aura's register.
 	s.dropSpellMods(spellID)
@@ -39742,6 +39783,104 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 		}
 	}
+	// spell_gen_gift_of_naaru::CalculateAmount
+	// (spell_generic.cpp:1814-1853): DoEffectCalcAmount on EFFECT_0
+	// SPELL_AURA_PERIODIC_HEAL adds floor(heal/totalTicks) to the DBC base,
+	// where heal is 1.885x spell power (mage/warlock/priest), the max of
+	// that and 1.1x melee AP (paladin/shaman), or 1.1x the max of melee and
+	// ranged AP (warrior/hunter/DK). The caster must be the session player
+	// (the Load() GetCaster gate, and the spellpower/AP model lives on the
+	// session); totalTicks mirrors GetTotalTicks (lua_aura.go:417), with
+	// the START_PERIODIC_AT_APPLY +1. Adjusted here, before the
+	// player/creature split, so both branches and both merge arms take the
+	// bonused amount. The AuraEvent 11 CalcAmount hook exists for Lua
+	// ports, but these four ride the Go funnel because it also covers
+	// merge/re-cast uniformly and the vehicle leg needs the Go-side
+	// item-level twin; a Lua handler on top would double-apply.
+	// spell_gen_lifeblood::CalculateAmount (spell_generic.cpp:1959-1976):
+	// DoEffectCalcAmount on EFFECT_0 SPELL_AURA_PERIODIC_HEAL adds
+	// CalculatePct(owner MaxHealth, 1.5/totalTicks) to the DBC base — the
+	// owner is the aura target, resolved below for player and creature
+	// targets alike (lifeblood is self-cast, so the caster session's own
+	// max health is the common case). No caster gate: C++ never touches
+	// GetCaster here.
+	totalTicks := uint32(0)
+	if periodMs > 0 && durationMs > 0 {
+		totalTicks = durationMs / periodMs
+		if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+			totalTicks++
+		}
+	}
+	if casterGUID == s.playerGUID && s.player != nil && totalTicks > 0 && effIndex == 0 && eff.Aura == spellAuraPeriodicHeal && isGiftOfNaaruSpellID(spell.ID) {
+		var heal float32
+		switch spell.SpellFamilyName {
+		case spellFamilyMage, spellFamilyWarlock, spellFamilyPriest:
+			heal = 1.885 * float32(s.spellBaseDamageBonusDone(spell.SchoolMask))
+		case spellFamilyPaladin, spellFamilyShaman:
+			heal = max(1.885*float32(s.spellBaseDamageBonusDone(spell.SchoolMask)), 1.1*s.totalAttackPowerValue(false))
+		case spellFamilyWarrior, spellFamilyHunter, spellFamilyDeathKnight:
+			heal = 1.1 * max(s.totalAttackPowerValue(false), s.totalAttackPowerValue(true))
+		}
+		healTick := int32(math.Floor(float64(heal) / float64(totalTicks)))
+		amount = uint32(int32(amount) + max(healTick, 0))
+	}
+	if totalTicks > 0 && effIndex == 0 && eff.Aura == spellAuraPeriodicHeal && spell.ID == 55428 {
+		if maxHealth := s.targetMaxHealth(targetGUID); maxHealth > 0 {
+			amount = uint32(int32(amount) + int32(float32(maxHealth)*(1.5/float32(totalTicks))/100))
+		}
+	}
+	// spell_gen_replenishment_aura::CalculateAmount
+	// (spell_generic.cpp:3043-3077): DoEffectCalcAmount on EFFECT_0
+	// SPELL_AURA_PERIODIC_ENERGIZE *sets* the amount to 0.2% of the
+	// owner's max mana (57669) or 0.25% (61782). The Load() gate (owner
+	// power type == MANA) is the maxMana > 0 check — a non-mana owner
+	// keeps the DBC base, matching a script that never loads. No caster
+	// gate: C++ reads only GetUnitOwner here. Adjusted here, before the
+	// player/creature split, so both branches take the set amount.
+	if effIndex == 0 && eff.Aura == spellAuraPeriodicEnergize {
+		switch spell.ID {
+		case 57669, 61782:
+			if maxMana := s.targetMaxMana(targetGUID); maxMana > 0 {
+				pct := float32(0.002)
+				if spell.ID == 61782 {
+					pct = 0.0025
+				}
+				amount = uint32(float32(maxMana) * pct)
+			}
+		}
+	}
+	// spell_gen_vehicle_scaling::CalculateAmount
+	// (spell_generic.cpp:3506-3554): DoEffectCalcAmount on EFFECT_0
+	// SPELL_AURA_MOD_HEALING_PCT, EFFECT_1
+	// SPELL_AURA_MOD_DAMAGE_PERCENT_DONE and EFFECT_2
+	// SPELL_AURA_MOD_INCREASE_HEALTH_PERCENT *sets* the amount to
+	// (averageItemLevel - base) with base 205 for SPELL_GEAR_SCALING
+	// (66668) and 170 otherwise, only when the average is at or above the
+	// base. The Load() gate (caster TYPEID_PLAYER) is the session-player
+	// caster check; the average item level is the new
+	// averageItemLevelIncludingQuality twin of
+	// Player::GetAverageItemLevel. Adjusted here, before the
+	// player/creature split, so both branches take the scaled amount.
+	if casterGUID == s.playerGUID && s.player != nil && isVehicleScalingSpellID(spell.ID) {
+		var auraType uint32
+		switch effIndex {
+		case 0:
+			auraType = spellAuraModHealingPct
+		case 1:
+			auraType = spellAuraDamagePercentDone
+		case 2:
+			auraType = spellAuraModIncreaseHealthPercent
+		}
+		if auraType != 0 && eff.Aura == auraType {
+			baseItemLevel := float32(170)
+			if spell.ID == 66668 {
+				baseItemLevel = 205
+			}
+			if avgILvl := s.averageItemLevelIncludingQuality(ctx); avgILvl >= baseItemLevel {
+				amount = uint32(uint16(avgILvl - baseItemLevel))
+			}
+		}
+	}
 	mountEffectMask, mountMiscValue, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(spell)
 
 	positive := !isHarmfulAura(eff.Aura) && eff.ImplicitTargetA != 6
@@ -39917,6 +40056,21 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				// would miss it too.
 				existing.EffectMask |= spellEffectMask(spell, eff)
 				targetSess.castMu.Unlock()
+				// AuraScript::DoEffectCalcAmount (AuraEffect::CalculateAmount,
+				// SpellAuraEffects.cpp:425-539): a re-cast's later effects
+				// refresh their amounts through SetStackAmount, which C++
+				// recalculates via CalculateAmount, so the hook re-runs for
+				// this effect; synthetic effects (effIndex -1) carry none.
+				if effIndex >= 0 && s.server != nil && s.server.hasAuraCalcAmountHook(spell.ID) {
+					var mergeMap, mergeInst uint32
+					targetSess.playerStateMu.Lock()
+					if targetSess.player != nil {
+						mergeMap, mergeInst = targetSess.player.Map, targetSess.player.InstanceID
+					}
+					targetSess.playerStateMu.Unlock()
+					mergeRef := &luaAuraRef{server: s.server, spellID: spell.ID, player: targetSess, mapID: mergeMap, instanceID: mergeInst}
+					s.server.fireAuraCalcAmount(ctx, spell.ID, mergeRef.luaAuraObject(), targetSess.luaPlayer(), effIndex)
+				}
 				return
 			}
 			// Unit::_TryStackingOrRefreshingExistingAura (Unit.cpp:3326) ->
@@ -40337,6 +40491,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 			targetSess.playerStateMu.Unlock()
 			auraRef := &luaAuraRef{server: s.server, spellID: spell.ID, player: targetSess, mapID: tMap, instanceID: tInst}
+			// AuraScript::DoEffectCalcAmount (AuraEffect::CalculateAmount,
+			// SpellAuraEffects.cpp:425-539) runs per effect while the aura
+			// is created, before the OnApply handlers below; the fresh leg
+			// runs once per effect call, so this fires for the current
+			// effect. Synthetic effects (effIndex -1) carry none.
+			if effIndex >= 0 && s.server.hasAuraCalcAmountHook(spell.ID) {
+				s.server.fireAuraCalcAmount(ctx, spell.ID, auraRef.luaAuraObject(), targetSess.luaPlayer(), effIndex)
+			}
 			s.server.fireAuraApply(ctx, spell.ID, auraRef.luaAuraObject(), targetSess.luaPlayer())
 		}
 		// SpellInfo::ApplyAllSpellImmunitiesTo dispel arms

@@ -429,6 +429,31 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return total
 	})
+	// GetSpellFamilyName is SpellInfo::SpellFamilyName for the aura's spell
+	// (SharedDefines.h SpellFamilyNames; 0 when the spell record is
+	// unknown). Backs the Gift of Naaru CalcAmount leg
+	// (spell_generic.cpp:1814-1853), which keys the heal formula on the
+	// casting spell's family.
+	methods["GetSpellFamilyName"] = luaNoArgs(func() any {
+		if r.server == nil || r.server.Data == nil {
+			return uint32(0)
+		}
+		if sp, found, err := r.server.Data.Spell(spellID); err == nil && found {
+			return sp.SpellFamilyName
+		}
+		return uint32(0)
+	})
+	// GetSchoolMask is SpellInfo::GetSchoolMask for the aura's spell: the
+	// school mask the aura was applied with, 0 when the record is gone.
+	// Backs the same Gift of Naaru leg, which prices
+	// SpellBaseDamageBonusDone on the spell's school.
+	methods["GetSchoolMask"] = luaNoArgs(func() any {
+		aura := r.resolve()
+		if aura == nil {
+			return uint32(0)
+		}
+		return aura.SchoolMask
+	})
 	// GetAmount([effectIndex]) is AuraEffect::GetAmount: the live
 	// effect amount (Amounts, rescaled by stack), defaulting to effect
 	// 0. An out-of-range index or a removed aura reads 0.
@@ -1223,6 +1248,33 @@ func (s *Server) fireAuraChangeAmount(ctx context.Context, spellID uint32, auraO
 		return
 	}
 	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnChangeAmount, scripting.AuraEventOnChangeAmount, auraObj, target)
+}
+
+// hasAuraCalcAmountHook reports whether any RegisterAuraEvent(...,
+// OnEffectCalcAmount, ...) handler is registered for the spell, so the
+// apply funnels can skip the per-effect Lua dispatch when no handler
+// could fire.
+func (s *Server) hasAuraCalcAmountHook(spellID uint32) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil {
+		return false
+	}
+	return s.Features.Scripts.HasHook("aura:"+strconv.FormatUint(uint64(spellID), 10), scripting.AuraEventOnEffectCalcAmount)
+}
+
+// fireAuraCalcAmount dispatches the RegisterAuraEvent OnEffectCalcAmount
+// hook for one freshly applied aura effect (args (event, aura, target,
+// effectIndex)). It mirrors AuraScript::DoEffectCalcAmount
+// (AuraEffect::CalculateAmount, SpellAuraEffects.cpp:425-539), which C++
+// runs per effect while the aura is created, before the OnApply handlers
+// and the default effect arms. Notification-only: the handler reads the
+// DBC base with aura:GetAmount(effectIndex) and rewrites it with
+// aura:SetAmount(amount, effectIndex); the fire sites run it after the
+// record is stored, so both methods resolve the live amounts.
+func (s *Server) fireAuraCalcAmount(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any, effectIndex int) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnEffectCalcAmount, scripting.AuraEventOnEffectCalcAmount, auraObj, target, effectIndex)
 }
 
 // fireAuraDispel dispatches the RegisterAuraEvent OnDispel hook for a
