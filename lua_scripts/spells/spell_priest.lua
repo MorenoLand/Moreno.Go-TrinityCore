@@ -67,6 +67,7 @@ RegisterAuraEvent(SPELL_PRIEST_RENEW_R14, 2, renewApply)
 local SPELL_PRIEST_BLESSED_RECOVERY = 27811 -- spell_priest.cpp:188 (class spell_pri_blessed_recovery)
 local SPELL_PRIEST_BLESSED_RECOVERY_R1 = 27813 -- spell_priest.cpp:39
 local SPELL_PRIEST_IMP_SHADOWFORM = 47569 -- spell_priest.cpp:603 (class spell_pri_imp_shadowform)
+local SPELL_PRIEST_IMP_SHADOWFORM_R2 = 47570 -- rank 2 (TDB binds 47570 to spell_pri_improved_shadowform; bot_priest_ai.cpp:87)
 
 -- C++ spell_pri_blessed_recovery_AuraScript::HandleProc
 -- (spell_priest.cpp:201-221): OnEffectProc, EFFECT_0 PROC_TRIGGER_SPELL.
@@ -115,6 +116,7 @@ local function impShadowformProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_PRIEST_IMP_SHADOWFORM, 6, impShadowformProc)
+RegisterAuraEvent(SPELL_PRIEST_IMP_SHADOWFORM_R2, 6, impShadowformProc)
 
 local SPELL_PRIEST_LIGHTWELL_RENEW = 7001 -- spell_priest.cpp:788 (class spell_pri_lightwell_renew)
 local SPELL_PRIEST_LIGHTWELL_RENEW_R2 = 27873
@@ -162,8 +164,9 @@ RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R6, 2, lightwellRenewApply)
 -- (procs.go takenMeleeTypeMask, Unit.cpp:1430), but the entry's
 -- Chance/Charges still ride the DBC spell and the aura itself needs
 -- the DBC to exist. The CalculateAmount glyph arm (:797-804, AddPct
--- by the 55673 aura's EFFECT_0 amount) stays out: no
--- DoEffectCalcAmount fire site at the apply paths.
+-- by the 55673 aura's EFFECT_0 amount) is PORTED below (ev11
+-- lightwellRenewCalcAmount): the ev11 fire site exists at the apply
+-- paths (lua_aura.go fireAuraCalcAmount).
 local function lightwellRenewProc(event, aura, target, actor, procTarget, damage)
     if damage == nil or damage == 0 then
         return
@@ -182,6 +185,102 @@ RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R3, 6, lightwellRenewProc)
 RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R4, 6, lightwellRenewProc)
 RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R5, 6, lightwellRenewProc)
 RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R6, 6, lightwellRenewProc)
+
+-- C++ spell_pri_lightwell_renew_AuraScript::CalculateAmount
+-- (spell_priest.cpp:797-804): DoEffectCalcAmount, EFFECT_0
+-- PERIODIC_HEAL — when the aura caster carries Glyph of Lightwell
+-- 55673, AddPct the amount by the glyph's EFFECT_0 amount
+-- (CalculatePct float-truncate, the math.floor twin below).
+-- DELTA: C++ reads the glyph off the aura caster, which is the
+-- priest (the 60123 cast passes the summoner GUID as original
+-- caster); in Go the renew is attributed to the lightwell (the
+-- lightwellHit note below), which never carries the priest's glyph,
+-- so the glyph is read off the lightwell's summoner instead. A
+-- direct priest-cast renew (caster is a Player) reads the glyph off
+-- the caster itself. DORMANT until Spell.dbc ships the 7001 rows.
+local function lightwellRenewCalcAmount(event, aura, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    local glyph = caster:GetAuraEffect(SPELL_PRIEST_GLYPH_OF_LIGHTWELL, 0)
+    if glyph == nil and caster:GetObjectType() == "Creature" then
+        local summoner = caster:GetSummonerUnit()
+        if summoner ~= nil then
+            glyph = summoner:GetAuraEffect(SPELL_PRIEST_GLYPH_OF_LIGHTWELL, 0)
+        end
+    end
+    if glyph == nil then
+        return
+    end
+    local amount = aura:GetAmount(0)
+    aura:SetAmount(math.floor(amount + amount * glyph / 100), 0)
+end
+
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW, 11, lightwellRenewCalcAmount)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R2, 11, lightwellRenewCalcAmount)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R3, 11, lightwellRenewCalcAmount)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R4, 11, lightwellRenewCalcAmount)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R5, 11, lightwellRenewCalcAmount)
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW_R6, 11, lightwellRenewCalcAmount)
+
+local SPELL_PRIEST_LIGHTWELL = 60123 -- spell_priest.cpp:719 (class spell_pri_lightwell)
+local SPELL_PRIEST_LIGHTWELL_CHARGES = 59907 -- spell_priest.cpp:49
+local LIGHTWELL_NPC_RENEWS = {
+    [31897] = 7001, [31896] = 27873, [31895] = 27874,
+    [31894] = 28276, [31893] = 48084, [31883] = 48085,
+}
+
+-- C++ spell_pri_lightwell::HandleScriptEffect (spell_priest.cpp:770-786):
+-- OnEffectHitTarget, EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT. Load gate:
+-- caster is TYPEID_UNIT; a non-summon caster returns. The caster's
+-- entry maps to the Lightwell Renew rank (enum :71-94); when the
+-- caster carries the Lightwell Charges aura 59907 it casts the mapped
+-- renew on the hit unit, and ModCharges(-1) dropping the last charge
+-- unsummons the lightwell. DELTAS: (a) C++ casts the renew with the
+-- summoner GUID as original caster, so the renew aura's caster is the
+-- priest; Go's CastSpell has no original-caster arg, so the renew is
+-- attributed to the lightwell — healing credit goes to the lightwell,
+-- and the renew's own Empowered Renew arm (caster must be a Player)
+-- will not fire off a lightwell-cast renew, where C++ would proc it.
+-- (b) The 59907 charges aura has no Go application site (zero Go
+-- hits) and no TDB row applying it — its application rides the 724
+-- Lightwell summon DBC, an open verification item; the handler
+-- nil-guards it exactly as C++ does, so a missing charges aura casts
+-- nothing rather than erroring. DORMANT until Spell.dbc ships the
+-- 60123 row (and the 724 summon row applies 59907). Trigger path:
+-- npc_spellclick_spells binds all six lightwell entries to 60123
+-- with cast_flags (2,2); the Go creature cast routes through the
+-- ev5 OnEffectHitTarget loop (boss_ai.go).
+local function lightwellHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    if not caster:IsSummon() then
+        return
+    end
+    local renew = LIGHTWELL_NPC_RENEWS[caster:GetEntry()]
+    if renew == nil then
+        return
+    end
+    local charges = caster:GetAura(SPELL_PRIEST_LIGHTWELL_CHARGES)
+    if charges == nil then
+        return
+    end
+    caster:CastSpell(hitTarget, renew, true)
+    if charges:ModCharges(-1) then
+        caster:DespawnOrUnsummon()
+    end
+end
+
+RegisterSpellEvent(SPELL_PRIEST_LIGHTWELL, 5, lightwellHit)
 
 local SPELL_PRIEST_POWER_WORD_SHIELD = 17 -- spell_priest.cpp:1064 (class spell_pri_power_word_shield)
 local SPELL_PRIEST_POWER_WORD_SHIELD_R2 = 592
@@ -449,6 +548,13 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   664 divine_aegis (47509, :336-389): PORTED this tick (ev6, heal
 --   forwarding: pct(heal, amount) + existing-aegis stack +
 --   level*125 cap, holder casts 47753 on the proc target).
+--   665 lightwell (60123, :719-786): PORTED 2026-11-20 (ev5
+--   lightwellHit above): entry->renew map (31897->7001 ... 31883->
+--   48085), 59907 charges gate, ModCharges(-1) -> DespawnOrUnsummon;
+--   npc_spellclick_spells binds all six entries to 60123 (2,2).
+--   Deltas: renew attributed to the lightwell (no original-caster arg
+--   on CastSpell), 59907 has no Go application site (rides the 724
+--   summon DBC). DORMANT until Spell.dbc ships the 60123 row.
 --   666 improved_spirit_tap (15337, :632-676): PORTED this tick (ev6,
 --   above): rank of SW:D 32379 / Mind Blast 8092 passes via the new
 --   procEvent:IsRankOf bridge, Mind Flay 58381 at 50%, all else vetoes.
@@ -462,8 +568,9 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   (27873/27874/28276/48084/48085, TDB spell_ranks chain + (-7001)
 --   binding; both handlers rank-agnostic). DORMANT until Spell.dbc
 --   ships (entry Chance/Charges ride the DBC spell). The
---   CalculateAmount glyph-bonus arm (55673) stays out: no
---   DoEffectCalcAmount fire site at the apply paths.
+--   CalculateAmount glyph-bonus arm (55673) is PORTED (ev11
+--   lightwellRenewCalcAmount above): the ev11 fire site exists at the
+--   apply paths (lua_aura.go fireAuraCalcAmount).
 --   668 mind_sear (49821, :889-915): PORTED 2026-11-19 (ev7 above):
 --   drop the caster's channel object from the EFFECT_0 area list via
 --   the new GetChannelObject bridge (both Lua unit surfaces); the
@@ -489,9 +596,12 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   (AfterHit ev3); R2-R14 registered 2026-11-19 (592/600/3747/6065/
 --   6066/10898/10899/10900/10901/25217/25218/48065/48066, TDB
 --   spell_ranks chain + (-17) binding; handler rank-agnostic).
---   CalculateAmount (:1109-1151) has no
---   DoEffectCalcAmount bridge (spellpower/dampening/ICC math
---   unbridged) and ReflectDamage (:1153-1169) has no
+--   CalculateAmount (:1109-1151) stays out, but the gap is no longer
+--   the hook: the ev11 DoEffectCalcAmount fire site exists now
+--   (lua_aura.go fireAuraCalcAmount) — the arm needs the
+--   spellpower-model bridges (SpellBaseHealingBonusDone /
+--   ApplyEffectModifiers / level-penalty coefficient), none of which
+--   exists on any Lua surface. ReflectDamage (:1153-1169) has no
 --   AfterEffectAbsorb bridge (no absorb event; the DamageInfo
 --   attacker/spell read has no hook). Census go_hit is Renewed Hope
 --   (spell_stats.go:1563 hasAura 6788); lua_hit is the Whitemane
@@ -508,7 +618,7 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 -- CLOSED IN GO + TRIAGED STAY OUT (tick 2026-11-11 18:46, census rows
 -- 224-229 header-source + 672-673 comment-block; spell_priest.cpp end):
 --   prayer_of_mending_heal (33110, :1185-1219): CLOSED IN GO
---   (spells.go:31449-31471: T9 2P 67201 EFFECT_0 pct on the hit heal,
+--   (spells.go:32000-32017: T9 2P 67201 EFFECT_0 pct on the hit heal,
 --   post-chain pre-crit). Real hook OnEffectHitTarget EFFECT_0
 --   SPELL_EFFECT_HEAL only; census phantom HandleDamage/OnEffectApply/OnHit.
 --   shadowfiend_death (57989, :1268-1315): CLOSED IN GO (boss_ai.go
