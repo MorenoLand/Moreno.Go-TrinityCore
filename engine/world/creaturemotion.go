@@ -8609,7 +8609,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// AI spell carrying a trigger effect previously
 			// triggered nothing server-side (non-victim casts ride
 			// castCreatureSpellInternal, which already runs this
-			// pre-pass). Interrupt 68 (LAUNCH_TARGET) + charge 96 (LAUNCH_TARGET movement; its HIT attack leg is player-caster-only) + charge-dest 149 (LAUNCH) + jump 41 (LAUNCH_TARGET) + jump-dest 42 (LAUNCH) ride the same pre-pass via their twins.
+			// pre-pass). Interrupt 68 (LAUNCH_TARGET) + charge 96 (LAUNCH_TARGET movement; its HIT attack leg is player-caster-only) + charge-dest 149 (LAUNCH) + jump 41 (LAUNCH_TARGET) + jump-dest 42 (LAUNCH) + leap-back 138 (LAUNCH_TARGET) ride the same pre-pass via their twins.
 			if inlineSpellKnown {
 				launchReflected := make(map[uint64]uint8, len(reflectedSet))
 				for guid := range reflectedSet {
@@ -8637,6 +8637,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.creatureEffectJump(ctx, motion, inlineSpell, i, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), launchReflected, evadedSet, immuneSet, missSet)
 					case spellEffectJumpDest:
 						s.creatureEffectJumpDest(ctx, motion, inlineSpell, i, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
+					case spellEffectLeapBack:
+						s.creatureEffectLeapBack(ctx, motion, inlineSpell, inlineSpell.Effects[i], bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), launchReflected, evadedSet, immuneSet, missSet)
 					}
 				}
 			}

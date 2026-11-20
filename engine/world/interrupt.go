@@ -288,6 +288,23 @@ type interruptedCreatureCast struct {
 	channeled bool
 }
 
+// interruptCreatureCancelTail mirrors the m_originalCaster tail of
+// Spell::cancel (Spell.cpp:3248-3255): RemoveDynObject runs for every
+// state, RemoveGameObject only for a channeled spell. The player tail
+// rides interruptCurrentCast/interruptCurrentChannel; the creature
+// helpers had no twin, so interrupting a creature's channeled
+// persistent-area spell left its ground patch (and any channeled-spell
+// GO) ticking for its full duration instead of despawning it.
+func (s *Server) interruptCreatureCancelTail(m *creatureMotion, spellID uint32, channeled bool) {
+	if s == nil || m == nil || spellID == 0 {
+		return
+	}
+	s.despawnCasterDynObjects(m.GUID, spellID)
+	if channeled {
+		s.removeGameObjectsByOwnerSpell(m.GUID, spellID)
+	}
+}
+
 // interruptCreatureCast mirrors Spell::EffectInterruptCast
 // (SpellEffects.cpp:3511-3551) for a creature victim, returning the
 // interrupted arms in C++ loop order (generic, then channeled) so
@@ -319,6 +336,7 @@ func (s *Server) interruptCreatureCast(m *creatureMotion) []interruptedCreatureC
 	}
 	if genericSpellID != 0 && s.interruptCreatureSpellGate(genericSpellID, false) {
 		s.cancelPendingCreatureCast(m)
+		s.interruptCreatureCancelTail(m, genericSpellID, false)
 		if !s.creatureChannelLive(m) {
 			m.CastingUntil = time.Time{}
 		}
@@ -335,6 +353,7 @@ func (s *Server) interruptCreatureCast(m *creatureMotion) []interruptedCreatureC
 		m.ChannelUntil = time.Time{}
 		m.ChannelHitTargets = nil
 		s.cancelPendingCreatureCast(m)
+		s.interruptCreatureCancelTail(m, channelSpellID, true)
 		interrupted = append(interrupted, interruptedCreatureCast{spellID: channelSpellID, channeled: true})
 	}
 	return interrupted
@@ -373,6 +392,7 @@ func (s *Server) interruptCreatureNonMeleeCasts(m *creatureMotion) []interrupted
 	}
 	if genericSpellID != 0 {
 		s.cancelPendingCreatureCast(m)
+		s.interruptCreatureCancelTail(m, genericSpellID, false)
 		if !s.creatureChannelLive(m) {
 			m.CastingUntil = time.Time{}
 		}
@@ -389,6 +409,7 @@ func (s *Server) interruptCreatureNonMeleeCasts(m *creatureMotion) []interrupted
 		m.ChannelUntil = time.Time{}
 		m.ChannelHitTargets = nil
 		s.cancelPendingCreatureCast(m)
+		s.interruptCreatureCancelTail(m, channelSpellID, true)
 		interrupted = append(interrupted, interruptedCreatureCast{spellID: channelSpellID, channeled: true})
 	}
 	return interrupted
@@ -420,6 +441,7 @@ func (s *Server) interruptCreatureGenericCast(m *creatureMotion) []interruptedCr
 		return nil
 	}
 	s.cancelPendingCreatureCast(m)
+	s.interruptCreatureCancelTail(m, genericSpellID, false)
 	if !s.creatureChannelLive(m) {
 		m.CastingUntil = time.Time{}
 	}
@@ -452,6 +474,7 @@ func (s *Server) interruptCreatureChannelCast(m *creatureMotion) []interruptedCr
 	if m.PendingInlineSpellID == 0 && m.PendingCastSpellID == 0 {
 		m.CastingUntil = time.Time{}
 	}
+	s.interruptCreatureCancelTail(m, channelSpellID, true)
 	return []interruptedCreatureCast{{spellID: channelSpellID, channeled: true}}
 }
 

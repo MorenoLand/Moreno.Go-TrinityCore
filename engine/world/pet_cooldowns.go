@@ -178,12 +178,36 @@ func ResolvePetCooldownEnds(now time.Time, spellRecovery, categoryRecovery uint3
 	return spellEnd, categoryEnd, true
 }
 
+// recordPetSpellCooldown mirrors SpellHistory::StartCooldown
+// (SpellHistory.cpp:306-361) for a pet caster: the owner player is the
+// modOwner (Object.cpp:2246), so SPELLMOD_COOLDOWN folds over both the
+// spell cooldown and the category cooldown (the category fold skipped
+// when ATTR6_IGNORE_CATEGORY_COOLDOWN_MODS is set), with the negative
+// clamp after the fold, like the player path's startRealSpellCooldown.
+// The SPELL_AURA_MOD_COOLDOWN arm stays out: C++ reads it off the pet
+// itself (GetTotalAuraModifier on _owner) and Go has no pet-side aura
+// total; the only aura of that type is 24818 Noxious Breath, not a pet
+// spell. The shoot arm (:308-311, category 76 / auto-repeat ranged
+// attack time) stays out too — no pet ranged attack-time model.
 func (s *session) recordPetSpellCooldown(motion *creatureMotion, spell wotlk.Spell, now time.Time) {
 	if s == nil || s.server == nil || motion == nil {
 		return
 	}
 	categoryID, categoryRecovery := spell.Category, spell.CategoryRecoveryTime
-	cooldownEnd, categoryEnd, hasCooldown := ResolvePetCooldownEnds(now, spell.RecoveryTime, categoryRecovery)
+	cooldownMs, categoryCooldownMs := int32(spell.RecoveryTime), int32(categoryRecovery)
+	if cooldownMs >= 0 {
+		cooldownMs = s.applySpellMod(spell, spellModCooldown, cooldownMs)
+	}
+	if categoryCooldownMs >= 0 && spell.AttributesEx6&spellAttr6IgnoreCategoryCooldownMods == 0 {
+		categoryCooldownMs = s.applySpellMod(spell, spellModCooldown, categoryCooldownMs)
+	}
+	if cooldownMs < 0 {
+		cooldownMs = 0
+	}
+	if categoryCooldownMs < 0 {
+		categoryCooldownMs = 0
+	}
+	cooldownEnd, categoryEnd, hasCooldown := ResolvePetCooldownEnds(now, uint32(cooldownMs), uint32(categoryCooldownMs))
 	if !hasCooldown {
 		s.server.motionMu.Lock()
 		motion.LastSpell = now
