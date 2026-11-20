@@ -59,7 +59,6 @@ RegisterAuraEvent(SPELL_BREWFEST_APPLE_TRAP, 2, appleTrapApply)
 local SPELL_BREWFEST_GIDDYUP = 42924 -- spell_holiday.cpp:1087
 local SPELL_RENTAL_RACING_RAM = 43883 -- spell_holiday.cpp:1069
 local SPELL_SWIFT_WORK_RAM = 43880 -- spell_holiday.cpp:1070
-local SPELL_EXHAUSTED_RAM = 43332 -- spell_holiday.cpp:1077
 local SPELL_RAM_TROT = 42992 -- spell_holiday.cpp:1073
 local SPELL_RAM_CANTER = 42993 -- spell_holiday.cpp:1074
 local SPELL_RAM_GALLOP = 42994 -- spell_holiday.cpp:1075
@@ -85,7 +84,7 @@ local function giddyupChange(event, aura, target)
         target:RemoveAura(SPELL_BREWFEST_GIDDYUP)
         return
     end
-    if target:HasAura(SPELL_EXHAUSTED_RAM) then
+    if target:HasAura(SPELL_BREWFEST_EXHAUSTED_RAM) then
         return
     end
     giddyupSpeedLeg(target, aura:GetStackAmount())
@@ -114,7 +113,7 @@ local function giddyupPeriodic(event, aura, target)
         target:RemoveAura(SPELL_BREWFEST_GIDDYUP)
         return
     end
-    if target:HasAura(SPELL_EXHAUSTED_RAM) then
+    if target:HasAura(SPELL_BREWFEST_EXHAUSTED_RAM) then
         return
     end
     giddyupSpeedLeg(target, stacks)
@@ -211,9 +210,6 @@ local SPELL_HALLOWS_END_CANDY_FEMALE_DEFIAS_PIRATE = 44742 -- spell_holiday.cpp:
 local SPELL_HALLOWS_END_CANDY_MALE_DEFIAS_PIRATE = 44743 -- spell_holiday.cpp:123
 local GENDER_FEMALE = 1 -- SharedDefines.h:77
 
-local SPELL_RAM_TROT = 42992 -- spell_holiday.cpp:1073
-local SPELL_RAM_CANTER = 42993 -- spell_holiday.cpp:1074
-local SPELL_RAM_GALLOP = 42994 -- spell_holiday.cpp:1075
 local SPELL_BREWFEST_QUEST_SPEED_BUNNY_GREEN = 43345 -- spell_holiday.cpp:1081
 local SPELL_BREWFEST_QUEST_SPEED_BUNNY_YELLOW = 43346 -- spell_holiday.cpp:1082
 local SPELL_BREWFEST_QUEST_SPEED_BUNNY_RED = 43347 -- spell_holiday.cpp:1083
@@ -230,6 +226,9 @@ local TEAM_ALLIANCE = 0 -- GetTeam twin (lua_player.go:324)
 local TEAM_HORDE = 1
 
 local function hallowEndCandyPirateApply(event, aura, target)
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
     if target:GetNativeGender() == GENDER_FEMALE then
         target:CastSpell(target, SPELL_HALLOWS_END_CANDY_FEMALE_DEFIAS_PIRATE, true)
     else
@@ -240,6 +239,9 @@ end
 RegisterAuraEvent(SPELL_HALLOW_END_CANDY_PIRATE, 2, hallowEndCandyPirateApply)
 
 local function hallowEndCandyPirateRemove(event, aura, target)
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
     if target:GetNativeGender() == GENDER_FEMALE then
         target:RemoveAura(SPELL_HALLOWS_END_CANDY_FEMALE_DEFIAS_PIRATE)
     else
@@ -297,7 +299,7 @@ local function dropFatigueStacks(target, amount)
 end
 
 local function brewfestRamTick(event, aura, target)
-    if target:HasAura(SPELL_EXHAUSTED_RAM) then
+    if target:HasAura(SPELL_BREWFEST_EXHAUSTED_RAM) then
         return
     end
     local id = aura:GetAuraId()
@@ -346,7 +348,7 @@ local function brewfestRamFatigueChangeAmount(event, aura, target)
         target:RemoveAura(SPELL_RAM_CANTER)
         target:RemoveAura(SPELL_RAM_GALLOP)
         target:RemoveAura(SPELL_BREWFEST_GIDDYUP)
-        target:CastSpell(target, SPELL_EXHAUSTED_RAM, true)
+        target:CastSpell(target, SPELL_BREWFEST_EXHAUSTED_RAM, true)
     end
 end
 
