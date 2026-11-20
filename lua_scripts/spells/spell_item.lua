@@ -1218,3 +1218,338 @@ local function vanquishedClutchesHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(EV4_ITEM.VANQUISHED_CLUTCHES, 4, vanquishedClutchesHit)
+
+-- PORTED (RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_brittle_armor::HandleScript (:419-422): hit unit RemoveAuraFromStack(24575).
+--   spell_item_goblin_weather_machine::HandleScript (:699-705): RAND 46740/46739/46738/46736,
+--   hit unit casts on itself (C++ target->CastSpell(target), not the caster).
+--   spell_item_gnomish_death_ray::HandleDummy (:1049-1059): 15% self 13493, else hit unit 13279.
+--   spell_item_mercurial_shield::HandleScript (:1314-1317): hit unit RemoveAuraFromStack(26464).
+--   spell_item_net_o_matic::HandleDummy (:1436-1449): roll <2 -> 16566, <4 -> 13119, else 13099.
+--   spell_item_mind_control_cap::HandleDummy (:4031-4042): item-gated; 95%: 32% dullard 67809
+--   else mind-control 13181 (with item); 5% backfire: target casts 13181 on caster.
+--   spell_item_eggnog::HandleScript (:4280-4285, EFFECT_2 INEBRIATE): 40% then 50%: 21936/21980
+--   on hit unit, with cast item.
+--   spell_item_mirrens_drinking_hat::HandleScriptEffect (:3985-4002): urand 1-6: 1-3 -> 29827,
+--   4-5 -> 29828, 6 -> 29829, non-triggered.
+--   spell_item_six_demon_bag::HandleDummy (:2141-2171): weighted fireball 15662 / frostbolt 11538 /
+--   chain lightning 21179 / polymorph 14621 (30% self) / enveloping winds 25189 / felhunter
+--   14642 on caster, with cast item.
+--   spell_item_nigh_invulnerability::HandleDummy (:2806-2815): item-gated; 86% 30456 else 30457,
+--   with cast item.
+--   spell_item_poultryizer::HandleDummy (:2839-2843): item-gated; 80% 30501 else 30504 on hit
+--   unit, with cast item.
+--   spell_item_complete_raptor_capture::HandleDummy (:2954-2961): despawn hit creature, self-cast 42337.
+--   spell_item_impale_leviroth::HandleDummy (:2988-2997): entry-26452 creature at >=95% health
+--   self-casts 49882 + ResetPlayerDamageReq().
+--   spell_item_pygmy_oil::HandleDummy (:3255-3271): 53806 present -> refresh duration
+--   (SetDuration(GetMaxDuration()) twin); else 53805 <5 stacks or 50% -> cast 53805,
+--   else remove 53805 + cast 53806.
+--   Bindings 24590/46203/13280/26465/13120/13180/21149/29830/14537/30458/30507/44875/47170/53808
+--   (AC spell_script_names). DORMANT until Spell.dbc ships the binding rows.
+local EV5_ITEM = {
+    BRITTLE_ARMOR = 24590,
+    BRITTLE_ARMOR_AURA = 24575,
+    GOBLIN_WEATHER_MACHINE = 46203,
+    WEATHER = { 46740, 46739, 46738, 46736 },
+    GNOMISH_DEATH_RAY = 13280,
+    GNOMISH_DEATH_RAY_SELF = 13493,
+    GNOMISH_DEATH_RAY_TARGET = 13279,
+    MERCURIAL_SHIELD = 26465,
+    MERCURIAL_SHIELD_AURA = 26464,
+    NET_O_MATIC = 13120,
+    NET_O_MATIC_TRIGGERED1 = 16566,
+    NET_O_MATIC_TRIGGERED2 = 13119,
+    NET_O_MATIC_TRIGGERED3 = 13099,
+    MIND_CONTROL_CAP = 13180,
+    GNOMISH_MIND_CONTROL_CAP = 13181,
+    DULLARD = 67809,
+    EGGNOG = 21149,
+    EGG_NOG_REINDEER = 21936,
+    EGG_NOG_SNOWMAN = 21980,
+    MIRRENS_DRINKING_HAT = 29830,
+    LOCH_MODAN_LAGER = 29827,
+    STOUTHAMMER_LITE = 29828,
+    AERIE_PEAK_PALE_ALE = 29829,
+    SIX_DEMON_BAG = 14537,
+    FIREBALL = 15662,
+    FROSTBOLT = 11538,
+    CHAIN_LIGHTNING = 21179,
+    POLYMORPH = 14621,
+    ENVELOPING_WINDS = 25189,
+    SUMMON_FELHOUND_MINION = 14642,
+    NIGH_INVULNERABILITY = 30458,
+    NIGH_INVULNERABILITY_BUFF = 30456,
+    COMPLETE_VULNERABILITY = 30457,
+    POULTRYIZER = 30507,
+    POULTRYIZER_SUCCESS = 30501,
+    POULTRYIZER_BACKFIRE = 30504,
+    COMPLETE_RAPTOR_CAPTURE = 44875,
+    RAPTOR_CAPTURE_CREDIT = 42337,
+    IMPALE_LEVIROTH = 47170,
+    LEVIROTH = 26452,
+    LEVIROTH_SELF_IMPALE = 49882,
+    PYGMY_OIL = 53808,
+    PYGMY_OIL_PYGMY_AURA = 53806,
+    PYGMY_OIL_SMALLER_AURA = 53805,
+}
+
+local function brittleArmorHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAuraFromStack(EV5_ITEM.BRITTLE_ARMOR_AURA)
+end
+
+RegisterSpellEvent(EV5_ITEM.BRITTLE_ARMOR, 5, brittleArmorHit)
+
+local function goblinWeatherMachineHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, EV5_ITEM.WEATHER[math.random(1, 4)], true)
+end
+
+RegisterSpellEvent(EV5_ITEM.GOBLIN_WEATHER_MACHINE, 5, goblinWeatherMachineHit)
+
+local function gnomishDeathRayHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(0, 99) < 15 then
+        caster:CastSpell(caster, EV5_ITEM.GNOMISH_DEATH_RAY_SELF, true)
+    else
+        caster:CastSpell(hitTarget, EV5_ITEM.GNOMISH_DEATH_RAY_TARGET, true)
+    end
+end
+
+RegisterSpellEvent(EV5_ITEM.GNOMISH_DEATH_RAY, 5, gnomishDeathRayHit)
+
+local function mercurialShieldHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAuraFromStack(EV5_ITEM.MERCURIAL_SHIELD_AURA)
+end
+
+RegisterSpellEvent(EV5_ITEM.MERCURIAL_SHIELD, 5, mercurialShieldHit)
+
+local function netOMaticHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local roll = math.random(0, 99)
+    local spellId = EV5_ITEM.NET_O_MATIC_TRIGGERED3
+    if roll < 2 then
+        spellId = EV5_ITEM.NET_O_MATIC_TRIGGERED1
+    elseif roll < 4 then
+        spellId = EV5_ITEM.NET_O_MATIC_TRIGGERED2
+    end
+    caster:CastSpell(hitTarget, spellId, true)
+end
+
+RegisterSpellEvent(EV5_ITEM.NET_O_MATIC, 5, netOMaticHit)
+
+local function mindControlCapHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local item = spell:GetCastItem()
+    if item == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(1, 100) <= 95 then
+        local spellId = EV5_ITEM.GNOMISH_MIND_CONTROL_CAP
+        if math.random(1, 100) <= 32 then
+            spellId = EV5_ITEM.DULLARD
+        end
+        caster:CastCustomSpell(hitTarget, spellId, false, nil, nil, nil, item)
+    else
+        hitTarget:CastSpell(caster, EV5_ITEM.GNOMISH_MIND_CONTROL_CAP, true)
+    end
+end
+
+RegisterSpellEvent(EV5_ITEM.MIND_CONTROL_CAP, 5, mindControlCapHit)
+
+local function eggnogHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 2 or hitTarget == nil then
+        return
+    end
+    if math.random(1, 100) <= 40 then
+        local caster = spell:GetCaster()
+        if caster == nil then
+            return
+        end
+        local spellId = EV5_ITEM.EGG_NOG_SNOWMAN
+        if math.random(1, 100) <= 50 then
+            spellId = EV5_ITEM.EGG_NOG_REINDEER
+        end
+        caster:CastCustomSpell(hitTarget, spellId, false, nil, nil, nil, spell:GetCastItem())
+    end
+end
+
+RegisterSpellEvent(EV5_ITEM.EGGNOG, 5, eggnogHit)
+
+local function mirrensDrinkingHatHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local roll = math.random(1, 6)
+    local spellId = EV5_ITEM.AERIE_PEAK_PALE_ALE
+    if roll <= 3 then
+        spellId = EV5_ITEM.LOCH_MODAN_LAGER
+    elseif roll <= 5 then
+        spellId = EV5_ITEM.STOUTHAMMER_LITE
+    end
+    caster:CastSpell(caster, spellId, false)
+end
+
+RegisterSpellEvent(EV5_ITEM.MIRRENS_DRINKING_HAT, 5, mirrensDrinkingHatHit)
+
+local function sixDemonBagHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local item = spell:GetCastItem()
+    local target = hitTarget
+    local spellId
+    local rand = math.random(0, 99)
+    if rand < 25 then
+        spellId = EV5_ITEM.FIREBALL
+    elseif rand < 50 then
+        spellId = EV5_ITEM.FROSTBOLT
+    elseif rand < 70 then
+        spellId = EV5_ITEM.CHAIN_LIGHTNING
+    elseif rand < 80 then
+        spellId = EV5_ITEM.POLYMORPH
+        if math.random(0, 100) <= 30 then
+            target = caster
+        end
+    elseif rand < 95 then
+        spellId = EV5_ITEM.ENVELOPING_WINDS
+    else
+        spellId = EV5_ITEM.SUMMON_FELHOUND_MINION
+        target = caster
+    end
+    caster:CastCustomSpell(target, spellId, false, nil, nil, nil, item)
+end
+
+RegisterSpellEvent(EV5_ITEM.SIX_DEMON_BAG, 5, sixDemonBagHit)
+
+local function nighInvulnerabilityHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local item = spell:GetCastItem()
+    if item == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(1, 100) <= 86 then
+        caster:CastCustomSpell(caster, EV5_ITEM.NIGH_INVULNERABILITY_BUFF, false, nil, nil, nil, item)
+    else
+        caster:CastCustomSpell(caster, EV5_ITEM.COMPLETE_VULNERABILITY, false, nil, nil, nil, item)
+    end
+end
+
+RegisterSpellEvent(EV5_ITEM.NIGH_INVULNERABILITY, 5, nighInvulnerabilityHit)
+
+local function poultryizerHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local item = spell:GetCastItem()
+    if item == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local spellId = EV5_ITEM.POULTRYIZER_BACKFIRE
+    if math.random(1, 100) <= 80 then
+        spellId = EV5_ITEM.POULTRYIZER_SUCCESS
+    end
+    caster:CastCustomSpell(hitTarget, spellId, false, nil, nil, nil, item)
+end
+
+RegisterSpellEvent(EV5_ITEM.POULTRYIZER, 5, poultryizerHit)
+
+local function completeRaptorCaptureHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:DespawnOrUnsummon()
+    caster:CastSpell(caster, EV5_ITEM.RAPTOR_CAPTURE_CREDIT, true)
+end
+
+RegisterSpellEvent(EV5_ITEM.COMPLETE_RAPTOR_CAPTURE, 5, completeRaptorCaptureHit)
+
+local function impaleLevirothHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    if hitTarget:GetEntry() == EV5_ITEM.LEVIROTH and not hitTarget:HealthBelowPct(95) then
+        hitTarget:CastSpell(hitTarget, EV5_ITEM.LEVIROTH_SELF_IMPALE, true)
+        hitTarget:ResetPlayerDamageReq()
+    end
+end
+
+RegisterSpellEvent(EV5_ITEM.IMPALE_LEVIROTH, 5, impaleLevirothHit)
+
+local function pygmyOilHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local aura = caster:GetAura(EV5_ITEM.PYGMY_OIL_PYGMY_AURA)
+    if aura ~= nil then
+        aura:SetDuration(aura:GetMaxDuration())
+    else
+        aura = caster:GetAura(EV5_ITEM.PYGMY_OIL_SMALLER_AURA)
+        if aura == nil or aura:GetStackAmount() < 5 or math.random(1, 100) > 50 then
+            caster:CastSpell(caster, EV5_ITEM.PYGMY_OIL_SMALLER_AURA, true)
+        else
+            aura:Remove()
+            caster:CastSpell(caster, EV5_ITEM.PYGMY_OIL_PYGMY_AURA, true)
+        end
+    end
+end
+
+RegisterSpellEvent(EV5_ITEM.PYGMY_OIL, 5, pygmyOilHit)
