@@ -2850,7 +2850,11 @@ func (s *Server) serverCreatureSpellImmuneVerdict(ctx context.Context, m *creatu
 		return false
 	}
 	if ts := s.findSessionByGUID(targetGUID); ts != nil {
-		if ts.isImmuneToSpell(spell, nil) {
+		// The caster is the live creature motion, so the friendly
+		// verdict rides the creature-caster helper (Unit.cpp:7909):
+		// a positive spell on a friendly target skips the school arm
+		// while the ID/dispel/mechanic/all-effects arms still block.
+		if ts.isImmuneToSpellCreatureCaster(spell, s.creatureFriendlyToTarget(m, targetGUID)) {
 			return true
 		}
 		return spellHasOnlyDamageEffects(spell) && ts.isImmuneToDamageSpell(spell, spell.SchoolMask)
@@ -3340,6 +3344,7 @@ func (s *Server) serverCreatureFullyEffectImmuneVerdict(ctx context.Context, m *
 	if s == nil || m == nil || targetGUID == 0 {
 		return false
 	}
+	friendly := s.creatureFriendlyToTarget(m, targetGUID)
 	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 		anyEffect := false
 		for i := range spell.Effects {
@@ -3347,7 +3352,7 @@ func (s *Server) serverCreatureFullyEffectImmuneVerdict(ctx context.Context, m *
 				continue
 			}
 			anyEffect = true
-			if !ts.isImmunedToSpellEffect(spell, i, nil) {
+			if !ts.isImmunedToSpellEffectCreatureCaster(spell, i, friendly) {
 				return false
 			}
 		}
@@ -3359,7 +3364,6 @@ func (s *Server) serverCreatureFullyEffectImmuneVerdict(ctx context.Context, m *
 	}
 	key := creatureAuraKeyForMotion(tm)
 	stats := s.loadCreatureStats(ctx, tm.Entry)
-	friendly := s.creatureFriendlyToTarget(m, targetGUID)
 	anyEffect := false
 	for i := range spell.Effects {
 		if spell.Effects[i].Effect == 0 {

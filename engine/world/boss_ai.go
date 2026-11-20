@@ -10184,16 +10184,16 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		// registers an immune target — same gate as the 500ms pass
 		// (updateCreatureDynobjTargetMap); the cast-time fill checks it
 		// here because applyAuraFromCaster runs neither the whole-spell
-		// nor the per-effect gate. The whole-spell gate is skipped for
-		// a positive spell on a friendly target (the nil-caster session
-		// check cannot see the friendly exemption C++ applies to the
-		// school-immunity arm, Unit.cpp:7909).
-		if !spellIsPositive(spell) || !s.creatureFriendlyToTarget(m, vs.playerGUID) {
-			if vs.isImmuneToSpell(spell, nil) {
-				continue
-			}
+		// nor the per-effect gate. The friendly verdict rides the
+		// creature-caster helpers, so the school-immunity exemption
+		// (Unit.cpp:7909) applies to a positive spell on a friendly
+		// target while the ID/dispel/mechanic/all-effects arms still
+		// block it, as in C++.
+		targetFriendly := s.creatureFriendlyToTarget(m, vs.playerGUID)
+		if vs.isImmuneToSpellCreatureCaster(spell, targetFriendly) {
+			continue
 		}
-		if auraEffectIndex >= 0 && vs.isImmunedToSpellEffect(spell, auraEffectIndex, nil) {
+		if auraEffectIndex >= 0 && vs.isImmunedToSpellEffectCreatureCaster(spell, auraEffectIndex, targetFriendly) {
 			continue
 		}
 		sharedDelayMs := uint32(object.NextAuraTick.Sub(now) / time.Millisecond)

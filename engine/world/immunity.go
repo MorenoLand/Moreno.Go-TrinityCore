@@ -359,7 +359,19 @@ func (s *session) playerSpellImmuneHas(op, immType uint32) bool {
 // (SpellAuras.cpp:1341), stored in spellImmuneRows and cleared at remove
 // (:1371-1372); the creature twin writes ScriptSpellImmune rows.
 func (s *session) isImmuneToSpell(spell wotlk.Spell, caster *session) bool {
-	return s.isImmuneToSpellFiltered(spell, caster, true)
+	return s.isImmuneToSpellFiltered(spell, caster, true, nil)
+}
+
+// isImmuneToSpellCreatureCaster mirrors Unit::IsImmunedToSpell for a
+// creature caster, which has no player session: the friendly verdict
+// comes from the caller (creatureFriendlyToTarget), so the school-fold
+// exemption (Unit.cpp:7909) keys on the live caster's friendliness
+// instead of a nil session forcing the arm to apply. Only the school
+// fold reads the override — the ID/dispel/mechanic/all-effects arms
+// never depended on the caster — so a positive spell on a friendly
+// target is now gated on those arms alone, as in C++.
+func (s *session) isImmuneToSpellCreatureCaster(spell wotlk.Spell, friendly bool) bool {
+	return s.isImmuneToSpellFiltered(spell, nil, true, &friendly)
 }
 
 // isImmuneToSpellNoHarmfulGate mirrors Unit::IsImmunedToSpell for the
@@ -369,7 +381,7 @@ func (s *session) isImmuneToSpell(spell wotlk.Spell, caster *session) bool {
 // return trip lands nothing — which the hit-path twin's harmful bail would
 // wrongly soften to NONE.
 func (s *session) isImmuneToSpellNoHarmfulGate(spell wotlk.Spell, caster *session) bool {
-	return s.isImmuneToSpellFiltered(spell, caster, false)
+	return s.isImmuneToSpellFiltered(spell, caster, false, nil)
 }
 
 // removeOwnBanishOnImmuneMiss is the spell_warl_banish BeforeHit arm
@@ -430,7 +442,7 @@ func (s *session) spellPiercesImmunityGrant(spell wotlk.Spell, grantID uint32) b
 	return canSpellPierceImmuneAura(spell, grant)
 }
 
-func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, requireHarmful bool) bool {
+func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, requireHarmful bool, friendlyOverride *bool) bool {
 	if s == nil || s.player == nil {
 		return false
 	}
@@ -586,7 +598,11 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 			if misc&schoolMask == 0 {
 				continue
 			}
-			if (found && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || caster == nil || !s.isFriendlyToPlayer(caster) {
+			casterFriendly := caster != nil && s.isFriendlyToPlayer(caster)
+			if friendlyOverride != nil {
+				casterFriendly = *friendlyOverride
+			}
+			if (found && !spellIsPositive(immuneSpell)) || !spellIsPositive(spell) || !casterFriendly {
 				if !found || !canSpellPierceImmuneAura(spell, immuneSpell) {
 					schoolImmunityMask |= misc
 				}
@@ -611,7 +627,7 @@ func (s *session) isImmuneToSpellFiltered(spell wotlk.Spell, caster *session, re
 			continue
 		}
 		anyEffect = true
-		if !immunedToSpellEffectEval(spell, i, s, caster, snap) {
+		if !immunedToSpellEffectEval(spell, i, s, caster, snap, friendlyOverride) {
 			immuneToAllEffects = false
 			break
 		}
@@ -1245,7 +1261,21 @@ func (s *session) isImmunedToSpellEffect(spell wotlk.Spell, effIndex int, caster
 	s.castMu.Lock()
 	snap := s.immuneAuraSnapshotLocked()
 	s.castMu.Unlock()
-	return immunedToSpellEffectEval(spell, effIndex, s, caster, snap)
+	return immunedToSpellEffectEval(spell, effIndex, s, caster, snap, nil)
+}
+
+// isImmunedToSpellEffectCreatureCaster is the creature-caster twin of
+// isImmunedToSpellEffect: the 267 arm (Unit.cpp:7987) keys on the live
+// caster's friendliness instead of a nil session, so a positive effect
+// on a hostile target reports immune where the nil-caster call did not.
+func (s *session) isImmunedToSpellEffectCreatureCaster(spell wotlk.Spell, effIndex int, friendly bool) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	s.castMu.Lock()
+	snap := s.immuneAuraSnapshotLocked()
+	s.castMu.Unlock()
+	return immunedToSpellEffectEval(spell, effIndex, s, nil, snap, &friendly)
 }
 
 // snapshotMechanicMask is the per-effect IMMUNITY_MECHANIC list one live
@@ -1340,7 +1370,7 @@ func (s *session) immuneAuraSnapshotLocked() []immuneAura {
 // immunedToSpellEffectEval is the lock-free evaluation half of
 // isImmunedToSpellEffect: target is the immune target, caster the spell
 // caster, auras a snapshot from immuneAuraSnapshotLocked.
-func immunedToSpellEffectEval(spell wotlk.Spell, effIndex int, target, caster *session, auras []immuneAura) bool {
+func immunedToSpellEffectEval(spell wotlk.Spell, effIndex int, target, caster *session, auras []immuneAura, friendlyOverride *bool) bool {
 	if target == nil || target.player == nil {
 		return false
 	}
@@ -1424,7 +1454,11 @@ func immunedToSpellEffectEval(spell wotlk.Spell, effIndex int, target, caster *s
 					continue
 				}
 				// (caster && !IsFriendlyTo(caster)) || !IsPositiveEffect(index) (Unit.cpp:7987)
-				if (caster != nil && !target.isFriendlyToPlayer(caster)) || !spell.IsPositiveEffect(effIndex) {
+				casterHostile := caster != nil && !target.isFriendlyToPlayer(caster)
+				if friendlyOverride != nil {
+					casterHostile = !*friendlyOverride
+				}
+				if casterHostile || !spell.IsPositiveEffect(effIndex) {
 					return true
 				}
 			}

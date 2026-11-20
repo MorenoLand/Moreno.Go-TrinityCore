@@ -466,18 +466,17 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 		// creature-caster pass checks here; creature targets get the
 		// whole-spell half here too (the per-effect half rides
 		// serverApplyAuraToCreatureTarget). A skipped target is not
-		// registered, so the next pass re-checks it. The whole-spell
-		// gate is skipped for a positive spell on a friendly target:
-		// the nil-caster session check cannot see the friendly
-		// exemption C++ applies to the school-immunity arm
-		// (Unit.cpp:7909).
+		// registered, so the next pass re-checks it. The friendly
+		// verdict rides the creature-caster helpers, so the
+		// school-immunity exemption (Unit.cpp:7909) applies to a
+		// positive spell on a friendly target while the
+		// ID/dispel/mechanic/all-effects arms still block it, as in C++.
 		if vs, ok := playerTargets[guid]; ok && vs != nil {
-			if !spellIsPositive(spell) || !s.creatureFriendlyToTarget(caster, guid) {
-				if vs.isImmuneToSpell(spell, nil) {
-					continue
-				}
+			targetFriendly := s.creatureFriendlyToTarget(caster, guid)
+			if vs.isImmuneToSpellCreatureCaster(spell, targetFriendly) {
+				continue
 			}
-			if object.AuraEffectIndex >= 0 && vs.isImmunedToSpellEffect(spell, object.AuraEffectIndex, nil) {
+			if object.AuraEffectIndex >= 0 && vs.isImmunedToSpellEffectCreatureCaster(spell, object.AuraEffectIndex, targetFriendly) {
 				continue
 			}
 			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs, true)
