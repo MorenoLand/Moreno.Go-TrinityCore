@@ -703,3 +703,115 @@ local function netherProtectionProc(event, aura, target, actor, procTarget, dama
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_NETHER_PROTECTION, 6, netherProtectionProc)
+
+local SPELL_WARLOCK_GLYPH_OF_LIFE_TAP = 63320 -- spell_warlock.cpp:699 (class spell_warl_glyph_of_life_tap)
+local SPELL_WARLOCK_GLYPH_OF_LIFE_TAP_TRIGGERED = 63321 -- spell_warlock.cpp:74
+
+-- C++ spell_warl_glyph_of_life_tap_AuraScript::HandleProc
+-- (spell_warlock.cpp:713-720): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction; the proc actor casts the triggered
+-- Life Tap glyph spell 63321 on itself, triggered
+-- (CastSpellExtraArgs(aurEff) = TRIGGERED_FULL_MASK,
+-- SpellDefines.h:166). DORMANT until Spell.dbc ships the 63320
+-- proc entry.
+local function glyphOfLifeTapProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil then
+        return true
+    end
+    actor:CastSpell(actor, SPELL_WARLOCK_GLYPH_OF_LIFE_TAP_TRIGGERED, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_GLYPH_OF_LIFE_TAP, 6, glyphOfLifeTapProc)
+
+local SPELL_WARLOCK_GLYPH_OF_SHADOWFLAME = 63310 -- spell_warlock.cpp:733 (class spell_warl_glyph_of_shadowflame)
+local SPELL_WARLOCK_GLYPH_OF_SHADOWFLAME_TRIGGERED = 63311 -- spell_warlock.cpp:53
+
+-- C++ spell_warl_glyph_of_shadowflame_AuraScript::HandleProc
+-- (spell_warlock.cpp:747-753): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction; the holder casts the triggered
+-- Shadowflame glyph spell 63311 on the proc target, triggered
+-- (CastSpellExtraArgs(aurEff) = TRIGGERED_FULL_MASK).
+-- DORMANT until Spell.dbc ships the 63310 proc entry.
+local function glyphOfShadowflameProc(event, aura, target, actor, procTarget, damage)
+    if target == nil or procTarget == nil then
+        return true
+    end
+    target:CastSpell(procTarget, SPELL_WARLOCK_GLYPH_OF_SHADOWFLAME_TRIGGERED, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_GLYPH_OF_SHADOWFLAME, 6, glyphOfShadowflameProc)
+
+local SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC_RANKS = { 32863, 36123, 38252, 39367, 44141, 70388 } -- TDB spell_script_names positive bindings for spell_warl_seed_of_corruption_generic
+local SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC = 32865 -- spell_warlock.cpp:76
+
+-- C++ spell_warl_seed_of_corruption_generic_AuraScript::HandleProc
+-- (spell_warlock.cpp:1261-1284): OnEffectProc, EFFECT_1 DUMMY.
+-- The damage is eaten from the buffer (EFFECT_1 amount); a
+-- surviving buffer only sets the new amount and returns, with NO
+-- HealthBelowPctDamaged gate — unlike the 27243 dummy arm, this
+-- one detonates as soon as the buffer is eaten. On detonation the
+-- aura is removed (before the caster-nil return, the dummy-port
+-- order) and the caster casts the generic damage spell 32865 on
+-- the action target (the seeded holder, GetActionTarget(); the
+-- ev6 target on the taken side, Unit.cpp:10412-10417), triggered.
+-- DORMANT until Spell.dbc ships the proc entries for the six
+-- bound aura ids.
+local function seedOfCorruptionGenericProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 then
+        return true
+    end
+    if target == nil then
+        return true
+    end
+    local amount = aura:GetAmount(1) - damage
+    if amount > 0 then
+        aura:SetAmount(amount, 1)
+        return true
+    end
+    local caster = aura:GetCaster()
+    aura:Remove()
+    if caster == nil then
+        return true
+    end
+    caster:CastSpell(target, SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC, true)
+    return true
+end
+
+for _, spellId in ipairs(SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC_RANKS) do
+    RegisterAuraEvent(spellId, 6, seedOfCorruptionGenericProc)
+end
+
+local SPELL_WARLOCK_SIPHON_LIFE = 63108 -- spell_warlock.cpp:1334 (class spell_warl_siphon_life)
+local SPELL_WARLOCK_SIPHON_LIFE_HEAL = 63106 -- spell_warlock.cpp:72
+local SPELL_WARLOCK_GLYPH_OF_SIPHON_LIFE = 56216 -- spell_warlock.cpp:54
+
+-- C++ spell_warl_siphon_life_AuraScript::CheckProc + OnProc
+-- (spell_warlock.cpp:1350-1358, :1361-1375): OnEffectProc,
+-- EFFECT_0 DUMMY. The CheckProc gate (damage > 0, holder alive)
+-- is the early return returning true (PreventDefaultAction,
+-- the drain-soul precedent); the heal is CalculatePct(damage,
+-- EFFECT_0 amount) with the Glyph of Siphon Life leg (AddPct by
+-- the 56216 aura's EFFECT_0 amount, unit:GetAuraEffect twin on
+-- both surfaces), and the holder casts the heal 63106 on itself,
+-- triggered, BP0 = the amount. IsDead is the generic object.go
+-- fallback twin of IsAlive. DORMANT until Spell.dbc ships the
+-- 63108 proc entry.
+local function siphonLifeProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 or target == nil then
+        return true
+    end
+    if target:IsDead() then
+        return true
+    end
+    local amount = math.floor(damage * aura:GetAmount(0) / 100)
+    local glyph = target:GetAuraEffect(SPELL_WARLOCK_GLYPH_OF_SIPHON_LIFE, 0)
+    if glyph ~= nil then
+        amount = amount + math.floor(amount * glyph / 100)
+    end
+    target:CastCustomSpell(target, SPELL_WARLOCK_SIPHON_LIFE_HEAL, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_SIPHON_LIFE, 6, siphonLifeProc)
