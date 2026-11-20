@@ -75,11 +75,11 @@ RegisterAuraEvent(SPELL_NITRO_BOOSTS_BACKFIRE, 3, nitroBackfireRemove)
 --   unmodeled (harmless in practice — the aura is self-only).
 --   spell_item_shadowmourne::OnRemove (spell_item.cpp:2055-2058):
 --   EFFECT_0 DUMMY, REAL. On remove the Soul Fragment aura 71905
---   drops. The proc leg stays out (no proc hook).
+--   drops. The proc leg is ported below (ev6 strip).
 --   spell_item_anger_capacitor::OnRemove (spell_item.cpp:260-263):
 --   EFFECT_0 DUMMY, REAL. On remove the Mote of Anger aura 71432
 --   drops. Registered for both ranks: 71406 (8-stack) and 71545
---   (heroic, 7-stack). The proc leg stays out (no proc hook).
+--   (heroic, 7-stack). The proc leg is ported below (ev6 strip).
 --   spell_item_trinket_stack::OnRemove (spell_item.cpp:3750-3752):
 --   EFFECT_0 PROC_TRIGGER_SPELL, REAL. On remove the stack aura
 --   drops (Lightning Capacitor 37657 -> 37658, Thunder Capacitor
@@ -112,7 +112,6 @@ local SPELL_DEMENTIA_POS = 41406 -- spell_item.cpp:308
 local SPELL_DEMENTIA_NEG = 41409 -- spell_item.cpp:309
 local SPELL_POWER_CIRCLE = 45043 -- spell_item.cpp:1618 (class spell_item_power_circle)
 local SPELL_LIMITLESS_POWER = 45044 -- spell_item.cpp:1615
-local SPELL_SHADOWMOURNE = 71903 -- spell_item.cpp:2007 (class spell_item_shadowmourne)
 local SPELL_SHADOWMOURNE_SOUL_FRAGMENT = 71905 -- spell_item.cpp:2059 (class spell_item_shadowmourne_soul_fragment)
 local SPELL_SHADOWMOURNE_VISUAL_LOW = 72521 -- spell_item.cpp:2002
 local SPELL_SHADOWMOURNE_VISUAL_HIGH = 72523 -- spell_item.cpp:2003
@@ -197,12 +196,6 @@ local function shadowmourneSoulFragmentRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SHADOWMOURNE_SOUL_FRAGMENT, 3, shadowmourneSoulFragmentRemove)
-
-local function shadowmourneRemove(event, aura, target)
-    target:RemoveAura(SPELL_SHADOWMOURNE_SOUL_FRAGMENT)
-end
-
-RegisterAuraEvent(SPELL_SHADOWMOURNE, 3, shadowmourneRemove)
 
 local function angerCapacitorRemove(event, aura, target)
     target:RemoveAura(SPELL_MOTE_OF_ANGER)
@@ -1908,6 +1901,8 @@ local EV6_ITEM = {
     VALANYR = 64415,
     CRYSTAL_SPIRE = 40971,
     DEADLY_PRECISION = 71564,
+    PET_HEALING = 37381,
+    PET_HEALING_LINK = 37382,
 }
 
 RegisterAuraEvent(EV6_ITEM.AEGIS_OF_PRESERVATION, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
@@ -2095,7 +2090,7 @@ end)
 --   the 71169 DBC proc effect is unverified, world.db spell_dbc empty).
 --   Gate: actor is a player and the action target is a non-critter
 --   creature that is Sindragosa (36853) or not a summon; actor casts
---   71203 on the aura holder. IsCritter bridged this tick
+--   71203 on the aura caster (GetCaster()). IsCritter bridged this tick
 --   (lua_objects.go / lua_creature_events.go).
 --   spell_item_aura_of_madness::HandleProc (:375-395): EFFECT_0 DUMMY.
 --   One uniform pick from the class table on the actor; the 10% Say
@@ -2113,11 +2108,15 @@ end)
 --   MOD_RATING. Holder drops one stack of 71564 (the player bridge
 --   takes spellId only; the C++ caster-GUID arg is unmodeled and a
 --   float64 GUID round-trips lossy).
+--   spell_item_pet_healing::HandleProc (:1577-1587): EFFECT_0 DUMMY.
+--   Zero-damage gate; BP0 = pct(damage, aura amount); the actor casts
+--   37382 on the player's pet via CastCustomSpell (player:GetPet,
+--   lua_player.go:1865; nil pet skips). Hunter/Warlock T5 2P bonus.
+--   The C++ nullptr-target cast relies on 37382's implicit pet target;
+--   the explicit pet target is the Lua modeling of it.
 --   NOT PORTED: deathbringers will 71519/71562 is Go-covered
 --   (procs.go:4311 leg + deathbringersWillForms; a Lua twin would
---   double-fire). Pet healing 37381 is blocked: 37382 targets the
---   pet and Lua has no pet-object bridge (only GetPetGUID, whose
---   float64 round-trip is lossy). Deadly precision dummy 71563 is an
+--   double-fire). Deadly precision dummy 71563 is an
 --   ev4 SpellScript, out of this ev6 strip.
 --   Bindings per C++ comments; world.db spell_script_names, spell_dbc
 --   and broadcast_text are all empty (0 rows), so DBC-side effect
@@ -2321,7 +2320,11 @@ RegisterAuraEvent(EV6_ITEM.SHADOWS_FATE, 6, function(event, aura, target, actor,
     if actionTarget:GetEntry() ~= EV6_ITEM.NPC_SINDRAGOSA and actionTarget:IsSummon() then
         return true
     end
-    actor:CastSpell(target, EV6_ITEM.SOUL_FEAST, true)
+    local feastTarget = aura:GetCaster()
+    if feastTarget == nil then
+        return true
+    end
+    actor:CastSpell(feastTarget, EV6_ITEM.SOUL_FEAST, true)
     return true
 end)
 
@@ -2363,6 +2366,26 @@ RegisterAuraEvent(EV6_ITEM.DEADLY_PRECISION, 6, function(event, aura, target, ac
         return effectIndex == 0
     end
     target:RemoveAuraFromStack(EV6_ITEM.DEADLY_PRECISION)
+    return true
+end)
+
+RegisterAuraEvent(EV6_ITEM.PET_HEALING, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or actor == nil then
+        return effectIndex == 0
+    end
+    local player = actor:ToPlayer()
+    if player == nil then
+        return true
+    end
+    local pet = player:GetPet()
+    if pet == nil then
+        return true
+    end
+    local dealt = procEvent:GetDamage()
+    if dealt == nil or dealt == 0 then
+        return true
+    end
+    actor:CastCustomSpell(pet, EV6_ITEM.PET_HEALING_LINK, true, math.floor(dealt * aura:GetAmount() / 100))
     return true
 end)
 
