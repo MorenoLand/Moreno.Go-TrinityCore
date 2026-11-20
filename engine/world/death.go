@@ -2587,11 +2587,9 @@ func (s *session) getResurrectionSpellId(ctx context.Context) uint32 {
 
 // spellHasCooldown mirrors SpellHistory::HasCooldown (SpellHistory.cpp:473-487)
 // with the default ignoreCategoryCooldown=false: the per-spell entry, then
-// the category arm. The category comes from the DBC spell row
-// (GetCooldownDurations' category out-param); the category-cooldown horizon
-// is the max CategoryEnd across entries sharing that category — the Go
-// per-spell entries each carry the C++ _categoryCooldowns map entry, so any
-// live one blocks like the map lookup does.
+// the category arm over the single _categoryCooldowns holder
+// (playerCategoryCooldownBlocked: EraseCooldown, SpellHistory.h:140-144,
+// erases the category entry when the holder spell's entry is erased).
 func (s *session) spellHasCooldown(spellID uint32) bool {
 	if s.player == nil {
 		return false
@@ -2611,12 +2609,7 @@ func (s *session) spellHasCooldown(spellID uint32) bool {
 	if category == 0 {
 		return false
 	}
-	for _, cd := range s.player.Cooldowns {
-		if cd.Category == category && cd.CategoryEnd > nowUnix {
-			return true
-		}
-	}
-	return false
+	return s.playerCategoryCooldownBlocked(category, nowUnix)
 }
 
 // inventoryItemCount mirrors Player::GetItemCount (Player.cpp): the total

@@ -2649,19 +2649,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 	}
 	if categoryID := spell.Category; categoryID != 0 {
-		for _, cooldown := range s.player.Cooldowns {
-			// SpellHistory::HasCooldown (SpellHistory.cpp:473-487): the
-			// category arm reads _categoryCooldowns alone, and
-			// SpellHistory::Update (SpellHistory.cpp:141-155) erases the
-			// _categoryCooldowns entry on CategoryEnd and the
-			// _spellCooldowns entry on CooldownEnd independently — a
-			// category cooldown can outlive the spell's own cooldown, so
-			// the spell arm's End must not gate this check.
-			if cooldown.Category == categoryID && cooldown.CategoryEnd > nowUnix {
-				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
-				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
-				return true
-			}
+		if s.playerCategoryCooldownBlocked(categoryID, nowUnix) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
+			return true
 		}
 	}
 	// CheckCast cheat-spell gate (Spell::CheckCast, Spell.cpp:5223-5227):
@@ -48012,6 +48003,52 @@ func buildCooldownEvent(casterGUID uint64, spellID uint32) []byte {
 	return buf.Bytes()
 }
 
+// playerCategoryCooldownBlocked mirrors SpellHistory::HasCooldown's category
+// arm (SpellHistory.cpp:473-487) over the single _categoryCooldowns holder:
+// EraseCooldown (SpellHistory.h:140-144) erases _categoryCooldowns[CategoryId]
+// whenever the holder spell's entry is erased, so the category block dies
+// with the holder spell's own cooldown even when CategoryEnd is still future.
+// The holder is the last row AddCooldown'd for the category (SpellHistory.cpp:395-407
+// overwrites the single entry per category; the GetRemainingCooldown twin at
+// interrupt.go:702 already reads the last matching row). Residual: a
+// same-category entry expiring after the holder was set also erases the
+// shared entry in C++ (the spell sweep's EraseCooldown); Go keeps the
+// holder until its own End passes.
+func (s *session) playerCategoryCooldownBlocked(categoryID uint32, nowUnix int64) bool {
+	if s == nil || s.player == nil || categoryID == 0 {
+		return false
+	}
+	for i := len(s.player.Cooldowns) - 1; i >= 0; i-- {
+		cd := s.player.Cooldowns[i]
+		if cd.Category != categoryID {
+			continue
+		}
+		return cd.CategoryEnd > nowUnix && cd.End > nowUnix
+	}
+	return false
+}
+
+// playerCategoryCooldownHolder returns the spell holding the category
+// cooldown — the last row AddCooldown'd for the category, when its block is
+// live — for the SendCooldownEvent category arm (SpellHistory.cpp:364-391),
+// which fires the holder's own event and restarts its real cooldown first.
+func (s *session) playerCategoryCooldownHolder(categoryID uint32, nowUnix int64) (uint32, bool) {
+	if s == nil || s.player == nil || categoryID == 0 {
+		return 0, false
+	}
+	for i := len(s.player.Cooldowns) - 1; i >= 0; i-- {
+		cd := s.player.Cooldowns[i]
+		if cd.Category != categoryID {
+			continue
+		}
+		if cd.CategoryEnd > nowUnix && cd.End > nowUnix {
+			return cd.Spell, true
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
 // infinityCooldownDuration mirrors SpellHistory::InfinityCooldownDelay
 // (SpellHistory.cpp:30): +1 month (30 days) marks an onHold cooldown
 // entry. The login packet's infinity check uses MONTH/2 (15 days,
@@ -48070,16 +48107,12 @@ func (s *session) sendSpellCooldownEvent(spell wotlk.Spell) {
 	}
 	now := time.Now()
 	if spell.Category != 0 {
-		nowUnix := now.Unix()
-		for _, cd := range s.player.Cooldowns {
-			if cd.Category == spell.Category && cd.Spell != spell.ID && cd.CategoryEnd > nowUnix {
-				_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, cd.Spell), true)
-				if s.server != nil && s.server.Data != nil {
-					if holder, found, err := s.server.Data.Spell(cd.Spell); err == nil && found {
-						s.startRealSpellCooldown(holder, int32(holder.RecoveryTime), int32(holder.CategoryRecoveryTime), holder.Category, 0, now)
-					}
+		if holderID, ok := s.playerCategoryCooldownHolder(spell.Category, now.Unix()); ok && holderID != spell.ID {
+			_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, holderID), true)
+			if s.server != nil && s.server.Data != nil {
+				if holder, found, err := s.server.Data.Spell(holderID); err == nil && found {
+					s.startRealSpellCooldown(holder, int32(holder.RecoveryTime), int32(holder.CategoryRecoveryTime), holder.Category, 0, now)
 				}
-				break
 			}
 		}
 	}
@@ -48296,21 +48329,18 @@ func (s *session) startPotionCooldownEntry(spell wotlk.Spell, itemID uint32, coo
 // different spell currently holding the resolved category fires its own
 // SMSG_COOLDOWN_EVENT first and its server-side cooldown restarts
 // (StartCooldown, :380) — mirrors the _categoryCooldowns map: one holder
-// per category, so the first active same-category entry from another
-// spell wins. The cooldown triplet resolves through GetCooldownDurations,
+// per category, so the holder (playerCategoryCooldownHolder, last setter)
+// wins, not the first active same-category row. The cooldown triplet resolves through GetCooldownDurations,
 // so item-template spell-slot values win over the DBC when present.
 func (s *session) sendPotionCooldownEvent(ctx context.Context, spell wotlk.Spell, itemID uint32) {
 	now := time.Now()
 	cooldownMs, categoryCooldownMs, categoryID := s.server.spellCooldownDurationsForItem(ctx, spell, itemID)
 	if categoryID != 0 {
-		for _, cd := range s.player.Cooldowns {
-			if cd.Category == categoryID && cd.Spell != spell.ID && (cd.End > now.Unix() || cd.CategoryEnd > now.Unix()) {
-				_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, cd.Spell), true)
-				if holder, found, err := s.server.Data.Spell(cd.Spell); err == nil && found {
-					hcd, hcat, hcatID := s.server.spellCooldownDurationsForItem(ctx, holder, itemID)
-					s.startPotionCooldownEntry(holder, itemID, hcd, hcat, hcatID)
-				}
-				break
+		if holderID, ok := s.playerCategoryCooldownHolder(categoryID, now.Unix()); ok && holderID != spell.ID {
+			_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, holderID), true)
+			if holder, found, err := s.server.Data.Spell(holderID); err == nil && found {
+				hcd, hcat, hcatID := s.server.spellCooldownDurationsForItem(ctx, holder, itemID)
+				s.startPotionCooldownEntry(holder, itemID, hcd, hcat, hcatID)
 			}
 		}
 	}
@@ -51324,13 +51354,8 @@ func (s *session) handleEffectCastButtons(ctx context.Context, eff wotlk.SpellEf
 			if cd.Spell == spellID && cd.End > nowUnix {
 				return true
 			}
-			// SpellHistory::HasCooldown (SpellHistory.cpp:473-487): the
-			// category arm reads the category cooldowns independently.
-			if category != 0 && cd.Category == category && cd.CategoryEnd > nowUnix {
-				return true
-			}
 		}
-		return false
+		return s.playerCategoryCooldownBlocked(category, nowUnix)
 	}
 	for ; nButtons > 0; nButtons, buttonID = nButtons-1, buttonID+1 {
 		if buttonID < 0 || buttonID >= len(s.player.Actions) {

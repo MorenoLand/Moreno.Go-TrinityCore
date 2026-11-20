@@ -4519,12 +4519,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// m_CastItem path: SpellHistory::IsReady/HasCooldown
 		// (SpellHistory.cpp:190-200/473-487) fails with
 		// SPELL_FAILED_NOT_READY when the spell or its category is
-		// cooling down. The category arm reads the category entry
-		// alone — SpellHistory::Update (SpellHistory.cpp:141-155)
-		// erases category and spell entries independently, so the
-		// spell arm's End must not gate it. Runs after the Eluna
-		// hooks, matching C++ SpellHandler.cpp order (OnItemUse at
-		// SpellHandler.cpp:176 precedes the cast and its CheckCast).
+		// cooling down. The category arm reads the single
+		// _categoryCooldowns holder (playerCategoryCooldownBlocked:
+		// EraseCooldown, SpellHistory.h:140-144, erases the category
+		// entry when the holder spell's entry is erased). Runs after
+		// the Eluna hooks, matching C++ SpellHandler.cpp order (OnItemUse
+		// at SpellHandler.cpp:176 precedes the cast and its CheckCast).
 		nowUnix := time.Now().Unix()
 		for _, cd := range s.player.Cooldowns {
 			if cd.Spell == spellID && cd.End > nowUnix {
@@ -4533,14 +4533,10 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				return true
 			}
 		}
-		if categoryID := spell.Category; categoryID != 0 {
-			for _, cd := range s.player.Cooldowns {
-				if cd.Category == categoryID && cd.CategoryEnd > nowUnix {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
-					s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
-					return true
-				}
-			}
+		if categoryID := spell.Category; categoryID != 0 && s.playerCategoryCooldownBlocked(categoryID, nowUnix) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
+			return true
 		}
 		// Spell::CheckCast potion leg (Spell.cpp:5195-5198): with a
 		// banked m_lastPotionId (set at SendSpellCooldown above), a
