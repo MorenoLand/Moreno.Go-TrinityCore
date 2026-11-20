@@ -953,7 +953,8 @@ RegisterAuraEvent(SPELL_STEAL_ESSENCE_VISUAL_AURA, 3, stealEssenceVisualRemove)
 --   the aura holder on a damage-taken proc) casts Blood Reserve Heal
 --   64569 on itself with BP0 = the aura effect amount (CastCustomSpell
 --   4-arg form, cannon_blast precedent; C++ CastSpellExtraArgs(aurEff)
---   + AddSpellBP0, triggered defaults false), then drops the 64568 aura.
+--   + AddSpellBP0, triggered (TRIGGERED_FULL_MASK, SpellDefines.h:166),
+--   then drops the 64568 aura.
 --   HealthBelowPct rides GetHealthPct (generic object fallback);
 --   strict < 35 matches the C++ strict-below comparison.
 --   DORMANT until Spell.dbc ships the 64568 row.
@@ -968,7 +969,7 @@ local function bloodReserveProc(event, aura, target, actor, procTarget, damage, 
     if actionTarget == nil or actionTarget:GetHealthPct() >= 35 then
         return true
     end
-    actionTarget:CastCustomSpell(actionTarget, SPELL_BLOOD_RESERVE_HEAL, false, aura:GetAmount())
+    actionTarget:CastCustomSpell(actionTarget, SPELL_BLOOD_RESERVE_HEAL, true, aura:GetAmount())
     actionTarget:RemoveAura(SPELL_BLOOD_RESERVE_AURA)
     return true
 end
@@ -1714,4 +1715,197 @@ RegisterAuraEvent(SPELL_GEN_STRIP7.whisperGulch, 1, function(event, aura, target
     end
     target:CastSpell(nil, 29072, true)
     return true
+end)
+
+-- PORTED (this tick): four spell_generic.cpp classes, each
+-- verified name-by-name vs C++ + bridges (per-port comments
+-- below). All 20 registered IDs are TDB-bound in 26091; all
+-- four are DORMANT until Spell.dbc ships the rows. The IDs
+-- live in one table local: the file sits at 194/200
+-- main-chunk locals, so new consts are grouped and handlers
+-- are inline (function-scope locals do not count toward
+-- the 200).
+local SPELL_GEN_STRIP8 = {
+    adaptiveWarding = 28764, -- spell_generic.cpp:79
+    adaptiveWardingTriggers = { [2] = 28765, [3] = 28768, [4] = 28766, [5] = 28769, [6] = 28770 }, -- spell_generic.cpp:72-76
+    arenaDrink = { 430, 431, 432, 1133, 1135, 1137, 10250, 22734, 27089, 34291, 43182, 43183, 46755, 49472, 57073, 61830, 72623 }, -- spell_generic.cpp:263
+    bladeWarding = 64440, -- spell_generic.cpp:616
+    bladeWardingTriggered = 64442, -- spell_generic.cpp:614
+    bonked = 62991, -- spell_generic.cpp:656
+    bonkedDefeat = 62994, -- spell_generic.cpp:659
+}
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_gen_adaptive_warding::CheckProc + HandleProc
+--   (spell_generic.cpp:96-143): 28764, EFFECT_0 DUMMY.
+--   CheckProc gates on the proc event carrying a spell
+--   (GetSpellId() == 0 vetoes, the no-DamageInfo twin;
+--   black_magic precedent) and on the holder carrying any
+--   Mage Armor rank (GetAuraOfRankedSpell(6117), the
+--   GetAuraEffect(SPELL_AURA_MOD_MANA_REGEN_INTERRUPT,
+--   SPELLFAMILY_MAGE, 0x10000000) twin — the TDB rank chain
+--   is 6117/22782/22783/27125/43023/43024). The first school
+--   in the event mask (GetFirstSchoolInMask: lowest set bit;
+--   FIRE = 1<<2 per movement.go:2733) picks the trigger:
+--   fire 28765, nature 28768, frost 28766, shadow 28769,
+--   arcane 28770; NORMAL/HOLY have no trigger and veto. The
+--   holder self-casts the trigger, triggered (C++
+--   CastSpell(target, id, aurEff) rides
+--   CastSpellExtraArgs(aurEff) = TRIGGERED_FULL_MASK,
+--   SpellDefines.h:166; player CastSpell always rides the
+--   triggered funnel). Return true on every path is the
+--   PreventDefaultAction twin. DORMANT until Spell.dbc ships
+--   the 28764 row.
+RegisterAuraEvent(SPELL_GEN_STRIP8.adaptiveWarding, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if target == nil or target:GetTypeId() ~= TYPEID_PLAYER or target:GetAuraOfRankedSpell(6117) == nil then
+        return true
+    end
+    local mask = procEvent:GetSchoolMask()
+    local school = 0
+    for i = 0, 6 do
+        if bit32.band(mask, bit32.lshift(1, i)) ~= 0 then
+            school = i
+            break
+        end
+    end
+    local triggerId = SPELL_GEN_STRIP8.adaptiveWardingTriggers[school]
+    if triggerId == nil then
+        return true
+    end
+    target:CastSpell(target, triggerId, true)
+    return true
+end)
+
+-- PORTED (this tick, RegisterAuraEvent OnApply = 2 +
+--   OnPeriodic = 1):
+--   spell_gen_arena_drink::CalcPeriodic + CalcAmount +
+--   UpdatePeriodic (spell_generic.cpp:263-369): 17 drink
+--   IDs, EFFECT_1 PERIODIC_DUMMY driving the EFFECT_0
+--   MOD_POWER_REGEN amount. CalcAmount twin (ev2): outside
+--   an arena the regen takes the dummy's amount
+--   (SetAmount(GetAmount(1), 0), nonzero-guarded for the
+--   missing-DBC read); inside an arena it is untouched.
+--   A creature caster never reaches the set either — C++
+--   Load() admits player casters only (NPCBot aside,
+--   unmodelled), so the script never runs for one.
+--   CalcPeriodic twin (ev1 gate): Go has no CalcPeriodic,
+--   so the tick handler itself no-ops for creature casters
+--   and for players outside an arena — C++ sets isPeriodic
+--   false there and the aura never ticks. In-arena the ramp
+--   runs on the tick number (first tick reads 1,
+--   lua_aura.go:392): tick 1 -> 0, tick 2 -> amount*5/3,
+--   tick 3 -> amount*4/3, tick 4+ -> amount (C++ integer
+--   math; math.floor here). Deltas: no SetPeriodic bridge,
+--   so ticks 4+ idempotently re-set 100% instead of
+--   stopping the periodic; no IsNPCBot bridge, but creature
+--   casters take the non-arena path, the same C++ outcome;
+--   ev2 does not re-fire on reapply (tournament_pennant
+--   precedent). The ev1 handler returns nothing: no
+--   PreventDefaultAction in C++. DORMANT until Spell.dbc
+--   ships the 17 rows.
+for _, spellId in ipairs(SPELL_GEN_STRIP8.arenaDrink) do
+    RegisterAuraEvent(spellId, 2, function(event, aura, target)
+        local caster = aura:GetCaster()
+        if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER or caster:InArena() then
+            return
+        end
+        local base = aura:GetAmount(1)
+        if base ~= 0 then
+            aura:SetAmount(base, 0)
+        end
+    end)
+    RegisterAuraEvent(spellId, 1, function(event, aura, target)
+        local caster = aura:GetCaster()
+        if caster == nil then
+            return
+        end
+        if caster:GetTypeId() ~= TYPEID_PLAYER or not caster:InArena() then
+            return
+        end
+        local base = aura:GetAmount(1)
+        local tick = aura:GetTickNumber()
+        if tick == 1 then
+            aura:SetAmount(0, 0)
+        elseif tick == 2 then
+            aura:SetAmount(math.floor(base * 5 / 3), 0)
+        elseif tick == 3 then
+            aura:SetAmount(math.floor(base * 4 / 3), 0)
+        else
+            aura:SetAmount(base, 0)
+        end
+    end)
+end
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_gen_blade_warding::HandleProc
+--   (spell_generic.cpp:622-640): 64440, EFFECT_1
+--   PROC_TRIGGER_SPELL, no CheckProc. The proc action
+--   target (procEvent:GetActionTarget(), the
+--   procActionTargetGUID twin) casts 64442 on the proc
+--   actor with BP0 = the sum over stacks of the triggered
+--   spell's EFFECT_0 CalcValue on the caster — priced per
+--   stack, because C++ CalcValue rolls irand(1, DieSides)
+--   per call (SpellInfo.cpp:402-440). The cast is
+--   TRIGGERED: C++ CastSpellExtraArgs(aurEff) sets
+--   TRIGGERED_FULL_MASK (SpellDefines.h:166); the
+--   coordinator's "non-triggered" is wrong, and the same
+--   error sits in the blood_reserve port below, fixed this
+--   tick. The bp prices through the player's with-caster
+--   CalculateSpellDamage (lua_player.go:298); a creature
+--   caster falls back to the aura's no-caster
+--   GetSpellEffectCalcValue (lua_aura.go:510), which reads
+--   0 while the DBC is missing. Return true is the
+--   PreventDefaultAction twin. DORMANT until Spell.dbc
+--   ships the 64440/64442 rows.
+RegisterAuraEvent(SPELL_GEN_STRIP8.bladeWarding, 6, function(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 1 or procEvent == nil then
+        return true
+    end
+    local caster = procEvent:GetActionTarget()
+    local victim = procEvent:GetActor()
+    if caster == nil or victim == nil then
+        return true
+    end
+    local bp = 0
+    for _ = 1, aura:GetStackAmount() do
+        if caster:GetTypeId() == TYPEID_PLAYER then
+            bp = bp + caster:CalculateSpellDamage(SPELL_GEN_STRIP8.bladeWardingTriggered, 0)
+        else
+            bp = bp + aura:GetSpellEffectCalcValue(SPELL_GEN_STRIP8.bladeWardingTriggered, 0)
+        end
+    end
+    caster:CastCustomSpell(victim, SPELL_GEN_STRIP8.bladeWardingTriggered, true, bp)
+    return true
+end)
+
+-- PORTED (this tick, RegisterSpellEvent AfterHit = 3):
+--   spell_gen_bonked::HandleScript (spell_generic.cpp:
+--   663-680): 62991, EFFECT_1 SCRIPT_EFFECT. The hit
+--   player whose Bonked aura sits at 3 stacks self-casts
+--   62994 triggered and drops 62991. Registered on ev3,
+--   NOT ev5: the Go ev5 (OnHit) fires in PreprocessTarget
+--   before any effect applies (fireSpellScriptPreprocess-
+--   Twins, spells.go), so an ev5 stack read would see the
+--   PRE-hit count and miss the 2->3 transition; ev3 fires
+--   once per hit target after the effects loop (AfterHit
+--   block, spells.go; manaBurnAfterHit precedent), so the
+--   GetAura(62991) read sees the post-apply stacks, the
+--   C++ GetHitAura() twin. The On-Guard leg stays out: it
+--   needs aura:GetCastItemGUID + player GetItemByGuid, and
+--   neither has a Lua bridge (DestroyItemCount exists but
+--   the item entry is unreachable). DORMANT until Spell.dbc
+--   ships the 62991/62994 rows.
+RegisterSpellEvent(SPELL_GEN_STRIP8.bonked, 3, function(event, spell, hitTarget)
+    if hitTarget == nil or hitTarget:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    local aura = hitTarget:GetAura(SPELL_GEN_STRIP8.bonked)
+    if aura == nil or aura:GetStackAmount() ~= 3 then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, SPELL_GEN_STRIP8.bonkedDefeat, true)
+    hitTarget:RemoveAurasDueToSpell(SPELL_GEN_STRIP8.bonked)
 end)
