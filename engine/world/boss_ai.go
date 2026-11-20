@@ -3660,9 +3660,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectThreat:
-				s.creatureEffectThreat(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectThreat(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectAttackMe:
-				s.creatureEffectTaunt(ctx, m, spellID, hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectTaunt(ctx, m, spellID, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3993,7 +3993,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			case spellEffectRemoveAura:
 				s.creatureEffectRemoveAura(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectModifyThreatPercent:
-				s.creatureEffectModifyThreatPercent(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectModifyThreatPercent(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
