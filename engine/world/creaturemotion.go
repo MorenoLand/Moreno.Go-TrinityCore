@@ -5579,6 +5579,659 @@ func (s *Server) stepCreatureMoveInLOSProximity(ctx context.Context, motion *cre
 // Creature::Update, not PetAI, so the summoned step bypasses the pet
 // diversion below and runs the generic legs (regen, combat pulse, threat
 // update, combat pursuit, sight-aggro scan, wander/idle, Lua OnAIUpdate).
+// executeCreatureMeleeSwing runs one wild-creature base-attack swing —
+// the Unit::AttackerStateUpdate (Unit.cpp:2130) twin extracted from the
+// inline engine-driven swing in stepCreatureMotion so the finish-phase
+// extra-attacks spend can drive the same pipeline. extraAttack is the
+// C++ extra=true arm (Unit.cpp:2180-2187 via HandleProcExtraAttackFor):
+// the swing runs the full damage / outcome / proc / packet pipeline
+// but never re-arms the regular swing interval (see the LastAttack
+// guard at the tail). The caller owns victim liveness: the tick path
+// drops dead targets in its section-1 head, the spend path
+// re-resolves a live victim per swing in consumeCreatureExtraAttacks.
+func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creatureMotion, target *playerPos, now time.Time, extraAttack bool) {
+	if s == nil || motion == nil || target == nil {
+		return
+	}
+	var damage uint32
+	if motion.MinDamage > 0 && motion.MaxDamage >= motion.MinDamage {
+		variance := float64(motion.MaxDamage - motion.MinDamage)
+		baseDmg := float64(motion.MinDamage)
+		if variance > 0 {
+			baseDmg += rand.Float64() * variance
+		}
+		damage = uint32(baseDmg)
+	} else {
+		lvl := float64(motion.Level)
+		if lvl < 1 {
+			lvl = 1
+		}
+		attSpeed := float64(motion.AttackTime) / 1000.0
+		if attSpeed <= 0 {
+			attSpeed = 2.0
+		}
+		minDmg := lvl * 0.75 * attSpeed
+		maxDmg := lvl * 1.25 * attSpeed
+		if minDmg < 1 {
+			minDmg = 1
+		}
+		if maxDmg < minDmg {
+			maxDmg = minDmg + 1
+		}
+		damage = uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
+	}
+	// Unit::ApplyStatPctModifier (Unit.cpp:9237-9255) with
+	// UNIT_MOD_DAMAGE_MAINHAND / TOTAL_PCT: AddPct scales the
+	// weapon-damage base itself (UpdateUnitMod recomputes the
+	// min/max), so the script multiplier lands on the rolled
+	// base ahead of the flat-13 / pct-79 aura folds below —
+	// the arlokk/marli/thekal phase-transform damage hacks.
+	if pct := motion.DamageMainhandPct; pct != 0 && pct != 1.0 {
+		damage = uint32(float64(damage) * pct)
+	}
+	// AuraEffect::HandleModDamageDone (SpellAuraEffects.cpp): the flat
+	// NORMAL-school 13 arm runs on every target type via
+	// Unit::UpdateAllDamageDoneMods (Unit.cpp:9334-9360) — the player
+	// twin is meleeDamageDoneFlat (aura_damage.go). The percent arm
+	// is the separate HandleModDamagePercentDone (79) handler.
+	if flat := s.creatureAuraDamageDoneFlat(creatureAuraKeyForMotion(motion)); flat != 0 {
+		if dmg := int32(damage) + flat; dmg <= 0 {
+			damage = 0
+		} else {
+			damage = uint32(dmg)
+		}
+	}
+	// AuraEffect::HandleModDamagePercentDone
+	// (SpellAuraEffects.cpp:4176-4199): the 79 NORMAL-school percent
+	// arm multiplies the flat-adjusted swing damage — the player
+	// twin is meleeDamageDonePctMod (aura_damage.go), applied as
+	// (damage + flat) * pct in executeMeleeSwing.
+	if pct := s.creatureAuraDamageDonePct(creatureAuraKeyForMotion(motion)); pct != 1.0 {
+		damage = uint32(float64(damage) * pct)
+	}
+	// AutoBalance_UnitScript::ModifyMeleeDamage analog. The victim
+	// split is declared here, ahead of the armor leg that used to
+	// dereference target.Sess unconditionally below.
+	isPlayerVictim := target.Sess != nil && target.Sess.player != nil
+	if isPlayerVictim {
+		damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
+	} else {
+		damage = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, damage)
+	}
+	// Unit::CalculateMeleeDamage (Unit.cpp:1236-1237):
+	// MeleeDamageBonusTaken runs on the victim ahead of the armor
+	// reduction for every attacker type — the creature path never
+	// bridged the victim-side flat (14 + 125), percent (87 + 126),
+	// Cheat Death or Sanctified Wrath arms (the player twin rides
+	// meleeWeaponDamageTaken). The attacker's MOD_IGNORE_TARGET_RESIST
+	// (269) clawback reads the creature's own aura store.
+	if damage > 0 {
+		attackerKey := creatureAuraKeyForMotion(motion)
+		ignoreResist := creatureAuraModifiersByMiscMask(s, attackerKey, spellAuraModIgnoreTargetResist, spellSchoolMaskNormal)
+		damage, _ = s.applyMeleeDamageTaken(damage, spellSchoolMaskNormal, ignoreResist, target.GUID, combatTarget{
+			GUID: target.GUID, Map: target.Map, InstanceID: target.InstanceID,
+		}, false, true)
+	}
+	if isPlayerVictim && target.Sess.player.Armor > 0 {
+		armor := float64(target.Sess.player.Armor)
+		// The attacker's 123/269 ignore-resist arms run on the
+		// creature auto-swing path (Unit.cpp:1632-1650, null
+		// spellInfo).
+		armor = s.creatureIgnoreTargetResistArmor(creatureAuraKeyForMotion(motion), armor)
+		damage = calcArmorReducedDamage(armor, uint8(motion.Level), target.Sess.player.Level, damage)
+	} else if !isPlayerVictim {
+		// Creature victims fold their live armor the same way the
+		// spell twin does (liveCreatureArmor + ignore-resist arms).
+		if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil {
+			armor := s.liveCreatureArmor(creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, vm, float64(vm.Armor))
+			armor = s.creatureIgnoreTargetResistArmor(creatureAuraKeyForMotion(motion), armor)
+			if armor > 0 {
+				damage = calcArmorReducedDamage(armor, uint8(motion.Level), uint8(vm.Level), damage)
+			}
+		}
+	}
+	if damage < 1 {
+		damage = 1
+	}
+
+	targetLevel := uint8(1)
+	if isPlayerVictim && target.Sess.player.Level > 0 {
+		targetLevel = target.Sess.player.Level
+	}
+	canBlock := isPlayerVictim && target.Sess.player.CanBlock && target.Sess.player.Block > 0
+	canParry := isPlayerVictim && (target.Sess.player.Level >= 10 || target.Sess.player.Level == 0)
+	canDodge := true
+	if isPlayerVictim {
+		// Player defender cannot block, parry, or dodge if creature is attacking from behind
+		// (Unit::RollMeleeOutcomeAgainst, Unit.cpp:2213-2217). SPELL_AURA_IGNORE_HIT_DIRECTION
+		// (288) exempts the victim from the behind-arc kill.
+		attackerInFront := hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi)
+		if !attackerInFront && !target.Sess.hasAuraType(spellAuraIgnoreHitDirection) {
+			canBlock = false
+			canParry = false
+			canDodge = false
+		}
+		// A victim mid cast cannot avoid (Unit.cpp:2219-2224:
+		// victim->IsNonMeleeSpellCast(false); UNIT_STATE_CONTROLLED has
+		// no Go unit-state model, stays unbridged).
+		if target.Sess.nonMeleeCastInProgress() {
+			canDodge = false
+			canParry = false
+			canBlock = false
+		}
+	}
+	victimDodgeBP := int32(-1)
+	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance read the
+	// victim's PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE
+	// (Unit.cpp:2712/2788); -1 keeps the legacy 5%-base fallback.
+	victimParryBP := int32(-1)
+	victimBlockBP := int32(-1)
+	if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
+		victimDodgeBP = int32(math.Round(float64(target.Sess.player.DodgePercentage) * 100))
+		victimParryBP = int32(math.Round(float64(target.Sess.player.ParryPercentage) * 100))
+		victimBlockBP = int32(math.Round(float64(target.Sess.player.BlockPercentage) * 100))
+	}
+	// Creature victims parry (5% base + 47) and block (5% base + 51) when
+	// the attacker is in the front arc — 288 exempts — unless the
+	// template carries CREATURE_FLAG_EXTRA_NO_PARRY (0x4) / NO_BLOCK
+	// (0x10). Totems never avoid. Mirrors the pet-attacker path
+	// (pet_combat.go) and Unit::RollMeleeOutcomeAgainst /
+	// Unit::GetUnitParryChance / Unit::GetUnitBlockChance
+	// (Unit.cpp:2213-2217, 2708, 2777).
+	var victimParryBonusBP, victimBlockBonusBP, victimDodgeBonusBP int32
+	if !isPlayerVictim {
+		if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && !s.isTotemGUID(target.GUID) {
+			victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
+			// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the victim's
+			// SPELL_AURA_MOD_DODGE_PERCENT (49) total adds to the 5% base
+			// (dodge is not arc-gated for creatures).
+			victimDodgeBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModDodgePercent) * 100
+			inFront := hasInArc(vm.Orientation, vm.X, vm.Y, motion.X, motion.Y, math.Pi) ||
+				s.creatureAuraTypeSum(victimKey, spellAuraIgnoreHitDirection) != 0
+			if inFront && vm.FlagsExtra&0x00000004 == 0 {
+				canParry = true
+				victimParryBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModParryPercent) * 100
+			}
+			if inFront && vm.FlagsExtra&0x00000010 == 0 {
+				canBlock = true
+				victimBlockBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModBlockPercent) * 100
+			}
+		}
+	}
+	// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the whole
+	// creature arm is gated on !victim->IsTotem() — totems never
+	// dodge.
+	if !isPlayerVictim && s.isTotemGUID(target.GUID) {
+		canDodge = false
+	}
+	// Unit::RollMeleeOutcomeAgainst's casting/cc'd victim arm
+	// (Unit.cpp:2238-2242): a victim that is casting or controlled
+	// (confused/stunned/fleeing) cannot dodge/parry/block. Player
+	// victims bridge the cast half via nonMeleeCastInProgress, creature
+	// victims via motion.CastingUntil; the CONTROLLED half bridges via
+	// the 5/7/12 aura twin (victimIsControlled).
+	if isPlayerVictim && target.Sess != nil && (target.Sess.nonMeleeCastInProgress() || victimIsControlled(s, true, target.Sess, combatTarget{})) {
+		canDodge = false
+		canParry = false
+		canBlock = false
+	} else if !isPlayerVictim {
+		if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && (time.Now().Before(vm.CastingUntil) || victimIsControlled(s, false, nil, combatTarget{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID})) {
+			canDodge = false
+			canParry = false
+			canBlock = false
+		}
+	}
+	// Unit::RollMeleeOutcomeAgainst's sitting-victim arm (Unit.cpp:2246-2247):
+	// a non-standing player victim always takes a crit when the attacker
+	// has nonzero crit chance.
+	victimSitting := isPlayerVictim && target.Sess != nil && target.Sess.player != nil && target.Sess.player.StandState != 0
+	// Unit::GetUnitCriticalChanceDone's creature arm (Unit.cpp:2836-2844):
+	// 5% base + SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) +
+	// SPELL_AURA_MOD_CRIT_PCT (290), gated on
+	// !CREATURE_FLAG_EXTRA_NO_CRIT (0x20000) — the flag zeroes the
+	// whole base, so the adjustment is -500 flat and the aura totals are dropped.
+	attackerKey := creatureAuraKeyForMotion(motion)
+	attackerCritAdjustBP := s.creatureAuraTypeSum(attackerKey, spellAuraModWeaponCritPercent)*100 +
+		s.creatureAuraTypeSum(attackerKey, spellAuraModCritPct)*100
+	if motion.FlagsExtra&0x00020000 != 0 {
+		attackerCritAdjustBP = -500
+	}
+	// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the
+	// victim-side 187/308 flats (pre-resilience) and 197 total
+	// (post-resilience). A non-pet creature attacker cannot apply
+	// resilience (Unit::CanApplyResilience, Unit.cpp:12333), so the
+	// reduction stays 0 here.
+	var victimFlatCritTakenBP, victimSpellWeaponCritBP int32
+	if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
+		victimFlatCritTakenBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerMeleeCritChance))*100)) +
+			int32(math.Round(target.Sess.victimCritChanceForCaster(motion.GUID)*100))
+		victimSpellWeaponCritBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
+	} else if !isPlayerVictim {
+		victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
+		victimFlatCritTakenBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerMeleeCritChance)*100 +
+			int32(math.Round(creatureVictimCritChanceForCaster(s, victimKey, motion.GUID)*100))
+		victimSpellWeaponCritBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
+	}
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, true, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
+	if isPlayerVictim && target.Sess != nil {
+		if target.Sess.isImmuneToDamage(1) {
+			outcome = protocol.MeleeHitImmune
+			hitInfo = protocol.HitInfoMiss
+			targetState = protocol.VictimStateIsImmune
+		}
+	} else if creatureImmuneToDamage(s, creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, 1) {
+		// Unit::CalculateMeleeDamage (Unit.cpp:1209-1223): the physical
+		// immune check runs on any victim ahead of the outcome roll.
+		outcome = protocol.MeleeHitImmune
+		hitInfo = protocol.HitInfoMiss
+		targetState = protocol.VictimStateIsImmune
+	} else if s.isCreatureEvadingInInstance(target.Map, target.InstanceID, target.GUID) {
+		// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2191-2192): a creature
+		// victim in evade mode evades all melee swings.
+		outcome = protocol.MeleeHitEvade
+		hitInfo = protocol.HitInfoMiss
+		targetState = protocol.VictimStateEvades
+	}
+	blocked := uint32(0)
+
+	switch outcome {
+	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
+		damage = 0
+	case protocol.MeleeHitBlock:
+		// Unit::CalculateMeleeDamage MELEE_HIT_BLOCK arm
+		// (Unit.cpp:1340-1376): the player victim's shield block
+		// value, doubled on a block crit, consumed against the
+		// swing; a full block zeroes damage and reports
+		// VICTIMSTATE_BLOCKS.
+		var blockValue uint32
+		var critChance int32
+		if isPlayerVictim && target.Sess != nil {
+			blockValue, critChance = target.Sess.shieldBlockParams()
+		}
+		var fullBlock bool
+		blocked, fullBlock = applyShieldBlockValue(blockValue, critChance, damage)
+		damage -= blocked
+		if fullBlock {
+			targetState = protocol.VictimStateBlocks
+		}
+	case protocol.MeleeHitCrit:
+		damage *= 2
+		// Unit::CalculateMeleeDamage MELEE_HIT_CRIT leg (Unit.cpp:1302-1319):
+		// the victim's 203, the attacker's 163 product by the NORMAL
+		// school mask, and the attacker's 169 sum by the victim's
+		// creature-type mask AddPct after the doubling, ahead of the
+		// resilience reduction below. The old twin doubled only.
+		{
+			var victimMask uint32
+			if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
+				victimMask = target.Sess.playerCreatureTypeMask(target.Sess.player)
+			} else if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && vm.CreatureType >= 1 {
+				victimMask = uint32(1) << (vm.CreatureType - 1)
+			}
+			damage = s.creatureMeleeCritDamageBonus(attackerKey, creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, target.Sess, isPlayerVictim, victimMask, damage)
+		}
+	case protocol.MeleeHitCrushing:
+		damage = uint32(float64(damage) * 1.5)
+	}
+
+	// Unit::CalculateMeleeDamage resilience tail (Unit.cpp:1418-1427):
+	// a player-owned attacker applies the victim's resilience
+	// (crit-damage reduction on crits plus the flat damage
+	// reduction) ahead of absorbs. Wild attackers never apply it
+	// (Unit::CanApplyResilience, Unit.cpp:12333).
+	if isPlayerVictim && target.Sess != nil && s.creatureCasterCanApplyResilience(motion) {
+		target.Sess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+	}
+
+	// Handle player parry haste when player parries creature attack
+	if targetState == protocol.VictimStateParry && isPlayerVictim {
+		pMainSpeed := time.Duration(target.Sess.player.AttackTime) * time.Millisecond
+		if pMainSpeed <= 0 {
+			pMainSpeed = 2 * time.Second
+		}
+		elapsed := now.Sub(target.Sess.lastSwing)
+		if elapsed < pMainSpeed {
+			rem := pMainSpeed - elapsed
+			hasted := calcParryHastedRemaining(rem, pMainSpeed)
+			target.Sess.lastSwing = now.Add(-(pMainSpeed - hasted))
+		}
+	}
+
+	// Unit::ProcSkillsAndReactives victim arm (Unit.cpp:10283-10324): a
+	// dodged/parried/blocked creature swing arms the player victim's
+	// reactive aura states (Revenge/Counterattack usability) for the
+	// 4000ms window.
+	if isPlayerVictim && target.Sess != nil {
+		target.Sess.procReactiveVictimArms(outcome)
+	}
+
+	overkill := uint32(0)
+	// absorbedDmg carries the pre-absorb portion for the rage legs
+	// (Unit.cpp:815-924): the received leg converts damage + absorbed.
+	absorbedDmg := uint32(0)
+	if damage > 0 && isPlayerVictim {
+		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the creature
+		// attacker's MOD_TARGET_ABSORB_SCHOOL (194) pct bypasses absorbs.
+		bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(creatureAuraKeyForMotion(motion), 1))
+		absorbed, rem := target.Sess.applyAbsorptionShields(damage-bypass, 1)
+		absorbedDmg = absorbed
+		damage = rem + bypass
+		if rem == 0 && absorbed > 0 {
+			hitInfo |= protocol.HitInfoFullAbsorb
+		} else if absorbed > 0 {
+			hitInfo |= protocol.HitInfoPartialAbsorb
+		}
+	} else if damage > 0 {
+		// Creature-victim absorb twin (spell twin's pool leg).
+		victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
+		bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(victimKey, 1))
+		absorbed, rem := s.applyCreatureAbsorptionShields(victimKey, damage-bypass, 1)
+		absorbedDmg = absorbed
+		damage = rem + bypass
+		if rem == 0 && absorbed > 0 {
+			hitInfo |= protocol.HitInfoFullAbsorb
+		} else if absorbed > 0 {
+			hitInfo |= protocol.HitInfoPartialAbsorb
+		}
+	}
+	// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
+	// after absorption (C++ absorbs before DealDamage) — the application
+	// block below is then skipped: no health loss, no death, no pushback,
+	// no procs. lastCombatTime / in-combat still update, as entering
+	// combat precedes DealDamage in C++. shieldGateDamage keeps the
+	// pre-god value for the damage-shield gate below (Unit.cpp:1555:
+	// Damages is post-absorb but pre-god).
+	shieldGateDamage := damage
+	if isPlayerVictim {
+		damage = target.Sess.negateGodModeDamage(damage)
+	}
+	// Unit::DealDamage (Unit.cpp:815-819): rage from fully absorbed
+	// damage — ahead of the application block the god arm skips (the
+	// god arm itself returns before this leg in C++).
+	if isPlayerVictim && damage == 0 && absorbedDmg > 0 && !target.Sess.godCheatActive() {
+		target.Sess.grantRageFromDamageTaken(ctx, absorbedDmg)
+		// Unit::DealDamage (Unit.cpp:742-747): absorbed damage still
+		// strips TAKE_DAMAGE-interrupt auras — the removal runs before
+		// the !damage early-return.
+		target.Sess.procDamageAuras(false)
+		// Unit::DealDamage (Unit.cpp:749-761): fully absorbed non-DoT
+		// damage aborts ABORT_ON_DMG casts (creature attacker !=
+		// player victim).
+		target.Sess.interruptAbsorbedCast()
+	}
+	if damage > 0 && isPlayerVictim {
+		// Unit::CalcAbsorbResist (Unit.cpp:1977-2060):
+		// SPELL_AURA_SPLIT_DAMAGE (81/153) redirects part of the
+		// damage to the aura's caster, ahead of the 300 share leg.
+		damage = target.Sess.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
+		// Unit::DealDamage (Unit.cpp:766-788):
+		// SPELL_AURA_SHARE_DAMAGE_PCT.
+		target.Sess.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
+		// Unit::DealDamage (Unit.cpp:869-870): HIGHEST_HIT_RECEIVED
+		// fires for any damage to a player victim, wild-creature
+		// attackers included.
+		target.Sess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
+		victimHealth := target.Sess.player.Health
+		// Duel defeat (Unit.cpp:825-853, 957-973): a charmed creature's
+		// blow lands as a duel defeat when its charmer is the duel
+		// opponent (GetControllingPlayer, Unit.cpp:5996); a wild
+		// creature's exactly-health-1 hit still completes the duel as
+		// won, while its lethal hit kills and interrupts.
+		if duelDefeatOnDamage(target.Sess, target.Sess.controllingPlayerGUID(motion.GUID), damage, victimHealth) {
+			// Duel defeat consumed the hit — loser at 1 HP, duel complete.
+		} else if damage >= victimHealth {
+			overkill = damage - victimHealth
+			target.Sess.player.Health = 0
+			target.IsDead = true
+			target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
+			// GetCharmerOrOwnerPlayerOrPlayerItself (Unit.cpp:11279):
+			// a player-owned pet's kill credits its owner; a wild
+			// creature resolves to no player.
+			var creatureKiller *session
+			if motion.OwnerGUID != 0 {
+				creatureKiller = s.findSessionByGUID(motion.OwnerGUID)
+			}
+			target.Sess.killPlayer(ctx, creatureKiller, false, true)
+			// Eluna PLAYER_EVENT_ON_KILLED_BY_CREATURE (8): Unit::Kill
+			// tail (Unit.cpp:11466-11480), attacker is the creature
+			// (for pet kills C++ pushes the pet itself).
+			s.fireKilledByCreatureHook(ctx, motion, target.Sess)
+			if motion.BossAI != nil {
+				motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
+			}
+			// Unit::Kill (Unit.cpp:11283-11290): the PROC_FLAG_KILL leg
+			// evaluates the killer creature's own proc auras on the
+			// kill victim; the KILLED/DEATH legs already ran inside
+			// killPlayer (death.go).
+			s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{
+				typeMask:       procFlagKill,
+				spellTypeMask:  procSpellTypeMaskAll,
+				spellPhaseMask: procSpellPhaseNone,
+				hitMask:        procHitNone,
+				actorGUID:      motion.GUID,
+			})
+		} else {
+			target.Sess.player.Health -= damage
+			// Unit::DealDamage (Unit.cpp:915-924): rage from damage
+			// received — damage + absorbed for the conversion.
+			target.Sess.grantRageFromDamageTaken(ctx, damage+absorbedDmg)
+			// Unit::DealDamage (Unit.cpp:906-913): random durability
+			// loss on HIT TAKEN — the victim is a player.
+			target.Sess.rollDurabilityLossOnHit(ctx, damage)
+			// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
+			target.Sess.delayCurrentCast()
+			target.Sess.delayCurrentChannel()
+			target.Sess.procDamageAuras(true, damage)
+		}
+		target.Sess.lastCombatTime = now
+		if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
+			markPlayerInCombat(ctx, target.Sess, motion.GUID)
+		}
+	}
+	// Creature-victim application twin of the player block above:
+	// the split leg, then the spell twin's locked health mutation
+	// and death chain. The 300 share leg has no creature twin on
+	// the spell path (vehicle-session only) and stays out here too;
+	// the melee path carries no DamageTaken hook on either twin.
+	if damage > 0 && !isPlayerVictim {
+		victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
+		damage = s.splitDamageToCaster(ctx, target.GUID, false, victimKey, motion.GUID, damage, 1)
+		if damage > 0 {
+			var killed bool
+			var live *creatureMotion
+			var liveMaxHealth, liveNewHealth uint32
+			var liveX, liveY, liveZ float32
+			var liveFlags uint32
+			var liveCreatureType uint32
+			var rageNext uint32
+			var rageChanged bool
+			s.motionMu.Lock()
+			if m := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, target.GUID); m != nil && m.Health > 0 {
+				live = m
+				if live.BossAI == nil {
+					live.BossAI = getBossAIForCreature(live, live.ScriptName)
+				}
+				liveMaxHealth = live.MaxHealth
+				liveCreatureType = live.CreatureType
+				if damage >= live.Health {
+					overkill = damage - live.Health
+					live.Health = 0
+					live.DynamicFlags |= unitDynFlagLootable
+					live.InCombat = false
+					live.TargetGUID = 0
+					live.Moving = false
+					if live.ThreatMgr != nil {
+						live.ThreatMgr.ClearThreat()
+					}
+					killed = true
+				} else {
+					live.Health -= damage
+					if next, changed := s.addCreatureRageLocked(live, live.Level, damage+absorbedDmg); changed {
+						rageNext, rageChanged = next, true
+					}
+				}
+				liveNewHealth = live.Health
+				liveX, liveY, liveZ = live.X, live.Y, live.Z
+				liveFlags = live.DynamicFlags
+			}
+			s.motionMu.Unlock()
+			if live == nil {
+				damage = 0
+			} else if killed {
+				target.IsDead = true
+				s.procCreatureLethalDamageAuras(victimKey, 0, damage, liveMaxHealth)
+				s.stopCreatureMotionInInstance(motion.Map, motion.InstanceID, target.GUID, liveX, liveY, liveZ)
+				s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: liveFlags})
+				s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, liveX, liveY, liveZ, target.GUID, live.PhaseMask)
+				if liveCreatureType != creatureTypeCritter {
+					s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{typeMask: procFlagKill, spellTypeMask: procSpellTypeMaskAll, spellPhaseMask: procSpellPhaseNone, hitMask: procHitNone, actorGUID: motion.GUID})
+					s.fireCreatureMeleeAuraProcs(ctx, live, motion.GUID, procEventInfo{typeMask: procFlagKilled, spellTypeMask: procSpellTypeMaskAll, spellPhaseMask: procSpellPhaseNone, hitMask: procHitNone, actorGUID: live.GUID})
+				}
+				s.fireCreatureMeleeAuraProcs(ctx, live, target.GUID, procEventInfo{typeMask: procFlagDeath, spellTypeMask: procSpellTypeMaskAll, spellPhaseMask: procSpellPhaseNone, hitMask: procHitNone, actorGUID: live.GUID})
+				s.clearCreatureAurasOnDeath(victimKey)
+				s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, target.GUID)
+				s.clearCreatureDeathState(live)
+				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
+				s.fireCreatureDiedByCreature(ctx, live, motion)
+				if live.BossAI != nil {
+					live.BossAI.OnDied(ctx, s, live)
+				}
+				s.fireCreatureDeathCast(ctx, live, motion.GUID)
+				s.recordCreatureKillLoot(live, motion)
+				s.grantCreatureKillReward(ctx, live, motion)
+				s.bindInstanceOnNoFunnelKill(ctx, live, motion)
+				s.creditNoFunnelKillingBlow(motion)
+				s.handleNoFunnelBattlegroundKill(live, motion)
+			} else {
+				healthUpdate := map[int]uint32{unitFieldHealth: liveNewHealth}
+				if rageChanged {
+					healthUpdate[unitFieldPower1+powerRage] = rageNext
+				}
+				s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, target.GUID, healthUpdate)
+				s.procCreatureDirectDamageAuras(victimKey, 0, damage, liveMaxHealth)
+			}
+		}
+	}
+	// Unit::DealMeleeDamage (Unit.cpp:1555-1579): a wild creature's
+	// melee hit from behind can daze the victim (SPELL_DAZED 1604,
+	// triggered). Fires on normal/crit/crushing/glancing outcomes;
+	// the 20% base (0.65*level+0.5 below 30) scales by the
+	// attacker/victim skill ratio x0.16, clamped to [0,40]. Go models
+	// no weapon/defense skill bonuses, so both skills are 5*level
+	// (crushing-blow convention, combat.go:2591). Pets and charmed
+	// creatures are player-controlled and never daze (C++
+	// !IsControlledByPlayer, boss_ai.go:creatureIsPlayerControlled).
+	// The !victim->IsVehicle() arm stays unbridged — Go has no
+	// player-vehicle model.
+	if isPlayerVictim &&
+		(outcome == protocol.MeleeHitNormal || outcome == protocol.MeleeHitCrit ||
+			outcome == protocol.MeleeHitCrushing || outcome == protocol.MeleeHitGlancing) &&
+		!creatureIsPlayerControlled(motion) &&
+		!hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi) {
+		victimLvl := float64(targetLevel)
+		if victimLvl < 1 {
+			victimLvl = 1
+		}
+		attackerLvl := float64(motion.Level)
+		if attackerLvl < 1 {
+			attackerLvl = 1
+		}
+		dazeChance := 20.0
+		if victimLvl < 30 {
+			dazeChance = 0.65*victimLvl + 0.5
+		}
+		dazeChance *= attackerLvl / victimLvl * 0.16
+		if dazeChance < 0 {
+			dazeChance = 0
+		}
+		if dazeChance > 40 {
+			dazeChance = 40
+		}
+		if rand.Float64()*100 < dazeChance {
+			s.castCreatureSpellTriggered(ctx, motion, 1604, target.GUID)
+		}
+	}
+	// Unit::ProcSkillsAndAuras (Unit.cpp:2169) — the actor leg for a
+	// creature melee swing: TriggerAurasProcOnEvent with ProcAttacker
+	// = PROC_FLAG_DONE_MELEE_AUTO_ATTACK |
+	// PROC_FLAG_DONE_MAINHAND_ATTACK (Unit.cpp:1194; creatures swing
+	// BASE_ATTACK only). Runs after damage is dealt, matching C++
+	// (2169 follows DealMeleeDamage).
+	s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{
+		typeMask:       procFlagDoneMeleeAutoAttack | procFlagDoneMainhandAttack,
+		schoolMask:     spellSchoolMaskNormal,
+		spellTypeMask:  procSpellTypeNone,
+		spellPhaseMask: procSpellPhaseNone,
+		hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
+		actorGUID:      motion.GUID,
+		damage:         damage,
+	})
+	// The victim leg of the same call: the player victim's own
+	// Taken-side proc auras fire on the melee event
+	// (PROC_FLAG_TAKEN_MELEE_AUTO_ATTACK, Unit.cpp:1195), the
+	// trigger spell targeting the creature attacker.
+	if isPlayerVictim && target.Sess != nil {
+		target.Sess.procVictimAuraTriggers(ctx, motion.GUID, outcome, hitInfo, targetState, blocked, damage)
+	} else if !isPlayerVictim {
+		if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil {
+			s.fireCreatureAuraProcLoop(ctx, vm, motion.GUID, procEventInfo{typeMask: takenMeleeTypeMask(damage), schoolMask: spellSchoolMaskNormal, spellTypeMask: procSpellTypeNone, spellPhaseMask: procSpellPhaseNone, hitMask: meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked), actorGUID: motion.GUID, damage: damage})
+		}
+	}
+	// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the player
+	// victim's SPELL_AURA_DAMAGE_SHIELD (15) effects strike the
+	// creature attacker after a damaging melee hit, gated on the
+	// pre-god post-absorb damage (see shieldGateDamage above).
+	if isPlayerVictim && target.Sess != nil && shieldGateDamage > 0 {
+		s.applyDamageShieldRetaliation(ctx,
+			damageShieldSide{sess: target.Sess, isPlayer: true},
+			damageShieldSide{key: creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}},
+			shieldGateDamage)
+	}
+	asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
+	if target.Sess != nil {
+		target.Sess.debug("creature melee attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)
+	}
+	// Unit::SendAttackStateUpdate: SendMessageToSet on the attacker —
+	// the creature's visibility set; the creature has no session leg
+	// (the victim is reached through the set).
+	if s != nil {
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+	}
+	if isPlayerVictim {
+		target.Sess.sendPlayerUpdate()
+	}
+	if s != nil && isPlayerVictim {
+		s.triggerPetDefensive(ctx, target.Map, target.InstanceID, target.GUID, motion.GUID, scripting.CreatureEventOnOwnerAttackedAt)
+	}
+	// An extra swing never re-arms the regular swing interval —
+	// the C++ extra=true arm touches no timer (Unit.cpp:2180-2187
+	// via HandleProcExtraAttackFor; the session twin preserves
+	// lastSwing the same way, spells.go:21004) — so only a normal
+	// swing stamps LastAttack here, where the timer gate it was
+	// extracted from stamped it.
+	if !extraAttack {
+		motion.LastAttack = now
+	}
+}
+
+// creatureMeleeVictimPos mirrors stepCreatureMotion section 1's victim
+// resolution (creaturemotion.go:5979-6002) for a GUID outside the motion
+// tick: an online player resolves to their live session row, a live
+// motion to the nil-session synth, so every Sess-guarded leg in the
+// swing treats it as a creature victim. Nil when neither resolves.
+func (s *Server) creatureMeleeVictimPos(mapID, instanceID uint32, guid uint64) *playerPos {
+	if guid == 0 {
+		return nil
+	}
+	if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		return &playerPos{Map: ts.player.Map, InstanceID: ts.player.InstanceID, X: ts.player.X, Y: ts.player.Y, Z: ts.player.Z, GUID: guid, Level: ts.player.Level, IsDead: ts.isDeadOrGhost(), Sess: ts}
+	}
+	if vm := s.findCreatureMotion(mapID, instanceID, guid); vm != nil {
+		return &playerPos{Map: vm.Map, InstanceID: vm.InstanceID, X: vm.X, Y: vm.Y, Z: vm.Z, GUID: vm.GUID, Level: uint8(vm.Level), IsDead: vm.Health == 0, FactionTemplate: vm.Faction}
+	}
+	return nil
+}
+
 func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time, summoned bool) {
 	if motion == nil {
 		return
@@ -8770,617 +9423,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			attackTime = 2 * time.Second
 		}
 		if motion.LastAttack.IsZero() || now.Sub(motion.LastAttack) >= attackTime {
-			var damage uint32
-			if motion.MinDamage > 0 && motion.MaxDamage >= motion.MinDamage {
-				variance := float64(motion.MaxDamage - motion.MinDamage)
-				baseDmg := float64(motion.MinDamage)
-				if variance > 0 {
-					baseDmg += rand.Float64() * variance
-				}
-				damage = uint32(baseDmg)
-			} else {
-				lvl := float64(motion.Level)
-				if lvl < 1 {
-					lvl = 1
-				}
-				attSpeed := float64(motion.AttackTime) / 1000.0
-				if attSpeed <= 0 {
-					attSpeed = 2.0
-				}
-				minDmg := lvl * 0.75 * attSpeed
-				maxDmg := lvl * 1.25 * attSpeed
-				if minDmg < 1 {
-					minDmg = 1
-				}
-				if maxDmg < minDmg {
-					maxDmg = minDmg + 1
-				}
-				damage = uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
-			}
-			// Unit::ApplyStatPctModifier (Unit.cpp:9237-9255) with
-			// UNIT_MOD_DAMAGE_MAINHAND / TOTAL_PCT: AddPct scales the
-			// weapon-damage base itself (UpdateUnitMod recomputes the
-			// min/max), so the script multiplier lands on the rolled
-			// base ahead of the flat-13 / pct-79 aura folds below —
-			// the arlokk/marli/thekal phase-transform damage hacks.
-			if pct := motion.DamageMainhandPct; pct != 0 && pct != 1.0 {
-				damage = uint32(float64(damage) * pct)
-			}
-			// AuraEffect::HandleModDamageDone (SpellAuraEffects.cpp): the flat
-			// NORMAL-school 13 arm runs on every target type via
-			// Unit::UpdateAllDamageDoneMods (Unit.cpp:9334-9360) — the player
-			// twin is meleeDamageDoneFlat (aura_damage.go). The percent arm
-			// is the separate HandleModDamagePercentDone (79) handler.
-			if flat := s.creatureAuraDamageDoneFlat(creatureAuraKeyForMotion(motion)); flat != 0 {
-				if dmg := int32(damage) + flat; dmg <= 0 {
-					damage = 0
-				} else {
-					damage = uint32(dmg)
-				}
-			}
-			// AuraEffect::HandleModDamagePercentDone
-			// (SpellAuraEffects.cpp:4176-4199): the 79 NORMAL-school percent
-			// arm multiplies the flat-adjusted swing damage — the player
-			// twin is meleeDamageDonePctMod (aura_damage.go), applied as
-			// (damage + flat) * pct in executeMeleeSwing.
-			if pct := s.creatureAuraDamageDonePct(creatureAuraKeyForMotion(motion)); pct != 1.0 {
-				damage = uint32(float64(damage) * pct)
-			}
-			// AutoBalance_UnitScript::ModifyMeleeDamage analog. The victim
-			// split is declared here, ahead of the armor leg that used to
-			// dereference target.Sess unconditionally below.
-			isPlayerVictim := target.Sess != nil && target.Sess.player != nil
-			if isPlayerVictim {
-				damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
-			} else {
-				damage = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, damage)
-			}
-			// Unit::CalculateMeleeDamage (Unit.cpp:1236-1237):
-			// MeleeDamageBonusTaken runs on the victim ahead of the armor
-			// reduction for every attacker type — the creature path never
-			// bridged the victim-side flat (14 + 125), percent (87 + 126),
-			// Cheat Death or Sanctified Wrath arms (the player twin rides
-			// meleeWeaponDamageTaken). The attacker's MOD_IGNORE_TARGET_RESIST
-			// (269) clawback reads the creature's own aura store.
-			if damage > 0 {
-				attackerKey := creatureAuraKeyForMotion(motion)
-				ignoreResist := creatureAuraModifiersByMiscMask(s, attackerKey, spellAuraModIgnoreTargetResist, spellSchoolMaskNormal)
-				damage, _ = s.applyMeleeDamageTaken(damage, spellSchoolMaskNormal, ignoreResist, target.GUID, combatTarget{
-					GUID: target.GUID, Map: target.Map, InstanceID: target.InstanceID,
-				}, false, true)
-			}
-			if isPlayerVictim && target.Sess.player.Armor > 0 {
-				armor := float64(target.Sess.player.Armor)
-				// The attacker's 123/269 ignore-resist arms run on the
-				// creature auto-swing path (Unit.cpp:1632-1650, null
-				// spellInfo).
-				armor = s.creatureIgnoreTargetResistArmor(creatureAuraKeyForMotion(motion), armor)
-				damage = calcArmorReducedDamage(armor, uint8(motion.Level), target.Sess.player.Level, damage)
-			} else if !isPlayerVictim {
-				// Creature victims fold their live armor the same way the
-				// spell twin does (liveCreatureArmor + ignore-resist arms).
-				if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil {
-					armor := s.liveCreatureArmor(creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, vm, float64(vm.Armor))
-					armor = s.creatureIgnoreTargetResistArmor(creatureAuraKeyForMotion(motion), armor)
-					if armor > 0 {
-						damage = calcArmorReducedDamage(armor, uint8(motion.Level), uint8(vm.Level), damage)
-					}
-				}
-			}
-			if damage < 1 {
-				damage = 1
-			}
-
-			targetLevel := uint8(1)
-			if isPlayerVictim && target.Sess.player.Level > 0 {
-				targetLevel = target.Sess.player.Level
-			}
-			canBlock := isPlayerVictim && target.Sess.player.CanBlock && target.Sess.player.Block > 0
-			canParry := isPlayerVictim && (target.Sess.player.Level >= 10 || target.Sess.player.Level == 0)
-			canDodge := true
-			if isPlayerVictim {
-				// Player defender cannot block, parry, or dodge if creature is attacking from behind
-				// (Unit::RollMeleeOutcomeAgainst, Unit.cpp:2213-2217). SPELL_AURA_IGNORE_HIT_DIRECTION
-				// (288) exempts the victim from the behind-arc kill.
-				attackerInFront := hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi)
-				if !attackerInFront && !target.Sess.hasAuraType(spellAuraIgnoreHitDirection) {
-					canBlock = false
-					canParry = false
-					canDodge = false
-				}
-				// A victim mid cast cannot avoid (Unit.cpp:2219-2224:
-				// victim->IsNonMeleeSpellCast(false); UNIT_STATE_CONTROLLED has
-				// no Go unit-state model, stays unbridged).
-				if target.Sess.nonMeleeCastInProgress() {
-					canDodge = false
-					canParry = false
-					canBlock = false
-				}
-			}
-			victimDodgeBP := int32(-1)
-			// Unit::GetUnitParryChance / Unit::GetUnitBlockChance read the
-			// victim's PLAYER_PARRY_PERCENTAGE / PLAYER_BLOCK_PERCENTAGE
-			// (Unit.cpp:2712/2788); -1 keeps the legacy 5%-base fallback.
-			victimParryBP := int32(-1)
-			victimBlockBP := int32(-1)
-			if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
-				victimDodgeBP = int32(math.Round(float64(target.Sess.player.DodgePercentage) * 100))
-				victimParryBP = int32(math.Round(float64(target.Sess.player.ParryPercentage) * 100))
-				victimBlockBP = int32(math.Round(float64(target.Sess.player.BlockPercentage) * 100))
-			}
-			// Creature victims parry (5% base + 47) and block (5% base + 51) when
-			// the attacker is in the front arc — 288 exempts — unless the
-			// template carries CREATURE_FLAG_EXTRA_NO_PARRY (0x4) / NO_BLOCK
-			// (0x10). Totems never avoid. Mirrors the pet-attacker path
-			// (pet_combat.go) and Unit::RollMeleeOutcomeAgainst /
-			// Unit::GetUnitParryChance / Unit::GetUnitBlockChance
-			// (Unit.cpp:2213-2217, 2708, 2777).
-			var victimParryBonusBP, victimBlockBonusBP, victimDodgeBonusBP int32
-			if !isPlayerVictim {
-				if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && !s.isTotemGUID(target.GUID) {
-					victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
-					// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the victim's
-					// SPELL_AURA_MOD_DODGE_PERCENT (49) total adds to the 5% base
-					// (dodge is not arc-gated for creatures).
-					victimDodgeBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModDodgePercent) * 100
-					inFront := hasInArc(vm.Orientation, vm.X, vm.Y, motion.X, motion.Y, math.Pi) ||
-						s.creatureAuraTypeSum(victimKey, spellAuraIgnoreHitDirection) != 0
-					if inFront && vm.FlagsExtra&0x00000004 == 0 {
-						canParry = true
-						victimParryBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModParryPercent) * 100
-					}
-					if inFront && vm.FlagsExtra&0x00000010 == 0 {
-						canBlock = true
-						victimBlockBonusBP = s.creatureAuraTypeSum(victimKey, spellAuraModBlockPercent) * 100
-					}
-				}
-			}
-			// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the whole
-			// creature arm is gated on !victim->IsTotem() — totems never
-			// dodge.
-			if !isPlayerVictim && s.isTotemGUID(target.GUID) {
-				canDodge = false
-			}
-			// Unit::RollMeleeOutcomeAgainst's casting/cc'd victim arm
-			// (Unit.cpp:2238-2242): a victim that is casting or controlled
-			// (confused/stunned/fleeing) cannot dodge/parry/block. Player
-			// victims bridge the cast half via nonMeleeCastInProgress, creature
-			// victims via motion.CastingUntil; the CONTROLLED half bridges via
-			// the 5/7/12 aura twin (victimIsControlled).
-			if isPlayerVictim && target.Sess != nil && (target.Sess.nonMeleeCastInProgress() || victimIsControlled(s, true, target.Sess, combatTarget{})) {
-				canDodge = false
-				canParry = false
-				canBlock = false
-			} else if !isPlayerVictim {
-				if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && (time.Now().Before(vm.CastingUntil) || victimIsControlled(s, false, nil, combatTarget{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID})) {
-					canDodge = false
-					canParry = false
-					canBlock = false
-				}
-			}
-			// Unit::RollMeleeOutcomeAgainst's sitting-victim arm (Unit.cpp:2246-2247):
-			// a non-standing player victim always takes a crit when the attacker
-			// has nonzero crit chance.
-			victimSitting := isPlayerVictim && target.Sess != nil && target.Sess.player != nil && target.Sess.player.StandState != 0
-			// Unit::GetUnitCriticalChanceDone's creature arm (Unit.cpp:2836-2844):
-			// 5% base + SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) +
-			// SPELL_AURA_MOD_CRIT_PCT (290), gated on
-			// !CREATURE_FLAG_EXTRA_NO_CRIT (0x20000) — the flag zeroes the
-			// whole base, so the adjustment is -500 flat and the aura totals are dropped.
-			attackerKey := creatureAuraKeyForMotion(motion)
-			attackerCritAdjustBP := s.creatureAuraTypeSum(attackerKey, spellAuraModWeaponCritPercent)*100 +
-				s.creatureAuraTypeSum(attackerKey, spellAuraModCritPct)*100
-			if motion.FlagsExtra&0x00020000 != 0 {
-				attackerCritAdjustBP = -500
-			}
-			// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the
-			// victim-side 187/308 flats (pre-resilience) and 197 total
-			// (post-resilience). A non-pet creature attacker cannot apply
-			// resilience (Unit::CanApplyResilience, Unit.cpp:12333), so the
-			// reduction stays 0 here.
-			var victimFlatCritTakenBP, victimSpellWeaponCritBP int32
-			if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
-				victimFlatCritTakenBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerMeleeCritChance))*100)) +
-					int32(math.Round(target.Sess.victimCritChanceForCaster(motion.GUID)*100))
-				victimSpellWeaponCritBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
-			} else if !isPlayerVictim {
-				victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
-				victimFlatCritTakenBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerMeleeCritChance)*100 +
-					int32(math.Round(creatureVictimCritChanceForCaster(s, victimKey, motion.GUID)*100))
-				victimSpellWeaponCritBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
-			}
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, true, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
-			if isPlayerVictim && target.Sess != nil {
-				if target.Sess.isImmuneToDamage(1) {
-					outcome = protocol.MeleeHitImmune
-					hitInfo = protocol.HitInfoMiss
-					targetState = protocol.VictimStateIsImmune
-				}
-			} else if creatureImmuneToDamage(s, creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, 1) {
-				// Unit::CalculateMeleeDamage (Unit.cpp:1209-1223): the physical
-				// immune check runs on any victim ahead of the outcome roll.
-				outcome = protocol.MeleeHitImmune
-				hitInfo = protocol.HitInfoMiss
-				targetState = protocol.VictimStateIsImmune
-			} else if s.isCreatureEvadingInInstance(target.Map, target.InstanceID, target.GUID) {
-				// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2191-2192): a creature
-				// victim in evade mode evades all melee swings.
-				outcome = protocol.MeleeHitEvade
-				hitInfo = protocol.HitInfoMiss
-				targetState = protocol.VictimStateEvades
-			}
-			blocked := uint32(0)
-
-			switch outcome {
-			case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
-				damage = 0
-			case protocol.MeleeHitBlock:
-				// Unit::CalculateMeleeDamage MELEE_HIT_BLOCK arm
-				// (Unit.cpp:1340-1376): the player victim's shield block
-				// value, doubled on a block crit, consumed against the
-				// swing; a full block zeroes damage and reports
-				// VICTIMSTATE_BLOCKS.
-				var blockValue uint32
-				var critChance int32
-				if isPlayerVictim && target.Sess != nil {
-					blockValue, critChance = target.Sess.shieldBlockParams()
-				}
-				var fullBlock bool
-				blocked, fullBlock = applyShieldBlockValue(blockValue, critChance, damage)
-				damage -= blocked
-				if fullBlock {
-					targetState = protocol.VictimStateBlocks
-				}
-			case protocol.MeleeHitCrit:
-				damage *= 2
-				// Unit::CalculateMeleeDamage MELEE_HIT_CRIT leg (Unit.cpp:1302-1319):
-				// the victim's 203, the attacker's 163 product by the NORMAL
-				// school mask, and the attacker's 169 sum by the victim's
-				// creature-type mask AddPct after the doubling, ahead of the
-				// resilience reduction below. The old twin doubled only.
-				{
-					var victimMask uint32
-					if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
-						victimMask = target.Sess.playerCreatureTypeMask(target.Sess.player)
-					} else if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && vm.CreatureType >= 1 {
-						victimMask = uint32(1) << (vm.CreatureType - 1)
-					}
-					damage = s.creatureMeleeCritDamageBonus(attackerKey, creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, target.Sess, isPlayerVictim, victimMask, damage)
-				}
-			case protocol.MeleeHitCrushing:
-				damage = uint32(float64(damage) * 1.5)
-			}
-
-			// Unit::CalculateMeleeDamage resilience tail (Unit.cpp:1418-1427):
-			// a player-owned attacker applies the victim's resilience
-			// (crit-damage reduction on crits plus the flat damage
-			// reduction) ahead of absorbs. Wild attackers never apply it
-			// (Unit::CanApplyResilience, Unit.cpp:12333).
-			if isPlayerVictim && target.Sess != nil && s.creatureCasterCanApplyResilience(motion) {
-				target.Sess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
-			}
-
-			// Handle player parry haste when player parries creature attack
-			if targetState == protocol.VictimStateParry && isPlayerVictim {
-				pMainSpeed := time.Duration(target.Sess.player.AttackTime) * time.Millisecond
-				if pMainSpeed <= 0 {
-					pMainSpeed = 2 * time.Second
-				}
-				elapsed := now.Sub(target.Sess.lastSwing)
-				if elapsed < pMainSpeed {
-					rem := pMainSpeed - elapsed
-					hasted := calcParryHastedRemaining(rem, pMainSpeed)
-					target.Sess.lastSwing = now.Add(-(pMainSpeed - hasted))
-				}
-			}
-
-			// Unit::ProcSkillsAndReactives victim arm (Unit.cpp:10283-10324): a
-			// dodged/parried/blocked creature swing arms the player victim's
-			// reactive aura states (Revenge/Counterattack usability) for the
-			// 4000ms window.
-			if isPlayerVictim && target.Sess != nil {
-				target.Sess.procReactiveVictimArms(outcome)
-			}
-
-			overkill := uint32(0)
-			// absorbedDmg carries the pre-absorb portion for the rage legs
-			// (Unit.cpp:815-924): the received leg converts damage + absorbed.
-			absorbedDmg := uint32(0)
-			if damage > 0 && isPlayerVictim {
-				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the creature
-				// attacker's MOD_TARGET_ABSORB_SCHOOL (194) pct bypasses absorbs.
-				bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(creatureAuraKeyForMotion(motion), 1))
-				absorbed, rem := target.Sess.applyAbsorptionShields(damage-bypass, 1)
-				absorbedDmg = absorbed
-				damage = rem + bypass
-				if rem == 0 && absorbed > 0 {
-					hitInfo |= protocol.HitInfoFullAbsorb
-				} else if absorbed > 0 {
-					hitInfo |= protocol.HitInfoPartialAbsorb
-				}
-			} else if damage > 0 {
-				// Creature-victim absorb twin (spell twin's pool leg).
-				victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
-				bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(victimKey, 1))
-				absorbed, rem := s.applyCreatureAbsorptionShields(victimKey, damage-bypass, 1)
-				absorbedDmg = absorbed
-				damage = rem + bypass
-				if rem == 0 && absorbed > 0 {
-					hitInfo |= protocol.HitInfoFullAbsorb
-				} else if absorbed > 0 {
-					hitInfo |= protocol.HitInfoPartialAbsorb
-				}
-			}
-			// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
-			// after absorption (C++ absorbs before DealDamage) — the application
-			// block below is then skipped: no health loss, no death, no pushback,
-			// no procs. lastCombatTime / in-combat still update, as entering
-			// combat precedes DealDamage in C++. shieldGateDamage keeps the
-			// pre-god value for the damage-shield gate below (Unit.cpp:1555:
-			// Damages is post-absorb but pre-god).
-			shieldGateDamage := damage
-			if isPlayerVictim {
-				damage = target.Sess.negateGodModeDamage(damage)
-			}
-			// Unit::DealDamage (Unit.cpp:815-819): rage from fully absorbed
-			// damage — ahead of the application block the god arm skips (the
-			// god arm itself returns before this leg in C++).
-			if isPlayerVictim && damage == 0 && absorbedDmg > 0 && !target.Sess.godCheatActive() {
-				target.Sess.grantRageFromDamageTaken(ctx, absorbedDmg)
-				// Unit::DealDamage (Unit.cpp:742-747): absorbed damage still
-				// strips TAKE_DAMAGE-interrupt auras — the removal runs before
-				// the !damage early-return.
-				target.Sess.procDamageAuras(false)
-				// Unit::DealDamage (Unit.cpp:749-761): fully absorbed non-DoT
-				// damage aborts ABORT_ON_DMG casts (creature attacker !=
-				// player victim).
-				target.Sess.interruptAbsorbedCast()
-			}
-			if damage > 0 && isPlayerVictim {
-				// Unit::CalcAbsorbResist (Unit.cpp:1977-2060):
-				// SPELL_AURA_SPLIT_DAMAGE (81/153) redirects part of the
-				// damage to the aura's caster, ahead of the 300 share leg.
-				damage = target.Sess.server.splitDamageToCaster(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
-				// Unit::DealDamage (Unit.cpp:766-788):
-				// SPELL_AURA_SHARE_DAMAGE_PCT.
-				target.Sess.splitShareDamagePct(ctx, target.GUID, true, creatureAuraKey{}, motion.GUID, damage, 1)
-				// Unit::DealDamage (Unit.cpp:869-870): HIGHEST_HIT_RECEIVED
-				// fires for any damage to a player victim, wild-creature
-				// attackers included.
-				target.Sess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
-				victimHealth := target.Sess.player.Health
-				// Duel defeat (Unit.cpp:825-853, 957-973): a charmed creature's
-				// blow lands as a duel defeat when its charmer is the duel
-				// opponent (GetControllingPlayer, Unit.cpp:5996); a wild
-				// creature's exactly-health-1 hit still completes the duel as
-				// won, while its lethal hit kills and interrupts.
-				if duelDefeatOnDamage(target.Sess, target.Sess.controllingPlayerGUID(motion.GUID), damage, victimHealth) {
-					// Duel defeat consumed the hit — loser at 1 HP, duel complete.
-				} else if damage >= victimHealth {
-					overkill = damage - victimHealth
-					target.Sess.player.Health = 0
-					target.IsDead = true
-					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
-					// GetCharmerOrOwnerPlayerOrPlayerItself (Unit.cpp:11279):
-					// a player-owned pet's kill credits its owner; a wild
-					// creature resolves to no player.
-					var creatureKiller *session
-					if motion.OwnerGUID != 0 {
-						creatureKiller = s.findSessionByGUID(motion.OwnerGUID)
-					}
-					target.Sess.killPlayer(ctx, creatureKiller, false, true)
-					// Eluna PLAYER_EVENT_ON_KILLED_BY_CREATURE (8): Unit::Kill
-					// tail (Unit.cpp:11466-11480), attacker is the creature
-					// (for pet kills C++ pushes the pet itself).
-					s.fireKilledByCreatureHook(ctx, motion, target.Sess)
-					if motion.BossAI != nil {
-						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
-					}
-					// Unit::Kill (Unit.cpp:11283-11290): the PROC_FLAG_KILL leg
-					// evaluates the killer creature's own proc auras on the
-					// kill victim; the KILLED/DEATH legs already ran inside
-					// killPlayer (death.go).
-					s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{
-						typeMask:       procFlagKill,
-						spellTypeMask:  procSpellTypeMaskAll,
-						spellPhaseMask: procSpellPhaseNone,
-						hitMask:        procHitNone,
-						actorGUID:      motion.GUID,
-					})
-				} else {
-					target.Sess.player.Health -= damage
-					// Unit::DealDamage (Unit.cpp:915-924): rage from damage
-					// received — damage + absorbed for the conversion.
-					target.Sess.grantRageFromDamageTaken(ctx, damage+absorbedDmg)
-					// Unit::DealDamage (Unit.cpp:906-913): random durability
-					// loss on HIT TAKEN — the victim is a player.
-					target.Sess.rollDurabilityLossOnHit(ctx, damage)
-					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
-					target.Sess.delayCurrentCast()
-					target.Sess.delayCurrentChannel()
-					target.Sess.procDamageAuras(true, damage)
-				}
-				target.Sess.lastCombatTime = now
-				if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
-					markPlayerInCombat(ctx, target.Sess, motion.GUID)
-				}
-			}
-			// Creature-victim application twin of the player block above:
-			// the split leg, then the spell twin's locked health mutation
-			// and death chain. The 300 share leg has no creature twin on
-			// the spell path (vehicle-session only) and stays out here too;
-			// the melee path carries no DamageTaken hook on either twin.
-			if damage > 0 && !isPlayerVictim {
-				victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
-				damage = s.splitDamageToCaster(ctx, target.GUID, false, victimKey, motion.GUID, damage, 1)
-				if damage > 0 {
-					var killed bool
-					var live *creatureMotion
-					var liveMaxHealth, liveNewHealth uint32
-					var liveX, liveY, liveZ float32
-					var liveFlags uint32
-					var liveCreatureType uint32
-					var rageNext uint32
-					var rageChanged bool
-					s.motionMu.Lock()
-					if m := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, target.GUID); m != nil && m.Health > 0 {
-						live = m
-						if live.BossAI == nil {
-							live.BossAI = getBossAIForCreature(live, live.ScriptName)
-						}
-						liveMaxHealth = live.MaxHealth
-						liveCreatureType = live.CreatureType
-						if damage >= live.Health {
-							overkill = damage - live.Health
-							live.Health = 0
-							live.DynamicFlags |= unitDynFlagLootable
-							live.InCombat = false
-							live.TargetGUID = 0
-							live.Moving = false
-							if live.ThreatMgr != nil {
-								live.ThreatMgr.ClearThreat()
-							}
-							killed = true
-						} else {
-							live.Health -= damage
-							if next, changed := s.addCreatureRageLocked(live, live.Level, damage+absorbedDmg); changed {
-								rageNext, rageChanged = next, true
-							}
-						}
-						liveNewHealth = live.Health
-						liveX, liveY, liveZ = live.X, live.Y, live.Z
-						liveFlags = live.DynamicFlags
-					}
-					s.motionMu.Unlock()
-					if live == nil {
-						damage = 0
-					} else if killed {
-						target.IsDead = true
-						s.procCreatureLethalDamageAuras(victimKey, 0, damage, liveMaxHealth)
-						s.stopCreatureMotionInInstance(motion.Map, motion.InstanceID, target.GUID, liveX, liveY, liveZ)
-						s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: liveFlags})
-						s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, liveX, liveY, liveZ, target.GUID, live.PhaseMask)
-						if liveCreatureType != creatureTypeCritter {
-							s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{typeMask: procFlagKill, spellTypeMask: procSpellTypeMaskAll, spellPhaseMask: procSpellPhaseNone, hitMask: procHitNone, actorGUID: motion.GUID})
-							s.fireCreatureMeleeAuraProcs(ctx, live, motion.GUID, procEventInfo{typeMask: procFlagKilled, spellTypeMask: procSpellTypeMaskAll, spellPhaseMask: procSpellPhaseNone, hitMask: procHitNone, actorGUID: live.GUID})
-						}
-						s.fireCreatureMeleeAuraProcs(ctx, live, target.GUID, procEventInfo{typeMask: procFlagDeath, spellTypeMask: procSpellTypeMaskAll, spellPhaseMask: procSpellPhaseNone, hitMask: procHitNone, actorGUID: live.GUID})
-						s.clearCreatureAurasOnDeath(victimKey)
-						s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, target.GUID)
-						s.clearCreatureDeathState(live)
-						s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
-						s.fireCreatureDiedByCreature(ctx, live, motion)
-						if live.BossAI != nil {
-							live.BossAI.OnDied(ctx, s, live)
-						}
-						s.fireCreatureDeathCast(ctx, live, motion.GUID)
-						s.recordCreatureKillLoot(live, motion)
-						s.grantCreatureKillReward(ctx, live, motion)
-						s.bindInstanceOnNoFunnelKill(ctx, live, motion)
-						s.creditNoFunnelKillingBlow(motion)
-						s.handleNoFunnelBattlegroundKill(live, motion)
-					} else {
-						healthUpdate := map[int]uint32{unitFieldHealth: liveNewHealth}
-						if rageChanged {
-							healthUpdate[unitFieldPower1+powerRage] = rageNext
-						}
-						s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, target.GUID, healthUpdate)
-						s.procCreatureDirectDamageAuras(victimKey, 0, damage, liveMaxHealth)
-					}
-				}
-			}
-			// Unit::DealMeleeDamage (Unit.cpp:1555-1579): a wild creature's
-			// melee hit from behind can daze the victim (SPELL_DAZED 1604,
-			// triggered). Fires on normal/crit/crushing/glancing outcomes;
-			// the 20% base (0.65*level+0.5 below 30) scales by the
-			// attacker/victim skill ratio x0.16, clamped to [0,40]. Go models
-			// no weapon/defense skill bonuses, so both skills are 5*level
-			// (crushing-blow convention, combat.go:2591). Pets and charmed
-			// creatures are player-controlled and never daze (C++
-			// !IsControlledByPlayer, boss_ai.go:creatureIsPlayerControlled).
-			// The !victim->IsVehicle() arm stays unbridged — Go has no
-			// player-vehicle model.
-			if isPlayerVictim &&
-				(outcome == protocol.MeleeHitNormal || outcome == protocol.MeleeHitCrit ||
-					outcome == protocol.MeleeHitCrushing || outcome == protocol.MeleeHitGlancing) &&
-				!creatureIsPlayerControlled(motion) &&
-				!hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi) {
-				victimLvl := float64(targetLevel)
-				if victimLvl < 1 {
-					victimLvl = 1
-				}
-				attackerLvl := float64(motion.Level)
-				if attackerLvl < 1 {
-					attackerLvl = 1
-				}
-				dazeChance := 20.0
-				if victimLvl < 30 {
-					dazeChance = 0.65*victimLvl + 0.5
-				}
-				dazeChance *= attackerLvl / victimLvl * 0.16
-				if dazeChance < 0 {
-					dazeChance = 0
-				}
-				if dazeChance > 40 {
-					dazeChance = 40
-				}
-				if rand.Float64()*100 < dazeChance {
-					s.castCreatureSpellTriggered(ctx, motion, 1604, target.GUID)
-				}
-			}
-			// Unit::ProcSkillsAndAuras (Unit.cpp:2169) — the actor leg for a
-			// creature melee swing: TriggerAurasProcOnEvent with ProcAttacker
-			// = PROC_FLAG_DONE_MELEE_AUTO_ATTACK |
-			// PROC_FLAG_DONE_MAINHAND_ATTACK (Unit.cpp:1194; creatures swing
-			// BASE_ATTACK only). Runs after damage is dealt, matching C++
-			// (2169 follows DealMeleeDamage).
-			s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{
-				typeMask:       procFlagDoneMeleeAutoAttack | procFlagDoneMainhandAttack,
-				schoolMask:     spellSchoolMaskNormal,
-				spellTypeMask:  procSpellTypeNone,
-				spellPhaseMask: procSpellPhaseNone,
-				hitMask:        meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked),
-				actorGUID:      motion.GUID,
-				damage:         damage,
-			})
-			// The victim leg of the same call: the player victim's own
-			// Taken-side proc auras fire on the melee event
-			// (PROC_FLAG_TAKEN_MELEE_AUTO_ATTACK, Unit.cpp:1195), the
-			// trigger spell targeting the creature attacker.
-			if isPlayerVictim && target.Sess != nil {
-				target.Sess.procVictimAuraTriggers(ctx, motion.GUID, outcome, hitInfo, targetState, blocked, damage)
-			} else if !isPlayerVictim {
-				if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil {
-					s.fireCreatureAuraProcLoop(ctx, vm, motion.GUID, procEventInfo{typeMask: takenMeleeTypeMask(damage), schoolMask: spellSchoolMaskNormal, spellTypeMask: procSpellTypeNone, spellPhaseMask: procSpellPhaseNone, hitMask: meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked), actorGUID: motion.GUID, damage: damage})
-				}
-			}
-			// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the player
-			// victim's SPELL_AURA_DAMAGE_SHIELD (15) effects strike the
-			// creature attacker after a damaging melee hit, gated on the
-			// pre-god post-absorb damage (see shieldGateDamage above).
-			if isPlayerVictim && target.Sess != nil && shieldGateDamage > 0 {
-				s.applyDamageShieldRetaliation(ctx,
-					damageShieldSide{sess: target.Sess, isPlayer: true},
-					damageShieldSide{key: creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}},
-					shieldGateDamage)
-			}
-			asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
-			if target.Sess != nil {
-				target.Sess.debug("creature melee attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)
-			}
-			// Unit::SendAttackStateUpdate: SendMessageToSet on the attacker —
-			// the creature's visibility set; the creature has no session leg
-			// (the victim is reached through the set).
-			if s != nil {
-				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
-			}
-			if isPlayerVictim {
-				target.Sess.sendPlayerUpdate()
-			}
-			if s != nil && isPlayerVictim {
-				s.triggerPetDefensive(ctx, target.Map, target.InstanceID, target.GUID, motion.GUID, scripting.CreatureEventOnOwnerAttackedAt)
-			}
-			motion.LastAttack = now
+			s.executeCreatureMeleeSwing(ctx, motion, target, now, false)
 		}
 		return
 	}

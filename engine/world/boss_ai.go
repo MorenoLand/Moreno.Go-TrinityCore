@@ -4430,6 +4430,17 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	if spellKnown {
 		s.fireSpellAfterCast(ctx, spellID, s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage}))
 	}
+	// Spell::_handle_finish_phase (Spell.cpp:3753-3761): a finished cast
+	// whose spell carries SPELL_EFFECT_ADD_EXTRA_ATTACKS spends the
+	// caster's pending extra attacks as extra base-attack swings against
+	// the cast's original unit target. The finish phase runs inside
+	// handle_immediate, ahead of the PHASE_CAST leg below in _cast order
+	// (Spell.cpp:3496 vs 3525-3545) — the same relative order as the
+	// session twin (spells.go:20704). The HasEffect gate is C++'s (3754):
+	// a counter banked by another spell is not spent by this cast.
+	if spellKnown && spellHasEffect(spellInfo, spellEffectAddExtraAttacks) {
+		s.consumeCreatureExtraAttacks(ctx, m, targetGUID)
+	}
 	// Spell::_cast "Handle procs on cast" tail (Spell.cpp:3525-3545): the
 	// PHASE_CAST proc leg fires after the spell_linked tail for creature
 	// casters too. The modOwner block (3514-3522) is vacuous on this path —
@@ -4895,6 +4906,37 @@ func (s *Server) creatureExtraAttacks(m *creatureMotion) uint32 {
 	return m.extraAttacks
 }
 
+// decrementCreatureExtraAttacks drops the banked counter by one under
+// motionMu — the HandleProcExtraAttackFor --m_extraAttacks twin
+// (Unit.cpp:2185), split out so the consume loop never holds motionMu
+// across a swing (the swing re-enters motionMu through its live-motion
+// legs). decrement-after-swing keeps the pending counter visible to the
+// CheckEffectProc extra-attacks arm during the swing, blocking recursive
+// extra-attack procs exactly like C++ — the session twin does the same
+// (spells.go:21004).
+func (s *Server) decrementCreatureExtraAttacks(m *creatureMotion) {
+	if s == nil || m == nil {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if m.extraAttacks > 0 {
+		m.extraAttacks--
+	}
+}
+
+// clearCreatureExtraAttacks zeroes the banked counter under motionMu —
+// the C++ null-victim arm (Spell.cpp:3757-3758) and the loop-exit burn
+// (Unit.cpp:2182-2185 runs the counter to zero either way).
+func (s *Server) clearCreatureExtraAttacks(m *creatureMotion) {
+	if s == nil || m == nil {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	m.extraAttacks = 0
+}
+
 // sendCreatureExtraAttacksLog mirrors Spell::ExecuteLogEffectExtraAttacks
 // (Spell.cpp:4566-4571) as flushed by SendLogExecute (Spell.cpp:4523-4552):
 // SMSG_SPELLLOGEXECUTE carrying the effect id, the InitEffectExecuteData
@@ -4927,15 +4969,14 @@ func (s *Server) sendCreatureExtraAttacksLog(m *creatureMotion, spellID uint32, 
 // has no pending bank (the m_extraAttacks early return). The filter
 // mirrors the redirect leg: only the hit verdicts a HIT_TARGET arm never
 // sees (evaded / immune / missed) are skipped, and a landed reflect
-// retargets onto the caster. DORMANT until Spell.dbc ships a
-// creature-cast extra-attacks spell: the only effect-19 spell in this
-// tree is 3391 Thrash (druid, player-cast), and no effect-19 row exists
-// in the seed DBC beyond it. The finish-phase spend (Spell.cpp:3753-3761)
-// is NOT wired here: it needs a reusable creature melee-swing executor
-// and the wild-creature swing is still inline in stepCreatureMotion
-// (creaturemotion.go:8777-9400) — the next unit extracts it and hooks the
-// spend ahead of the PHASE_CAST proc leg at the tail of
-// castCreatureSpellInternalWithBasePoints.
+// retargets onto the caster. LIVE, not dormant: 3391 Thrash is cast by
+// boss scripts (halycon/kurinnaxx/mr_smite DoCast(me), ayamiss
+// DoCastVictim, venoxis/theradras/cthun) and the seed DBC carries its
+// effect-19 row (tools/spelldbc_seed/main.go:6171, effAddExtraAttacks,
+// TARGET_UNIT_CASTER, bp1). The finish-phase spend (Spell.cpp:3753-3761)
+// is wired at the tail of castCreatureSpellInternalWithBasePoints via
+// consumeCreatureExtraAttacks, driving the extracted
+// executeCreatureMeleeSwing (creaturemotion.go).
 func (s *Server) creatureEffectAddExtraAttacks(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, effectIndex int, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
@@ -4973,6 +5014,37 @@ func (s *Server) creatureEffectAddExtraAttacks(ctx context.Context, m *creatureM
 		if banked {
 			s.sendCreatureExtraAttacksLog(m, spell.ID, effectIndex, guid, uint32(damage))
 		}
+	}
+}
+
+// consumeCreatureExtraAttacks mirrors Spell::_handle_finish_phase plus
+// Unit::HandleProcExtraAttackFor (Spell.cpp:3753-3761, Unit.cpp:2180-2187)
+// for a creature caster: pending extra attacks become extra base-attack
+// swings against the cast's original unit target, one decrement per swing
+// (so the CheckEffectProc extra-attacks arm still sees the pending
+// counter during those swings, blocking recursive extra-attack procs
+// exactly like C++). A dead or unresolvable target burns the counter
+// with no swings, matching the C++ null-victim arm. The HasEffect gate
+// lives at the call site (the tail of
+// castCreatureSpellInternalWithBasePoints), like the session twin
+// (spells.go:20704): a counter banked by another spell is not spent by
+// this cast. Extra swings never reset the regular swing timer — the
+// executor's extraAttack arm leaves LastAttack untouched.
+func (s *Server) consumeCreatureExtraAttacks(ctx context.Context, m *creatureMotion, targetGUID uint64) {
+	if s == nil || m == nil || s.creatureExtraAttacks(m) == 0 {
+		return
+	}
+	defer s.clearCreatureExtraAttacks(m)
+	if targetGUID == 0 {
+		return
+	}
+	for s.creatureExtraAttacks(m) > 0 {
+		victim := s.creatureMeleeVictimPos(m.Map, m.InstanceID, targetGUID)
+		if victim == nil || victim.IsDead {
+			break
+		}
+		s.executeCreatureMeleeSwing(ctx, m, victim, time.Now(), true)
+		s.decrementCreatureExtraAttacks(m)
 	}
 }
 
