@@ -305,6 +305,23 @@ func (r *luaAuraRef) modAuraCharges(num int32, mode auraRemoveMode) bool {
 // DropCharge (SpellAuras.h:154-159, SpellAuras.cpp:941-985) on the
 // live RemainingCharges counter; GetScriptValue/SetScriptValue are the
 // per-aura script store (the AuraScript member-variable twin).
+// calcSpellDamageForBase is the shared WorldObject::CalculateSpellDamage
+// (Object.cpp:2271-2274) twin: SpellEffectInfo::CalcValue via
+// CalcValueForBase (store.go), with the unknown-spell identity fallback
+// (no DBC row means no DieSides or level leg, so CalcValue is the base
+// points). The spell-mod/combo folds of the C++ tail are omitted, the
+// same approximation dispel.go uses.
+func calcSpellDamageForBase(server *Server, spellID uint32, index int, baseAmount int32, casterLevel uint32) int32 {
+	if server == nil || server.Data == nil || index < 0 {
+		return baseAmount
+	}
+	sp, found, err := server.Data.Spell(spellID)
+	if err != nil || !found || index >= len(sp.Effects) {
+		return baseAmount
+	}
+	return sp.Effects[index].CalcValueForBase(sp, baseAmount, casterLevel)
+}
+
 func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 	if r == nil {
 		return nil
@@ -430,6 +447,28 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return []any{aura.Amounts[index]}, nil
 	}
+	// GetBaseAmount([effectIndex]) is AuraEffect::GetBaseAmount: the
+	// stored base amount (BaseAmounts, the CalcValue input at apply
+	// time), defaulting to effect 0. An out-of-range index or a
+	// removed aura reads 0, the GetAmount convention. Backs the
+	// sniper-training countdown (spell_hunter.cpp:1374-1375, 1391,
+	// 1401), which re-derives the amount from the base each tick via
+	// CalculateSpellDamage.
+	methods["GetBaseAmount"] = func(_ context.Context, args []any) ([]any, error) {
+		index := 0
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaInt64Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		aura := r.resolve()
+		if aura == nil || index < 0 || index >= len(aura.BaseAmounts) {
+			return []any{int32(0)}, nil
+		}
+		return []any{aura.BaseAmounts[index]}, nil
+	}
 	// GetTriggerSpell([effectIndex]) is SpellInfo::Effects[eff].
 	// TriggerSpell (SpellInfo.h, the DBC trigger of a
 	// PERIODIC_TRIGGER_SPELL effect): the spell id the Go default
@@ -492,6 +531,49 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 			return []any{int32(0)}, nil
 		}
 		return []any{sp.Effects[index].CalcValue()}, nil
+	}
+	// CalculateSpellDamage([effectIndex[, baseAmount]]) is
+	// WorldObject::CalculateSpellDamage (Object.cpp:2271-2274) for
+	// this aura's own spell: SpellEffectInfo::CalcValue(caster,
+	// &baseAmount) (SpellInfo.cpp:402-440) — the DBC base points plus
+	// the RealPointsPerLevel level scaling and the DieSides roll, via
+	// the CalcValueForBase twin (store.go). The base defaults to
+	// GetBaseAmount(index) when omitted, the C++ caller's &baseAmount
+	// shape. The caster level is the aura's live caster level, else
+	// the stored apply-time level (casterLevel). An unknown spell, an
+	// out-of-range index, or a removed aura returns the base amount:
+	// with no DBC row there is no DieSides or level leg to apply, so
+	// CalcValue is the identity on the base points. DELTA: the Go
+	// twin omits the combo-point and ApplyEffectModifiers (spell-mod)
+	// folds of the C++ tail, the same approximation dispel.go uses.
+	// Backs the sniper-training countdown
+	// (spell_hunter.cpp:1375, 1392-1393, 1402-1403) and the demonic
+	// empowerment voidwalker leg (spell_warlock.cpp:460).
+	methods["CalculateSpellDamage"] = func(_ context.Context, args []any) ([]any, error) {
+		index := 0
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaInt64Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		aura := r.resolve()
+		if aura == nil || index < 0 || index >= len(aura.BaseAmounts) {
+			return []any{int32(0)}, nil
+		}
+		baseAmount := aura.BaseAmounts[index]
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			baseAmount = int32(v)
+		}
+		if r.server == nil || r.server.Data == nil {
+			return []any{baseAmount}, nil
+		}
+		return []any{calcSpellDamageForBase(r.server, spellID, index, baseAmount, r.casterLevel(aura))}, nil
 	}
 	// GetSpellStackAmount(spellID) is SpellInfo::StackAmount
 	// (Spell.dbc field 49 = CumulativeAura, DBCStructure.h:1440):

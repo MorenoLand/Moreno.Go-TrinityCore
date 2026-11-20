@@ -773,15 +773,58 @@ local function rapidRecuperationTriggerProc(event, aura, target, actor, procTarg
 end
 
 RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_TRIGGER, 6, rapidRecuperationTriggerProc)
--- NOT IN LUA: spell_hun_sniper_training (53302,
--- spell_hunter.cpp:1350-1420) — the countdown lives in
--- OnEffectUpdatePeriodic (no Lua event: only OnPeriodic/Apply/
--- Remove/ChangeAmount/Dispel/Proc fire) and both the reset and the
--- buff-cast legs need CalculateSpellDamage(baseAmount), which has no
--- Lua bridge (nor does aura:GetBaseAmount or aura:GetId for the
--- 64418 + rank-offset buff math). STAYS OUT; recipe: add an
--- update-periodic aura event + a CalculateSpellDamage bridge, then
--- port ev1 with the moving/stationary countdown folded in.
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_hun_sniper_training (53302, spell_hunter.cpp:1350-1420):
+--   OnEffectPeriodic EFFECT_0 PERIODIC_TRIGGER_SPELL
+--   (HandlePeriodic :1364-1379) + OnEffectUpdatePeriodic EFFECT_0
+--   (HandleUpdatePeriodic :1381-1407). The update-periodic arm has
+--   no dedicated AuraEvent, but it is exactly reproducible on ev1:
+--   C++ AuraEffect::Update does ++_ticksDone, then calls the
+--   update-periodic handlers, then the periodic tick
+--   (SpellAuraEffects.cpp:827-834), and Go ev1 fires at the head of
+--   the tick with _ticksDone already incremented (spells.go) — the
+--   kalecgos / burn-brutallus precedent (spell_generic.lua:519).
+--   Per tick, alive player owners recompute the countdown: moving
+--   resets it to CalculateSpellDamage(baseAmount), standing still
+--   decrements it by 1 (SetAmount, lua_aura.go). When the amount
+--   reaches 0 the owner casts the buff (64418 + rank offset, the
+--   C++ GetId() math — aura:GetAuraId() is the GetId twin) triggered
+--   and the countdown resets to CalculateSpellDamage. The
+--   HandlePeriodic PreventDefaultAction is the `return true` veto,
+--   so the DBC default trigger never fires. The creature leg of
+--   HandleUpdatePeriodic is npcbot-only (IsNPCBot gate :1386-1397);
+--   Go has no NPC bots, so a creature owner skips the countdown arm
+--   and only the periodic arm runs. Only R1 registers: TDB has no
+--   spell_ranks chain for 53302 and the C++ file names no R2/R3 IDs,
+--   never guessed; the buff chain 64418/64419/64420 is TDB-verified.
+--   DORMANT until Spell.dbc ships 53302/64418 (seed axis parked).
+local SPELL_HUNTER_SNIPER_TRAINING_R1 = 53302 -- spell_hunter.cpp:1350
+local SPELL_HUNTER_SNIPER_TRAINING_BUFF_R1 = 64418 -- spell_hunter.cpp:58
+
+local function sniperTrainingTick(event, aura, target)
+    if target == nil then
+        return true
+    end
+    if target:IsAlive() and target:GetObjectType() == "Player" then
+        local baseAmount = aura:GetBaseAmount(0)
+        local amount
+        if target:IsMoving() then
+            amount = aura:CalculateSpellDamage(0, baseAmount)
+        else
+            amount = aura:GetAmount(0) - 1
+        end
+        aura:SetAmount(amount, 0)
+    end
+    if aura:GetAmount(0) <= 0 then
+        target:CastSpell(target, SPELL_HUNTER_SNIPER_TRAINING_BUFF_R1 + aura:GetAuraId() - SPELL_HUNTER_SNIPER_TRAINING_R1, true)
+        if target:GetObjectType() == "Player" then
+            aura:SetAmount(aura:CalculateSpellDamage(0, aura:GetBaseAmount(0)), 0)
+        end
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_SNIPER_TRAINING_R1, 1, sniperTrainingTick)
 -- CENSUS CORRECTION: row 602 hooks (OnCheckCast) are phantom; real
 -- is OnEffectPeriodic + OnEffectUpdatePeriodic.
 -- CENSUS CORRECTION: row 603 spell_hun_thrill_of_the_hunt (34497)
