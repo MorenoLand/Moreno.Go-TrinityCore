@@ -127,10 +127,13 @@ local AURA_REMOVE_BY_EXPIRE = 4
 -- C++ spell_mage_fire_frost_ward::Absorb (spell_mage.cpp:661-679):
 -- EFFECT_0 OnEffectAbsorb. When the holder carries the Frost
 -- Warding talent aura (any rank; EFFECT_0 presence via
--- GetAuraEffectOfRankedSpell), the talent's EFFECT_1 live amount is
+-- GetAuraEffectOfRankedSpell), the talent's EFFECT_1 CalcValue is
 -- the roll chance (C++ reads EFFECT_1 CalcValue of the same spell)
 -- and a passed roll negates the full remaining damage and casts the
 -- triggered leg 57776 on the holder with BP0 = damage, triggered.
+-- The chance reads via aura:GetSpellEffectCalcValue (the DBC read,
+-- cheatDeath precedent): EFFECT_1 is a non-aura DUMMY with no
+-- EffectMask bit, so the ranked live-amount lookup reads nil.
 -- BOUNDED DEVIATION: Go clamps the returned amount to the live pool
 -- and consumes it; C++ AbsorbDamage bypasses the pool
 -- (absorbAmount = 0 + PreventDefaultAction leaves the ward intact).
@@ -148,7 +151,7 @@ local function fireFrostWardAbsorb(event, aura, target, damage, absorbAmount)
     if target:GetAuraEffectOfRankedSpell(SPELL_MAGE_FROST_WARDING_R1, 0) == nil then
         return nil
     end
-    local chance = target:GetAuraEffectOfRankedSpell(SPELL_MAGE_FROST_WARDING_R1, 1)
+    local chance = aura:GetSpellEffectCalcValue(SPELL_MAGE_FROST_WARDING_R1, 1)
     if chance == nil or chance <= 0 then
         return nil
     end
