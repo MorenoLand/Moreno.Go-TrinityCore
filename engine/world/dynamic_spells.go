@@ -176,6 +176,28 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 // shared AuraEffect timer (SpellAuras.cpp:815-843).
 const dynobjTargetMapInterval = 500 * time.Millisecond
 
+// dynobjCreatureTargetImmune mirrors the whole-spell half of the
+// DynObjAura::UpdateTargetMap registration check (SpellAuras.cpp:687-695):
+// a target immune to the whole spell is never registered. The per-effect
+// half rides the apply funnels (applyAuraToTarget's creature branch and
+// serverApplyAuraToCreatureTarget's per-effect loop); this covers the
+// whole-spell half those funnels leave to hit-resolution dispatch, which
+// the dynobj 500ms pass never runs. The friendly verdict is the caller's:
+// the player-path tick's targets come from the enemy sweep unless the
+// spell is friendly, and the creature-path tick already filtered on it.
+func (s *Server) dynobjCreatureTargetImmune(ctx context.Context, spell wotlk.Spell, targetGUID uint64, mapID, instanceID uint32, friendly bool) bool {
+	if s == nil {
+		return false
+	}
+	tm := s.findCreatureMotion(mapID, instanceID, targetGUID)
+	if tm == nil {
+		return false
+	}
+	stats := s.loadCreatureStats(ctx, tm.Entry)
+	key := creatureAuraKeyForMotion(tm)
+	return creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(targetGUID), nil, tm.Faction, func(uint32) bool { return friendly })
+}
+
 func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	if s == nil {
 		return
@@ -270,6 +292,17 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			// target map (and out of AuraHolders below), so the next
 			// pass re-checks it.
 			if !s.fireAuraCheckAreaTarget(ctx, spellID, object.CasterGUID, object.Map, object.InstanceID, targetGUID) {
+				continue
+			}
+			// DynObjAura::UpdateTargetMap (SpellAuras.cpp:687-695) never
+			// registers a whole-spell immune target; the per-effect half
+			// rides applyAuraToTarget, but the whole-spell half is left
+			// to hit-resolution dispatch there, which the 500ms pass
+			// never runs. Player targets already get both gates inside
+			// applyAuraToTarget, so only creature targets need the check
+			// here; targets come from the enemy sweep unless the spell
+			// is friendly.
+			if s.findSessionByGUID(targetGUID) == nil && s.dynobjCreatureTargetImmune(ctx, object.SpellData, targetGUID, object.Map, object.InstanceID, isFriendlyAreaSpell(object.SpellData)) {
 				continue
 			}
 			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, object.AuraEffectIndex, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true, 0, false, &sharedDelayMs)
@@ -381,9 +414,33 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 		if !s.fireAuraCheckAreaTarget(ctx, spellID, object.CasterGUID, object.Map, object.InstanceID, guid) {
 			continue
 		}
+		// DynObjAura::UpdateTargetMap (SpellAuras.cpp:687-695) never
+		// registers an immune target: whole-spell immunity blocks the
+		// target and per-effect immunity strips the dynobj's single
+		// effect. applyAuraFromCaster runs neither gate (the player-path
+		// twin runs both inside applyAuraToTarget), so the
+		// creature-caster pass checks here; creature targets get the
+		// whole-spell half here too (the per-effect half rides
+		// serverApplyAuraToCreatureTarget). A skipped target is not
+		// registered, so the next pass re-checks it. The whole-spell
+		// gate is skipped for a positive spell on a friendly target:
+		// the nil-caster session check cannot see the friendly
+		// exemption C++ applies to the school-immunity arm
+		// (Unit.cpp:7909).
 		if vs, ok := playerTargets[guid]; ok && vs != nil {
+			if !spellIsPositive(spell) || !s.creatureFriendlyToTarget(caster, guid) {
+				if vs.isImmuneToSpell(spell, nil) {
+					continue
+				}
+			}
+			if object.AuraEffectIndex >= 0 && vs.isImmunedToSpellEffect(spell, object.AuraEffectIndex, nil) {
+				continue
+			}
 			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs)
 		} else {
+			if s.dynobjCreatureTargetImmune(ctx, spell, guid, object.Map, object.InstanceID, s.creatureFriendlyToTarget(caster, guid)) {
+				continue
+			}
 			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil)
 		}
 		object.AuraHolders[guid] = struct{}{}

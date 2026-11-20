@@ -11618,6 +11618,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// rolls must not compute it again as a partition (the roll block would
 	// roll it twice).
 	refCenteredBranch := false
+	// nearbyBranchPick is the unit the nearby selection branch picked
+	// (Spell::SelectImplicitNearbyTargets, Spell.cpp:1036): the wire blocks
+	// below roll only the packet target, so the pick gets its own
+	// AddUnitTarget verdict in the roll block ahead of shareWireOutcome.
+	nearbyBranchPick := uint64(0)
 	goAreaBranchRan, goConeBranchRan := false, false
 	friendlyConeBranchRan := false
 	wireGOMask := spellGOWireEffectMask(spell)
@@ -11694,6 +11699,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// nearest PARTY/ALLY/RAID unit (3/4/58) becomes the target.
 		if nearby, ok := s.spellFriendlyNearbyTarget(ctx, spell, target); ok {
 			hitTargets = []uint64{nearby}
+			nearbyBranchPick = nearby
 		} else {
 			// Spell.cpp:1111: no target found ->
 			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
@@ -11709,6 +11715,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// (Spell.cpp:761-900), and a miss on either fails the cast.
 		if nearby, ok := s.spellEntryNearbyTarget(ctx, spell, spellID); ok {
 			hitTargets = []uint64{nearby}
+			nearbyBranchPick = nearby
 			if goNearbyEntrySpell {
 				if goNearby, ok := s.spellEntryNearbyGOTarget(ctx, spell, spellID); ok {
 					hitTargets = append(hitTargets, goNearby)
@@ -11732,6 +11739,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// becomes the target; no match fails the cast.
 		if nearby, ok := s.spellHostileNearbyTarget(ctx, spell); ok {
 			hitTargets = []uint64{nearby}
+			nearbyBranchPick = nearby
 		} else {
 			// Spell.cpp:1111: no target found ->
 			// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
@@ -12538,6 +12546,89 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::AddUnitTarget (Spell.cpp:2152) rolls every selected target,
+	// including the nearby branch's single pick (SelectImplicitNearbyTargets,
+	// Spell.cpp:1036 -> AddUnitTarget, :2095): the pick is not the wire
+	// target, so the wire blocks above never rolled it, and the rejoin
+	// loop below skips it as already listed — a reflecting, immune, or
+	// evading pick took full effects and its reflect aura was never
+	// consumed. A pick equal to the wire target was already rolled by
+	// the wire arms (wireDecided); a pick the area roll already decided
+	// carries its miss entry. The verdict arms mirror the rejoin loop
+	// (one spellTargetMissResult roll: immune, evade, reflect, hit
+	// table), with a clean reflect retargeting to the caster the
+	// doReflect way — the charge was already spent synchronously inside
+	// spellTargetMissResult (the chain-jump precedent), so no second
+	// ProcReflectDelayed timer is armed.
+	if nearbyBranchPick != 0 && nearbyBranchPick != s.playerGUID && uint16(nearbyBranchPick>>48) != 0xF110 && nearbyBranchPick != targetGUID {
+		pickInList := false
+		for _, guid := range hitTargets {
+			if guid == nearbyBranchPick {
+				pickInList = true
+				break
+			}
+		}
+		pickVerdicted := false
+		for _, miss := range missStatus {
+			if miss.TargetGUID == nearbyBranchPick {
+				pickVerdicted = true
+				break
+			}
+		}
+		if pickInList && !pickVerdicted {
+			var pickSess *session
+			if s.server != nil {
+				pickSess = s.server.findSessionByGUID(nearbyBranchPick)
+			}
+			var pickFaction uint32
+			if tgt, ok := s.getCombatTarget(ctx, nearbyBranchPick); ok {
+				pickFaction = tgt.Faction
+			}
+			if pickSess != nil && pickSess.isImmuneToSpell(spell, s) {
+				dropWireTarget(nearbyBranchPick)
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: nearbyBranchPick, Reason: protocol.SpellMissImmune})
+			} else if pickSess == nil && s.creatureTargetImmuneToSpell(ctx, nearbyBranchPick, spell, s, pickFaction) {
+				dropWireTarget(nearbyBranchPick)
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: nearbyBranchPick, Reason: protocol.SpellMissImmune})
+			} else if pickSess != nil && spellHasOnlyDamageEffects(spell) && pickSess.isImmuneToDamageSpell(spell, spell.SchoolMask) {
+				dropWireTarget(nearbyBranchPick)
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: nearbyBranchPick, Reason: protocol.SpellMissImmune})
+			} else if pickSess == nil && s.server != nil && spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s.server, creatureAuraKeyForPlayer(*s.player, nearbyBranchPick), spell, spell.SchoolMask) {
+				dropWireTarget(nearbyBranchPick)
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: nearbyBranchPick, Reason: protocol.SpellMissImmune})
+			} else if missInfo := s.spellTargetMissResult(ctx, nearbyBranchPick, spell); missInfo != protocol.SpellMissNone {
+				entry := protocol.SpellMissStatus{TargetGUID: nearbyBranchPick, Reason: missInfo}
+				if missInfo == protocol.SpellMissReflect {
+					entry.ReflectStatus = s.spellReflectReturnStatus(spell)
+					if entry.ReflectStatus == protocol.SpellMissNone {
+						isReflected = true
+						reflectSourceGUID = nearbyBranchPick
+						retargeted := make([]uint64, 0, len(hitTargets))
+						for _, guid := range hitTargets {
+							if guid == nearbyBranchPick {
+								retargeted = append(retargeted, s.playerGUID)
+							} else {
+								retargeted = append(retargeted, guid)
+							}
+						}
+						hitTargets = retargeted
+					} else {
+						dropWireTarget(nearbyBranchPick)
+					}
+				} else {
+					dropWireTarget(nearbyBranchPick)
+				}
+				missStatus = append(missStatus, entry)
+			} else if pickSess != nil && s.spellTargetFullyEffectImmune(spell, pickSess) {
+				dropWireTarget(nearbyBranchPick)
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: nearbyBranchPick, Reason: protocol.SpellMissImmune2})
+			} else if pickSess == nil && s.creatureTargetFullyEffectImmune(ctx, nearbyBranchPick, spell, s, pickFaction) {
+				dropWireTarget(nearbyBranchPick)
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: nearbyBranchPick, Reason: protocol.SpellMissImmune2})
+			}
+		}
+	}
+
 	// Spell::AddUnitTarget (Spell.cpp:2121) merges selections by GUID: a
 	// unit selected both as the wire target and by a friendly-area or
 	// 37/61 leg carries one TargetInfo whose EffectMask holds both bits,
@@ -12588,26 +12679,35 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	// partitionJumpOutcome reports the already-decided outcome for a unit
-	// that is also a per-effect partition member (Spell.cpp:2121 merged
-	// entry): the partition roll (rolled path), the wire share (unrolled
-	// path), or the unrolled-kept list already fixed it, so a chain jump,
-	// chain primary, or rejoined packet target landing on that GUID must
-	// take the partition outcome, not a fresh roll — a fresh roll would give
-	// the merged entry two independent reflect chances and split outcomes
-	// (kept in one list, tripped or missed in the other). 1 = kept in a
-	// partition list, 2 = clean-reflect trip, 3 = missed; 0 = no partition
-	// outcome, roll normally. Kept wins across partitions: the roll block's
-	// prior sets keep the lists consistent, so any inconsistency can only
-	// come from the unrolled path, where kept is the decided state.
+	// that is also a per-effect partition member or a main-list member
+	// (Spell.cpp:2121 merged entry): the partition roll (rolled path), the
+	// wire share (unrolled path), or the unrolled-kept list already fixed
+	// it, so a chain jump, chain primary, or rejoined packet target landing
+	// on that GUID must take the partition outcome, not a fresh roll — a
+	// fresh roll would give the merged entry two independent reflect chances
+	// and split outcomes (kept in one list, tripped or missed in the
+	// other). 1 = kept in a partition list, 2 = clean-reflect trip,
+	// 3 = missed; 0 = no partition outcome, roll normally. Kept wins across
+	// partitions: the roll block's prior sets keep the lists consistent, so
+	// any inconsistency can only come from the unrolled path, where kept is
+	// the decided state. The main list counts too: a GUID the area roll
+	// kept, tripped, or missed takes that outcome here — the wire and rejoin
+	// blocks already skip such GUIDs via wireDecided/primaryVerdicted, but
+	// the winning chain blocks consult only this oracle, so without the main
+	// list a chain primary or jump landing on an area-decided GUID took a
+	// second independent roll (a second reflect chance and a second charge,
+	// or a resurrected hit on an immune/resisted target). Trips are checked
+	// before misses: a clean reflect rides both lists, and the trip outcome
+	// (2) is the decided one.
 	partitionJumpOutcome := func(guid uint64) int {
-		for _, list := range [][]uint64{friendlyEffectTargets, refCenteredFriendlyTargets} {
+		for _, list := range [][]uint64{hitTargets, friendlyEffectTargets, refCenteredFriendlyTargets} {
 			for _, kept := range list {
 				if kept == guid {
 					return 1
 				}
 			}
 		}
-		for _, trips := range [][]uint64{reflectedAllyTrips, refCenteredAllyTrips} {
+		for _, trips := range [][]uint64{reflectedAoETrips, reflectedAllyTrips, refCenteredAllyTrips} {
 			for _, trip := range trips {
 				if trip == guid {
 					return 2
@@ -12619,6 +12719,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 		if _, ok := refCenteredMissGUIDs[guid]; ok {
 			return 3
+		}
+		for _, miss := range missStatus {
+			if miss.TargetGUID == guid {
+				return 3
+			}
 		}
 		return 0
 	}

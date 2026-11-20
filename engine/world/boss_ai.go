@@ -10181,6 +10181,22 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		// (SpellAuras.cpp:815-843) first ticks at cast + period, so a
 		// target in the patch at cast takes its first tick on that
 		// schedule, not a private period later.
+		// DynObjAura::UpdateTargetMap (SpellAuras.cpp:687-695) never
+		// registers an immune target — same gate as the 500ms pass
+		// (updateCreatureDynobjTargetMap); the cast-time fill checks it
+		// here because applyAuraFromCaster runs neither the whole-spell
+		// nor the per-effect gate. The whole-spell gate is skipped for
+		// a positive spell on a friendly target (the nil-caster session
+		// check cannot see the friendly exemption C++ applies to the
+		// school-immunity arm, Unit.cpp:7909).
+		if !spellIsPositive(spell) || !s.creatureFriendlyToTarget(m, vs.playerGUID) {
+			if vs.isImmuneToSpell(spell, nil) {
+				continue
+			}
+		}
+		if auraEffectIndex >= 0 && vs.isImmunedToSpellEffect(spell, auraEffectIndex, nil) {
+			continue
+		}
 		sharedDelayMs := uint32(object.NextAuraTick.Sub(now) / time.Millisecond)
 		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), periodMs, &sharedDelayMs)
 	}
@@ -10208,6 +10224,12 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		// map is first filled at creation; a rejection leaves the
 		// target out, so the 500ms pass re-checks it.
 		if !s.fireAuraCheckAreaTarget(ctx, spell.ID, m.GUID, m.Map, m.InstanceID, tm.guid) {
+			continue
+		}
+		// DynObjAura::UpdateTargetMap (SpellAuras.cpp:687-695): a
+		// whole-spell immune target is never registered (the per-effect
+		// half rides serverApplyAuraToCreatureTarget).
+		if s.dynobjCreatureTargetImmune(ctx, spell, tm.guid, m.Map, m.InstanceID, s.creatureFriendlyToTarget(m, tm.guid)) {
 			continue
 		}
 		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil)
