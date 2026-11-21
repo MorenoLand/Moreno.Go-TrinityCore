@@ -23,6 +23,11 @@ const (
 	// to taunt auras and the ATTACK_ME effect — Creature::ApplySpellImmune
 	// rows at Creature.cpp:634-638.
 	creatureFlagExtraNoTaunt = 0x00000100
+	// CREATURE_FLAG_EXTRA_NO_MOVE_FLAGS_UPDATE (CreatureData.h:46):
+	// creature won't update movement flags — Creature::
+	// UpdateMovementFlags returns early for it, so scripts own the
+	// swim/fly/gravity flags outright.
+	creatureFlagExtraNoMoveFlagsUpdate = 0x00000200
 	// CREATURE_FLAG_EXTRA_IMMUNITY_KNOCKBACK (CreatureData.h:67):
 	// Creature.cpp:1184-1187 applies IMMUNITY_EFFECT KNOCK_BACK +
 	// KNOCK_BACK_DEST.

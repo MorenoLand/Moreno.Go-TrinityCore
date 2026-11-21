@@ -137,7 +137,7 @@ type creatureMotion struct {
 	GravityDisabled       bool                // MOVEMENTFLAG_DISABLE_GRAVITY live value: Lua CreatureMethods::SetDisableGravity (Creature::SetDisableGravity twin, Creature.cpp:3027); zero value = gravity enabled (the C++ default), broadcast leg only
 	Hovering              bool                // MOVEMENTFLAG_HOVER live value: Lua CreatureMethods::SetHover (Creature::SetHover twin, Creature.cpp:3105); zero value = not hovering (the C++ default), broadcast leg only
 	Flying                bool                // MOVEMENTFLAG_CAN_FLY live value: Lua CreatureMethods::SetCanFly (Creature::SetCanFly twin, Creature.cpp:3060); zero value = cannot fly (the C++ default), broadcast leg only
-	Swimming              bool                // MOVEMENTFLAG_SWIMMING live value: Lua CreatureMethods::SetSwim (Unit::SetSwim twin, Unit.cpp:13728); zero value = not swimming (the C++ default), broadcast leg only
+	Swimming              bool                // MOVEMENTFLAG_SWIMMING live value: Lua CreatureMethods::SetSwim (Unit::SetSwim twin, Unit.cpp:13728) plus the per-tick auto-set (Creature::UpdateMovementFlags swim leg); zero value = not swimming (the C++ default). Drives the swim branch of creatureSplineVelocity and the START/STOP_SWIM broadcast
 	FeatherFalling        bool                // MOVEMENTFLAG_FALLING_SLOW live value: .debug moveflags SetFeatherFall twin (Unit.cpp:13767); zero value = normal fall (the C++ default), broadcast leg only
 	MoveFlagsRaw          uint32              // unhandled movement-flag bits stored by .debug moveflags (cs_debug.cpp:1251): the SetUnitMovementFlags word minus the handled set; folded into the moveflags display, never read by engine gates
 	MoveFlagsExtra        uint32              // MovementFlags2 extra flags stored by .debug moveflags (SetExtraUnitMovementFlags twin); display only
@@ -750,6 +750,9 @@ const (
 	creatureBaseWalkSpeed   = 2.5
 	creatureBaseRunSpeed    = 7.0
 	creatureBaseFlightSpeed = 7.0
+	// creatureBaseSwimSpeed is baseMoveSpeed[MOVE_SWIM] (Unit.cpp:93):
+	// the unmodified swim speed every creature spline starts from.
+	creatureBaseSwimSpeed = 4.722222
 )
 
 // creatureTypeFlagBossMob is CREATURE_TYPE_FLAG_BOSS_MOB
@@ -770,15 +773,25 @@ const creatureTypeFlagBossMob = 0x4
 // 1.0, Creature.cpp:532). A script-set MOVE_FLIGHT rate therefore never
 // affects a launched spline; the MOVE_RUN rate already folds into
 // motion.RunSpeed via SetSpeedRate. The WALKING leg selects MOVE_WALK.
-// Documented no-bridge arms of the same Launch block: the SWIMMING leg
-// of SelectSpeedType (creatureMotion carries no swim flag). Waypoint
+// The SWIMMING leg selects MOVE_SWIM: Unit::UpdateSpeed (Unit.cpp:8694)
+// folds only MOD_INCREASE_SWIM_SPEED (58) into the swim rate and then
+// multiplies by the template speed_run (banked on BaseRunRate), so the
+// swim speed is BaseRunRate * 4.722222 — the aura-58 fold has no Go
+// creature model (residual) and the 191 normalization cap shares the
+// run path's no-bridge (no MechanicImmuneMask on the motion). Waypoint
 // LAND/TAKEOFF set only AnimationTier (cosmetic), unmodeled.
 // The 0.66 searched-assistance multiplier (MoveSplineInit.cpp:118) is
 // applied below: it folds over the selected speed for every spline,
-// including flight, exactly like Launch's unconditional post-select arm.
+// including swim, exactly like Launch's post-select arm.
 func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
 	var speed float32
-	if walk || (motion != nil && motion.Walking) {
+	if motion != nil && motion.Swimming {
+		base := float32(1.0)
+		if motion.BaseRunRate > 0 {
+			base = motion.BaseRunRate
+		}
+		speed = base * creatureBaseSwimSpeed
+	} else if walk || (motion != nil && motion.Walking) {
 		speed = motion.Speed
 	} else {
 		speed = motion.RunSpeed
@@ -6801,6 +6814,30 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	}
 	if motion.Charmed && motion.OwnerGUID == 0 {
 		return
+	}
+	// Creature::UpdateMovementFlags swim leg (Creature.cpp:2779-2816):
+	// SetSwim(IsSwimAllowed() && IsInWater()) — the movement-template
+	// Swim flag (motion.MoveSwim, creature_template_movement.Swim) and
+	// the map liquid state. Only the swim leg runs here: the fly/gravity/
+	// hover legs of the same function have no Go twin (no per-motion
+	// ground-height model). The C++ gates ride along: a player-controlled
+	// creature (m_playerMovingMe) keeps script-set flags — the charmed
+	// early-return above covers charm/possess control — and
+	// CREATURE_FLAG_EXTRA_NO_MOVE_FLAGS_UPDATE leaves the flag to
+	// scripts. A flip broadcasts SMSG_SPLINE_MOVE_START_SWIM/STOP_SWIM,
+	// the SetSwim bridge's packet. Residual: a driven vehicle base has
+	// no per-motion driver marker in Go, so C++'s m_playerMovingMe skip
+	// does not cover it here; its splines never launch from this path.
+	if motion.FlagsExtra&creatureFlagExtraNoMoveFlagsUpdate == 0 {
+		wantSwim := motion.MoveSwim && s.mapIsInWater(motion.Map, motion.X, motion.Y, motion.Z)
+		if wantSwim != motion.Swimming {
+			motion.Swimming = wantSwim
+			opcode := protocol.OpcodeSMSG_SPLINE_MOVE_STOP_SWIM
+			if wantSwim {
+				opcode = protocol.OpcodeSMSG_SPLINE_MOVE_START_SWIM
+			}
+			s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, opcode, motion.PhaseMask)
+		}
 	}
 	if isCreaturePassive(motion) && motion.InCombat {
 		// CreatureAI::UpdateVictim (CreatureAI.cpp:240-264): REACT_PASSIVE
