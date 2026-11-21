@@ -17182,10 +17182,11 @@ func init() {
 	// fireblast 16144 5s->5s..8s, all victim-cast; melee engine-driven;
 	// immolate + berserkercharge ported (threat-list pool);
 	// UpdateAI CASTING gates ported as 500ms IsCasting defers;
-	// SetData beast-room/reached arms + both area triggers + SpellHit
-	// skinning arm unmodeled — no area-trigger/instance/MotionMaster/
-	// SpellHit bridges; Reset _Reset / JustDied _JustDied covered by the
-	// cancel on 2/4/23).
+	// SetData beast-room/reached arms ported on ev41 (orc runaway +
+	// suicide, MovePath, first-orc Talk) + both area triggers
+	// (at_the_beast.lua, 2066/2067) + SpellHit skinning arm; Reset
+	// _beastReached MovePath arm ported; Reset _Reset / JustDied
+	// _JustDied covered by the cancel on 2/4/23).
 	// Entry 10430 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_THE_BEAST at 10430 (BRS creatures enum) — see
 	// lua_scripts/eastern_kingdoms/boss_the_beast.lua.
@@ -17244,10 +17245,10 @@ func init() {
 	// {8s,16s} init -> {10s,16s} loop; knock-away 10101 victim-cast
 	// {12s,18s} init -> {14s,20s} loop (C++ urand ranges as {min,max}).
 	// 5%-HP latch -> self-cast summon-rend 16328 via OnDamageTaken(9)
-	// (mother_smolderweb latch convention; the RemoveAura(16167)
-	// arm has no bridge). Pre-fight event (portcullis, Nefarius
-	// SetData, MovePath) is documented-only — no gameobject /
-	// creature-list / MotionMaster bridges; Reset/JustDied instance
+	// (mother_smolderweb latch convention; RemoveAura(16167) bridged
+	// on the handler surface). Pre-fight SetData(1, 1) chain ported
+	// (ev41 -> AddAura 16167, portcullis UseDoorOrButton, victor
+	// SetData(1, 1), MovePath 1379681); Reset/JustDied instance
 	// arms unmodeled. UpdateAI combat-branch CASTING gates ported as
 	// 500ms IsCasting defers; Reset _Reset / JustDied _JustDied covered
 	// by the cancel on 2/4/23.
@@ -17261,16 +17262,15 @@ func init() {
 	// (C++ urand ranges as {min,max}). UpdateAI combat-branch CASTING
 	// gates ported as 500ms IsCasting defers. SPELL_FRENZY 8269 / SPELL_KNOCKDOWN 13360 are
 	// enum-only in C++ (never cast), omitted by design. The whole
-	// pre-fight gyth event chain (Nefarius FindNearestCreature,
-	// portcullis gameobject, MovePath, NearTeleportTo, SummonCreature
-	// of Gyth, area-trigger SetData) is documented-only — no bridges
-	// on the Lua surface (the_beast / gyth precedent); wave tables are
-	// commented out in C++ and the EVENT_WAVE_1..6 bodies are no-ops.
-	// JustDied's SetData(1, 2) on Nefarius unmodeled (creature-list
-	// precedent); IsSummonedBy's SetImmuneToPC(false) + DoZoneInCombat
-	// has no spawn bridge (emberseer precedent); MovementInform
-	// despawn gates on MotionMaster/DespawnOrUnsummon. Reset _Reset /
-	// JustDied _JustDied covered by the cancel on 2/4/23. Entry 10429
+	// pre-fight gyth event chain ported (ev41 area-trigger SetData ->
+	// 32-event machine: Nefarius Talk/emotes/facing, MovePath,
+	// NearTeleportTo x2, SummonCreature Gyth, portcullis door on each
+	// wave; wave tables are commented out in C++ and the EVENT_WAVE_1..6
+	// bodies are the door toggle only). JustDied's SetData(1, 2) on
+	// Nefarius ported; IsSummonedBy ports DoZoneInCombat on ev22
+	// (SetImmuneToPC has no engine model); MovementInform node 5/11
+	// ported on ev6 (teleport chain, Gyth SetData + despawn).
+	// Reset _Reset / JustDied _JustDied covered by the cancel on 2/4/23. Entry 10429
 	// verifiable from the C++ sources: blackrock_spire.h:70 names
 	// NPC_WARCHIEF_REND_BLACKHAND = 10429.
 	RegisterLuaBoss("boss_rend_blackhand", 10429)

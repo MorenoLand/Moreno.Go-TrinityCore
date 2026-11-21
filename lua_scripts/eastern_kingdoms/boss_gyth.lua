@@ -54,18 +54,26 @@
 -- SetBossState(DATA_GYTH, DONE) port via creature:GetBossState /
 -- creature:SetBossState (bridge live 2026-11-05) — see onReset/onDied.
 -- JustDied's _JustDied() is internal BossAI machinery covered by the
--- cancel on combat events. SetData(type, 1) -> EVENT_SUMMONED_1
--- 1s (self-cast aura SPELL_REND_MOUNTS 16167 (AddAura), FindNearestGame
--- Object(GO_DR_PORTCULLIS 175185, 40.0f)->UseDoorOrButton,
--- FindNearestCreature(NPC_LORD_VICTOR_NEFARIUS, 75.0f)->AI()->SetData(1,
--- 1), then EVENT_SUMMONED_2 2s -> MovePath(GYTH_PATH_1 1379681)) — the
--- whole pre-fight event gates on gameobject / creature-list /
--- MotionMaster bridges absent from the Lua surface (the_beast
--- SetData precedent). SPELL_REND_MOUNTS 16167, NEFARIUS_PATH_2/3
--- 1379671/1379672 and GYTH_PATH_1 1379681 are enum-only here
--- (no bridge consumes them).
+-- cancel on combat events.
+-- PORTED (2026-11-21): SetData(type, 1) -> EVENT_SUMMONED_1 1s
+-- (self-cast aura SPELL_REND_MOUNTS 16167 via creature:AddAura,
+-- FindNearestGameObject(GO_DR_PORTCULLIS 175185, 40.0f) ->
+-- UseDoorOrButton, FindNearestCreature(NPC_LORD_VICTOR_NEFARIUS 10162,
+-- 75.0f) -> AI()->SetData(1, 1), then EVENT_SUMMONED_2 2s ->
+-- MovePath(GYTH_PATH_1 1379681, false) via the 2026-11-21 MovePath
+-- bridge). The C++ SetData switch is on data only (type ignored).
+-- The pre-fight timers run outside the combat scheduler (C++ drains
+-- them in the !UpdateVictim branch); the Lua timers fire regardless
+-- of combat state and are cancelled on 2/4/23 with the rest.
+-- NEFARIUS_PATH_2/3 1379671/1379672 are enum-only here (no bridge
+-- consumes them; Nefarius walks them via his own AI, which C++ leaves
+-- unscripted — victor:SetData(1, 1) is a no-op dispatch).
 
 local ENTRY_GYTH = 10339
+
+local NPC_LORD_VICTOR_NEFARIUS = 10162
+local GO_DR_PORTCULLIS = 175185
+local GYTH_PATH_1 = 1379681
 
 local SPELL_CORROSIVE_ACID = 16359
 local SPELL_FLAMEBREATH = 16390
@@ -192,8 +200,39 @@ local function onDamageTaken(_, creature, _, damage)
     end
 end
 
+-- C++ SetData (boss_gyth.cpp:99-109): switch on data; data == 1 ->
+-- EVENT_SUMMONED_1 in 1s. EVENT_SUMMONED_1 (UpdateAI !UpdateVictim
+-- branch): AddAura(SPELL_REND_MOUNTS 16167, me), portcullis
+-- UseDoorOrButton, victor SetData(1, 1), then EVENT_SUMMONED_2 in 2s.
+-- EVENT_SUMMONED_2: MovePath(GYTH_PATH_1 1379681, false).
+local function onSummoned2(creature, _)
+    creature:MovePath(GYTH_PATH_1, false)
+end
+
+local function onSummoned1(creature, guid)
+    creature:AddAura(SPELL_REND_MOUNTS)
+    local portcullis = creature:FindNearestGameObject(GO_DR_PORTCULLIS, 40.0)
+    if portcullis then
+        portcullis:UseDoorOrButton()
+    end
+    local victor = creature:FindNearestCreature(NPC_LORD_VICTOR_NEFARIUS, 75.0, true)
+    if victor then
+        victor:SetData(1, 1)
+    end
+    schedule(guid, "summoned2", 2000, function() onSummoned2(creature, guid) end)
+end
+
+local function onSetData(_, creature, _, data)
+    if data ~= 1 then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "summoned1", 1000, function() onSummoned1(creature, guid) end)
+end
+
 RegisterCreatureEvent(ENTRY_GYTH, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_GYTH, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_GYTH, 4, onDied)
 RegisterCreatureEvent(ENTRY_GYTH, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_GYTH, 23, onReset)
+RegisterCreatureEvent(ENTRY_GYTH, 41, onSetData)

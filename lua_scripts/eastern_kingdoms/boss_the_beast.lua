@@ -16,8 +16,8 @@
 -- ev1 IN_PROGRESS via the base call (boss_the_beast.cpp:150,
 -- BossAI::_JustEngagedWith, ScriptedCreature.cpp:537); ev23 NOT_STARTED
 -- via Reset's _Reset() (:83, ScriptedCreature.cpp:499-507, alive-gated +
--- state != DONE) — Reset's MovePath arm stays out (no MotionMaster
--- bridge); ev4 DONE via the base BossAI::JustDied — there is NO
+-- state != DONE) — Reset's _beastReached MovePath arm is ported in
+-- onReset (MovePath bridge live 2026-11-21); ev4 DONE via the base BossAI::JustDied — there is NO
 -- JustDied override in the file, so the base runs by virtual dispatch
 -- (ScriptedCreature.h:330 -> _JustDied(), ScriptedCreature.cpp:513-518).
 -- The remaining _Reset()/_JustDied() bookkeeping is covered by the
@@ -45,18 +45,29 @@
 -- SelectTarget(Random, 0, 38, true) is playerOnly (threat-list pool,
 -- within 38yd); 2s init -> urand(15s, 23s) loop, re-arm unconditional,
 -- non-triggered DoCast(target).
--- SetData(DATA_BEAST_ROOM / DATA_BEAST_REACHED) — gates on
--- FindNearbyOrcs (GetCreatureListWithEntryInGrid NPC_BLACKHAND_ELITE
--- 10317), ObjectAccessor::GetCreature, MotionMaster::MovePath /
--- MovePoint, BasicEvent scheduling (OrcDeathEvent suicide 6s),
--- SetReactState, and both are only reachable via the area triggers
--- (at_trigger_the_beast_movement AT 2066, at_the_beast_room) and the
--- instance script. The area-trigger dispatch exists
--- (RegisterServerEvent(24)) and creature:GetGuidData is bridged,
--- but there is no instance_blackrock_spire.lua to bind the Beast
--- and no ev41 consumer for the SetData legs — the stay-out is the
--- unported consumer machine, not the dispatch (coren_direbrew /
--- instance precedent).
+-- PORTED (2026-11-21): SetData(DATA_BEAST_ROOM / DATA_BEAST_REACHED)
+-- via ev41 (boss_the_beast.cpp:98-148), triggered by
+-- at_the_beast.lua (RegisterServerEvent 24, triggers 2066/2067,
+-- TDB-verified in at_census_2026-11-15.md). DATA_BEAST_REACHED:
+-- _beastReached latch, MovePath(BEAST_MOVEMENT_ID 1379690, true),
+-- FindNearbyOrcs (GetCreaturesInGrid NPC_BLACKHAND_ELITE 10317, 50.0f)
+-- -> each orc MoveTo(1, GetRandomPoint(OrcsRunawayPosition, 5.0f))
+-- + OrcDeathEvent suicide (CastSpell self 7, triggered) at 6s +
+-- SetReactState(REACT_PASSIVE), then the DATA_BEAST_ROOM leg inline
+-- (C++ self-SetData call). DATA_BEAST_ROOM: _orcYelled latch, first
+-- orc in the GUID-sorted grid list Talk(SAY_BLACKHAND_DOOMED 0).
+-- GetRandomPoint rides Lua math.random (angle uniform, signed
+-- triangular radius (rand+rand, folded at 1) * 5.0, Object.cpp
+-- :1422-1441 C++-exact; z stays the anchor z, no ground-height snap).
+-- CreateLuaEvent guarded by IsAlive (C++ fires unconditionally, but
+-- a suicide cast on a dead orc is a no-op in both). The Reset
+-- _beastReached MovePath arm is ported in onReset (alive-gated).
+-- DELTAS: (1) the triggers bind the Beast via player:
+-- FindNearestCreature(10430, 200) instead of instance GetGuidData
+-- (no instance_blackrock_spire.lua); (2) the GM gate on both
+-- triggers is unmodeled (no player:IsGameMaster bridge);
+-- (3) C++ _beastReached/_orcYelled reset only on AI construction
+-- (respawn); the Lua latches clear on ev4 to match.
 -- PORTED (2026-11-15): SpellHit skinning arm (boss_the_beast.cpp:88-94)
 -- loops MAX_SPELL_EFFECTS (:90), fires only if an effect
 -- IsEffect(SPELL_EFFECT_SKINNING = 95, SharedDefines.h:906) (:91), then
@@ -92,8 +103,21 @@ local SPELL_IMMOLATE = 15570
 local SPELL_BERSERKER_CHARGE = 16636
 local SPELL_FINKLE_IS_EINHORN = 16710
 local SPELL_EFFECT_SKINNING = 95 -- SharedDefines.h:906
+local SPELL_SUICIDE = 7 -- boss_the_beast.cpp:36
+local NPC_BLACKHAND_ELITE = 10317 -- boss_the_beast.cpp:44
+local BEAST_MOVEMENT_ID = 1379690 -- boss_the_beast.cpp:41
+local DATA_BEAST_REACHED = 1 -- boss_the_beast.cpp:39
+local DATA_BEAST_ROOM = 2 -- boss_the_beast.cpp:40
+local REACT_PASSIVE = 0 -- UnitDefines.h
+local ORC_RUNAWAY_X = 34.163567 -- boss_the_beast.cpp:47 OrcsRunawayPosition
+local ORC_RUNAWAY_Y = -536.852356
+local ORC_RUNAWAY_Z = 110.935196
 
 local ENTRY_THE_BEAST = 10430
+
+-- SetData latches, keyed by Beast GUID (C++ constructor members,
+-- cleared on ev4 to match respawn-constructs-a-fresh-AI).
+local beastState = {}
 
 local timers = {}
 
@@ -235,22 +259,31 @@ end
 
 -- C++ Reset (boss_the_beast.cpp:81-86): _Reset() bookkeeping (timer
 -- cancel above) + the NOT_STARTED write (ScriptedCreature.cpp:499-507:
--- alive-gated, state != DONE). The _beastReached MovePath arm stays
--- out (no MotionMaster bridge). Alive gate is load-bearing: Go fires
--- ev23 on the death path too, and C++ Reset never runs on death.
+-- alive-gated, state != DONE) + the _beastReached MovePath arm
+-- (MovePath(BEAST_MOVEMENT_ID, true)). Alive gate is load-bearing:
+-- Go fires ev23 on the death path too, and C++ Reset never runs on
+-- death (so a dead Beast never re-paths).
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
     if creature:IsAlive() and creature:GetBossState(12) ~= 3 then
         creature:SetBossState(12, 0)
+        local state = beastState[guid]
+        if state and state.reached then
+            creature:MovePath(BEAST_MOVEMENT_ID, true)
+        end
     end
 end
 
 -- No JustDied override in boss_the_beast.cpp: the base
 -- BossAI::JustDied runs by virtual dispatch (ScriptedCreature.h:330)
 -- -> _JustDied() (ScriptedCreature.cpp:513-518) bookkeeping (timer
--- cancel) + SetBossState(DATA_THE_BEAST=12, DONE).
+-- cancel) + SetBossState(DATA_THE_BEAST=12, DONE). The SetData latches
+-- clear here: C++ constructs a fresh AI on respawn.
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    beastState[guid] = nil
     creature:SetBossState(12, 3)
 end
 
@@ -268,8 +301,85 @@ local function onSpellHit(_, creature, _, spellId)
     creature:CastSpell(creature, SPELL_FINKLE_IS_EINHORN, true)
 end
 
+-- C++ FindNearbyOrcs (boss_the_beast.cpp:207-214): every Blackhand Elite
+-- in the 50.0f grid around the Beast. GetCreaturesInGrid returns the
+-- matches GUID-sorted, so orcs[1] is the C++ _nearbyOrcsGUIDs.front().
+local function findNearbyOrcs(creature)
+    return creature:GetCreaturesInGrid(NPC_BLACKHAND_ELITE, 50.0)
+end
+
+-- C++ SetData DATA_BEAST_ROOM (boss_the_beast.cpp:106-126): _orcYelled
+-- latch; the first orc says SAY_BLACKHAND_DOOMED (0). No orcs -> the
+-- latch stays unset and the leg retries on the next SetData.
+local function beastRoomLeg(creature, guid)
+    local state = beastState[guid]
+    if not state or state.yelled then
+        return
+    end
+    local orcs = findNearbyOrcs(creature)
+    if #orcs == 0 then
+        return
+    end
+    state.yelled = true
+    orcs[1]:Talk(0)
+end
+
+-- C++ SetData DATA_BEAST_REACHED (boss_the_beast.cpp:127-148):
+-- _beastReached latch, MovePath(BEAST_MOVEMENT_ID, true), each nearby
+-- orc MovePoint(1, GetRandomPoint(OrcsRunawayPosition, 5.0f)) +
+-- OrcDeathEvent (suicide at 6s) + SetReactState(REACT_PASSIVE), then
+-- the DATA_BEAST_ROOM leg inline (C++ self-SetData call).
+local function beastReachedLeg(creature, guid)
+    local state = beastState[guid]
+    if not state then
+        state = { reached = false, yelled = false }
+        beastState[guid] = state
+    end
+    if state.reached then
+        return
+    end
+    state.reached = true
+    creature:MovePath(BEAST_MOVEMENT_ID, true)
+    local orcs = findNearbyOrcs(creature)
+    for _, orc in ipairs(orcs) do
+        -- WorldObject::GetRandomPoint (Object.cpp:1422-1441): angle
+        -- uniform over 2pi; radius = (rand_norm() + rand_norm(),
+        -- folded at 1 to [-1, 1]) * distance -- a signed triangular
+        -- radius, NOT rand*distance. z stays the anchor z (C++
+        -- re-snaps to ground height; no map-height bridge in Lua).
+        local angle = math.random() * 2 * math.pi
+        local radius = math.random() + math.random()
+        if radius > 1 then
+            radius = radius - 2
+        end
+        local dist = radius * 5.0
+        orc:MoveTo(1, ORC_RUNAWAY_X + dist * math.cos(angle),
+            ORC_RUNAWAY_Y + dist * math.sin(angle), ORC_RUNAWAY_Z)
+        orc:SetReactState(REACT_PASSIVE)
+        CreateLuaEvent(function()
+            if orc:IsAlive() then
+                orc:CastSpell(orc, SPELL_SUICIDE, true)
+            end
+        end, 6000)
+    end
+    beastRoomLeg(creature, guid)
+end
+
+-- C++ SetData (boss_the_beast.cpp:98-105): switch on type; the area
+-- triggers pass (DATA_BEAST_REACHED, DATA_BEAST_REACHED) and
+-- (DATA_BEAST_ROOM, DATA_BEAST_ROOM).
+local function onSetData(_, creature, setType, _)
+    local guid = creature:GetGUIDLow()
+    if setType == DATA_BEAST_REACHED then
+        beastReachedLeg(creature, guid)
+    elseif setType == DATA_BEAST_ROOM then
+        beastRoomLeg(creature, guid)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_THE_BEAST, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_THE_BEAST, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_THE_BEAST, 4, onDied)
 RegisterCreatureEvent(ENTRY_THE_BEAST, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY_THE_BEAST, 23, onReset)
+RegisterCreatureEvent(ENTRY_THE_BEAST, 41, onSetData)
