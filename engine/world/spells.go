@@ -14822,6 +14822,39 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// divisor (Spell.cpp:7761, m_UniqueTargetInfo.size() at launch) counts the
 	// whole cast, not the wave. Nil on the immediate and single-timer paths.
 	var waveSnap *waveTargetSnapshot
+	// Caster-owned area-aura fan-out (area_auras.go): DoSpellEffectHit
+	// (Spell.cpp:2840-2872) creates the aura on the caster at hit time
+	// and Aura::UpdateTargetMap fills it — the triggered path's
+	// registerPlayerAreaAura hook twin. The immediate branch registers
+	// once after applyEffects; the delayed branch registers on the
+	// first wave (the first DoTargetSpellHit moment), never on later
+	// waves — a re-register would refresh every holder's duration.
+	// Duration is the first area-aura effect's auraEffectParams value
+	// (the APPLY_AURA arm's own convention: SPELLMOD_DURATION and
+	// haste folded); the spell-level DurationIndex is shared by every
+	// effect, so the first area effect is representative. No
+	// SpellScript prevent gate: the aura is created in
+	// DoSpellEffectHit before the effect handler ever runs, so a
+	// PreventHitDefaultEffect veto on an area effect is vacuous — the
+	// registerCreatureAreaAura twin's convention.
+	clientAreaAuraRegistered := false
+	registerClientAreaAura := func(hookCtx context.Context) {
+		if clientAreaAuraRegistered || !spellHasAreaAuraEffect(spell) {
+			return
+		}
+		clientAreaAuraRegistered = true
+		var durationMs uint32
+		for i, eff := range spell.Effects {
+			if eff.Aura == 0 {
+				continue
+			}
+			if _, ok := areaAuraSelectionForEffect(eff.Effect); ok {
+				durationMs, _, _ = s.auraEffectParams(spell, eff, i)
+				break
+			}
+		}
+		s.registerPlayerAreaAura(hookCtx, spell, durationMs)
+	}
 	applyEffects := func(effCtx context.Context) {
 		// The immediate phase runs once per cast (immediateHandled above).
 		defer func() { immediateHandled = true }()
@@ -17641,7 +17674,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.executeSpellMaxHealthHeal(effCtx, s.playerGUID, spellID, eff.CalcValueForLevel(spell, casterLevel))
 				}
-			case 6, 27, 35: // Apply Aura
+			case 6, 27: // Apply Aura
+				// SPELL_EFFECT_APPLY_AREA_AURA_PARTY (35) is EffectUnused
+				// (SpellEffects.cpp:104) — no HIT leg. Its aura reaches
+				// targets only through UnitAura::FillTargetMap, which the
+				// registerClientAreaAura hook below runs; the 65/119/128/
+				// 129/143 effects already fall through to default. The
+				// triggered path's twin gate is the area-aura skip in
+				// castSpellDirectWithOverrides' APPLY_AURA arm.
 				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
 				// skips the default handler for this effect: an ev4/ev5
 				// handler's veto suppresses the aura application (and its
@@ -21120,6 +21160,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				reflectedAoETrips, reflectedAllyTrips, refCenteredAllyTrips = dueAoETrips, dueAllyTrips, dueRefTrips
 				targetSelectFiltered = dueFiltered
 				applyEffects(context.Background())
+				registerClientAreaAura(context.Background())
 				hitTargets, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets = pendingHit, pendingFriendly, pendingRefCentered, pendingFriendlyCone, pendingEnemyCone
 				reflectedAoETrips, reflectedAllyTrips, refCenteredAllyTrips = pendingAoETrips, pendingAllyTrips, pendingRefTrips
 				targetSelectFiltered = pendingFiltered
@@ -21281,6 +21322,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	applyEffects(ctx)
+	registerClientAreaAura(ctx)
 	// Spell::handle_immediate (Spell.cpp:3568) no-bridge legs, noted:
 	//   - PrepareTargetProcessing()/FinishTargetProcessing(): Go has no
 	//     target container model; hitTargets were resolved at cast start.

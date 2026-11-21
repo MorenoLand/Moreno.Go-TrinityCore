@@ -28,12 +28,13 @@ import (
 // radius + relation, and the 500ms pass adopts late joiners and strips
 // leavers.
 //
-// The player triggered-cast path (castSpellDirectWithOverrides) registers
-// the fan-out the same way and strips area effects from its hit loop; the
-// client path (finishSpellCast/applyEffects) still applies them to its
-// aura-list targets and has no 500ms re-selection pass — a separate unit.
-// The pet funnel already fans 35/129 out to its area targets
-// (pet_combat.go:6843) and still needs 65/119/128/143.
+// The player triggered-cast path (castSpellDirectWithOverrides) and the
+// client path (finishSpellCast/applyEffects, registerClientAreaAura hook)
+// both register the fan-out and strip area effects from their hit loops;
+// the 500ms pass re-selects after. The pet funnel fans 35/65/128/129 out
+// to its area targets (pet_combat.go:6843; 65/128 ride the effect-id ally
+// legs, petAreaAllyWantedMaskForEffect) and 119/143 through the
+// radius-gated owner leg.
 //
 // KNOWN DELTA (single-record model, shared with the player path and the
 // dynobj path): the fan-out applies the whole spell record, so on a mixed
@@ -548,6 +549,24 @@ func (s *Server) applyPlayerAreaAuraToHolder(ctx context.Context, state *areaAur
 		}
 	}
 	return s.areaAuraPresent(state, holderGUID)
+}
+
+// playerAreaAuraDurationMs mirrors the creature twin's duration fold
+// (boss_ai.go:9978-9995) and Aura::CalcMaxDuration (SpellAuras.cpp:871-886):
+// the DBC duration with the caster's SPELLMOD_DURATION mods. No haste fold,
+// matching the creature twin.
+func (s *session) playerAreaAuraDurationMs(spell wotlk.Spell) uint32 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || spell.DurationIndex == 0 {
+		return 0
+	}
+	dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level))
+	if err != nil || !ok || dur <= 0 {
+		return 0
+	}
+	if modded := s.applySpellMod(spell, spellModDuration, dur); modded > 0 {
+		dur = modded
+	}
+	return uint32(dur)
 }
 
 // registerPlayerAreaAura creates the caster-owned area aura at cast time for a
