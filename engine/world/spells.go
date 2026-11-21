@@ -3445,8 +3445,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// Unit-target positional block (Spell::CheckCast, Spell.cpp:5372-5401):
 	// in C++ the behind/facing/LOS arms sit inside the same `if (Unit*
 	// target = m_targets.GetUnitTarget())` block as the CheckTarget call,
-	// after it and ahead of the dest-LOS check (5400).
-	if targetGUID != 0 && targetGUID != s.playerGUID {
+	// after it and ahead of the dest-LOS check (5400). GetUnitTarget() is
+	// null for a corpse-targeted cast, so the whole block is skipped when
+	// the wire target was a corpse (corpseTargetGUID, the CheckRange
+	// precedent below): the resurrect-new / skin corpse-LOS legs live in
+	// CheckEffectTarget (Spell.cpp:7434-7478) at AddUnitTarget /
+	// AddCorpseTarget time, never in CheckCast, and EffectResurrectNew
+	// (SpellEffects.cpp:246-275) + EffectSkinPlayerCorpse (:5126-5146)
+	// carry no LOS leg of their own.
+	if targetGUID != 0 && targetGUID != s.playerGUID && corpseTargetGUID == 0 {
 		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 			// Behind/facing arms (Spell::CheckCast, Spell.cpp:5378-5389): in C++
 			// these sit right after the CheckTarget call inside the unit-target
@@ -4641,7 +4648,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				s.castMu.Unlock()
 				// Spell::update (Spell.cpp:3805-3811):
 				// m_targets.GetUnitTargetGUID() && !m_targets.GetUnitTarget()
-				if targetGUID != 0 {
+				// — the GUID term is the UNIT target GUID, null for a
+				// corpse-targeted cast, so a corpse wire target never
+				// cancels mid-bar; a corpse that despawns mid-cast is a
+				// no-op at apply time (EffectResurrectNew resolves the
+				// owner and returns when the corpse is gone).
+				if targetGUID != 0 && !isCorpseGUID(targetGUID) {
 					if _, ok := s.getCombatTarget(context.Background(), targetGUID); !ok {
 						s.debug("spell cast cancelled mid-bar", "account", s.accountName, "spell", st.SpellID, "reason", "target removed")
 						s.interruptCurrentCast()
@@ -9556,15 +9568,43 @@ func (s *session) implicitCasterUnitTarget(spell wotlk.Spell) (uint64, bool) {
 // leg has no Go model), the caster itself (target == m_caster), and a
 // gameobject caster ignoring LOS checks (vacuous here — the Go caster is
 // always the session player). The triggered-aura inheritance arm
-// (m_triggeredByAuraSpell carrying ATTR2_CAN_TARGET_NOT_IN_LOS) has no
-// bridge: triggeredByAuraCast carries no spell id. The charm legs
+// (m_triggeredByAuraSpell carrying ATTR2_CAN_TARGET_NOT_IN_LOS,
+// Spell.cpp:7424-7426) rides triggeredByAuraIgnoresLOS below: the
+// in-cast slot s.castTriggerAuraSpell carries the triggering aura spell
+// id, so the arm is bridged. The charm legs
 // (MOD_POSSESS/CHARM/POSSESS_PET/AOE_CHARM) ride the cast-time checkCharmCast
 // (spells.go:4806); no vanilla spell pairs them with nearby targets.
+// triggeredByAuraIgnoresLOS mirrors the triggered-by-aura arm of
+// Spell::CheckEffectTarget (Spell.cpp:7424-7426): a triggered cast whose
+// triggering aura spell carries SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS ignores
+// LOS for every effect. The in-cast slot s.castTriggerAuraSpell is the
+// per-Spell-object m_triggeredByAuraSpell (set at
+// castSpellDirectWithOverrides entry, save/restored for nested casts), so
+// a non-zero slot also implies IsTriggered(); finishSpellCast never runs
+// inside the triggered funnel, so the slot cannot leak into a
+// non-triggered cast. The DisableMgr SPELL_DISABLE_LOS leg on the
+// triggering aura has no Go model, as for the spell's own gate. The charm
+// prune is unaffected: in C++ it runs before this arm (Spell.cpp:7397-7412)
+// and returns false ahead of it.
+func (s *session) triggeredByAuraIgnoresLOS() bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.castTriggerAuraSpell == 0 {
+		return false
+	}
+	auraSpell, found, err := s.server.Data.Spell(s.castTriggerAuraSpell)
+	if err != nil || !found {
+		return false
+	}
+	return auraSpell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0
+}
+
 func (s *session) implicitUnitTargetLOSPasses(spell wotlk.Spell, targetGUID uint64, tx, ty, tz float32) bool {
 	if s == nil || s.player == nil || s.server == nil {
 		return true
 	}
 	if spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 {
+		return true
+	}
+	if s.triggeredByAuraIgnoresLOS() {
 		return true
 	}
 	if targetGUID == s.playerGUID {
@@ -9583,8 +9623,8 @@ func (s *session) implicitUnitTargetLOSPasses(spell wotlk.Spell, targetGUID uint
 // SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS gate (Spell.cpp:7415-7416; the DisableMgr
 // SPELL_DISABLE_LOS leg has no Go model, the GO-caster ignoring-LOS leg is
 // vacuous for the session-player caster, and the triggered-by-aura
-// inheritance arm has no bridge since triggeredByAuraCast carries no spell
-// id). The target == m_caster exemption belongs to the null-losPosition
+// inheritance arm (Spell.cpp:7424-7426) rides triggeredByAuraIgnoresLOS).
+// The target == m_caster exemption belongs to the null-losPosition
 // arm only; the position-equality early-true in hasLineOfSightFlags covers
 // the self case here. Per-effect mask stripping (C++ strips only the
 // failing effects — the charm/possess arms, RESURRECT_NEW and
@@ -9595,6 +9635,9 @@ func (s *session) implicitAreaTargetLOSPasses(spell wotlk.Spell, tx, ty, tz, cx,
 		return true
 	}
 	if spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 {
+		return true
+	}
+	if s.triggeredByAuraIgnoresLOS() {
 		return true
 	}
 	return s.server.hasLineOfSightSpellCheck(s.player.Map, cx, cy, cz, tx, ty, tz)
@@ -11140,7 +11183,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// The unit-target arms below (Spell.cpp:3805-3811 removal,
 		// CheckRange unit arm, 5391 LoS, SpellInfo.cpp:1715 dead) all run
 		// on GetUnitTarget(), which is null for a gameobject target, so
-		// none of them applies here; the GO range leg below
+		// none of them applies here — and likewise null for a corpse
+		// target, so none of them applies to a corpse-targeted cast
+		// either (the corpse arm is the CheckTarget rebind at prepare,
+		// and a corpse gone mid-bar is a no-op at apply time); the GO range leg below
 		// (validateSpellGORange, Spell.cpp:6565-6569) owns GO distance.
 		// getCombatTarget has no GO leg — its motion/DB legs rebuild a
 		// creature from the GO guid's low+entry bits — so a live GO must
@@ -11156,7 +11202,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			return
 		}
 	}
-	if target.UnitGUID != 0 && uint16(target.UnitGUID>>48) != 0xF110 {
+	if target.UnitGUID != 0 && uint16(target.UnitGUID>>48) != 0xF110 && !isCorpseGUID(target.UnitGUID) {
 		// Spell::update (Spell.cpp:3805-3811) cancels the spell on every
 		// tick while PREPARING when the explicit unit target no longer
 		// resolves in the caster's world — the cancel() arm refunds the
@@ -11580,10 +11626,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     gates (cast-item NO_REAGENT_COST flag, CanNoReagentCast).
 	//     Triggered casts never enter finishSpellCast — the flag exemption
 	//     is structural (see castSpellDirectWithOverrides). The non-owned
-	//     item-target arm has no bridge: Go parses the wire item GUID but
-	//     has no m_targets.GetItemTarget() model in the cast flow (unit
-	//     targets only), so a triggered cast can never carry a non-owned
-	//     item target.
+	//     item-target else branch (Spell.cpp:3459-3462) is vacuous in
+	//     3.3.5, verified against C++: the only triggered cast carrying
+	//     an item target is Rockbiter Weapon's child casts
+	//     (SpellEffects.cpp:2884-2893, TRIGGERED_FULL_MASK +
+	//     SetItemTarget on the caster's own weapon), so the owner ==
+	//     caster and the branch never fires; every other
+	//     TRIGGERED_FULL_MASK cast is unit-targeted (SpellEffects.cpp:
+	//     458/1098/2382/2523/4196/4851), and the npcbot lockpick
+	//     item-target casts (bot_ai.cpp:6096-6115) have no Go model.
+	//     Trade-window enchants — the comment's motivating case — are
+	//     prepared directly (TradeHandler.cpp:524-526, TRIGGERED_NONE),
+	//     so the main TakeReagents arm covers them. No bridge needed.
 	//
 	// Spell::_cast (Spell.cpp:3438-3444): a player cast from an item
 	// (CMSG_USE_ITEM, m_CastItem) starts the item-use timed achievement and
