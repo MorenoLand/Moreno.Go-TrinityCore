@@ -43778,7 +43778,7 @@ func (s *session) faceChannelTargetOnPeriodicTick(aura *activeAura, spell wotlk.
 		// Creature casters have no Go channel state (channels live on player
 		// sessions); fall back to the channel target captured at aura apply.
 		channelGUID = aura.ChannelTargetGUID
-		if tgt, found := s.getCombatTarget(ctx, casterGUID); found && tgt.Map == mapID && tgt.InstanceID == instanceID {
+		if tgt, found := s.getCombatTargetOnMap(ctx, mapID, instanceID, casterGUID); found && tgt.Map == mapID && tgt.InstanceID == instanceID {
 			casterX, casterY = tgt.X, tgt.Y
 		} else {
 			return
@@ -43792,7 +43792,7 @@ func (s *session) faceChannelTargetOnPeriodicTick(aura *activeAura, spell wotlk.
 		ts.playerStateMu.Lock()
 		tx, ty = ts.player.X, ts.player.Y
 		ts.playerStateMu.Unlock()
-	} else if tgt, found := s.getCombatTarget(ctx, channelGUID); found {
+	} else if tgt, found := s.getCombatTargetOnMap(ctx, mapID, instanceID, channelGUID); found {
 		tx, ty = tgt.X, tgt.Y
 	} else {
 		// C++ GetWorldObject may also resolve gameobjects, which have no Go
@@ -46003,6 +46003,56 @@ func (s *session) scheduleCreaturePeriodicTickLockedInitial(aura *activeAura, pe
 	})
 }
 
+// scheduleCreaturePeriodicTickInitial is the Server twin of the session
+// scheduler below: serverApplyAuraToCreatureTarget has no player session
+// to schedule through, so the tick runs on a carrier session holding
+// only the server. The tick executor resolves its target on the aura's
+// own map/instance when the carrier has no player (getCombatTargetForAura),
+// and the damage funnel resolves tap/threat through the aura's caster
+// (tickTapAttribution) instead of the executor's player.
+func (s *Server) scheduleCreaturePeriodicTickInitial(aura *activeAura, periodMs, initialDelayMs uint32) {
+	if s == nil {
+		return
+	}
+	s.auraMu.Lock()
+	s.scheduleCreaturePeriodicTickLockedInitial(aura, periodMs, initialDelayMs)
+	s.auraMu.Unlock()
+}
+
+func (s *Server) scheduleCreaturePeriodicTickLocked(aura *activeAura, periodMs uint32) {
+	s.scheduleCreaturePeriodicTickLockedInitial(aura, periodMs, periodMs)
+}
+
+func (s *Server) scheduleCreaturePeriodicTickLockedInitial(aura *activeAura, periodMs, initialDelayMs uint32) {
+	aura.TickDueAt = time.Now().Add(time.Duration(initialDelayMs) * time.Millisecond)
+	aura.TickTimer = time.AfterFunc(time.Duration(initialDelayMs)*time.Millisecond, func() {
+		if s == nil {
+			return
+		}
+		s.auraMu.Lock()
+		if aura.Stopped {
+			s.auraMu.Unlock()
+			return
+		}
+		aura.TickInFlight = true
+		advanceAuraDuration(aura, time.Now())
+		stillRunning := aura.RemainingMs > 0 || aura.DurationMs == 0
+		s.auraMu.Unlock()
+
+		targetAlive := (&session{server: s}).executePeriodicTickOnCreature(aura)
+
+		s.auraMu.Lock()
+		aura.TickInFlight = false
+		if targetAlive && stillRunning && !aura.Stopped {
+			// Like the session leg: the running countdown is kept
+			// across refreshes, but later ticks use the recomputed
+			// PeriodMs (Aura::RefreshTimers, SpellAuras.cpp:930-940).
+			s.scheduleCreaturePeriodicTickLocked(aura, aura.PeriodMs)
+		}
+		s.auraMu.Unlock()
+	})
+}
+
 // periodicTickProcCaster resolves the periodic-tick caster for proc
 // attribution (the Unit::ProcSkillsAndAuras actor leg): the caster's own
 // player session when online, else the live creature motion on the tick's
@@ -46134,7 +46184,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		}
 	}
 	s.faceChannelTargetOnPeriodicTick(aura, tickSpell, tickKnown, key.Map, key.InstanceID)
-	target, ok := s.getCombatTarget(ctx, aura.TargetGUID)
+	target, ok := s.getCombatTargetForAura(ctx, aura)
 	if !ok || target.Map != key.Map || target.InstanceID != key.InstanceID || target.Health == 0 || (s.server != nil && s.server.isCreatureEvadingInInstance(key.Map, key.InstanceID, key.GUID)) {
 		if s.server != nil {
 			s.server.clearCreatureAuras(key)
@@ -46679,8 +46729,12 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// Player casters have no AI model (Unit::GetAI() returns nil for
 		// players), so the healer leg fires only when the caster resolves
 		// to a creature/pet motion — matching C++.
-		victimTickMotion := s.findCreatureMotion(aura.TargetGUID)
-		healerTickMotion := s.findCreatureMotion(aura.CasterGUID)
+		// The motions resolve on the aura's own map/instance, not the
+		// executing session's player's — a server-armed tick's carrier
+		// session has no player, and findCreatureMotion returns nil
+		// without one (the AI hooks would silently never fire).
+		victimTickMotion := s.findCreatureMotionOnMap(key.Map, key.InstanceID, aura.TargetGUID)
+		healerTickMotion := s.findCreatureMotionOnMap(key.Map, key.InstanceID, aura.CasterGUID)
 		fireDealHealAIHooks(ctx, s.server, victimTickMotion, healerTickMotion, aura.CasterGUID, aura.TargetGUID, &heal)
 		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, healAbsorbed, healCrit)
 		// Unit::SendPeriodicAuraLog (Unit.cpp:5368): the log rides
@@ -46689,7 +46743,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if s.server != nil {
 			sendPeriodicLog(logPkt)
 			s.server.motionMu.Lock()
-			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, aura.TargetGUID)
+			motion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, aura.TargetGUID)
 			if motion != nil {
 				motion.Health = newHP
 			}
@@ -48023,6 +48077,27 @@ func (s *session) applyCreaturePeriodicManaLeechGain(ctx context.Context, caster
 // applyPeriodicTickDamageToCreature runs the Unit::DealDamage + kill legs for a
 // periodic tick on a creature target, shared by the damage (3/89) and leech (53)
 // tick paths. Returns the damage actually dealt and whether the target survived.
+// tickTapAttribution resolves the periodic-tick tap attribution for the
+// aura's caster: the executor's own player for player/pet-armed ticks
+// (identical to the old s.playerGUID/s.groupID read), else the caster
+// resolved through tapAttackerAttribution — a wild creature caster taps
+// nothing and does not lower the damage requirement (Unit.cpp:872-876),
+// a player-controlled caster taps through its owner. Callers hold
+// motionMu: both tap sites in applyPeriodicTickDamageToCreature do
+// (the owner-session lookup follows the findSessionByGUID-under-motionMu
+// precedent tapAttackerAttribution documents).
+func (s *session) tickTapAttribution(aura *activeAura, key creatureAuraKey) (tapPlayer, tapGroup uint64, counts bool) {
+	if s != nil && s.player != nil {
+		return s.playerGUID, s.groupID, true
+	}
+	if s == nil || s.server == nil || aura == nil {
+		return 0, 0, false
+	}
+	casterSess := s.server.findSessionByGUID(aura.CasterGUID)
+	casterMotion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, aura.CasterGUID)
+	return s.server.tapAttackerAttribution(aura.CasterGUID, casterSess, casterMotion)
+}
+
 func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, targetHealth uint32, target combatTarget, key creatureAuraKey, aura *activeAura) (uint32, bool) {
 	// The CalcAbsorbResist split leg runs in the tick paths before the
 	// periodic log is built; only the 300 share leg remains here.
@@ -48094,10 +48169,11 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			if motion != nil {
 				// Unit::DealDamage tap block (Unit.cpp:872-876): the
 				// killing tick taps and lowers the damage requirement
-				// when untapped. The tick runs on the caster's session
-				// (the owner's when the caster is a pet), so s.playerGUID
-				// is already the charmer/owner-resolved player.
-				s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, dmg, motion.Health, true)
+				// when untapped. tickTapAttribution keeps the executor's
+				// player for player/pet-armed ticks and resolves through
+				// the caster for server-armed (carrier) ticks.
+				tapPlayer, tapGroup, tapCounts := s.tickTapAttribution(aura, key)
+				s.server.recordCreatureTap(motion, tapPlayer, tapGroup, dmg, motion.Health, tapCounts)
 				// Encounter-map removal takes instanceAdmissionMu, which the
 				// worldport admission check holds across its motionMu-taking
 				// occupant count; clearing here would deadlock against it.
@@ -48137,7 +48213,11 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID, threatPhase)
 			s.server.clearCreatureAuras(key)
 		}
-		_ = s.sendAttackStop(target.GUID, true)
+		// SMSG_ATTACK_STOP broadcasts from the attacking player's
+		// position; a server-armed tick's carrier session has none.
+		if s.player != nil {
+			_ = s.sendAttackStop(target.GUID, true)
+		}
 		s.attackTarget = 0
 		// Eluna CREATURE_EVENT_ON_TARGET_DIED (3) attacker: the periodic
 		// tick's killer is the aura caster — a pet motion when the DoT
@@ -48171,9 +48251,11 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		// below with the true pre-damage engagement state.
 		dotThreatGated := s.spellDamageStep1Gate(aura.SpellID, false)
 		if motion != nil {
-			// Unit::DealDamage tap block (Unit.cpp:872-876); the tick
-			// runs on the caster/owner session (see the kill arm above).
-			if s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, dmg, motion.Health, true) {
+			// Unit::DealDamage tap block (Unit.cpp:872-876); the
+			// attribution resolves through tickTapAttribution (see the
+			// kill arm above).
+			tapPlayer, tapGroup, tapCounts := s.tickTapAttribution(aura, key)
+			if s.server.recordCreatureTap(motion, tapPlayer, tapGroup, dmg, motion.Health, tapCounts) {
 				newlyTapped = true
 				tappedFlags = motion.DynamicFlags
 			}
@@ -48191,8 +48273,19 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion)
 			}
-			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
-			inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+			// The threat range resolves from the attacking player's
+			// position when the tick runs on a player session, else
+			// from the caster creature's motion — a server-armed
+			// tick's carrier session has no player. A missing caster
+			// motion falls back to the victim's own position.
+			attackerX, attackerY, attackerZ, attackerReach := motion.X, motion.Y, motion.Z, motion.CombatReach
+			if s.player != nil {
+				attackerX, attackerY, attackerZ, attackerReach = s.player.X, s.player.Y, s.player.Z, s.player.CombatReach
+			} else if cm := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, aura.CasterGUID); cm != nil {
+				attackerX, attackerY, attackerZ, attackerReach = cm.X, cm.Y, cm.Z, cm.CombatReach
+			}
+			dist := distance3D(attackerX, attackerY, attackerZ, motion.X, motion.Y, motion.Z)
+			inMelee := inMeleeThreatRange(motion.CombatReach, attackerReach, dist)
 			// Periodic damage ticks route through Unit::DealDamage
 			// (SpellAuraEffects.cpp:5224, damagetype DOT) whose AddThreat
 			// (Unit.cpp:906) uses the default args (ignoreModifiers=false,
@@ -48221,7 +48314,15 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				if dmgThreat > 0 {
 					dmgThreat, _, _ = s.splitThreatRedirects(motion, dmgThreat)
 				}
-				s.server.creatureAddThreat(motion, s.playerGUID, dmgThreat, inMelee, s, nil)
+				threatGUID := s.playerGUID
+				var threatSess *session = s
+				var threatMotion *creatureMotion
+				if s.player == nil {
+					threatGUID = aura.CasterGUID
+					threatSess = nil
+					threatMotion = s.server.findCreatureMotionLocked(key.Map, key.InstanceID, aura.CasterGUID)
+				}
+				s.server.creatureAddThreat(motion, threatGUID, dmgThreat, inMelee, threatSess, threatMotion)
 			}
 			// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447): a fresh
 			// DoT-tick engage dismounts and re-homes (Unit::DealDamage :906
@@ -48248,7 +48349,11 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		// (ThreatManager.cpp:311-317) — without this guard the tail
 		// aggro call would re-engage a victim C++ leaves unengaged.
 		if !dotThreatGated {
-			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+			threatGUID := s.playerGUID
+			if s.player == nil {
+				threatGUID = aura.CasterGUID
+			}
+			s.server.triggerCreatureAggro(ctx, target.GUID, threatGUID)
 		}
 	}
 	return dmg, true

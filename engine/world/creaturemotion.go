@@ -1249,6 +1249,16 @@ func (s *session) findCreatureMotion(guid uint64) *creatureMotion {
 	return s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, guid)
 }
 
+// findCreatureMotionOnMap resolves a creature motion on an explicit
+// map/instance — the findCreatureMotion twin for server-armed ticks,
+// whose carrier session has no player to supply the map.
+func (s *session) findCreatureMotionOnMap(mapID, instanceID uint32, guid uint64) *creatureMotion {
+	if s == nil || s.server == nil {
+		return nil
+	}
+	return s.server.findCreatureMotion(mapID, instanceID, guid)
+}
+
 func (s *Server) storeCreatureMotion(mapID, instanceID uint32, guid uint64, motion *creatureMotion) {
 	if s == nil || motion == nil {
 		return

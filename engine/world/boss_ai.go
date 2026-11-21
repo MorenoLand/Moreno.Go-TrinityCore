@@ -10232,10 +10232,12 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 // override, runs the spell_area rows, the speed recompute, the pet
 // derived recomputes and the taunt leg, and arms the duration-expiry
 // timer. Stay-outs, all session-bound in the session twin: the wire
-// aura-update packet, the periodic-tick and power-upkeep timers (a
-// wild-cast DoT/HoT record lands and expires but does not tick),
-// the linked-aura apply arms, and the charm, vehicle, dummy,
-// feign-death and phase effect tails.
+// aura-update packet and the power-upkeep timer (a wild-cast
+// power-upkeep aura lands and expires but never pays); the periodic
+// tick arms through the Server scheduler (scheduleCreaturePeriodicTickInitial),
+// whose carrier session resolves the tick on the aura's own map.
+// The remaining stay-outs are the linked-aura apply arms, and the
+// charm, vehicle, dummy, feign-death and phase effect tails.
 func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool) {
 	if s == nil || m == nil || targetGUID == 0 {
 		return
@@ -10267,7 +10269,33 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		}
 		s.auraMu.Unlock()
 	}
+	// DynObjAura primary-first (dynamic_spells.go: dynobjPrimaryEffect):
+	// the record's single AuraType/PeriodMs follow the first periodic
+	// effect, not the lowest-index aura effect — a leading dummy (27085
+	// eff0 aura 4, period 0) would otherwise own the record and the
+	// trailing trigger (eff1 aura 23, period 1000) would never tick.
+	// Gated on persistent-area-aura applications (the dynobj cast-time
+	// fill and 500ms pass); direct casts keep index order like the
+	// session apply path.
+	orderedEffects := make([]int, 0, len(spell.Effects))
+	primaryIdx := -1
+	if persistentAreaAura {
+		for i := range spell.Effects {
+			if spell.Effects[i].Aura != 0 && spell.Effects[i].AuraPeriod > 0 && !prevent.defaultPrevented(i) {
+				primaryIdx = i
+				break
+			}
+		}
+	}
+	if primaryIdx >= 0 {
+		orderedEffects = append(orderedEffects, primaryIdx)
+	}
 	for i := range spell.Effects {
+		if i != primaryIdx {
+			orderedEffects = append(orderedEffects, i)
+		}
+	}
+	for _, i := range orderedEffects {
 		eff := spell.Effects[i]
 		if eff.Aura == 0 {
 			continue
@@ -10340,13 +10368,28 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			// max. The merge keeps the old record, so the bookkeeping resets
 			// here; a fresh apply starts at zero by construction.
 			existing.RuptureBonusDurationMs = 0
+			// Spell.cpp:2854 resetPeriodicTimer gate, the applyAuraToTarget
+			// creature-branch twin (spells.go:42542): a stackable re-cast
+			// keeps the periodic countdown. The server funnel carries no
+			// triggered context, so the TRIGGERED_DONT_RESET_PERIODIC_TIMER
+			// term is absent — a triggered creature re-cast resets the
+			// timer here. Aura::RefreshTimers (SpellAuras.cpp:930-940)
+			// recomputes the amplitude and zeroes the tick counter on
+			// every refresh; only the timer restart is gated. The
+			// amplitude here is the raw DBC value like the fresh
+			// record's (no haste fold on the server path).
+			resetPeriodic := spell.StackAmount < 2
+			existing.PeriodMs = eff.AuraPeriod
+			existing.TickCount = 0
 			if existing.Timer != nil {
 				existing.Timer.Stop()
 				existing.Timer = nil
 			}
-			if existing.TickTimer != nil {
-				existing.TickTimer.Stop()
-				existing.TickTimer = nil
+			if resetPeriodic {
+				if existing.TickTimer != nil {
+					existing.TickTimer.Stop()
+					existing.TickTimer = nil
+				}
 			}
 			// Aura::RefreshDuration (SpellAuras.cpp:915-927) re-arms the 1s
 			// power-upkeep clock on every refresh: the upkeep chain is left
@@ -10365,6 +10408,11 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			s.syncCreatureLinkedAuraStacks(spell, targetKey, m.GUID, stackCount)
 			s.applyCreatureSpellAreaRows(targetKey, spell.ID)
 			s.propagateCreatureLinkedAuraStacks(ctx, spell, targetKey, m.GUID, stackCount)
+			// The merge re-arms the periodic tick the refresh stopped,
+			// the applyAuraToTarget creature-branch twin (spells.go:42598).
+			if resetPeriodic && existing.PeriodMs > 0 {
+				s.scheduleCreaturePeriodicTickInitial(existing, existing.PeriodMs, periodicTickInitialDelay(spell, existing.PeriodMs))
+			}
 			armExpiry(existing)
 			continue
 		}
@@ -10529,6 +10577,18 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			s.applyCreatureDetaunt(targetKey.Map, targetKey.InstanceID, m.GUID, targetKey.GUID, durationMs)
 		}
 		armExpiry(aura)
+		// The fresh apply arms the periodic tick, the applyAuraToTarget
+		// creature-branch twin (spells.go:43183): a wild-cast DoT/HoT
+		// record ticks through the Server scheduler on a carrier
+		// session (no player session exists to schedule through).
+		// Dynobj applications go primary-first above, so the record's
+		// PeriodMs is the ticking effect's amplitude here. A dynobj
+		// joiner's first tick is not aligned to the dynobj's shared
+		// schedule (the player pass carries sharedDelayMs; the server
+		// path has no delay parameter yet).
+		if aura.PeriodMs > 0 {
+			s.scheduleCreaturePeriodicTickInitial(aura, aura.PeriodMs, periodicTickInitialDelay(spell, aura.PeriodMs))
+		}
 		// spell_rog_killing_spree_AuraScript::HandleApply
 		// (spell_rogue.cpp:414-417): the EFFECT_0 PERIODIC_DUMMY
 		// AfterEffectApply arm — the aura holder casts 61851 (Killing

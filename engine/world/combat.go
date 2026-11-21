@@ -232,6 +232,27 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 	return s.server.combatTargetByGUID(ctx, s.player.Map, s.player.InstanceID, guid)
 }
 
+// getCombatTargetOnMap resolves a combat target on an explicit map/instance —
+// the getCombatTarget twin for server-armed ticks, whose carrier session has
+// no player to supply the map. When the maps coincide (every player-armed
+// tick) the result is identical.
+func (s *session) getCombatTargetOnMap(ctx context.Context, mapID, instanceID uint32, guid uint64) (combatTarget, bool) {
+	if s == nil || s.server == nil {
+		return combatTarget{}, false
+	}
+	return s.server.combatTargetByGUID(ctx, mapID, instanceID, guid)
+}
+
+// getCombatTargetForAura resolves a periodic-tick target on the aura's own
+// map/instance, via getCombatTargetOnMap.
+func (s *session) getCombatTargetForAura(ctx context.Context, aura *activeAura) (combatTarget, bool) {
+	if s == nil || aura == nil {
+		return combatTarget{}, false
+	}
+	key := aura.TargetKey
+	return s.getCombatTargetOnMap(ctx, key.Map, key.InstanceID, aura.TargetGUID)
+}
+
 // gmAttackTargetBlocked mirrors the player-target legs of
 // WorldObject::IsValidAttackTarget (Object.cpp:2945-2947): a target in GM mode
 // (PLAYER_EXTRA_GM_ON, the "can't attack GMs" leg) or GM invisibility (the
