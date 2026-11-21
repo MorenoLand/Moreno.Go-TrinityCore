@@ -45,6 +45,10 @@
 --   path is despawn-only (summons.DespawnAll + _DespawnAtEvade 30s
 --   respawn, ScriptedCreature.cpp:596), and the casts re-arm on the
 --   respawn Reset.
+-- - EnterEvadeMode's _DespawnAtEvade() (boss_vancleef.cpp:78-84) ->
+--   onLeaveCombat (2): creature:Despawn() + creature:SetBossState(5, 2)
+--   (BOSS_VANCLEEF, FAIL), C++ order, Shahraz precedent. The 30s
+--   respawn rides the engine's Despawn respawn path (same as Shahraz).
 -- - Reset's SummonBlackguards() (boss_vancleef.cpp:86-90: DoSummon(
 --   NPC_BLACKGUARD = 636, the two BlackguardPositions, 1min,
 --   TEMPSUMMON_CORPSE_TIMED_DESPAWN) x2) -> onSpawn (5, guarded) via
@@ -72,9 +76,6 @@
 -- - JustEngagedWith's summons.DoZoneInCombat() (boss_vancleef.cpp:69)
 --   — no bridge (dark-rider precedent); the blackguards aggro via the
 --   normal proximity scan.
--- - EnterEvadeMode's _DespawnAtEvade() (boss_vancleef.cpp:78-84) — no
---   bridge; the boss stays in world on evade (its summons ARE
---   despawned, see above).
 
 local SPELL_DUAL_WIELD = 674
 local SPELL_THRASH = 12787
@@ -187,6 +188,17 @@ end
 
 local function onLeaveCombat(_, creature)
     clearState(creature:GetGUIDLow())
+    -- C++ EnterEvadeMode's _DespawnAtEvade() (boss_vancleef.cpp:78-84):
+    -- DespawnOrUnsummon(0s, 30s) + instance->SetBossState(BOSS_VANCLEEF,
+    -- FAIL) (ScriptedCreature.cpp:596-617; BOSS_VANCLEEF = 5, deadmines.h:46;
+    -- FAIL = 2, InstanceScript.h:72). C++ order: despawn first, then FAIL.
+    -- creature:Despawn is the Shahraz precedent (boss_mother_shahraz.lua);
+    -- the engine's evade funnel returns early once the motion is gone
+    -- (creaturemotion.go triggerCreatureEvade, despawnAtEvade guard), so no
+    -- home spline runs. creature:SetBossState is bridged
+    -- (lua_creature_events.go:7920).
+    creature:Despawn()
+    creature:SetBossState(5, 2)
 end
 
 local function onDied(_, creature)

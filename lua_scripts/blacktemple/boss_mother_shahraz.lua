@@ -45,7 +45,8 @@
 -- is bridged, lua_creature_events.go:6593). OnLeaveCombat(2)/OnReset(23): cancel
 -- timers, drop per-GUID state (C++ Reset: _Reset/_enraged=false;
 -- the EnterEvadeMode _DespawnAtEvade() -> DespawnOrUnsummon() arm is
--- ported in shahrazLeaveCombat via creature:Despawn, supremus
+-- ported in shahrazLeaveCombat via creature:Despawn +
+-- creature:SetBossState(6, 2) (DATA_MOTHER_SHAHRAZ, FAIL), supremus
 -- precedent).
 -- The five spell/aura scripts registered by the C++ file: three
 -- PORTED below via RegisterAuraEvent — spell_mother_shahraz_saber_
@@ -278,8 +279,12 @@ end
 local function shahrazLeaveCombat(event, creature)
     shahrazResetState(creature:GetGUIDLow())
     -- C++ EnterEvadeMode: _DespawnAtEvade() -> DespawnOrUnsummon()
-    -- (supremus precedent).
+    -- (supremus precedent) + instance->SetBossState(DATA_MOTHER_SHAHRAZ,
+    -- FAIL) (ScriptedCreature.cpp:596-617; DATA_MOTHER_SHAHRAZ = 6,
+    -- black_temple.h:37; FAIL = 2, InstanceScript.h:72). C++ order:
+    -- despawn first, then FAIL.
     creature:Despawn()
+    creature:SetBossState(6, 2)
 end
 
 local function shahrazReset(event, creature)
