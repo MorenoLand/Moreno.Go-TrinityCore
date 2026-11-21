@@ -8625,13 +8625,32 @@ func (s *session) prepareHitTriggerSpells(spell wotlk.Spell) []spellHitTrigger {
 				continue
 			}
 			// Proc chance is stored in the effect amount; C++ runs it
-			// through Unit::CalculateSpellDamage (done mods) before
-			// multiplying by the stack amount. Go has no CalculateSpellDamage
-			// bridge for aura proc chances, so the base amount is used
-			// directly (documented delta).
-			chance := aura.BaseAmounts[index]
-			if chance == 0 {
-				chance = effect.BasePoints
+			// through Unit::CalculateSpellDamage (SpellEffectInfo::CalcValue,
+			// Spell.cpp:8199) before multiplying by the stack amount:
+			// level-scaled base + DieSides roll (CalcValueForBase), the
+			// combo-point bonus (PointsPerComboPoint * GetComboPoints),
+			// then ApplyEffectModifiers (SPELLMOD_ALL_EFFECTS + the
+			// per-effect SPELLMOD_EFFECT1/2/3 fold, Object.cpp:2295) with
+			// null-taking-spell semantics (ApplyEffectModifiers passes no
+			// spell, so the charge/taking legs do not apply). The
+			// level-damage scaling leg is vacuous here: APPLY_AURA /
+			// ADD_TARGET_TRIGGER is in neither CalcValue scale list.
+			base := aura.BaseAmounts[index]
+			if base == 0 {
+				base = effect.BasePoints
+			}
+			chance := effect.CalcValueForBase(auraSpell, base, uint32(s.player.Level))
+			if combo := s.sessionComboPoints(0); combo > 0 && effect.PointsPerCombo != 0 {
+				chance = int32(float64(chance) + float64(effect.PointsPerCombo)*float64(combo))
+			}
+			chance = s.applySpellModNoTakingLocked(auraSpell, spellModAllEffects, chance)
+			switch index {
+			case 0:
+				chance = s.applySpellModNoTakingLocked(auraSpell, spellModEffect1, chance)
+			case 1:
+				chance = s.applySpellModNoTakingLocked(auraSpell, spellModEffect2, chance)
+			case 2:
+				chance = s.applySpellModNoTakingLocked(auraSpell, spellModEffect3, chance)
 			}
 			chance *= int32(aura.StackAmount)
 			triggers = append(triggers, spellHitTrigger{
