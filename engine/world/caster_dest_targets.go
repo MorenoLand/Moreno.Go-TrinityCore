@@ -178,10 +178,13 @@ func spellHasFishingDestTarget(spell wotlk.Spell) bool {
 // a random angle in [-17.5°, +17.5°] via
 // WorldObject::GetClosePoint(DEFAULT_PLAYER_BOUNDING_RADIUS) (Object.cpp:
 // 3307). Like C++, any client-supplied destination is ignored. The
-// liquid-level legs are no-bridge: Go has no map-height/liquid model, so
-// the SPELL_FAILED_NOT_HERE / SPELL_FAILED_TOO_SHALLOW cast failures
-// cannot fire, and z keeps the caster's height instead of the liquid level.
-func (s *session) fishingDestPoint(spell wotlk.Spell) (x, y, z float32) {
+// liquid-level legs ride the map-height/liquid model (Spell.cpp:1367-1382):
+// no water at the point fails SPELL_FAILED_NOT_HERE, water shallower than
+// 0.75 over the ground fails SPELL_FAILED_TOO_SHALLOW, and the destination
+// z is the liquid level, not the caster's height. A failed height lookup
+// reads INVALID_HEIGHT like C++ GetMapHeight, so the shallow arm passes
+// and the point resolves at the liquid level.
+func (s *session) fishingDestPoint(spell wotlk.Spell) (x, y, z float32, failReason uint8) {
 	x, y, z = s.player.X, s.player.Y, s.player.Z
 	var minRange, maxRange float32
 	if s.server != nil && s.server.Data != nil && spell.RangeIndex != 0 {
@@ -202,7 +205,29 @@ func (s *session) fishingDestPoint(spell wotlk.Spell) (x, y, z float32) {
 	angle := rand.Float32()*float32(35.0*math.Pi/180.0) - float32(17.5*math.Pi/180.0)
 	a := s.player.Orientation + angle
 	offset := dist + defaultPlayerBoundingRadius
-	return x + offset*float32(math.Cos(float64(a))), y + offset*float32(math.Sin(float64(a))), z
+	x, y = x+offset*float32(math.Cos(float64(a))), y+offset*float32(math.Sin(float64(a)))
+	if s.server == nil {
+		return x, y, z, 0
+	}
+	// Spell.cpp:1367-1374: no liquid at the point fails NOT_HERE —
+	// Map::GetLiquidStatus reporting no water leaves liquidLevel at
+	// INVALID_HEIGHT, which is <= ground. The Go status already folds
+	// that comparison (a non-NoWater status implies level > ground).
+	status, liquid := s.server.mapLiquidStatus(s.player.Map, x, y, z, liquidTypeAll, terrainDefaultCollisionHeight)
+	if status == liquidStatusNoWater {
+		return x, y, z, spellFailedNotHere
+	}
+	// Spell.cpp:1376-1382: water shallower than 0.75 over the ground
+	// fails TOO_SHALLOW.
+	ground := terrainInvalidHeight
+	if h, ok := s.server.mapHeight(s.player.Map, x, y, z, true, 50); ok {
+		ground = h
+	}
+	if ground+0.75 > liquid.level {
+		return x, y, z, spellFailedTooShallow
+	}
+	// Spell.cpp:1384: the destination sits at the liquid level.
+	return x, y, liquid.level, 0
 }
 
 // spellTargetPositionDest ports the TARGET_DEST_DB (17) arm of

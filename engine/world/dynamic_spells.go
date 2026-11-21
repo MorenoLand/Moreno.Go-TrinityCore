@@ -467,6 +467,15 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 			continue
 		}
 		if s.creatureDynobjAuraPresent(object, guid) {
+			// The holder-loop re-validation arm above (SpellAuras.cpp:666-672)
+			// runs for adopted holders on later passes; a cast-time holder
+			// is re-validated here before adoption, so a verdict that
+			// flipped between the cast-time fill and the first pass strips
+			// the aura instead of adopting it for another pass.
+			if !s.fireAuraCheckAreaTarget(ctx, spellID, object.CasterGUID, object.Map, object.InstanceID, guid) {
+				s.expireDynobjHolderAura(object, guid, spellID)
+				continue
+			}
 			object.AuraHolders[guid] = struct{}{}
 			continue
 		}

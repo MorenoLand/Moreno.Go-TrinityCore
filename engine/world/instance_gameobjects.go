@@ -1053,15 +1053,28 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 		return
 	}
 	// Unit::RemoveGameObject (Unit.cpp:5246-5251): removing a game object
-	// created by a cooldown-started-on-event spell releases the owner's
-	// infinity cooldown via SendCooldownEvent. The recast arm in
-	// handleEffectSummonObject nulls the spell id before despawning, so a
-	// same-spell recast never releases here.
+	// created by a spell first strips the creating spell's auras from the
+	// owner (RemoveAurasDueToSpell, AURA_REMOVE_BY_DEFAULT, any caster),
+	// then releases the owner's infinity cooldown via SendCooldownEvent
+	// when the spell is cooldown-started-on-event. The strip itself fires
+	// SendCooldownEvent through Aura::_UnapplyForTarget
+	// (SpellAuras.cpp:611-613) while the aura is active, so C++ fires the
+	// event twice in that case and once when it is not; Go previously
+	// fired only the explicit arm and left the aura standing. The
+	// creature-owner twin strips through removeCreatureAuraWithMode,
+	// whose Leg-3 release fires only for a live player caster session —
+	// C++ fires into the creature's own SpellHistory there, which Go does
+	// not model. The recast arm in handleEffectSummonObject nulls the
+	// spell id before despawning, so a same-spell recast never strips or
+	// releases here.
 	if state.SpellID != 0 && state.OwnerGUID != 0 && s.Data != nil {
 		if owner := s.findSessionByGUID(state.OwnerGUID); owner != nil && owner.playerGUID == state.OwnerGUID {
+			owner.removeAuraWithMode(state.SpellID, auraRemoveByDefault)
 			if spell, found, err := s.Data.Spell(state.SpellID); err == nil && found && s.spellIsCooldownStartedOnEvent(spell) {
 				owner.sendSpellCooldownEvent(spell)
 			}
+		} else if s.findCreatureMotion(mapID, instanceID, state.OwnerGUID) != nil {
+			s.removeCreatureAuraWithMode(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: state.OwnerGUID}, state.SpellID, auraRemoveByDefault)
 		}
 	}
 	// SMSG_FISH_ESCAPED fires only for fishing bobbers, on the uncaught

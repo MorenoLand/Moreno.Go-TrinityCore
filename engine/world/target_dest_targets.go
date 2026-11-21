@@ -304,12 +304,13 @@ func sessionPersistentAreaAuraTarget(base protocol.SpellTargetData, cx, cy, cz f
 // with the dest-location flag so the area-selection and persistent-area read
 // sites consume it through their existing client-dest branches. It runs once
 // at cast time; the dynamic-aura tick path reuses those read sites with an
-// already resolved destination and must not re-apply the offsets. ok is
-// false when a 46 effect finds no object, which fails the cast with
-// SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111).
+// already resolved destination and must not re-apply the offsets. failReason
+// is 0 on success and the SPELL_FAILED_* code the cast must report otherwise
+// (BAD_IMPLICIT_TARGETS for a 46 arm with no object, NOT_HERE / TOO_SHALLOW
+// for the fishing 39 arm).
 func (s *session) resolveImplicitSpellDestination(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) (protocol.SpellTargetData, bool) {
-	resolved, _, ok := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target, 0)
-	return resolved, ok
+	resolved, _, failReason := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target, 0)
+	return resolved, failReason == 0
 }
 
 // sessionInitExplicitSeed mirrors the destination seed of
@@ -348,7 +349,7 @@ func (s *session) sessionInitExplicitSeed(ctx context.Context, spell wotlk.Spell
 // is the running destination after effect i's own A/B arms. The single-target
 // return is unchanged; callers that hand a destination to a HIT arm use the
 // slot, never the spell-final destination.
-func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, wireObjectGUID uint64) (protocol.SpellTargetData, []sessionDestSnapshot, bool) {
+func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, wireObjectGUID uint64) (protocol.SpellTargetData, []sessionDestSnapshot, uint8) {
 	if s == nil || s.player == nil || s.server == nil || (!spellHasDestFamilyTarget(spell) && !spellHasCasterDestTarget(spell) && !spellHasFishingDestTarget(spell) && !spellHasTrajTarget(spell) && !spellHasChannelDestTarget(spell) && !spellHasDestNearbyEntryTarget(spell)) {
 		// No dest-family target: every slot stamps the packet destination
 		// when one was sent (C++ AddDestTarget fires per effect while
@@ -394,7 +395,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 			target.DestTransportGUID = 0
 			target.DestTransportOffset = [3]float32{}
 		}
-		return finalizeSessionSrcTarget(spell, target, target.Flags&protocol.SpellTargetFlagSourceLocation != 0, s.player.X, s.player.Y, s.player.Z), snapshots, true
+		return finalizeSessionSrcTarget(spell, target, target.Flags&protocol.SpellTargetFlagSourceLocation != 0, s.player.X, s.player.Y, s.player.Z), snapshots, 0
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
 	packetHasDst := target.Flags&protocol.SpellTargetFlagDestLocation != 0
@@ -564,10 +565,14 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1359-1389):
 				// TARGET_DEST_CASTER_FISHING (39) — the bobber point resolves
 				// server-side, overwriting any client-supplied destination
-				// (the pre-strip client-dest gate). The liquid-level
-				// NOT_HERE/TOO_SHALLOW fail arms are no-bridge (no
-				// map-height/liquid model).
-				x, y, z = s.fishingDestPoint(spell)
+				// (the pre-strip client-dest gate). The liquid-level arms
+				// fail the cast (Spell.cpp:1367-1382): NOT_HERE with no
+				// water at the point, TOO_SHALLOW under 0.75 of water.
+				var failReason uint8
+				x, y, z, failReason = s.fishingDestPoint(spell)
+				if failReason != 0 {
+					return target, nil, failReason
+				}
 				hasDst = true
 				destOp = destOpReset
 			case isTargetDestTarget(targetType):
@@ -658,7 +663,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 					hasDst = true
 					destOp = destOpReset
 				} else {
-					return target, nil, false
+					return target, nil, spellFailedBadImplicitTargets
 				}
 			}
 		}
@@ -705,7 +710,7 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 			target.DestTransportOffset = [3]float32{}
 		}
 	}
-	return finalizeSessionSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), snapshots, true
+	return finalizeSessionSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), snapshots, 0
 }
 
 // finalizeSessionSrcTarget mirrors the SOURCE_LOCATION half of

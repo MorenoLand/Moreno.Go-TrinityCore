@@ -306,6 +306,7 @@ const (
 	spellFailedOnlyAboveWater            uint8  = 88    // SPELL_FAILED_ONLY_ABOVEWATER (SharedDefines.h:1070)
 	spellFailedTargetFriendly            uint8  = 115   // SPELL_FAILED_TARGET_FRIENDLY (SharedDefines.h:1097)
 	spellFailedNotHere                   uint8  = 60    // SPELL_FAILED_NOT_HERE (SharedDefines.h:1042)
+	spellFailedTooShallow                uint8  = 156   // SPELL_FAILED_TOO_SHALLOW (SharedDefines.h:1138)
 	spellFailedNoDueling                 uint8  = 79    // SPELL_FAILED_NO_DUELING (SharedDefines.h:1061)
 	spellFailedOnlyIndoors               uint8  = 90    // SPELL_FAILED_ONLY_INDOORS (SharedDefines.h:1072)
 	spellFailedOnlyOutdoors              uint8  = 93    // SPELL_FAILED_ONLY_OUTDOORS (SharedDefines.h:1075)
@@ -11502,12 +11503,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// spell destination from target-relative / dest-relative implicit
 	// targets once, before the area selection and persistent-area read
 	// sites below consume it.
-	target, sessionDestSnapshots, destOK := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target, wireObjectGUID)
-	if !destOK {
-		// Spell.cpp:1111: no nearby entry object found ->
-		// SPELL_FAILED_BAD_IMPLICIT_TARGETS (SharedDefines.h:993).
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 11), true)
-		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
+	target, sessionDestSnapshots, destFail := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, target, wireObjectGUID)
+	if destFail != 0 {
+		// A 46 effect with no nearby entry object fails with
+		// SPELL_FAILED_BAD_IMPLICIT_TARGETS (Spell.cpp:1111); the
+		// fishing 39 arm fails NOT_HERE / TOO_SHALLOW
+		// (Spell.cpp:1367-1382) — the resolver carries the code.
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, destFail), true)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "implicit destination resolution failed", "failReason", destFail)
 		return
 	}
 
@@ -27030,10 +27033,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// entry 46) resolve server-side here, not just the 76/106 channel leg
 	// the pre-strip code handled. The 46 BAD_IMPLICIT_TARGETS failure
 	// (Spell.cpp:1111) fails the triggered cast the same way.
-	spellTarget, triggeredDestSnapshots, destOK := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, spellTarget, triggerWireGUID)
-	if !destOK {
+	spellTarget, triggeredDestSnapshots, destFail := s.resolveImplicitSpellDestinationWithSnapshots(ctx, spell, spellID, spellTarget, triggerWireGUID)
+	if destFail != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
-		s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
+		s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "implicit destination resolution failed", "failReason", destFail)
 		return
 	}
 	// Spell::SelectImplicitAreaTargets reads the RUNNING destination at arm
