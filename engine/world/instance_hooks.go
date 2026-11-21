@@ -308,7 +308,13 @@ func (s *Server) mapWorldObject(ctx context.Context, mapID, instanceID uint32, g
 	case 0xF110:
 		return s.mapLuaGameObject(ctx, mapID, instanceID, guid)
 	case 0xF101:
-		ownerGUID := guid & 0xFFFFFFFFFFFF
+		// The wire GUID's low 32 bits are the map-assigned sequence
+		// value (Player.cpp:4822), not the owner: resolve the owner
+		// through the corpse registry before reading the session row.
+		ownerGUID, ok := s.corpseOwnerLow(mapID, instanceID, uint32(guid&0xFFFFFFFF))
+		if !ok {
+			return nil
+		}
 		sess := s.findSessionByGUID(ownerGUID)
 		if sess == nil {
 			return nil

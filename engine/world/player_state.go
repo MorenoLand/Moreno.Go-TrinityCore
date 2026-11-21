@@ -296,30 +296,37 @@ type playerState struct {
 	// the corpse position, not the ghost position. hasCorpse is false when
 	// no corpse exists (never died / corpse reclaimed), mirroring the
 	// !GetCorpse() fallback to the player itself.
-	hasCorpse                 bool
-	corpseX, corpseY, corpseZ float32
-	BaseMana                  uint32
-	ItemHealthBonus           uint32
-	ItemManaBonus             uint32
-	Powers                    [7]uint32
-	MaxPowers                 [7]uint32
-	Cinematic                 uint32
-	Movie                     uint32
-	KnownCurrency             uint64
-	WatchedFaction            uint32
-	AmmoID                    uint32
-	ChosenTitle               uint32
-	KnownTitles               [6]uint32
-	ActionBars                uint32
-	GrantableLevels           uint8
-	FishingSteps              uint8
-	PassOnGroupLoot           bool
-	Skills                    []playerSkill
-	Spells                    []learnedSpell
-	Actions                   [144]uint32
-	Cooldowns                 []spellCooldown
-	Equipment                 string
-	SheathState               uint8
+	// corpseMap/corpseInstanceID/corpseDisplayID/corpseOrientation complete
+	// the snapshot for battleground/arena corpses, which C++ converts from
+	// the in-memory corpse object (Map::ConvertCorpseToBones, Map.cpp:4627)
+	// without any DB row to read back from.
+	hasCorpse                   bool
+	corpseX, corpseY, corpseZ   float32
+	corpseMap, corpseInstanceID uint32
+	corpseDisplayID             uint32
+	corpseOrientation           float32
+	BaseMana                    uint32
+	ItemHealthBonus             uint32
+	ItemManaBonus               uint32
+	Powers                      [7]uint32
+	MaxPowers                   [7]uint32
+	Cinematic                   uint32
+	Movie                       uint32
+	KnownCurrency               uint64
+	WatchedFaction              uint32
+	AmmoID                      uint32
+	ChosenTitle                 uint32
+	KnownTitles                 [6]uint32
+	ActionBars                  uint32
+	GrantableLevels             uint8
+	FishingSteps                uint8
+	PassOnGroupLoot             bool
+	Skills                      []playerSkill
+	Spells                      []learnedSpell
+	Actions                     [144]uint32
+	Cooldowns                   []spellCooldown
+	Equipment                   string
+	SheathState                 uint8
 	// VirtualItemSlots carries the three UNIT_VIRTUAL_ITEM_SLOT_ID values
 	// Player::SetSheath derives from the sheath state (Player.cpp:9655-9682):
 	// the weapon entries shown on the sheathed/unsheathed model.

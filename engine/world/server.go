@@ -363,21 +363,29 @@ type Server struct {
 	lastItemDurationTick   time.Time
 	spiritReviveQueue      map[uint64]uint64            // playerGUID -> spiritGuideGUID
 	spiritResurrectPending map[uint64]spiritWavePending // playerGUID -> wave visual pass (resurrect due 500ms later)
-	creatureTextMgr        *creatureTextMgr
-	wardenCheckMgr         *wardenCheckMgr
-	spellChainMu           sync.RWMutex
-	spellChainLoaded       bool
-	prevSpellInChain       map[uint32]uint32
-	nextSpellInChain       map[uint32]uint32
-	firstSpellInChain      map[uint32]uint32
-	spellCustomAttrMu      sync.RWMutex
-	spellCustomAttrLoaded  bool
-	spellCustomAttr        map[uint32]uint32
-	enchantProcAttrMu      sync.RWMutex
-	enchantProcAttrLoaded  bool
-	enchantProcAttrs       map[uint32]uint32
-	itemTemplateMu         sync.RWMutex
-	itemTemplates          map[uint32]itemTemplateClassInfo
+	// corpseMu guards the corpse GUID registry and the bones registry
+	// below: per-map corpse GUID assignment (Map::GenerateLowGuid,
+	// Map.h:624) and the server-side bones objects (Map::_corpseBones).
+	corpseMu              sync.Mutex
+	corpseGUIDSeq         map[corpseMapKey]uint32
+	corpseGUIDByOwner     map[corpseKey]uint32
+	corpseOwnerByGUID     map[corpseGUIDKey]uint64
+	corpseBones           map[corpseKey]*corpseBonesEntry
+	creatureTextMgr       *creatureTextMgr
+	wardenCheckMgr        *wardenCheckMgr
+	spellChainMu          sync.RWMutex
+	spellChainLoaded      bool
+	prevSpellInChain      map[uint32]uint32
+	nextSpellInChain      map[uint32]uint32
+	firstSpellInChain     map[uint32]uint32
+	spellCustomAttrMu     sync.RWMutex
+	spellCustomAttrLoaded bool
+	spellCustomAttr       map[uint32]uint32
+	enchantProcAttrMu     sync.RWMutex
+	enchantProcAttrLoaded bool
+	enchantProcAttrs      map[uint32]uint32
+	itemTemplateMu        sync.RWMutex
+	itemTemplates         map[uint32]itemTemplateClassInfo
 	// itemCombatSpellMu guards itemCombatSpells: per-item-template cache of
 	// ITEM_SPELLTRIGGER_CHANCE_ON_HIT template spells for
 	// Player::CastItemCombatSpell (Player.cpp:8105).

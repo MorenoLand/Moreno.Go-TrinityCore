@@ -319,6 +319,265 @@ func (s *session) currentPlayerPhaseMask() uint32 {
 	return phaseMask
 }
 
+// corpseMapKey scopes a corpse GUID sequence to one map instance
+// (Map::GenerateLowGuid is per-Map, Map.h:624-629).
+type corpseMapKey struct {
+	mapID, instanceID uint32
+}
+
+// corpseKey identifies one corpse object on a map instance by its owner
+// (Map::_corpsesByPlayer is keyed the same way, Map.cpp:4603-4605).
+type corpseKey struct {
+	mapID, instanceID uint32
+	ownerLow          uint64
+}
+
+// corpseGUIDKey identifies one corpse object by its assigned low GUID.
+type corpseGUIDKey struct {
+	mapID, instanceID uint32
+	low               uint32
+}
+
+// corpseBonesExpiry is the bones lifetime (Corpse::IsExpired, Corpse.cpp:209:
+// CORPSE_BONES expires after 60 minutes; Map::RemoveOldCorpses,
+// Map.cpp:4693-4701, despawns them on the corpse sweep).
+const corpseBonesExpiry = 60 * time.Minute
+
+// corpseBonesEntry is one server-side bones object (Map::_corpseBones):
+// the ownerless visual Map::ConvertCorpseToBones creates (Map.cpp:4627-4676),
+// kept so late arrivals and relogs see it (buildNearbyCorpseUpdates) until
+// the 60-minute expiry. Bones keep the corpse's low GUID
+// (bones->Create(corpse->GetGUID().GetCounter()), Map.cpp:4653), so the
+// owner->low mapping stays live while the bones entry exists.
+type corpseBonesEntry struct {
+	lowGUID                      uint32
+	displayID, bytes1, bytes2    uint32
+	guildID, flags, dynamicFlags uint32
+	phaseMask                    uint32
+	x, y, z, orientation         float32
+	createdAt                    time.Time
+}
+
+// corpseLowGUID returns the map-scoped low GUID for a corpse object,
+// assigning the next sequence value on first sight (Map::GenerateLowGuid,
+// Map.h:624; ObjectGuidGenerator starts at 1, ObjectGuid.h:281-308).
+// The assignment is stable while the corpse or its bones exist; a later
+// corpse for the same owner gets a fresh value from the sequence, which
+// never rewinds.
+func (s *Server) corpseLowGUID(mapID, instanceID uint32, ownerLow uint64) uint32 {
+	if s == nil {
+		return uint32(ownerLow)
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	return s.corpseLowGUIDLocked(mapID, instanceID, ownerLow)
+}
+
+func (s *Server) corpseLowGUIDLocked(mapID, instanceID uint32, ownerLow uint64) uint32 {
+	key := corpseKey{mapID: mapID, instanceID: instanceID, ownerLow: ownerLow}
+	if s.corpseGUIDByOwner != nil {
+		if low, ok := s.corpseGUIDByOwner[key]; ok {
+			return low
+		}
+	}
+	if s.corpseGUIDSeq == nil {
+		s.corpseGUIDSeq = make(map[corpseMapKey]uint32)
+	}
+	mapKey := corpseMapKey{mapID: mapID, instanceID: instanceID}
+	low := s.corpseGUIDSeq[mapKey] + 1
+	s.corpseGUIDSeq[mapKey] = low
+	if s.corpseGUIDByOwner == nil {
+		s.corpseGUIDByOwner = make(map[corpseKey]uint32)
+	}
+	s.corpseGUIDByOwner[key] = low
+	if s.corpseOwnerByGUID == nil {
+		s.corpseOwnerByGUID = make(map[corpseGUIDKey]uint64)
+	}
+	s.corpseOwnerByGUID[corpseGUIDKey{mapID: mapID, instanceID: instanceID, low: low}] = ownerLow
+	return low
+}
+
+// corpseOwnerLow is the reverse lookup for a map-assigned corpse low GUID
+// (ObjectAccessor::GetCorpse / GetCorpseByPlayer twin): the owner whose
+// corpse carries this GUID on the map instance, or false when no such
+// corpse is registered.
+func (s *Server) corpseOwnerLow(mapID, instanceID uint32, low uint32) (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	if s.corpseOwnerByGUID == nil {
+		return 0, false
+	}
+	owner, ok := s.corpseOwnerByGUID[corpseGUIDKey{mapID: mapID, instanceID: instanceID, low: low}]
+	return owner, ok
+}
+
+// dropCorpseGUIDMapping drops one corpse's GUID mapping (Map::RemoveCorpse
+// erases the _corpsesByPlayer entry, Map.cpp:4617-4620) without touching a
+// standing bones entry for the same owner: the bones keep their low GUID
+// in the entry itself, and only the mapping must go so a later corpse for
+// the owner mints fresh instead of reusing the bones' value.
+func (s *Server) dropCorpseGUIDMapping(mapID, instanceID uint32, ownerLow uint64) {
+	if s == nil {
+		return
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	key := corpseKey{mapID: mapID, instanceID: instanceID, ownerLow: ownerLow}
+	if low, ok := s.corpseGUIDByOwner[key]; ok {
+		delete(s.corpseGUIDByOwner, key)
+		delete(s.corpseOwnerByGUID, corpseGUIDKey{mapID: mapID, instanceID: instanceID, low: low})
+	}
+}
+
+// dropCorpseGUIDMappings is the owner-wide form of dropCorpseGUIDMapping,
+// for corpse removals that do not know the corpse's map (the login
+// resurrect path): every mapping for the owner goes, standing bones
+// entries stay.
+func (s *Server) dropCorpseGUIDMappings(ownerLow uint64) {
+	if s == nil {
+		return
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	for key, low := range s.corpseGUIDByOwner {
+		if key.ownerLow != ownerLow {
+			continue
+		}
+		delete(s.corpseGUIDByOwner, key)
+		delete(s.corpseOwnerByGUID, corpseGUIDKey{mapID: key.mapID, instanceID: key.instanceID, low: low})
+	}
+}
+
+// releaseCorpseGUIDForNewCorpse runs before a new corpse object is created
+// for an owner whose previous death's bones still stand on the map: the
+// bones keep their low GUID (bones->Create(corpse->GetGUID().GetCounter()),
+// Map.cpp:4653) while the new corpse mints fresh from the sequence
+// (Player::CreateCorpse, Player.cpp:4822). Without the release the new
+// corpse would share its GUID with the standing bones.
+func (s *Server) releaseCorpseGUIDForNewCorpse(mapID, instanceID uint32, ownerLow uint64) {
+	if s == nil {
+		return
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	key := corpseKey{mapID: mapID, instanceID: instanceID, ownerLow: ownerLow}
+	if _, ok := s.corpseBones[key]; !ok {
+		return
+	}
+	if low, ok := s.corpseGUIDByOwner[key]; ok {
+		delete(s.corpseGUIDByOwner, key)
+		delete(s.corpseOwnerByGUID, corpseGUIDKey{mapID: mapID, instanceID: instanceID, low: low})
+	}
+}
+
+// forgetCorpseGUIDsForMap drops every corpse GUID mapping and bones
+// entry on a map instance (Map::DeleteCorpseData, Map.cpp:4585-4592: the
+// rows go with the unloading map, so the objects they described are gone
+// and their low GUIDs must not be handed to a later corpse).
+func (s *Server) forgetCorpseGUIDsForMap(mapID, instanceID uint32) {
+	if s == nil {
+		return
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	for key, low := range s.corpseGUIDByOwner {
+		if key.mapID != mapID || key.instanceID != instanceID {
+			continue
+		}
+		delete(s.corpseGUIDByOwner, key)
+		delete(s.corpseOwnerByGUID, corpseGUIDKey{mapID: key.mapID, instanceID: key.instanceID, low: low})
+		delete(s.corpseBones, key)
+	}
+}
+
+// ensureCorpseGUIDsForMap assigns low GUIDs to every resurrectable corpse
+// row on a map instance (Map::LoadCorpseData, Map.cpp:4551-4583, mints a
+// fresh GenerateLowGuid per loaded row): a corpse GUID that reaches a
+// lookup before any player rendered the corpse still resolves to its
+// owner instead of reading as a stale or foreign GUID.
+func (s *Server) ensureCorpseGUIDsForMap(ctx context.Context, mapID, instanceID uint32) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT guid FROM corpse WHERE mapId = ? AND instanceId = ? AND corpseType <> ?", mapID, instanceID, corpseTypeBones)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var owners []uint64
+	for rows.Next() {
+		var owner uint64
+		if err := rows.Scan(&owner); err == nil && owner != 0 {
+			owners = append(owners, owner)
+		}
+	}
+	_ = rows.Close()
+	if len(owners) == 0 {
+		return
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	for _, owner := range owners {
+		s.corpseLowGUIDLocked(mapID, instanceID, owner)
+	}
+}
+
+// registerCorpseBones records the bones object a conversion created, so
+// it survives in the world past the creating broadcast (Map::AddCorpse +
+// AddToMap, Map.cpp:4667-4670).
+func (s *Server) registerCorpseBones(mapID, instanceID uint32, ownerLow uint64, entry corpseBonesEntry) {
+	if s == nil {
+		return
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	if s.corpseBones == nil {
+		s.corpseBones = make(map[corpseKey]*corpseBonesEntry)
+	}
+	e := entry
+	s.corpseBones[corpseKey{mapID: mapID, instanceID: instanceID, ownerLow: ownerLow}] = &e
+}
+
+// expireCorpseBones despawns bones past the 60-minute horizon
+// (Map::RemoveOldCorpses, Map.cpp:4693-4701: RemoveCorpse + delete) and
+// drops their GUID mappings, returning the number removed. The destroy
+// goes to players near the bones, not near any session.
+func (s *Server) expireCorpseBones(ctx context.Context) int {
+	if s == nil {
+		return 0
+	}
+	now := time.Now()
+	s.corpseMu.Lock()
+	var expired []corpseBonesEntry
+	var expiredKeys []corpseKey
+	for key, entry := range s.corpseBones {
+		if entry == nil || now.Sub(entry.createdAt) < corpseBonesExpiry {
+			continue
+		}
+		expired = append(expired, *entry)
+		expiredKeys = append(expiredKeys, key)
+	}
+	for _, key := range expiredKeys {
+		low := s.corpseBones[key].lowGUID
+		delete(s.corpseBones, key)
+		delete(s.corpseGUIDByOwner, key)
+		delete(s.corpseOwnerByGUID, corpseGUIDKey{mapID: key.mapID, instanceID: key.instanceID, low: low})
+	}
+	s.corpseMu.Unlock()
+	for i, entry := range expired {
+		key := expiredKeys[i]
+		updates := protocol.NewUpdateData()
+		updates.AddOutOfRangeGUID(uint64(0xF101)<<48 | uint64(entry.lowGUID))
+		if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+			s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), key.mapID, key.instanceID, entry.x, entry.y, entry.z, nil)
+		}
+	}
+	return len(expired)
+}
+
 func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState, phaseMask uint32) (*protocol.Packet, int, error) {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || s.Config.VisibilityDistanceContinents <= 0 {
 		return nil, 0, nil
@@ -327,8 +586,11 @@ func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState
 	// Reference Map::LoadCorpseData (Map.cpp:4551-4583) scopes the map's
 	// corpse grid by (mapId, instanceId): corpses from another dungeon
 	// instance of the same map are never visible.
+	// Map::LoadCorpseData (Map.cpp:4567-4571) rejects bones rows — bones
+	// are in-world objects, not DB rows, so they render from the bones
+	// registry below, never from this query.
 	rows, err := s.CharactersStore.DB.QueryContext(ctx, `SELECT guid, mapId, posX, posY, posZ, orientation, displayId, itemCache, bytes1, bytes2, guildId, flags, dynFlags, corpseType, phaseMask
-		FROM corpse WHERE mapId = ? AND instanceId = ? AND posX BETWEEN ? AND ? AND posY BETWEEN ? AND ? ORDER BY guid`, state.Map, state.InstanceID, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
+		FROM corpse WHERE mapId = ? AND instanceId = ? AND corpseType <> ? AND posX BETWEEN ? AND ? AND posY BETWEEN ? AND ? ORDER BY guid`, state.Map, state.InstanceID, corpseTypeBones, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
 	if err != nil {
 		if missingTable(err) || isMissingColumn(err) {
 			return nil, 0, nil
@@ -357,18 +619,35 @@ func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState
 	}
 	// The equipment cache rides the same packing as the fresh-corpse visual
 	// (Corpse::LoadCorpseFromDB restores CORPSE_FIELD_ITEM from the stored
-	// row, Corpse.cpp:155-159); one batched template lookup covers every
-	// corpse on the grid.
+	// row, Corpse.cpp:155-159). Rows written since the packed format landed
+	// carry _ConcatFields output (Corpse.cpp:107, Object.cpp:143-148): 19
+	// space-separated DisplayInfoID | (InventoryType << 24) values, read
+	// verbatim with no template lookup. Older rows carry the Go-original
+	// loadEquipmentCache string (23 slots x entry/enchantment pairs);
+	// those still resolve through one batched template lookup, told apart
+	// by field count (19 packed vs 46 legacy).
 	var worldDB *sql.DB
 	if s.WorldStore != nil {
 		worldDB = s.WorldStore.DB
 	}
 	caches := make([][corpseItemSlots]uint32, len(corpses))
+	for i, c := range corpses {
+		if fields := strings.Fields(c.itemCache); len(fields) == corpseItemSlots {
+			for slot := 0; slot < corpseItemSlots; slot++ {
+				if v, err := strconv.ParseUint(fields[slot], 10, 32); err == nil {
+					caches[i][slot] = uint32(v)
+				}
+			}
+		}
+	}
 	if worldDB != nil {
 		parsed := make([][]uint32, len(corpses))
 		entries := make([]uint32, 0, len(corpses)*corpseItemSlots)
 		seen := make(map[uint32]bool)
 		for i, c := range corpses {
+			if len(strings.Fields(c.itemCache)) == corpseItemSlots {
+				continue
+			}
 			fields := strings.Fields(c.itemCache)
 			parsed[i] = make([]uint32, corpseItemSlots)
 			for slot := 0; slot < corpseItemSlots; slot++ {
@@ -404,6 +683,9 @@ func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState
 				}
 				_ = qrows.Close()
 				for i := range corpses {
+					if parsed[i] == nil {
+						continue
+					}
 					for slot := 0; slot < corpseItemSlots; slot++ {
 						if v, ok := byEntry[parsed[i][slot]]; ok {
 							caches[i][slot] = v[0] | (v[1] << 24)
@@ -421,10 +703,37 @@ func (s *Server) buildNearbyCorpseUpdates(ctx context.Context, state playerState
 		if c.corpseType == int64(corpseTypeBones) {
 			ownerGUID = 0
 		}
-		corpseGUID := guid | (uint64(0xF101) << 48)
+		// Player::CreateCorpse (Player.cpp:4822) mints the corpse GUID
+		// from the map's sequence (Map::GenerateLowGuid), and
+		// LoadCorpseData (:4576) re-mints one per loaded row — the low
+		// 32 bits are never the owner GUID.
+		corpseGUID := uint64(0xF101)<<48 | uint64(s.corpseLowGUID(state.Map, state.InstanceID, guid))
 		block := buildCorpseCreateBlockWithFields(corpseGUID, corpseObjectFields{OwnerGUID: ownerGUID, DisplayID: uint32(c.displayID), Items: caches[i], Bytes1: uint32(c.bytes1), Bytes2: uint32(c.bytes2), GuildID: uint32(c.guildID), Flags: uint32(c.flags), DynamicFlags: uint32(c.dynamicFlags)}, float32(c.x), float32(c.y), float32(c.z), float32(c.orientation))
 		updates.AddUpdateBlock(block)
 		count++
+	}
+	// Bones live in the registry, not the DB (Map::_corpseBones,
+	// Map.cpp:4605-4606): a player arriving after the conversion sees
+	// them here, where the row query above cannot reach them.
+	if s != nil {
+		s.corpseMu.Lock()
+		bones := make([]corpseBonesEntry, 0, len(s.corpseBones))
+		for key, entry := range s.corpseBones {
+			if entry == nil || key.mapID != state.Map || key.instanceID != state.InstanceID {
+				continue
+			}
+			bones = append(bones, *entry)
+		}
+		s.corpseMu.Unlock()
+		for _, b := range bones {
+			if b.phaseMask&phaseMask == 0 || math.Hypot(float64(b.x)-float64(state.X), float64(b.y)-float64(state.Y)) > distance || !validMovementPosition(b.x, b.y, b.z, b.orientation) {
+				continue
+			}
+			corpseGUID := uint64(0xF101)<<48 | uint64(b.lowGUID)
+			block := buildCorpseCreateBlockWithFields(corpseGUID, corpseObjectFields{DisplayID: b.displayID, Bytes1: b.bytes1, Bytes2: b.bytes2, GuildID: b.guildID, Flags: b.flags, DynamicFlags: b.dynamicFlags}, b.x, b.y, b.z, b.orientation)
+			updates.AddUpdateBlock(block)
+			count++
+		}
 	}
 	if count == 0 {
 		return nil, 0, nil
@@ -1186,15 +1495,41 @@ func resolveCorpseItemCache(ctx context.Context, db *sql.DB, equipment string) [
 	return items
 }
 
+// formatCorpseItemCache renders the CORPSE_FIELD_ITEM cache the way
+// Corpse::SaveToDB persists it (Corpse.cpp:107): Object::_ConcatFields
+// (Object.cpp:143-148) writes the 19 packed per-slot values as
+// space-separated decimals, each followed by a space. LoadCorpseFromDB
+// (Corpse.cpp:155-159) reads the same string back verbatim.
+func formatCorpseItemCache(items [corpseItemSlots]uint32) string {
+	var b strings.Builder
+	for _, v := range items {
+		b.WriteString(strconv.FormatUint(uint64(v), 10))
+		b.WriteByte(' ')
+	}
+	return b.String()
+}
+
 func (s *session) spawnCorpseObject(ctx context.Context, displayID uint32, battlegroundLootable bool) {
 	if s.player == nil {
 		return
 	}
-	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
+	// Player::CreateCorpse (Player.cpp:4822): the corpse GUID comes from
+	// the map's sequence, not the owner. The release is the backstop for
+	// the buildPlayerRepop call: standing bones from a previous death
+	// keep their value while this corpse mints fresh.
+	s.server.releaseCorpseGUIDForNewCorpse(s.player.Map, s.player.InstanceID, s.playerGUID)
+	corpseGUID := uint64(0xF101)<<48 | uint64(s.server.corpseLowGUID(s.player.Map, s.player.InstanceID, s.playerGUID))
 	// Player::BuildPlayerRepop (Player.cpp:4640+): m_corpse anchors corpse-based
 	// distance checks while dead (Player::IsAtGroupRewardDistance).
 	s.player.hasCorpse = true
 	s.player.corpseX, s.player.corpseY, s.player.corpseZ = s.player.X, s.player.Y, s.player.Z
+	// The corpse snapshot is the ConvertCorpseToBones source for corpses
+	// with no DB row (battlegrounds/arenas, Player.cpp:4867-4868 save-skip):
+	// C++ converts the in-memory corpse object, so its map, display and
+	// orientation must survive the ghost's later movement.
+	s.player.corpseMap, s.player.corpseInstanceID = s.player.Map, s.player.InstanceID
+	s.player.corpseDisplayID = displayID
+	s.player.corpseOrientation = s.player.Orientation
 	bytes1, bytes2 := corpseAppearance(s.player)
 	var worldDB *sql.DB
 	if s.server != nil && s.server.WorldStore != nil {
@@ -1224,8 +1559,12 @@ func (s *session) despawnCorpseObject(mapID, instanceID uint32, x, y, z float32)
 	// distance checks fall back to the player position.
 	if s.player != nil {
 		s.player.hasCorpse = false
+		s.player.corpseMap, s.player.corpseInstanceID = 0, 0
+		s.player.corpseDisplayID, s.player.corpseOrientation = 0, 0
 	}
-	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
+	// The destroy carries the corpse's map-assigned GUID, matching the
+	// create block spawnCorpseObject sent.
+	corpseGUID := uint64(0xF101)<<48 | uint64(s.server.corpseLowGUID(mapID, instanceID, s.playerGUID))
 	updates := protocol.NewUpdateData()
 	updates.AddOutOfRangeGUID(corpseGUID)
 	packet, err := updates.BuildPacket(0)
@@ -1316,8 +1655,10 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	// (Map::ConvertCorpseToBones deletes the old row outside the BG/arena
 	// save-skip gate and spawns the ownerless bones visual per the
 	// DEATH_BONES configs) instead of only deleting the row.
-	// convertCorpseToBones is the Go analog; it early-returns when no row
-	// exists, matching ConvertCorpseToBones' GetCorpseByPlayer miss.
+	// convertCorpseToBones is the Go analog; a missing DB row falls
+	// through to the session snapshot (battleground/arena corpses convert
+	// from the in-memory object, Map.cpp:4629-4631), and only a missing
+	// snapshot matches ConvertCorpseToBones' GetCorpseByPlayer miss.
 	// Player::LoadCorpse (Player.cpp:18301-18313): a dead login keeps the
 	// existing corpse row as-is — its reclaim delay counts from the original
 	// time and its PvP type is preserved — instead of the convert+rewrite a
@@ -1325,8 +1666,15 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	keepCorpseRow := s.player.repopOnLogin && s.player.loadedCorpseRow
 	if !keepCorpseRow {
 		s.convertCorpseToBones(ctx, false)
+		// A new corpse object is about to be created below: if the
+		// previous death's bones still stand on this map, release the
+		// mapping now — the bones keep their low GUID and the new
+		// corpse mints fresh (Map.cpp:4653 vs Player.cpp:4822). The
+		// release runs before the insert so a concurrent nearby render
+		// of the fresh row cannot claim the bones' value first.
+		s.server.releaseCorpseGUIDForNewCorpse(s.player.Map, s.player.InstanceID, s.playerGUID)
 	}
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && !bgLootable && !keepCorpseRow {
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && !battlegroundMap(s.player.Map) && !keepCorpseRow {
 		// Column order mirrors SaveToDB (Corpse.cpp:102-119): the dynFlags
 		// 0 is exact — Player::CreateCorpse never sets CORPSE_FIELD_DYNAMIC_FLAGS
 		// on a fresh corpse — and instanceId is the map's instance id
@@ -1335,15 +1683,20 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 		// Player::CreateCorpse (Player.cpp:4867-4868) skips the DB save when
 		// the map is a battleground or arena — "we do not need to save
 		// corpses for BG/arenas" — while still creating the in-memory corpse
-		// object (with the LOOTABLE flag for the insignia). Go has no arena
-		// system, so the gate is the battleground leg only: the old row is
-		// still deleted (C++ ConvertCorpseToBones deletes it outside the
-		// gate), but no new row is written, so BG deaths leave no stale
-		// corpse row behind for the reclaim / map-admission / login loaders.
+		// object (with the LOOTABLE flag for the insignia). The gate is the
+		// map's battleground/arena property, not the LOOTABLE flag: arenas
+		// carry no LOOTABLE flag (Player.cpp:4841) but still skip the save.
+		// itemCache is the packed _ConcatFields string (Corpse.cpp:107):
+		// the 19 DisplayInfoID | (InventoryType << 24) values, not the
+		// Go-original entry/enchantment pairs.
 		bytes1, bytes2 := corpseAppearance(s.player)
+		var worldDB *sql.DB
+		if s.server.WorldStore != nil {
+			worldDB = s.server.WorldStore.DB
+		}
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
 			s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
-			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player, bgLootable), 0, time.Now().Unix(), corpseType, s.player.InstanceID, s.currentPlayerPhaseMask())
+			displayID, formatCorpseItemCache(resolveCorpseItemCache(ctx, worldDB, s.player.Equipment)), bytes1, bytes2, s.player.GuildID, corpseFlags(s.player, bgLootable), 0, time.Now().Unix(), corpseType, s.player.InstanceID, s.currentPlayerPhaseMask())
 	}
 
 	s.player.PlayerFlags |= playerFlagGhost
@@ -1884,6 +2237,7 @@ type corpseObjectState struct {
 	DisplayID, Bytes1, Bytes2, Flags, DynamicFlags uint32
 	GuildID                                        uint32
 	CorpseType                                     uint32
+	PhaseMask                                      uint32
 	GhostTime                                      int64
 	X, Y, Z, Orientation                           float32
 }
@@ -1892,9 +2246,9 @@ func (s *session) loadCorpseObject(ctx context.Context) (corpseObjectState, bool
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return corpseObjectState{}, false
 	}
-	var mapID, instanceID, displayID, bytes1, bytes2, flags, dynamicFlags, corpseType, ghostTime int64
+	var mapID, instanceID, displayID, bytes1, bytes2, flags, dynamicFlags, corpseType, ghostTime, phaseMask int64
 	var corpse corpseObjectState
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, instanceId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, flags, dynFlags, corpseType, time FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones).Scan(&mapID, &instanceID, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Orientation, &displayID, &bytes1, &bytes2, &flags, &dynamicFlags, &corpseType, &ghostTime); err != nil {
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, instanceId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, flags, dynFlags, corpseType, time, phaseMask FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones).Scan(&mapID, &instanceID, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Orientation, &displayID, &bytes1, &bytes2, &flags, &dynamicFlags, &corpseType, &ghostTime, &phaseMask); err != nil {
 		return corpseObjectState{}, false
 	}
 	corpse.MapID = uint32(mapID)
@@ -1905,6 +2259,7 @@ func (s *session) loadCorpseObject(ctx context.Context) (corpseObjectState, bool
 	corpse.Flags = uint32(flags)
 	corpse.DynamicFlags = uint32(dynamicFlags)
 	corpse.CorpseType = uint32(corpseType)
+	corpse.PhaseMask = uint32(phaseMask)
 	corpse.GhostTime = ghostTime
 	var guildID int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guildId FROM corpse WHERE guid = ?", s.playerGUID).Scan(&guildID); err == nil {
@@ -1917,9 +2272,9 @@ func (s *session) loadCorpseObject(ctx context.Context) (corpseObjectState, bool
 // resurrectable corpse (Player::GetCorpse, PlayerMethods.h:1581-1588;
 // CorpseMethods.h). The row comes from loadCorpseObject, so bones are
 // excluded and BG/arena deaths, which Go never persists (the
-// Player.cpp:4867-4868 save-skip), never reach here. The corpse GUID
-// follows the spawnCorpseObject construction (playerGUID | 0xF101<<48);
-// the generic object fallback supplies GetGUID/GetMapId/GetObjectType(7)
+// Player.cpp:4867-4868 save-skip), never reach here. The corpse GUID is
+// the map-assigned low GUID (Player.cpp:4822), not the owner GUID.
+// The generic object fallback supplies GetGUID/GetMapId/GetObjectType(7)
 // and position reads, while the five Corpse methods are explicit here.
 // Only the ghost time is mutable from Lua (ResetGhostTime,
 // Corpse.cpp:146-149), so SaveToDB persists just the time column: a full
@@ -1931,7 +2286,7 @@ func (s *session) luaCorpseObject(state corpseObjectState) *scripting.Object {
 		return nil
 	}
 	ownerGUID := s.playerGUID
-	corpseGUID := ownerGUID | (uint64(0xF101) << 48)
+	corpseGUID := uint64(0xF101)<<48 | uint64(s.server.corpseLowGUID(state.MapID, state.InstanceID, ownerGUID))
 	ghostTime := state.GhostTime
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetOwnerGUID"] = luaNoArgs(func() any { return ownerGUID })
@@ -1968,6 +2323,12 @@ func (s *session) prepareLoginResurrection(ctx context.Context, state *playerSta
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ?", state.GUID)
+		// The corpse object is gone with the row (no bones are created on
+		// this path), so the low GUID must not be reused by the next
+		// corpse for this owner. Standing bones entries stay: the row
+		// delete does not remove bones (Player::OfflineResurrect has no
+		// ConvertCorpseToBones leg), so only the mappings go.
+		s.server.dropCorpseGUIDMappings(state.GUID)
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ?, health = ?, playerFlags = ? WHERE guid = ?", ^uint32(atLoginResurrect), maxUint32(state.MaxHealth/2, 1), state.PlayerFlags&^playerFlagGhost, state.GUID)
 	}
 	s.castMu.Lock()
@@ -2010,14 +2371,21 @@ func battlegroundMap(mapID uint32) bool {
 	}
 }
 
+func (s *Server) shouldCreateCorpseBones(mapID uint32) bool {
+	if s == nil {
+		return false
+	}
+	if battlegroundMap(mapID) {
+		return s.Config.DeathBonesBattleground
+	}
+	return s.Config.DeathBonesWorld
+}
+
 func (s *session) shouldCreateCorpseBones(mapID uint32) bool {
 	if s == nil || s.server == nil {
 		return false
 	}
-	if battlegroundMap(mapID) {
-		return s.server.Config.DeathBonesBattleground
-	}
-	return s.server.Config.DeathBonesWorld
+	return s.server.shouldCreateCorpseBones(mapID)
 }
 
 // spawnCorpseBones mirrors Player::SpawnCorpseBones and Map::ConvertCorpseToBones:
@@ -2033,6 +2401,12 @@ func (s *session) spawnLoadedCorpseBones(ctx context.Context) {
 func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible bool) {
 	corpse, ok := s.loadCorpseObject(ctx)
 	if !ok {
+		// Battleground/arena corpses have no DB row (the
+		// Player.cpp:4867-4868 save-skip), but C++ converts the
+		// in-memory corpse object all the same (Map::ConvertCorpseToBones
+		// works off GetCorpseByPlayer, Map.cpp:4629-4631); the session
+		// snapshot taken at spawnCorpseObject is that object here.
+		s.convertSessionCorpseToBones(ctx, destroyVisible)
 		return
 	}
 	if destroyVisible {
@@ -2042,11 +2416,61 @@ func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible bool)
 		return
 	}
 	if !s.shouldCreateCorpseBones(corpse.MapID) {
+		s.server.dropCorpseGUIDMapping(corpse.MapID, corpse.InstanceID, s.playerGUID)
 		return
 	}
-	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
-	fields := corpseObjectFields{DisplayID: corpse.DisplayID, Bytes1: corpse.Bytes1, Bytes2: corpse.Bytes2, GuildID: corpse.GuildID, Flags: corpseFlagUnk2 | corpseFlagBones, DynamicFlags: corpse.DynamicFlags}
-	block := buildCorpseCreateBlockWithFields(corpseGUID, fields, corpse.X, corpse.Y, corpse.Z, corpse.Orientation)
+	s.createCorpseBones(corpse.MapID, corpse.InstanceID, corpse.DisplayID, corpse.Bytes1, corpse.Bytes2, corpse.GuildID, corpse.DynamicFlags, corpse.PhaseMask, corpse.X, corpse.Y, corpse.Z, corpse.Orientation)
+}
+
+// convertSessionCorpseToBones is the no-row half of ConvertCorpseToBones:
+// a battleground/arena corpse converts from the session snapshot, never
+// from the DB. With no snapshot there is no corpse object to convert,
+// matching the GetCorpseByPlayer miss.
+func (s *session) convertSessionCorpseToBones(ctx context.Context, destroyVisible bool) {
+	if s == nil || s.server == nil || s.player == nil || !s.player.hasCorpse {
+		return
+	}
+	// Snapshot before the despawn below clears it: despawnCorpseObject
+	// zeroes the session snapshot as the m_corpse clear does. The corpse
+	// flags do not carry over (ConvertCorpseToBones overwrites them with
+	// UNK2|BONES, Map.cpp:4659) and fresh corpses carry dynFlags 0, so
+	// neither is snapshotted.
+	mapID, instanceID := s.player.corpseMap, s.player.corpseInstanceID
+	displayID := s.player.corpseDisplayID
+	x, y, z, orientation := s.player.corpseX, s.player.corpseY, s.player.corpseZ, s.player.corpseOrientation
+	if destroyVisible {
+		s.despawnCorpseObject(mapID, instanceID, x, y, z)
+	}
+	if !s.shouldCreateCorpseBones(mapID) {
+		s.server.dropCorpseGUIDMapping(mapID, instanceID, s.playerGUID)
+		return
+	}
+	bytes1, bytes2 := corpseAppearance(s.player)
+	s.createCorpseBones(mapID, instanceID, displayID, bytes1, bytes2, s.player.GuildID, 0, s.currentPlayerPhaseMask(), x, y, z, orientation)
+}
+
+// createCorpseBones broadcasts the bones create block for a converted
+// corpse and registers the bones object (Map::ConvertCorpseToBones,
+// Map.cpp:4653-4670): bones keep the corpse's low GUID, carry
+// UNK2|BONES with the item slots cleared, and live in the registry until
+// the 60-minute expiry so late arrivals see them. The conversion consumes
+// the corpse object (Map::RemoveCorpse, Map.cpp:4610-4621), so the session
+// snapshot goes with it — a later conversion must not re-bone the stale
+// position, and the next corpse mints fresh via releaseCorpseGUIDForNewCorpse.
+func (s *session) createCorpseBones(mapID, instanceID, displayID, bytes1, bytes2, guildID, dynamicFlags, phaseMask uint32, x, y, z, orientation float32) {
+	if s == nil || s.server == nil {
+		return
+	}
+	if s.player != nil {
+		s.player.hasCorpse = false
+		s.player.corpseMap, s.player.corpseInstanceID = 0, 0
+		s.player.corpseDisplayID, s.player.corpseOrientation = 0, 0
+	}
+	lowGUID := s.server.corpseLowGUID(mapID, instanceID, s.playerGUID)
+	corpseGUID := uint64(0xF101)<<48 | uint64(lowGUID)
+	fields := corpseObjectFields{DisplayID: displayID, Bytes1: bytes1, Bytes2: bytes2, GuildID: guildID, Flags: corpseFlagUnk2 | corpseFlagBones, DynamicFlags: dynamicFlags}
+	block := buildCorpseCreateBlockWithFields(corpseGUID, fields, x, y, z, orientation)
+	s.server.registerCorpseBones(mapID, instanceID, s.playerGUID, corpseBonesEntry{lowGUID: lowGUID, displayID: displayID, bytes1: bytes1, bytes2: bytes2, guildID: guildID, flags: corpseFlagUnk2 | corpseFlagBones, dynamicFlags: dynamicFlags, phaseMask: phaseMask, x: x, y: y, z: z, orientation: orientation, createdAt: time.Now()})
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block)
 	packet, err := updates.BuildPacket(0)
@@ -2054,7 +2478,7 @@ func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible bool)
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		// Bones are AddToMap'd on the corpse's map (Map.cpp:4627-4670):
 		// center the fan-out on the corpse, not the player.
-		s.server.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), corpse.MapID, corpse.InstanceID, corpse.X, corpse.Y, corpse.Z, s)
+		s.server.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), mapID, instanceID, x, y, z, s)
 	}
 }
 
@@ -2069,18 +2493,16 @@ const corpseExpirySweepInterval = 20 * time.Minute
 
 // expireOldCorpses mirrors Map::RemoveOldCorpses (Map.cpp:4681-4703): every
 // resurrectable corpse older than corpseResurrectableExpiry is converted to
-// bones. An online owner's visible corpse is despawned and replaced with
-// bones via spawnLoadedCorpseBones (the RemoveCorpse + ConvertCorpseToBones
-// arm); an offline owner's corpse still becomes visible bones for nearby
-// players (Map::RemoveOldCorpses, Map.cpp:4681-4703) before the row is
-// deleted — bones are never persisted. Returns the number of expired
-// corpses handled.
-// No-bridge: the 60-minute bones expiry (Corpse.cpp:209, Map.cpp:4693-4701)
-// has no Go analog — Go bones are fire-and-forget client visuals with no
-// server-side state (no _corpseBones analog, no DB row), so nothing exists
-// to expire; clients clear them on map change/logout. The grid-loaded leg
-// (!IsRemovalGrid in ConvertCorpseToBones) likewise has no analog — Go has
-// no grid model and the packet broadcast is unconditional.
+// bones, and bones older than corpseBonesExpiry are despawned. An online
+// owner's visible corpse is despawned and replaced with bones via
+// spawnLoadedCorpseBones (the RemoveCorpse + ConvertCorpseToBones arm); an
+// offline owner's corpse still becomes visible bones for nearby players
+// (Map::RemoveOldCorpses, Map.cpp:4681-4703) before the row is deleted —
+// bones are never persisted. Returns the number of expired corpses and
+// bones handled.
+// No-bridge: the grid-loaded leg (!IsRemovalGrid in ConvertCorpseToBones)
+// has no analog — Go has no grid model and the packet broadcast is
+// unconditional.
 func (s *Server) expireOldCorpses(ctx context.Context) int {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return 0
@@ -2091,26 +2513,26 @@ func (s *Server) expireOldCorpses(ctx context.Context) int {
 	// (Map.cpp:4678-4690) converts such corpses to bones at the next
 	// sweep — the deleted-character arm is disjunctive with the 72h
 	// cutoff (an AND would leave orphans visible up to 3 days).
-	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT guid, mapId, instanceId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags FROM corpse WHERE corpseType <> ? AND (time < ? OR NOT EXISTS (SELECT 1 FROM characters WHERE guid = corpse.guid))", corpseTypeBones, cutoff)
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT guid, mapId, instanceId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags, phaseMask FROM corpse WHERE corpseType <> ? AND (time < ? OR NOT EXISTS (SELECT 1 FROM characters WHERE guid = corpse.guid))", corpseTypeBones, cutoff)
 	if err != nil {
 		return 0
 	}
 	type expiredCorpse struct {
 		guid                                                  uint64
 		mapID, instanceID, displayID, bytes1, bytes2, guildID uint32
-		flags, dynFlags                                       uint32
+		flags, dynFlags, phaseMask                            uint32
 		x, y, z, orientation                                  float32
 	}
 	var corpses []expiredCorpse
 	for rows.Next() {
 		var c expiredCorpse
-		var mapID, instanceID, displayID, bytes1, bytes2, guildID, flags, dynFlags int64
-		if err := rows.Scan(&c.guid, &mapID, &instanceID, &c.x, &c.y, &c.z, &c.orientation, &displayID, &bytes1, &bytes2, &guildID, &flags, &dynFlags); err != nil {
+		var mapID, instanceID, displayID, bytes1, bytes2, guildID, flags, dynFlags, phaseMask int64
+		if err := rows.Scan(&c.guid, &mapID, &instanceID, &c.x, &c.y, &c.z, &c.orientation, &displayID, &bytes1, &bytes2, &guildID, &flags, &dynFlags, &phaseMask); err != nil {
 			continue
 		}
 		c.mapID, c.instanceID = uint32(mapID), uint32(instanceID)
 		c.displayID, c.bytes1, c.bytes2, c.guildID = uint32(displayID), uint32(bytes1), uint32(bytes2), uint32(guildID)
-		c.flags, c.dynFlags = uint32(flags), uint32(dynFlags)
+		c.flags, c.dynFlags, c.phaseMask = uint32(flags), uint32(dynFlags), uint32(phaseMask)
 		corpses = append(corpses, c)
 	}
 	_ = rows.Close()
@@ -2122,17 +2544,25 @@ func (s *Server) expireOldCorpses(ctx context.Context) int {
 			// Map::RemoveOldCorpses converts the corpse even when the owner
 			// is offline (Map.cpp:4681-4703): broadcast the bones visual on
 			// the corpse's own map, then delete the row (bones are never
-			// persisted, Player.cpp:4867 / Map.cpp:4636).
-			corpseGUID := c.guid | (uint64(0xF101) << 48)
-			// Map::ConvertCorpseToBones (Map.cpp:4659) OVERWRITES the
-			// bones flags with UNK2|BONES; the corpse's hide-helm,
-			// hide-cloak and BG-lootable bits do not carry over.
-			fields := corpseObjectFields{DisplayID: c.displayID, Bytes1: c.bytes1, Bytes2: c.bytes2, GuildID: c.guildID, Flags: corpseFlagUnk2 | corpseFlagBones, DynamicFlags: c.dynFlags}
-			block := buildCorpseCreateBlockWithFields(corpseGUID, fields, c.x, c.y, c.z, c.orientation)
-			updates := protocol.NewUpdateData()
-			updates.AddUpdateBlock(block)
-			if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-				s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), c.mapID, c.instanceID, c.x, c.y, c.z, nil)
+			// persisted, Player.cpp:4867 / Map.cpp:4636). The bones keep
+			// the corpse's low GUID and join the registry like the
+			// online arm, so a player arriving later still sees them.
+			lowGUID := s.corpseLowGUID(c.mapID, c.instanceID, c.guid)
+			if s.shouldCreateCorpseBones(c.mapID) {
+				corpseGUID := uint64(0xF101)<<48 | uint64(lowGUID)
+				// Map::ConvertCorpseToBones (Map.cpp:4659) OVERWRITES the
+				// bones flags with UNK2|BONES; the corpse's hide-helm,
+				// hide-cloak and BG-lootable bits do not carry over.
+				fields := corpseObjectFields{DisplayID: c.displayID, Bytes1: c.bytes1, Bytes2: c.bytes2, GuildID: c.guildID, Flags: corpseFlagUnk2 | corpseFlagBones, DynamicFlags: c.dynFlags}
+				block := buildCorpseCreateBlockWithFields(corpseGUID, fields, c.x, c.y, c.z, c.orientation)
+				s.registerCorpseBones(c.mapID, c.instanceID, c.guid, corpseBonesEntry{lowGUID: lowGUID, displayID: c.displayID, bytes1: c.bytes1, bytes2: c.bytes2, guildID: c.guildID, flags: corpseFlagUnk2 | corpseFlagBones, dynamicFlags: c.dynFlags, phaseMask: c.phaseMask, x: c.x, y: c.y, z: c.z, orientation: c.orientation, createdAt: time.Now()})
+				updates := protocol.NewUpdateData()
+				updates.AddUpdateBlock(block)
+				if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+					s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), c.mapID, c.instanceID, c.x, c.y, c.z, nil)
+				}
+			} else {
+				s.dropCorpseGUIDMapping(c.mapID, c.instanceID, c.guid)
 			}
 			if _, err := s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", c.guid, corpseTypeBones); err != nil {
 				continue
@@ -2140,6 +2570,9 @@ func (s *Server) expireOldCorpses(ctx context.Context) int {
 		}
 		handled++
 	}
+	// Map::RemoveOldCorpses (Map.cpp:4693-4701) sweeps expired bones in the
+	// same pass as expired corpses.
+	handled += s.expireCorpseBones(ctx)
 	return handled
 }
 
@@ -2168,6 +2601,7 @@ func (s *session) deleteCorpseDataForMap(ctx context.Context, mapID, instanceID 
 		return
 	}
 	_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSES_FROM_MAP", mapID, instanceID)
+	s.server.forgetCorpseGUIDsForMap(mapID, instanceID)
 }
 
 // resurrectPlayer mirrors Player::ResurrectPlayer (Player.cpp:4682) with the
@@ -2486,9 +2920,10 @@ func (s *session) loadCorpse(ctx context.Context) (corpseRecord, bool) {
 }
 
 // corpseTarget is one in-world corpse as Spell::AddCorpseTarget sees it:
-// the characters.corpse row keyed by the corpse GUID (HighGuid 0xF101, low
-// 32 bits = owner player GUID), scoped to the caster's map+instance the way
-// ObjectAccessor::GetCorpse is (Corpse::GetMap / the map corpse grid).
+// the characters.corpse row keyed by its owner, scoped to the caster's
+// map+instance the way ObjectAccessor::GetCorpse is (Corpse::GetMap / the
+// map corpse grid). The corpse GUID is the map-assigned low GUID
+// (Player.cpp:4822), never the owner GUID.
 type corpseTarget struct {
 	GUID        uint64
 	OwnerGUID   uint64
@@ -2504,9 +2939,10 @@ func isCorpseGUID(guid uint64) bool { return uint16(guid>>48) == 0xF101 }
 // listCorpsesOnMap lists the non-bones corpses on a map+instance: the
 // characters.corpse rows Spell::SearchAreaTargets visits through the
 // corpse grid (Spell.cpp:1881-1888, GRID_MAP_TYPE_MASK_CORPSE). The row
-// guid is the owner's player GUID (lookupCorpse twin); the corpse GUID is
-// owner | 0xF101<<48. Bones (type 0) never pass SpellInfo::CheckTarget
-// (SpellInfo.cpp:1700) and are excluded here, like loadCorpse does.
+// guid is the owner's player GUID; the corpse GUID is the map-assigned
+// low GUID from the registry. Bones (type 0) never pass
+// SpellInfo::CheckTarget (SpellInfo.cpp:1700) and are excluded here, like
+// loadCorpse does.
 func (s *Server) listCorpsesOnMap(ctx context.Context, mapID, instanceID uint32) []corpseTarget {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return nil
@@ -2523,7 +2959,7 @@ func (s *Server) listCorpsesOnMap(ctx context.Context, mapID, instanceID uint32)
 		if err := rows.Scan(&ownerLow, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Type); err != nil {
 			continue
 		}
-		corpse.GUID = uint64(ownerLow) | (uint64(0xF101) << 48)
+		corpse.GUID = uint64(0xF101)<<48 | uint64(s.corpseLowGUID(mapID, instanceID, uint64(ownerLow)))
 		corpse.OwnerGUID = uint64(ownerLow)
 		corpse.MapID = mapID
 		corpse.InstanceID = instanceID
@@ -2535,13 +2971,25 @@ func (s *Server) listCorpsesOnMap(ctx context.Context, mapID, instanceID uint32)
 // lookupCorpse mirrors ObjectAccessor::GetCorpse: the corpse row for a corpse
 // GUID on the caster's map+instance, or false when the row is missing or
 // lives on another map/instance (a stale or foreign corpse GUID resolves to
-// no object, like C++'s null GetCorpseTarget).
+// no object, like C++'s null GetCorpseTarget). The wire GUID's low 32 bits
+// are the map-assigned sequence value, so the owner comes from the
+// registry first; a GUID that reaches here before any render pass assigned
+// it falls back to the map-load mint (ensureCorpseGUIDsForMap), mirroring
+// LoadCorpseData's per-row GenerateLowGuid.
 func (s *Server) lookupCorpse(ctx context.Context, corpseGUID uint64, mapID, instanceID uint32) (corpseTarget, bool) {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || !isCorpseGUID(corpseGUID) {
 		return corpseTarget{}, false
 	}
+	ownerLow, ok := s.corpseOwnerLow(mapID, instanceID, uint32(corpseGUID&0xFFFFFFFF))
+	if !ok {
+		s.ensureCorpseGUIDsForMap(ctx, mapID, instanceID)
+		ownerLow, ok = s.corpseOwnerLow(mapID, instanceID, uint32(corpseGUID&0xFFFFFFFF))
+		if !ok {
+			return corpseTarget{}, false
+		}
+	}
 	var corpse corpseTarget
-	row := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, mapId, instanceId, posX, posY, posZ, orientation, corpseType FROM corpse WHERE guid = ?", uint32(corpseGUID&0xFFFFFFFF))
+	row := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, mapId, instanceId, posX, posY, posZ, orientation, corpseType FROM corpse WHERE guid = ?", ownerLow)
 	var guid uint32
 	if err := row.Scan(&guid, &corpse.MapID, &corpse.InstanceID, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Orientation, &corpse.Type); err != nil {
 		return corpseTarget{}, false
