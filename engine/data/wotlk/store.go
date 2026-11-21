@@ -1469,12 +1469,30 @@ func (s *Store) SpellDifficultyIDForSpell(spellID uint32) (uint32, bool, error) 
 			if err != nil || entryID == 0 {
 				continue
 			}
+			// C++ validates every leg against the Spell store
+			// (DBCStores.cpp:507-513): a leg <= 0 or naming no spell
+			// loads as 0, and a row whose 10N/25N legs are both
+			// unset is skipped outright (:514-515). Fields are
+			// int32 in the DBC, so a negative leg must read <= 0
+			// rather than wrap through Uint32.
+			var variants [4]int32
 			for field := 1; field <= 4; field++ {
-				variant, err := record.Uint32(field)
-				if err != nil || variant == 0 {
+				v, err := record.Int32(field)
+				if err != nil || v <= 0 {
 					continue
 				}
-				s.spellDifficultyIDs[variant] = entryID
+				if _, ok, serr := s.spell(uint32(v)); serr != nil || !ok {
+					continue
+				}
+				variants[field-1] = v
+			}
+			if variants[0] <= 0 || variants[1] <= 0 {
+				continue
+			}
+			for _, variant := range variants {
+				if variant > 0 {
+					s.spellDifficultyIDs[uint32(variant)] = entryID
+				}
 			}
 		}
 	})

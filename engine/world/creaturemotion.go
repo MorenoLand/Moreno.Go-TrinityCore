@@ -7625,6 +7625,26 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				firingPendingInline = false
 			}
 		}
+		// SpellMgr::GetSpellIdForDifficulty (SpellMgr.cpp:176-233) via
+		// UnitAI (UnitAI.cpp:297): the AI event stores the base spell id,
+		// so the schedule key (rearmAISpell), the ArcherAI/TurretAI
+		// Spells[0] comparisons, and the pending-inline slot all keep
+		// the base id; only the cast itself uses the mapped id, in
+		// castSpellID. dueSpell follows the mapped spell (range, cast
+		// time, re-arm delay all read the mapped spell in C++). The
+		// mapping is idempotent per mode. The pending slot stores the
+		// base id, so the firing run re-adopts it and remaps again. The
+		// non-victim branch needs no remap here: it delegates to
+		// castCreatureSpell, whose funnel resolves the variant.
+		castSpellID := spellID
+		if dueOK {
+			if mapped := s.spellIDForDifficulty(spellID, motion.Map, motion.InstanceID); mapped != spellID {
+				castSpellID = mapped
+				if remapped, found, err := s.Data.Spell(mapped); err == nil && found {
+					dueSpell = remapped
+				}
+			}
+		}
 		// ArcherAI::UpdateAI (CombatAI.cpp:217-229) casts only m_spells[0]
 		// and only outside _minimumRange: inside the band it melee-attacks
 		// instead. The generic event path above can arm any template spell,
@@ -7724,7 +7744,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			inlineStartKnown := false
 			var inlineStartTargetGUID uint64
 			if s != nil && s.Data != nil {
-				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
+				if spellInfo, found, err := s.Data.Spell(castSpellID); err == nil && found {
 					inlineSpell, inlineSpellKnown = spellInfo, true
 					// Spell::prepare START snapshot (Spell.cpp:3194): the inline cast is a
 					// non-triggered UnitAI::DoCast, so C++ sends SMSG_SPELL_START before _cast.
@@ -7801,7 +7821,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// CONDITION_SOURCE_TYPE_SPELL rows with the caster as target 0 and the wire
 					// victim as target 1; no triggered exemption in C++. Ahead of
 					// CheckExplicitTarget, matching C++ order.
-					if !s.checkCreatureSpellCastConditions(ctx, motion, spellID, target.GUID) {
+					if !s.checkCreatureSpellCastConditions(ctx, motion, castSpellID, target.GUID) {
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
@@ -8048,7 +8068,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if !firingPendingInline {
 						if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); castMs > 0 {
 							if inlineStartKnown {
-								s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStart(motion.GUID, motion.GUID, castID, spellID, creatureStartCastFlags(inlineSpell), castMs, inlineStartTarget))
+								s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStart(motion.GUID, motion.GUID, castID, castSpellID, creatureStartCastFlags(inlineSpell), castMs, inlineStartTarget))
 							}
 							s.cancelPendingCreatureCast(motion)
 							motion.PendingInlineSpellID = spellID

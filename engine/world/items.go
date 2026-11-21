@@ -4003,12 +4003,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura state present", "state", spell.ExcludeCasterAuraState)
 			return true
 		}
-		if spell.CasterAuraSpell != 0 && !s.hasAura(spell.CasterAuraSpell) {
+		if spell.CasterAuraSpell != 0 && !s.hasAura(s.spellDifficultyID(spell.CasterAuraSpell)) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterAuraState), true)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura missing", "aura", spell.CasterAuraSpell)
 			return true
 		}
-		if spell.ExcludeCasterAuraSpell != 0 && s.hasAura(spell.ExcludeCasterAuraSpell) {
+		if spell.ExcludeCasterAuraSpell != 0 && s.hasAura(s.spellDifficultyID(spell.ExcludeCasterAuraSpell)) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterAuraState), true)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura present", "aura", spell.ExcludeCasterAuraSpell)
 			return true
@@ -4285,15 +4285,15 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				return true
 			}
 			// Target aura-spell (SpellInfo.cpp:1769-1773) and
-			// exclude-target-aura-spell (1776-1778): the
-			// GetSpellIdForDifficulty wrapper has no Go model (difficulty
-			// variants are checked as-is, like the client path).
-			if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, targetGUID, spell.TargetAuraSpell) {
+			// exclude-target-aura-spell (1776-1778): the aura-spell ids
+			// resolve through SpellMgr::GetSpellIdForDifficulty
+			// (SpellMgr.cpp:178-225), as C++ does.
+			if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, targetGUID, s.spellDifficultyID(spell.TargetAuraSpell)) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedTargetAuraState), true)
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "required target aura missing")
 				return true
 			}
-			if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
+			if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, targetGUID, s.spellDifficultyID(spell.ExcludeTargetAuraSpell)) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedTargetAuraState), true)
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura present")
 				return true

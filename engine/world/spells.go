@@ -2654,6 +2654,19 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
+	// SpellMgr::GetSpellForDifficultyFromSpell (SpellMgr.cpp:227-243) via
+	// the Spell constructor (Spell.cpp:524): the Spell object is built
+	// from the difficulty variant of the requested spell for the caster's
+	// map mode. The handler arms above (HasSpell, vehicle, lock,
+	// GetAuraRankForLevel) all key on the wire id, as in C++
+	// (SpellHandler.cpp:373-444); everything below reads the resolved row,
+	// so the record is re-fetched here. The resolver fails open to the
+	// source spell, so the re-fetch can only miss on a DBC load error.
+	spellID = s.spellDifficultyID(spellID)
+	if spell, found, err = s.server.Data.Spell(spellID); err != nil {
+		s.debug("spell lookup failed", "account", s.accountName, "spell", spellID, "error", err)
+		return true
+	}
 	// The clientside-periodic-trigger arm (SpellHandler.cpp:403-407): a
 	// SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT (48) aura whose effect
 	// triggers this spell allows the cast as fully triggered
@@ -2960,12 +2973,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	// Caster aura spell requirements (Spell::CheckCast caster-state block, Spell.cpp:5305-5308):
 	// client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.CasterAuraSpell != 0 && !s.hasAura(spell.CasterAuraSpell) {
+	// The aura-spell ids resolve through SpellMgr::GetSpellIdForDifficulty
+	// (SpellMgr.cpp:178-225), as C++ does at Spell.cpp:5305-5307.
+	if spell.CasterAuraSpell != 0 && !s.hasAura(s.spellDifficultyID(spell.CasterAuraSpell)) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura missing", "aura", spell.CasterAuraSpell)
 		return true
 	}
-	if spell.ExcludeCasterAuraSpell != 0 && s.hasAura(spell.ExcludeCasterAuraSpell) {
+	if spell.ExcludeCasterAuraSpell != 0 && s.hasAura(s.spellDifficultyID(spell.ExcludeCasterAuraSpell)) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura present", "aura", spell.ExcludeCasterAuraSpell)
 		return true
@@ -3346,13 +3361,15 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 
 	// Target aura spell requirements (SpellInfo::CheckTarget, SpellInfo.cpp:1769-1772):
 	// only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
+	// The aura-spell ids resolve through SpellMgr::GetSpellIdForDifficulty
+	// (SpellMgr.cpp:178-225), as C++ does at SpellInfo.cpp:1769-1772.
 	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.TargetAuraSpell != 0 && targetGUID != 0 && !s.targetHasAura(ctx, targetGUID, spell.TargetAuraSpell) {
+	if spell.TargetAuraSpell != 0 && targetGUID != 0 && !s.targetHasAura(ctx, targetGUID, s.spellDifficultyID(spell.TargetAuraSpell)) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required target aura missing", "aura", spell.TargetAuraSpell)
 		return true
 	}
-	if spell.ExcludeTargetAuraSpell != 0 && targetGUID != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
+	if spell.ExcludeTargetAuraSpell != 0 && targetGUID != 0 && s.targetHasAura(ctx, targetGUID, s.spellDifficultyID(spell.ExcludeTargetAuraSpell)) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded target aura present", "aura", spell.ExcludeTargetAuraSpell)
 		return true
@@ -11175,13 +11192,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "excluded target aura state gained")
 				return
 			}
-			if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, target.UnitGUID, spell.TargetAuraSpell) {
+			if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, target.UnitGUID, s.spellDifficultyID(spell.TargetAuraSpell)) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
 				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "required target aura lost")
 				return
 			}
-			if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, target.UnitGUID, spell.ExcludeTargetAuraSpell) {
+			if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, target.UnitGUID, s.spellDifficultyID(spell.ExcludeTargetAuraSpell)) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
 				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "excluded target aura gained")
@@ -26087,6 +26104,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if s == nil || s.player == nil || spellID == 0 {
 		return
 	}
+	// SpellMgr::GetSpellForDifficultyFromSpell (SpellMgr.cpp:227-243) via
+	// the Spell constructor (Spell.cpp:524): triggered casts resolve the
+	// difficulty variant the same way client casts do (handleCastSpell
+	// twin). Idempotent, so nested trigger/proc legs re-entering this
+	// funnel keep the same id.
+	spellID = s.spellDifficultyID(spellID)
 	// Spell::InitExplicitTargets (Spell.cpp:700-712) seeds from the
 	// caller-supplied explicit target; the redirect and implicit-caster
 	// arms below reassign targetGUID before the resolver runs.
@@ -26549,14 +26572,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 		// Aura-spell arms (SpellInfo.cpp:1769-1772): the client-path
-		// twins. The GetSpellIdForDifficulty mapping C++ applies to
-		// TargetAuraSpell/ExcludeTargetAuraSpell is unmodeled (same gap
-		// as the client path); the raw DBC id is judged.
-		if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, targetGUID, spell.TargetAuraSpell) {
+		// twins. The aura-spell ids resolve through
+		// SpellMgr::GetSpellIdForDifficulty (SpellMgr.cpp:178-225), as
+		// C++ does at SpellInfo.cpp:1769-1772.
+		if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, targetGUID, s.spellDifficultyID(spell.TargetAuraSpell)) {
 			rejectTriggeredCast("required target aura missing")
 			return
 		}
-		if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
+		if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, targetGUID, s.spellDifficultyID(spell.ExcludeTargetAuraSpell)) {
 			rejectTriggeredCast("excluded target aura present")
 			return
 		}

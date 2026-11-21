@@ -2654,11 +2654,14 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 		}
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1769-1773): target aura-spell
-	// requirements (no charmer exemption in C++).
-	if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, targetGUID, spell.TargetAuraSpell) {
+	// requirements (no charmer exemption in C++). The aura-spell ids
+	// resolve through SpellMgr::GetSpellIdForDifficulty
+	// (SpellMgr.cpp:178-225), as C++ does at SpellInfo.cpp:1769-1772;
+	// the caster is the pet motion, so the mode reads from its map.
+	if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, targetGUID, s.server.spellIDForDifficulty(spell.TargetAuraSpell, motion.Map, motion.InstanceID)) {
 		return false
 	}
-	if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
+	if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, targetGUID, s.server.spellIDForDifficulty(spell.ExcludeTargetAuraSpell, motion.Map, motion.InstanceID)) {
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1776-1778):

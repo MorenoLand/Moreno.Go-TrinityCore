@@ -121,17 +121,33 @@ func (s *session) playerPhaseMaskForSpawn() uint32 {
 // playerSpawnMode is Map::GetSpawnMode for the player's map (cs_npc.cpp:163
 // SaveToDB spawnMask leg): the instance difficulty (dungeon/raid) on
 // instance maps, normal elsewhere. Shared by npc-add and wp visual spawns.
+// The raid check comes first: MapEntry::IsDungeon (DBCStructure.h:1098)
+// covers raid maps too, so a dungeon-first test would return the player's
+// dungeon difficulty on a raid map instead of the raid difficulty
+// (spellDifficultyMode twin, raid-first for the same reason).
 func (s *session) playerSpawnMode() uint32 {
 	if s == nil || s.player == nil {
 		return 0
 	}
-	if s.isDungeonMap(s.player.Map) {
-		return uint32(s.player.DungeonDifficulty)
-	}
 	if raidMapID(s.server, s.player.Map) {
 		return uint32(s.player.RaidDifficulty)
 	}
+	if s.isDungeonMap(s.player.Map) {
+		return uint32(s.player.DungeonDifficulty)
+	}
 	return 0
+}
+
+// spellDifficultyID resolves spellID to its difficulty variant for the
+// player's map (SpellMgr::GetSpellIdForDifficulty, SpellMgr.cpp:178-225);
+// the Spell constructor twin (Spell.cpp:524) resolves every cast this way.
+// Idempotent: a variant id maps back to its own entry, so a second
+// resolution returns the same id.
+func (s *session) spellDifficultyID(spellID uint32) uint32 {
+	if s == nil || s.server == nil || s.player == nil {
+		return spellID
+	}
+	return s.server.spellIDForDifficulty(spellID, s.player.Map, s.player.InstanceID)
 }
 
 // wpRefreshMotion refreshes a live creature's motion entry after a path

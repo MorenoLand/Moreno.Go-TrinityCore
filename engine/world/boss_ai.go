@@ -1506,11 +1506,13 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 		}
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1769-1773): target aura-spell
-	// requirements (no charmer exemption in C++).
-	if spell.TargetAuraSpell != 0 && !s.creatureSpellTargetHasAura(m, targetGUID, spell.TargetAuraSpell) {
+	// requirements (no charmer exemption in C++). The aura-spell ids
+	// resolve through SpellMgr::GetSpellIdForDifficulty
+	// (SpellMgr.cpp:178-225), as C++ does at SpellInfo.cpp:1769-1772.
+	if spell.TargetAuraSpell != 0 && !s.creatureSpellTargetHasAura(m, targetGUID, s.spellIDForDifficulty(spell.TargetAuraSpell, m.Map, m.InstanceID)) {
 		return false
 	}
-	if spell.ExcludeTargetAuraSpell != 0 && s.creatureSpellTargetHasAura(m, targetGUID, spell.ExcludeTargetAuraSpell) {
+	if spell.ExcludeTargetAuraSpell != 0 && s.creatureSpellTargetHasAura(m, targetGUID, s.spellIDForDifficulty(spell.ExcludeTargetAuraSpell, m.Map, m.InstanceID)) {
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1776-1778):
@@ -14087,12 +14089,14 @@ func (s *Server) recordCreatureSpellCooldown(m *creatureMotion, spell wotlk.Spel
 // (TRIGGERED_IGNORE_CASTER_AURASTATE, SpellDefines.h:134), so every gate is
 // non-triggered only. A gate failure fizzles the cast before SendSpellGo.
 // Order follows C++: CasterAuraState, CasterAuraStateNot, CasterAuraSpell,
-// ExcludeCasterAuraSpell, then the in-combat arm.
+// ExcludeCasterAuraSpell, then the in-combat arm. The aura-spell ids resolve
+// through SpellMgr::GetSpellIdForDifficulty (SpellMgr.cpp:178-225), as C++
+// does at Spell.cpp:5305-5307.
 func (s *Server) checkCreatureSpellCasterState(m *creatureMotion, spell wotlk.Spell) bool {
-	if spell.CasterAuraSpell != 0 && !s.creatureHasAura(m, spell.CasterAuraSpell) {
+	if spell.CasterAuraSpell != 0 && !s.creatureHasAura(m, s.spellIDForDifficulty(spell.CasterAuraSpell, m.Map, m.InstanceID)) {
 		return false
 	}
-	if spell.ExcludeCasterAuraSpell != 0 && s.creatureHasAura(m, spell.ExcludeCasterAuraSpell) {
+	if spell.ExcludeCasterAuraSpell != 0 && s.creatureHasAura(m, s.spellIDForDifficulty(spell.ExcludeCasterAuraSpell, m.Map, m.InstanceID)) {
 		return false
 	}
 	if spell.CasterAuraState != 0 && !s.creatureCasterHasAuraState(m, spell, spell.CasterAuraState) {
