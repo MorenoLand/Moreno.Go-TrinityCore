@@ -5182,51 +5182,74 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	if motion.TransportGUID != 0 || motion.VehicleGUID != 0 {
 		motion.Moving = false
 		motion.Evading = false
-	} else if homeDist > 0.5 {
-		speed := creatureSplineVelocity(motion, false)
-		if speed < 0.001 {
-			// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
-			// velocity below 0.001 fails validation — no spline is launched and no
-			// SMSG_MONSTER_MOVE is sent. HomeMovementGenerator::DoUpdate then sees the
-			// finalized spline and finalizes immediately, so AI()->JustReachedHome()
-			// still fires (HomeMovementGenerator.cpp:139-151); the creature simply
-			// stays where it is instead of returning home at base run speed.
-			// DoFinalize clears UNIT_STATE_EVADE on the immediate finalize,
-			// so the flag set at evade start clears here, as in the
-			// already-home arm below.
+	} else if ownerGUID := creatureCharmerOrOwnerGUID(motion); ownerGUID != 0 {
+		// CreatureAI::EnterEvadeMode (CreatureAI.cpp:222-228): a charmed
+		// or owned creature follows its charmer/owner instead of walking
+		// home — MotionMaster::Clear() then MoveFollow(owner,
+		// PET_FOLLOW_DIST, GetFollowAngle()). The clear above already
+		// dropped the script chase/follow slots, so the follow fields are
+		// armed here in C++ order. PET_FOLLOW_DIST is 1.0
+		// (PetDefines.h:84); GetFollowAngle defaults to pi/2
+		// (Unit.h:1655). Only the else arm adds UNIT_STATE_EVADE, so the
+		// follow branch leaves Evading clear — the tick's evade-home
+		// branch must not snap the follower home at MoveEnds, and the
+		// script-follow leg (stepScriptFollow, out-of-combat) drives the
+		// re-path instead. An owner that left the world resolves to
+		// nothing (GetCharmerOrOwner null in C++), so the home arm below
+		// runs instead.
+		if _, _, _, ok := s.unitPositionByGUID(motion.Map, motion.InstanceID, ownerGUID); ok {
+			motion.ScriptFollowTargetGUID = ownerGUID
+			motion.ScriptFollowDist = 1.0
+			motion.ScriptFollowAngle = float32(math.Pi / 2)
+			motion.ScriptFollowInformed = false
+			motion.Moving = false
 			motion.Evading = false
+		} else if homeDist > 0.5 {
+			speed := creatureSplineVelocity(motion, false)
+			if speed < 0.001 {
+				// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
+				// velocity below 0.001 fails validation — no spline is launched and no
+				// SMSG_MONSTER_MOVE is sent. HomeMovementGenerator::DoUpdate then sees the
+				// finalized spline and finalizes immediately, so AI()->JustReachedHome()
+				// still fires (HomeMovementGenerator.cpp:139-151); the creature simply
+				// stays where it is instead of returning home at base run speed.
+				// DoFinalize clears UNIT_STATE_EVADE on the immediate finalize,
+				// so the flag set at evade start clears here, as in the
+				// already-home arm below.
+				motion.Evading = false
+				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
+				s.resetVehicleKitOnReachHome(ctx, motion)
+				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+				return
+			}
+			duration := splineDurationMs(float64(homeDist), speed)
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
+			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+			motion.Moving = true
+			motion.Evading = true
+			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+			motion.MoveVelocity = speed
+			motion.WaitUntil = motion.MoveEnds
+		} else {
+			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+			motion.Moving = false
+			motion.Evading = false
+			// HomeMovementGenerator<Creature>::DoFinalize (HomeMovementGenerator.cpp:151)
+			// fires AI()->JustReachedHome() when the home move completes, including
+			// the instant case where the creature is already at home (the spline
+			// finalizes immediately, so movementInform fires). Eluna::
+			// JustReachedHome (CreatureHooks.cpp:220) is START_HOOK_WITH_RETVAL
+			// (CREATURE_EVENT_ON_REACH_HOME, 24; args (event, creature)); the veto
+			// gates only ScriptedAI::JustReachedHome, which no ScriptedAI subclass
+			// overrides — BossAI::_JustReachedHome is me->setActive(false) and
+			// Go's native boss AIs carry no ReachedHome model — so the return is
+			// discarded as a provable no-op, matching the JustDied/SpellHit
+			// rulings. Health was already restored to max at evade start, matching
+			// DoFinalize's SetSpawnHealth ahead of the hook.
 			// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 			s.resetVehicleKitOnReachHome(ctx, motion)
 			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
-			return
 		}
-		duration := splineDurationMs(float64(homeDist), speed)
-		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
-		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
-		motion.Moving = true
-		motion.Evading = true
-		motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
-		motion.MoveVelocity = speed
-		motion.WaitUntil = motion.MoveEnds
-	} else {
-		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
-		motion.Moving = false
-		motion.Evading = false
-		// HomeMovementGenerator<Creature>::DoFinalize (HomeMovementGenerator.cpp:151)
-		// fires AI()->JustReachedHome() when the home move completes, including
-		// the instant case where the creature is already at home (the spline
-		// finalizes immediately, so movementInform fires). Eluna::
-		// JustReachedHome (CreatureHooks.cpp:220) is START_HOOK_WITH_RETVAL
-		// (CREATURE_EVENT_ON_REACH_HOME, 24; args (event, creature)); the veto
-		// gates only ScriptedAI::JustReachedHome, which no ScriptedAI subclass
-		// overrides — BossAI::_JustReachedHome is me->setActive(false) and
-		// Go's native boss AIs carry no ReachedHome model — so the return is
-		// discarded as a provable no-op, matching the JustDied/SpellHit
-		// rulings. Health was already restored to max at evade start, matching
-		// DoFinalize's SetSpawnHealth ahead of the hook.
-		// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
-		s.resetVehicleKitOnReachHome(ctx, motion)
-		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 	}
 }
 
