@@ -2394,8 +2394,8 @@ func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMot
 		return false
 	}
 	// Non-combat pets are never attacked (Creature.cpp:1971-1973;
-	// CREATURE_TYPE_NON_COMBAT_PET = 10).
-	if !target.isPlayer && target.creatureType == 10 {
+	// CREATURE_TYPE_NON_COMBAT_PET = 12, SharedDefines.h:2672).
+	if !target.isPlayer && target.creatureType == 12 {
 		return false
 	}
 	// m_CombatDistance is 0 except for TurretAI/ArcherAI, whose ctors
@@ -5372,8 +5372,8 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	if motion.TransportGUID != 0 || motion.VehicleGUID != 0 {
 		motion.Moving = false
 		motion.Evading = false
-	} else if ownerGUID := creatureCharmerOrOwnerGUID(motion); ownerGUID != 0 {
-		// CreatureAI::EnterEvadeMode (CreatureAI.cpp:222-228): a charmed
+	} else {
+		// CreatureAI::EnterEvadeMode (CreatureAI.cpp:222-236): a charmed
 		// or owned creature follows its charmer/owner instead of walking
 		// home — MotionMaster::Clear() then MoveFollow(owner,
 		// PET_FOLLOW_DIST, GetFollowAngle()). The clear above already
@@ -5386,72 +5386,83 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		// script-follow leg (stepScriptFollow, out-of-combat) drives the
 		// re-path instead. An owner that left the world resolves to
 		// nothing (GetCharmerOrOwner null in C++), so the home arm below
-		// runs instead.
-		if _, _, _, ok := s.unitPositionByGUID(motion.Map, motion.InstanceID, ownerGUID); ok {
-			motion.ScriptFollowTargetGUID = ownerGUID
-			motion.ScriptFollowDist = 1.0
-			motion.ScriptFollowAngle = float32(math.Pi / 2)
-			motion.ScriptFollowInformed = false
-			motion.Moving = false
-			motion.Evading = false
-		} else if homeDist > 0.5 {
-			speed := creatureSplineVelocityExplicit(motion, false)
-			if speed < 0.001 {
-				// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
-				// velocity below 0.001 fails validation — no spline is launched and no
-				// SMSG_MONSTER_MOVE is sent. HomeMovementGenerator::DoUpdate then sees the
-				// finalized spline and finalizes immediately, so AI()->JustReachedHome()
-				// still fires (HomeMovementGenerator.cpp:139-151); the creature simply
-				// stays where it is instead of returning home at base run speed.
-				// DoFinalize clears UNIT_STATE_EVADE on the immediate finalize,
-				// so the flag set at evade start clears here, as in the
-				// already-home arm below.
+		// runs instead — as does a creature with no owner at all: C++'s
+		// else arm is MoveTargetedHome, not a skip. The home arms used
+		// to sit inside the owner branch, so a wild mob never launched
+		// the home spline and the tick finalized on a zero MoveEnds,
+		// teleporting it home instead of walking.
+		followOwner := false
+		if ownerGUID := creatureCharmerOrOwnerGUID(motion); ownerGUID != 0 {
+			if _, _, _, ok := s.unitPositionByGUID(motion.Map, motion.InstanceID, ownerGUID); ok {
+				motion.ScriptFollowTargetGUID = ownerGUID
+				motion.ScriptFollowDist = 1.0
+				motion.ScriptFollowAngle = float32(math.Pi / 2)
+				motion.ScriptFollowInformed = false
+				motion.Moving = false
 				motion.Evading = false
+				followOwner = true
+			}
+		}
+		if !followOwner {
+			if homeDist > 0.5 {
+				speed := creatureSplineVelocityExplicit(motion, false)
+				if speed < 0.001 {
+					// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
+					// velocity below 0.001 fails validation — no spline is launched and no
+					// SMSG_MONSTER_MOVE is sent. HomeMovementGenerator::DoUpdate then sees the
+					// finalized spline and finalizes immediately, so AI()->JustReachedHome()
+					// still fires (HomeMovementGenerator.cpp:139-151); the creature simply
+					// stays where it is instead of returning home at base run speed.
+					// DoFinalize clears UNIT_STATE_EVADE on the immediate finalize,
+					// so the flag set at evade start clears here, as in the
+					// already-home arm below.
+					motion.Evading = false
+					// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
+					s.resetVehicleKitOnReachHome(ctx, motion)
+					s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+					return
+				}
+				// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the
+				// home duration runs on the 3D distance, not the 2D threshold
+				// distance above (a flying evade or cliff home would otherwise
+				// arrive early and fire JustReachedHome early).
+				duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ)), speed)
+				// HomeMovementGenerator.cpp:78: the home spline carries
+				// SetFacing(home orientation); MoveSpline.cpp:46-50 applies
+				// the final angle when the spline completes, so the packet
+				// rides HomeO as the facing leg.
+				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
+				motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+				motion.Moving = true
+				motion.Evading = true
+				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+				motion.MoveVelocity = speed
+				motion.WaitUntil = motion.MoveEnds
+			} else {
+				motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+				// HomeMovementGenerator.cpp:78 SetFacing(home orientation),
+				// applied at finalize (MoveSpline.cpp:46-50 final angle):
+				// the already-home spline finalizes immediately, so the
+				// orientation latches here with the position snap.
+				motion.Orientation = motion.HomeO
+				motion.Moving = false
+				motion.Evading = false
+				// HomeMovementGenerator<Creature>::DoFinalize (HomeMovementGenerator.cpp:151)
+				// fires AI()->JustReachedHome() when the home move completes, including
+				// the instant case where the creature is already at home (the spline
+				// finalizes immediately, so movementInform fires). Eluna::
+				// JustReachedHome (CreatureHooks.cpp:220) is START_HOOK_WITH_RETVAL
+				// (CREATURE_EVENT_ON_REACH_HOME, 24; args (event, creature)); the veto
+				// gates only ScriptedAI::JustReachedHome, which no ScriptedAI subclass
+				// overrides — BossAI::_JustReachedHome is me->setActive(false) and
+				// Go's native boss AIs carry no ReachedHome model — so the return is
+				// discarded as a provable no-op, matching the JustDied/SpellHit
+				// rulings. Health was already restored to max at evade start, matching
+				// DoFinalize's SetSpawnHealth ahead of the hook.
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
-				return
 			}
-			// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the
-			// home duration runs on the 3D distance, not the 2D threshold
-			// distance above (a flying evade or cliff home would otherwise
-			// arrive early and fire JustReachedHome early).
-			duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ)), speed)
-			// HomeMovementGenerator.cpp:78: the home spline carries
-			// SetFacing(home orientation); MoveSpline.cpp:46-50 applies
-			// the final angle when the spline completes, so the packet
-			// rides HomeO as the facing leg.
-			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
-			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
-			motion.Moving = true
-			motion.Evading = true
-			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
-			motion.MoveVelocity = speed
-			motion.WaitUntil = motion.MoveEnds
-		} else {
-			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
-			// HomeMovementGenerator.cpp:78 SetFacing(home orientation),
-			// applied at finalize (MoveSpline.cpp:46-50 final angle):
-			// the already-home spline finalizes immediately, so the
-			// orientation latches here with the position snap.
-			motion.Orientation = motion.HomeO
-			motion.Moving = false
-			motion.Evading = false
-			// HomeMovementGenerator<Creature>::DoFinalize (HomeMovementGenerator.cpp:151)
-			// fires AI()->JustReachedHome() when the home move completes, including
-			// the instant case where the creature is already at home (the spline
-			// finalizes immediately, so movementInform fires). Eluna::
-			// JustReachedHome (CreatureHooks.cpp:220) is START_HOOK_WITH_RETVAL
-			// (CREATURE_EVENT_ON_REACH_HOME, 24; args (event, creature)); the veto
-			// gates only ScriptedAI::JustReachedHome, which no ScriptedAI subclass
-			// overrides — BossAI::_JustReachedHome is me->setActive(false) and
-			// Go's native boss AIs carry no ReachedHome model — so the return is
-			// discarded as a provable no-op, matching the JustDied/SpellHit
-			// rulings. Health was already restored to max at evade start, matching
-			// DoFinalize's SetSpawnHealth ahead of the hook.
-			// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
-			s.resetVehicleKitOnReachHome(ctx, motion)
-			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 		}
 	}
 }
@@ -6447,7 +6458,12 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 			int32(math.Round(creatureVictimCritChanceForCaster(s, victimKey, motion.GUID)*100))
 		victimSpellWeaponCritBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
 	}
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, true, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
+	// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2307-2312): crushing
+	// requires !IsControlledByPlayer() — a player-charmed creature
+	// never crushes. The flag twin is UNIT_FLAG_PLAYER_CONTROLLED,
+	// set by the charm apply leg only when the charmer is a player;
+	// the pet path passes false for the same reason.
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, motion.UnitFlags&unitFlagPlayerControlled == 0, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
 	if isPlayerVictim && target.Sess != nil {
 		if target.Sess.isImmuneToDamage(1) {
 			outcome = protocol.MeleeHitImmune
@@ -6557,9 +6573,13 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 			hitInfo |= protocol.HitInfoPartialAbsorb
 		}
 	} else if damage > 0 {
-		// Creature-victim absorb twin (spell twin's pool leg).
+		// Creature-victim absorb twin (spell twin's pool leg):
+		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857) reads the bypass
+		// pct from the ATTACKER's MOD_TARGET_ABSORB_SCHOOL (194) auras,
+		// not the victim's — the attacker key, as in the player-victim
+		// twin above.
 		victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
-		bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(victimKey, 1))
+		bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(creatureAuraKeyForMotion(motion), 1))
 		absorbed, rem := s.applyCreatureAbsorptionShields(victimKey, damage-bypass, 1)
 		absorbedDmg = absorbed
 		damage = rem + bypass
@@ -11455,7 +11475,7 @@ func (s *Server) creatureSightHomeDistanceOK(caller *creatureMotion, victimX, vi
 // creatureSightVictimBlocked is the victim-side valid-target filter of
 // the creature-victim sight scan: non-combat pets are never attacked
 // (CanStartAttack, Creature.cpp:1971-1973, CREATURE_TYPE_NON_COMBAT_PET
-// = 10), and IsValidAttackTarget's no-spell flag set (Object.cpp:2930-3010:
+// = 12, SharedDefines.h:2672), and IsValidAttackTarget's no-spell flag set (Object.cpp:2930-3010:
 // NOT_SELECTABLE, NON_ATTACKABLE, TAXI_FLIGHT, NOT_ATTACKABLE_1/2)
 // plus its four immune pairings reject the victim. The player-victim twin
 // is playerSightVictimBlocked below.
@@ -11463,7 +11483,7 @@ func creatureSightVictimBlocked(scanner, victim *creatureMotion) bool {
 	if scanner == nil || victim == nil {
 		return true
 	}
-	if victim.CreatureType == 10 {
+	if victim.CreatureType == 12 {
 		return true
 	}
 	if victim.UnitFlags&(unitFlagNotSelectable|unitFlagNonAttackable|unitFlagTaxiFlight|unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
