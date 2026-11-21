@@ -1094,10 +1094,12 @@ local SPELL_CUSTOM_ERROR_LEARNED_EVERYTHING = 62 -- SharedDefines.h:1238
 -- (HasDiscoveredAllSpells, SkillDiscovery.cpp:195-208; 57
 -- discoverable spells in TDB 25101 skill_discovery_template).
 -- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go
--- fireSpellCheckCast). The HandleScript learn leg is ported below
--- (RegisterSpellEvent OnEffectHitTarget = 5, EFFECT_0): the weighted
--- player:GetExplicitDiscoverySpell roll (skill_discovery.go) +
--- player:LearnSpell (spell_item.cpp:2440-2447).
+-- fireSpellCheckCast). The HandleScript learn leg lives in the Go
+-- twin (handleEffectScriptEffect, spells.go): the weighted
+-- getExplicitDiscoverySpell roll + learnSpell (spell_item.cpp:2440-
+-- 2447). No Lua ev5 handler: the Go twin and ev5 both fire per
+-- (effect, target) in finishSpellCast, so a Lua twin would
+-- double-learn.
 local function bookOfGlyphMasteryCheckCast(event, spell)
     local caster = spell:GetCaster()
     if caster ~= nil and caster:HasDiscoveredAllSpells(SPELL_ITEM_BOOK_OF_GLYPH_MASTERY) then
@@ -1108,28 +1110,11 @@ end
 
 RegisterSpellEvent(SPELL_ITEM_BOOK_OF_GLYPH_MASTERY, 8, bookOfGlyphMasteryCheckCast)
 
--- C++ spell_item_book_of_glyph_mastery::HandleScript
--- (spell_item.cpp:2440-2447, registered OnEffectHitTarget EFFECT_0,
--- SPELL_EFFECT_SCRIPT_EFFECT): the caster learns one random explicit
--- discovery glyph (GetExplicitDiscoverySpell + LearnSpell). ev5 fires
--- per (effect, target) pair, so the EFFECT_0 guard is the
--- registration twin; the C++ Load() player gate rides the Player
--- object-type check (same idiom as the rocket-boots port above).
-local function bookOfGlyphMasteryHit(event, spell, hitTarget, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil or caster:GetObjectType() ~= "Player" then
-        return
-    end
-    local discovered = caster:GetExplicitDiscoverySpell(SPELL_ITEM_BOOK_OF_GLYPH_MASTERY)
-    if discovered ~= 0 then
-        caster:LearnSpell(discovered)
-    end
-end
-
-RegisterSpellEvent(SPELL_ITEM_BOOK_OF_GLYPH_MASTERY, 5, bookOfGlyphMasteryHit)
+-- NOTE: the HandleScript learn leg (spell_item.cpp:2440-2447) is
+-- owned by the Go twin in handleEffectScriptEffect (spells.go).
+-- The Lua ev5 handler that stood here double-learned (Go twin +
+-- ev5 both fire per (effect, target) in finishSpellCast), so it
+-- was removed; the ev8 CheckCast gate above stays.
 
 -- PORTED (RegisterSpellEvent OnEffectHit = 4; spell_item.cpp ev4 strip, 2026-11-20):
 --   spell_item_deviate_fish::HandleDummy (:812-817): EFFECT_0 DUMMY; player Load gate

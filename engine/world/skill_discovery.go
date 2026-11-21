@@ -86,6 +86,32 @@ func hasDiscoveredAnySpell(state *playerState, spellID uint32) bool {
 	return false
 }
 
+// professionResearchCheckCast mirrors the CheckRequirement arms of the
+// explicit-discovery research scripts (spell_gen_profession_research,
+// spell_generic.cpp:2808-2820; spell_item_book_of_glyph_mastery,
+// spell_item.cpp:2429-2438; bindings from TDB spell_script_names):
+// when every discoverable spell is already known the cast fails with
+// SPELL_FAILED_CUSTOM_ERROR — 46 NOTHING_TO_DISCOVER for the four
+// profession-research spells, 62 LEARNED_EVERYTHING for the Book of
+// Glyph Mastery (64323). Returns 0 when the cast may proceed. The
+// C++ Load() caster-is-player gate is vacuous: callers are sessions.
+func (s *session) professionResearchCheckCast(spellID uint32) uint32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	switch spellID {
+	case 60893, 61177, 61288, 61756:
+		if hasDiscoveredAllSpells(s.player, spellID) {
+			return spellCustomErrorNothingToDiscover
+		}
+	case 64323:
+		if hasDiscoveredAllSpells(s.player, spellID) {
+			return spellCustomErrorLearnedEverything
+		}
+	}
+	return 0
+}
+
 // getExplicitDiscoverySpell mirrors GetExplicitDiscoverySpell
 // (SkillDiscovery.cpp:158-192): a weighted pick among the reqSpell's
 // undiscovered entries whose reqSkillValue the player's skill meets.

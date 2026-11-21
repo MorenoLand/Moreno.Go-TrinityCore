@@ -24,32 +24,52 @@ const (
 	creatureTypeFlagCanCollideWithMissiles uint32 = 0x00080000
 )
 
+// spellTrajTangent mirrors the file-local tangent() helper
+// (Spell.cpp:1614-1623): tan clamped to ±100000, with the NaN
+// fallthrough returning 0.
+func spellTrajTangent(x float32) float32 {
+	t := float32(math.Tan(float64(x)))
+	if math.IsNaN(float64(t)) {
+		return 0
+	}
+	if t > 100000 {
+		return 100000
+	}
+	if t < -100000 {
+		return -100000
+	}
+	return t
+}
+
 // trajCaster anchors a trajectory sweep on one caster, player or creature:
 // the missile corridor, the candidate sort, and the shortened destination
 // all read the caster's position and orientation (Spell.cpp:1635-1701),
 // while the source position (the parabola origin) may differ when the
 // client supplied a source location. The session player helper below is
 // one construction of this type; creature casters build it from motion.
+// VehicleGUID is the base the caster rides (0 = not seated) — the
+// IsOnVehicle leg of the traj skip (Spell.cpp:1666).
 type trajCaster struct {
 	GUID        uint64
 	X, Y, Z     float32
 	Orientation float32
 	Map         uint32
 	InstanceID  uint32
+	VehicleGUID uint64
 }
 
 func trajCasterFromMotion(m *creatureMotion) trajCaster {
 	if m == nil {
 		return trajCaster{}
 	}
-	return trajCaster{GUID: m.GUID, X: m.X, Y: m.Y, Z: m.Z, Orientation: m.Orientation, Map: m.Map, InstanceID: m.InstanceID}
+	return trajCaster{GUID: m.GUID, X: m.X, Y: m.Y, Z: m.Z, Orientation: m.Orientation, Map: m.Map, InstanceID: m.InstanceID, VehicleGUID: m.VehicleGUID}
 }
 
 func trajCasterFromSessionPlayer(s *session) trajCaster {
 	if s == nil || s.player == nil {
 		return trajCaster{}
 	}
-	return trajCaster{GUID: s.playerGUID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, Orientation: s.player.Orientation, Map: s.player.Map, InstanceID: s.player.InstanceID}
+	return trajCaster{GUID: s.playerGUID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, Orientation: s.player.Orientation, Map: s.player.Map, InstanceID: s.player.InstanceID, VehicleGUID: s.player.VehicleGUID}
 }
 
 // spellHasTrajTarget reports whether any active effect carries the
@@ -85,6 +105,7 @@ type trajCandidate struct {
 	combatReach float32
 	entry       uint32 // creature template entry; 0 for players
 	isPlayer    bool
+	vehicleGUID uint64 // base the candidate rides (GetVehicle); 0 = not seated
 }
 
 // trajCollideFlags returns the creature_template type_flags for the given
@@ -153,7 +174,7 @@ func (s *Server) trajCandidatesForCaster(ctx context.Context, caster trajCaster,
 	// rejects non-player candidates for ONLY_TARGET_PLAYERS spells and
 	// non-ghost candidates for ONLY_TARGET_GHOSTS spells.
 	playersOnly := spellSearchPlayersOnly(spell)
-	accept := func(guid uint64, mapID, instanceID uint32, x, y, z, combatReach float32, unitFlags, flagsExtra, health uint32, entry uint32, isPlayer bool) {
+	accept := func(guid uint64, mapID, instanceID uint32, x, y, z, combatReach float32, unitFlags, flagsExtra, health uint32, entry uint32, isPlayer bool, vehicleGUID uint64) {
 		if guid == 0 || guid == caster.GUID {
 			return
 		}
@@ -201,7 +222,7 @@ func (s *Server) trajCandidatesForCaster(ctx context.Context, caster trajCaster,
 			return
 		}
 		seen[guid] = struct{}{}
-		candidates = append(candidates, trajCandidate{guid: guid, x: x, y: y, z: z, combatReach: combatReach, entry: entry, isPlayer: isPlayer})
+		candidates = append(candidates, trajCandidate{guid: guid, x: x, y: y, z: z, combatReach: combatReach, entry: entry, isPlayer: isPlayer, vehicleGUID: vehicleGUID})
 	}
 	s.motionMu.Lock()
 	motionMap := s.motionMapLocked(caster.Map, caster.InstanceID)
@@ -215,7 +236,7 @@ func (s *Server) trajCandidatesForCaster(ctx context.Context, caster trajCaster,
 	motionGUIDs := make(map[uint64]struct{}, len(motions))
 	for _, motion := range motions {
 		motionGUIDs[motion.GUID] = struct{}{}
-		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.CombatReach, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.Entry, false)
+		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.CombatReach, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.Entry, false, motion.VehicleGUID)
 	}
 	s.sessionsMu.RLock()
 	for targetSession := range s.sessions {
@@ -229,7 +250,7 @@ func (s *Server) trajCandidatesForCaster(ctx context.Context, caster trajCaster,
 		if targetSession.player.TaxiPath != "" {
 			continue
 		}
-		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.CombatReach, targetSession.player.UnitFlags, 0, targetSession.player.Health, 0, true)
+		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.CombatReach, targetSession.player.UnitFlags, 0, targetSession.player.Health, 0, true, targetSession.player.VehicleGUID)
 	}
 	s.sessionsMu.RUnlock()
 	if s.WorldStore != nil && s.WorldStore.DB != nil {
@@ -247,7 +268,7 @@ func (s *Server) trajCandidatesForCaster(ctx context.Context, caster trajCaster,
 					continue
 				}
 				stats := s.loadCreatureStats(ctx, uint32(entry))
-				accept(guid, uint32(mapID), caster.InstanceID, float32(x), float32(y), float32(z), stats.CombatReach, uint32(unitFlags), uint32(flagsExtra), uint32(health), uint32(entry), false)
+				accept(guid, uint32(mapID), caster.InstanceID, float32(x), float32(y), float32(z), stats.CombatReach, uint32(unitFlags), uint32(flagsExtra), uint32(health), uint32(entry), false, 0)
 			}
 		}
 	}
@@ -270,7 +291,7 @@ func (s *Server) resolveTrajDestinationForCaster(ctx context.Context, caster tra
 	if dist2d == 0 {
 		return dx, dy, dz, false
 	}
-	b := float32(math.Tan(float64(trajElevation)))
+	b := spellTrajTangent(trajElevation)
 	a := (dz - sz - dist2d*b) / (dist2d * dist2d)
 	if a > -0.0001 {
 		a = 0
@@ -310,6 +331,16 @@ func (s *Server) resolveTrajDestinationForCaster(ctx context.Context, caster tra
 	})
 	ori := float64(caster.Orientation)
 	for _, c := range candidates {
+		// The vehicle skips (Spell.cpp:1666): a candidate riding any
+		// vehicle (Unit::GetVehicle, Unit.h:1619 — the ridden vehicle,
+		// not the kit) never collides, and neither does the caster's
+		// own vehicle base (Unit::IsOnVehicle, Unit.cpp:12074 — the
+		// caster rides the candidate). A vehicle base itself is not
+		// skipped: it rides nothing and IsOnVehicle is false for it
+		// unless the caster rides it.
+		if c.vehicleGUID != 0 || (caster.VehicleGUID != 0 && caster.VehicleGUID == c.guid) {
+			continue
+		}
 		if !c.isPlayer {
 			// Creatures without CREATURE_TYPE_FLAG_CAN_COLLIDE_WITH_MISSILES
 			// never collide (Spell.cpp:1670-1673); players always can.
@@ -317,8 +348,8 @@ func (s *Server) resolveTrajDestinationForCaster(ctx context.Context, caster tra
 				continue
 			}
 		}
-		// The IsOnVehicle/GetVehicle skips (Spell.cpp:1666) have no Go
-		// vehicle-casting infra.
+		// The IsOnVehicle/GetVehicle skips above run first, matching
+		// the C++ order (Spell.cpp:1666 before :1670-1673).
 		size := c.combatReach
 		if size < 1.0 {
 			size = 1.0

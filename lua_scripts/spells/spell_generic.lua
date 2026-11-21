@@ -219,12 +219,13 @@ end
 -- OnCheckCast = 8 (lua_spell.go fireSpellCheckCast). Bindings are
 -- the four TDB spell_script_names rows for the script (25101 +
 -- 26091): 60893, 61177, 61288, 61756. The HandleScript
--- discovery-learn leg is ported below (RegisterSpellEvent
--- OnEffectHitTarget = 5, EFFECT_1): the weighted
--- player:GetExplicitDiscoverySpell roll (skill_discovery.go) +
--- player:LearnSpell, with the 61177 first-time leg learning two
--- extra recipes before the regular one (spell_generic.cpp:2826-
--- 2834, SkillDiscovery.cpp:158-193).
+-- discovery-learn leg lives in the Go twin (handleEffectScriptEffect,
+-- spells.go): the weighted getExplicitDiscoverySpell roll +
+-- learnSpell, with the 61177 first-time leg learning two extra
+-- recipes before the regular one (spell_generic.cpp:2826-2834,
+-- SkillDiscovery.cpp:158-193). No Lua ev5 handler: the Go twin and
+-- ev5 both fire per (effect, target) in finishSpellCast, so a Lua
+-- twin would double-learn.
 local SPELL_GEN_PROFESSION_RESEARCH_SPELLS = { 60893, 61177, 61288, 61756 }
 local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
 local SPELL_CUSTOM_ERROR_NOTHING_TO_DISCOVER = 46 -- SharedDefines.h:1222
@@ -241,47 +242,11 @@ for _, spellId in ipairs(SPELL_GEN_PROFESSION_RESEARCH_SPELLS) do
     RegisterSpellEvent(spellId, 8, professionResearchCheckCast)
 end
 
--- C++ spell_gen_profession_research::HandleScript
--- (spell_generic.cpp:2823-2836, registered OnEffectHitTarget
--- EFFECT_1, SPELL_EFFECT_SCRIPT_EFFECT): the caster learns one
--- random explicit discovery recipe (GetExplicitDiscoverySpell +
--- LearnSpell); on the very first Northrend Inscription Research
--- (61177) two extra recipes are learned first
--- (HasDiscoveredAnySpell gate, 3.3.0 patch note). ev5 fires per
--- (effect, target) pair, so the EFFECT_1 guard is the registration
--- twin; the C++ Load() player gate rides the Player object-type
--- check. The roll reads the player's skill value for the research
--- spell's SkillLineAbility skill line and skips known recipes, so
--- the triple learn yields three distinct recipes (LearnSpell now
--- syncs the in-memory spell list, lua_player.go).
-local SPELL_GEN_NORTHREND_INSCRIPTION_RESEARCH = 61177 -- spell_generic.cpp:2797
-
-local function professionResearchHit(event, spell, hitTarget, effectIndex)
-    if effectIndex ~= 1 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil or caster:GetObjectType() ~= "Player" then
-        return
-    end
-    local spellId = spell:GetEntry()
-    if spellId == SPELL_GEN_NORTHREND_INSCRIPTION_RESEARCH and not caster:HasDiscoveredAnySpell(spellId) then
-        for _ = 1, 2 do
-            local discovered = caster:GetExplicitDiscoverySpell(spellId)
-            if discovered ~= 0 then
-                caster:LearnSpell(discovered)
-            end
-        end
-    end
-    local discovered = caster:GetExplicitDiscoverySpell(spellId)
-    if discovered ~= 0 then
-        caster:LearnSpell(discovered)
-    end
-end
-
-for _, spellId in ipairs(SPELL_GEN_PROFESSION_RESEARCH_SPELLS) do
-    RegisterSpellEvent(spellId, 5, professionResearchHit)
-end
+-- NOTE: the HandleScript learn leg (spell_generic.cpp:2823-2836)
+-- is owned by the Go twin in handleEffectScriptEffect (spells.go).
+-- The Lua ev5 handler that stood here double-learned (Go twin +
+-- ev5 both fire per (effect, target) in finishSpellCast), so it
+-- was removed; the ev8 CheckCast gate above stays.
 
 -- PORTED (tick 2026-11-11, RegisterSpellEvent AfterHit = 3):
 --   spell_gen_clear_fear_poly::HandleAfterHit

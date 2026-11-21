@@ -183,6 +183,8 @@ const (
 	spellFailedCantDoThatRightNow        uint8  = 173 // SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW (SharedDefines.h:1155)
 	spellFailedReagents                  uint8  = 100 // SPELL_FAILED_REAGENTS (SharedDefines.h:1082)
 	spellCustomErrorGMOnly               uint32 = 65  // SPELL_CUSTOM_ERROR_GM_ONLY (SharedDefines.h:1241)
+	spellCustomErrorNothingToDiscover    uint32 = 46  // SPELL_CUSTOM_ERROR_NOTHING_TO_DISCOVER (SharedDefines.h:1222)
+	spellCustomErrorLearnedEverything    uint32 = 62  // SPELL_CUSTOM_ERROR_LEARNED_EVERYTHING (SharedDefines.h:1238)
 	spellFailedBadTargets                uint8  = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
 	spellFailedBmOrInvisGod              uint8  = 159 // SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141)
 	spellFailedTargetIsPlayer            uint8  = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
@@ -4079,12 +4081,46 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
 		return true
 	}
-	// CallScriptCheckCastHandlers (Spell.cpp:5515) is a no-op: Go has no
-	// SpellScript registry (the Lua runtime covers boss/zone creature
-	// scripts only), so the C++ m_loadedScripts loop iterates nothing and
-	// always returns SPELL_CAST_OK. C++ order places it between
-	// CheckCasterAuras and the dispel gate; that order is preserved by
-	// documenting it here.
+	// CallScriptCheckCastHandlers (Spell.cpp:5515) fires just below,
+	// between CheckCasterAuras and the dispel gate — the C++-exact
+	// position, ahead of the per-effect switch and the combo-point
+	// gate. The two native explicit-discovery CheckRequirement arms
+	// below are that hook's Go-native twin for the research spells
+	// (they return the identical failure the Lua ev8 twins would),
+	// and the Lua ev8 twins stay registered: the item-cast path has
+	// no native arm and gates on them.
+	// spell_gen_profession_research::CheckRequirement
+	// (spell_generic.cpp:2808-2820) and
+	// spell_item_book_of_glyph_mastery::CheckRequirement
+	// (spell_item.cpp:2429-2438): the explicit-discovery research
+	// spells fail with SPELL_FAILED_CUSTOM_ERROR when every
+	// discoverable spell is already known — 46 NOTHING_TO_DISCOVER
+	// for 60893/61177/61288/61756, 62 LEARNED_EVERYTHING for the Book
+	// of Glyph Mastery (64323); bindings from TDB spell_script_names.
+	// The C++ Load() caster-is-player gate is vacuous on the session
+	// path, and triggered casts never reach handleCastSpell.
+	if customError := s.professionResearchCheckCast(spellID); customError != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, spellFailedCustomError, customError), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "explicit-discovery research exhausted", "customError", customError)
+		return true
+	}
+	// SpellScript OnCheckCast (Spell.cpp:5515): the script hook fires
+	// here, after the native research arms above and before the dispel
+	// gate. The first non-OK result fails the cast; a
+	// SPELL_FAILED_CUSTOM_ERROR failure carries its custom-error id
+	// (WriteCastResultInfo, Spell.cpp:3974) via buildCastFailedParams.
+	// Triggered casts never reach handleCastSpell, matching C++
+	// TRIGGERED_IGNORE_CAST_CHECK; creature casts run no CheckCast
+	// gauntlet in Go, so that path does not fire it.
+	if failure, customError := s.fireSpellCheckCast(ctx, spellID, spell, target); failure != 0 {
+		if failure == spellFailedCustomError {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, failure, customError), true)
+		} else {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		}
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "OnCheckCast script hook", "failure", failure)
+		return true
+	}
 	// Per-effect CheckCast switch (Spell.cpp:5517-6012): runs after CheckPower,
 	// matching C++ CheckCast relative order (CheckPower 5502 ->
 	// CheckCasterAuras 5509 -> per-effect loop 5517). Assembled here in C++
@@ -4322,9 +4358,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// (spell_quest.lua checkFlyMountCheckCast, 39844 + 40160): the
 	// caster must carry a FLY or MOD_INCREASE_MOUNTED_FLIGHT_SPEED
 	// aura, else SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW. The ev8 consult
-	// fires after the combo-point leg below, matching C++ CheckCast
-	// order (combo points Spell.cpp:6186-6209, OnCheckCast at the end
-	// :7977-7996); the retired hardcoded gate fired before it.
+	// fires above, right after CheckCasterAuras (CallScriptCheckCastHandlers,
+	// Spell.cpp:5515), ahead of the combo-point leg below (combo points
+	// Spell.cpp:6186-6209); the retired hardcoded gate fired before it.
 	// Combo-point gate (Spell::CheckCast, Spell.cpp:6186-6209): a spell
 	// requiring combo points (REQ_COMBO_POINTS1/2) fails with
 	// SPELL_FAILED_NO_COMBO_POINTS when none are banked — against the
@@ -4338,24 +4374,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	// SpellScript OnCheckCast (Spell.cpp:5515, CallScriptCheckCastHandlers
-	// at :7977-7996): the script hook runs at the end of Spell::CheckCast,
-	// after CheckCasterAuras, and the first non-OK result fails the cast.
-	// Go fires it here, after the last generic gate, before
-	// SetCurrentCastSpell registers the cast. Triggered casts never reach
-	// handleCastSpell, matching C++ TRIGGERED_IGNORE_CAST_CHECK; creature
-	// casts run no CheckCast gauntlet in Go, so that path does not fire it.
-	// A SPELL_FAILED_CUSTOM_ERROR failure carries its custom-error id
-	// (WriteCastResultInfo, Spell.cpp:3974) via buildCastFailedParams.
-	if failure, customError := s.fireSpellCheckCast(ctx, spellID, spell, target); failure != 0 {
-		if failure == spellFailedCustomError {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, failure, customError), true)
-		} else {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		}
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "OnCheckCast script hook", "failure", failure)
-		return true
-	}
+	// The OnCheckCast script hook fired above, right after
+	// CheckCasterAuras (Spell.cpp:5515) — the C++-exact position.
 
 	// Unit::SetCurrentCastSpell (Unit.cpp:3064-3090): registering the new cast
 	// breaks the other containers. A generic cast breaks the active channel
@@ -6698,6 +6718,51 @@ func (s *session) checkSummonPetCast(spell wotlk.Spell) uint8 {
 		}
 	}
 	return 0
+}
+
+// scheduleDeferredSummon mirrors the AddFarSpellCallback deferral in
+// Spell::SelectEffectTypeImplicitTargets (Spell.cpp:1708-1746): the summon
+// runs on the target's next map update, not at selection time, and the
+// per-effect immunity check re-runs there — a target that gains summon
+// immunity mid-flight is not summoned. Go has no map-thread callback
+// queue; the map update interval is 100ms by default (World.cpp:721,
+// MapUpdateInterval), so a 100ms timer is the twin. The target session
+// is re-resolved at fire time (an offline target is skipped, like
+// ObjectAccessor::GetPlayer returning null); the caster session is
+// re-resolved too, since the RAF leg casts its trigger spell through it.
+// Only the captured GUIDs, zone, spell and effect travel into the timer —
+// no session pointer is dereferenced after scheduling.
+func (s *session) scheduleDeferredSummon(targetGUID uint64, spell wotlk.Spell, effectIndex int, rafFriend bool) {
+	if s == nil || s.server == nil || s.player == nil || targetGUID == 0 {
+		return
+	}
+	if effectIndex < 0 || effectIndex >= len(spell.Effects) {
+		return
+	}
+	server := s.server
+	casterGUID := s.playerGUID
+	zoneID := s.player.Zone
+	eff := spell.Effects[effectIndex]
+	time.AfterFunc(100*time.Millisecond, func() {
+		targetSess := server.findSessionByGUID(targetGUID)
+		if targetSess == nil {
+			return
+		}
+		// check immunity again in case it changed during update
+		// (Spell.cpp:1738-1740).
+		if targetSess.isImmunedToSpellEffect(spell, effectIndex, nil) {
+			return
+		}
+		if rafFriend {
+			casterSess := server.findSessionByGUID(casterGUID)
+			if casterSess == nil {
+				return
+			}
+			casterSess.handleEffectSummonRafFriend(context.Background(), targetGUID, eff)
+			return
+		}
+		targetSess.sendSummonRequest(casterGUID, zoneID)
+	})
 }
 
 // checkSummonPlayerCast mirrors the SPELL_EFFECT_SUMMON_PLAYER leg of the
@@ -18618,12 +18683,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// per-effect immunity check (IsImmunedToSpellEffect,
 				// Spell.cpp:1721-1732) runs with a null caster both at
 				// selection and at the deferred AddFarSpellCallback
-				// execution; the deferral itself has no Go model (no
-				// map-thread callback queue).
+				// execution; the deferral rides scheduleDeferredSummon
+				// (100ms map-tick timer, immunity re-checked at fire).
 				if s.server != nil && s.player != nil && s.selection != 0 {
 					if targetSess := s.server.findSessionByGUID(s.selection); targetSess != nil {
 						if !targetSess.isImmunedToSpellEffect(spell, effectIndex, nil) {
-							targetSess.sendSummonRequest(s.playerGUID, s.player.Zone)
+							s.scheduleDeferredSummon(s.selection, spell, effectIndex, false)
 						}
 					}
 				}
@@ -19059,7 +19124,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						if effectTarget == 0 {
 							continue
 						}
-						s.handleEffectScriptEffect(effCtx, spellID, spell, eff, effectTarget)
+						s.handleEffectScriptEffect(effCtx, spellID, spell, eff, effectTarget, effectIndex)
 					}
 					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 					// HIT_TARGET arm runs on the caster once per reflected target.
@@ -19074,12 +19139,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// self-cast, the per-hit-target arms with hit unit = caster);
 					// judgement trips cast primer + judgement on the caster.
 					for range areaEnemyTrips(eff, reflectedAoETrips) {
-						s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
+						s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID, effectIndex)
 					}
 					// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
 					// is the caster, so the arm runs on the caster once per trip.
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
-						s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
+						s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID, effectIndex)
 					}
 				}
 			case spellEffectSummonRafFriend: // 152: SPELL_EFFECT_SUMMON_RAF_FRIEND (EffectSummonRaFFriend, SpellEffects.cpp:5727)
@@ -19089,11 +19154,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// per-effect immunity check (IsImmunedToSpellEffect); the
 				// recruiter-account gates live in checkSummonRafFriendCast
 				// (Spell.cpp:5929-5943) and the deferred AddFarSpellCallback
-				// has no Go model.
+				// rides scheduleDeferredSummon (100ms map-tick timer,
+				// immunity re-checked at fire).
 				if s.server != nil && s.player != nil && s.selection != 0 {
 					if targetSess := s.server.findSessionByGUID(s.selection); targetSess != nil {
 						if !targetSess.isImmunedToSpellEffect(spell, effectIndex, nil) {
-							s.handleEffectSummonRafFriend(effCtx, s.selection, eff)
+							s.scheduleDeferredSummon(s.selection, spell, effectIndex, true)
 						}
 					}
 				}
@@ -29285,13 +29351,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// effects 85 (SUMMON_PLAYER) and 152 (SUMMON_RAF_FRIEND) target the
 		// caster's *selection*, never the wire target, and run once per effect.
 		// The per-effect immunity check uses a null caster (Spell.cpp:1721-1732);
-		// the deferred AddFarSpellCallback has no Go model (no map-thread
-		// callback queue), same as the client path.
+		// the deferred AddFarSpellCallback rides scheduleDeferredSummon
+		// (100ms map-tick timer, immunity re-checked at fire), same as the
+		// client path.
 		if eff.Effect == spellEffectSummonPlayer {
 			if s.server != nil && s.player != nil && s.selection != 0 {
 				if targetSess := s.server.findSessionByGUID(s.selection); targetSess != nil {
 					if !targetSess.isImmunedToSpellEffect(spell, effectIndex, nil) {
-						targetSess.sendSummonRequest(s.playerGUID, s.player.Zone)
+						s.scheduleDeferredSummon(s.selection, spell, effectIndex, false)
 					}
 				}
 			}
@@ -29301,7 +29368,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if s.server != nil && s.player != nil && s.selection != 0 {
 				if targetSess := s.server.findSessionByGUID(s.selection); targetSess != nil {
 					if !targetSess.isImmunedToSpellEffect(spell, effectIndex, nil) {
-						s.handleEffectSummonRafFriend(ctx, s.selection, eff)
+						s.scheduleDeferredSummon(s.selection, spell, effectIndex, true)
 					}
 				}
 			}
@@ -31210,7 +31277,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// mirroring the finishSpellCast twin and the creature
 				// twin at boss_ai.go:4231.
 				if !prevent.defaultPrevented(effectIndex) {
-					s.handleEffectScriptEffect(ctx, spellID, spell, eff, effectTarget)
+					s.handleEffectScriptEffect(ctx, spellID, spell, eff, effectTarget, effectIndex)
 				}
 			} else if eff.Effect == spellEffectEnvironmentalDamage {
 				// Spell::EffectEnvironmentalDMG (SpellEffects.cpp:306)
@@ -41944,6 +42011,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			targetSess.refreshSkillBonusForAuraAmountChange(existing, func() {
 				refreshAuraEffectBasepoints(existing, spell, eff, mergeAmount)
 			})
+			// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2654-2668):
+			// a re-cast re-applies the not-yet-applied effects of the
+			// existing HitAura — only the first effect runs the merge, so
+			// its bit must join the record's mask here (the later-effects
+			// arm below already does, and the server creature twin does
+			// in both arms, boss_ai.go:10695).
+			existing.EffectMask |= spellEffectMask(spell, eff)
 			existing.DurationMs = durationMs
 			existing.RemainingMs = durationMs
 			existing.DurationUpdatedAt = time.Now()
@@ -43085,6 +43159,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			mergeAmount = uint32(int32(amount) + carry)
 		}
 		refreshAuraEffectBasepoints(existing, spell, eff, mergeAmount)
+		// DoDamageAndTriggers HitAura reapply (Spell.cpp:2654-2668),
+		// creature-branch mirror of the player merge above: a re-cast's
+		// first effect refreshes the old record instead of replacing it,
+		// so the old mask must gain this cast's bit (the per-effect
+		// immunity strip above can leave it missing).
+		existing.EffectMask |= spellEffectMask(spell, eff)
 		existing.DurationMs = durationMs
 		existing.RemainingMs = durationMs
 		existing.DurationUpdatedAt = time.Now()
@@ -56145,6 +56225,9 @@ func (s *session) handleEffectPullTowardsDest(eff wotlk.SpellEffect, target prot
 // Brutallus Burn (45141/45151): a player hit target at or beyond the effect
 // radius without the Burn aura (46394) ignites via triggered 46394.
 // Wintergrasp RP-GG pickup (57347): a creature hit target is despawned.
+// Explicit-discovery research (60893/61177/61288/61756, EFFECT_1) and the
+// Book of Glyph Mastery (64323, EFFECT_0): learn one random undiscovered
+// recipe; 61177 learns three the very first time.
 // modWyrmGripStacks modifies the grip aura (56689) on the vehicle the caster
 // rides — the Go twin of the C++ GetCaster()->GetAura(SPELL_GRIP) leg in the
 // wild-wyrm vehicle spells (zone_storm_peaks.cpp:1171-1229). C++ casts
@@ -56783,7 +56866,7 @@ func judgementSealDamageSpell(data *wotlk.Store, auras []*activeAura) uint32 {
 	return 54158
 }
 
-func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, spell wotlk.Spell, eff wotlk.SpellEffect, targetGUID uint64) {
+func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, spell wotlk.Spell, eff wotlk.SpellEffect, targetGUID uint64, effIndex int) {
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
 		return
 	}
@@ -57419,6 +57502,41 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// is wrong: the class registers no proc handler. DORMANT
 		// until Spell.dbc ships the 47422 record.
 		s.refreshEverlastingAfflictionCorruption(ctx, targetGUID)
+	case 60893, 61177, 61288, 61756:
+		// spell_gen_profession_research::HandleScript
+		// (spell_generic.cpp:2823-2837): the EFFECT_1 SCRIPT_EFFECT
+		// OnEffectHitTarget arm — learn one random undiscovered
+		// recipe; Northrend Inscription Research (61177) learns
+		// three the very first time (two extra rolls before the
+		// shared one, when nothing is discovered yet). The
+		// caster-is-player gate (Load) is vacuous on the session
+		// path, and the hit unit is unused — the caster learns.
+		// DORMANT until Spell.dbc ships the research records.
+		if effIndex != 1 {
+			return
+		}
+		if spellID == 61177 && !hasDiscoveredAnySpell(s.player, spellID) {
+			for i := 0; i < 2; i++ {
+				if discovered := s.getExplicitDiscoverySpell(spellID); discovered != 0 {
+					s.learnSpell(ctx, discovered)
+				}
+			}
+		}
+		if discovered := s.getExplicitDiscoverySpell(spellID); discovered != 0 {
+			s.learnSpell(ctx, discovered)
+		}
+	case 64323:
+		// spell_item_book_of_glyph_mastery::HandleScript
+		// (spell_item.cpp:2440-2448): the EFFECT_0 SCRIPT_EFFECT
+		// OnEffectHitTarget arm — learn one random undiscovered
+		// glyph recipe. DORMANT until Spell.dbc ships the 64323
+		// record.
+		if effIndex != 0 {
+			return
+		}
+		if discovered := s.getExplicitDiscoverySpell(spellID); discovered != 0 {
+			s.learnSpell(ctx, discovered)
+		}
 	}
 }
 

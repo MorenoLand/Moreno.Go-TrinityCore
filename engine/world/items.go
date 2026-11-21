@@ -4868,14 +4868,32 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
 			return true
 		}
+		// CallScriptCheckCastHandlers (Spell.cpp:5515) runs between
+		// CheckCasterAuras and the dispel arm: the first non-OK script
+		// result fails the cast. A SPELL_FAILED_CUSTOM_ERROR failure
+		// carries its custom-error id (WriteCastResultInfo,
+		// Spell.cpp:3974) via buildCastFailedParams. Item casts are
+		// TRIGGERED_NONE prepares (Player::CastItemUseSpell,
+		// Player.cpp:8232), so the hook fires here too — the book of
+		// glyph mastery (64323, LEARNED_EVERYTHING) and gift of the
+		// harvester (52481, TOO_MANY_GHOULS) gates live on this path.
+		if failure, customError := s.fireSpellCheckCast(ctx, spellID, spell, target); failure != 0 {
+			if failure == spellFailedCustomError {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castCount, spellID, failure, customError), true)
+			} else {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+			}
+			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "OnCheckCast script hook", "failure", failure)
+			return true
+		}
 		// Dispel pre-check (Spell::CheckCast, Spell.cpp:5513-5560): a spell
 		// whose effects are all SPELL_EFFECT_DISPEL (no non-dispel
 		// effects, no area-targeted dispel, and a nonzero dispel mask)
 		// fails SPELL_FAILED_NOTHING_TO_DISPEL when the unit target has
 		// no dispellable auras. Item casts are TRIGGERED_NONE, so the
 		// !IsTriggered() arm applies. The CallScriptCheckCastHandlers
-		// arm between CheckCasterAuras and this one (Spell.cpp:5508) is a
-		// no-op: Go has no scripted-check-cast model. C++ keys on
+		// arm between CheckCasterAuras and this one (Spell.cpp:5515)
+		// fires just above. C++ keys on
 		// m_targets.GetUnitTarget() — the adopted wire unit here, exactly
 		// like the client path's checkDispelPreCast.
 		if failReason := s.checkDispelPreCast(spell, target.UnitGUID); failReason != 0 {

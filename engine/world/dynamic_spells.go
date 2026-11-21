@@ -386,13 +386,31 @@ func buildDynamicSpellObjectUpdate(object *dynamicSpellObjectState) []byte {
 	block.WritePackedGUID(object.GUID)
 	block.WriteU8(6)
 	block.WriteU16(dynamicObjectFlags)
-	block.WriteU8(0)
+	// Object::BuildMovementUpdate (Object.cpp:354-378), UPDATEFLAG_POSITION
+	// leg: a transport passenger carries the transport's packed GUID
+	// (DynamicObject::Create sets it via Transport::AddPassenger,
+	// DynamicObject.cpp:114-126) and the passenger offset in place of
+	// the repeated world position, so the client re-derives the patch's
+	// world position from the transport as it moves. The offset is the
+	// dynobjCaptureTransport value; the first position stays the world
+	// position dynobjFollowTransport keeps current.
+	if object.TransportGUID != 0 {
+		block.WritePackedGUID(object.TransportGUID)
+	} else {
+		block.WriteU8(0)
+	}
 	block.WriteF32(object.X)
 	block.WriteF32(object.Y)
 	block.WriteF32(object.Z)
-	block.WriteF32(object.X)
-	block.WriteF32(object.Y)
-	block.WriteF32(object.Z)
+	if object.TransportGUID != 0 {
+		block.WriteF32(object.TransportOffsetX)
+		block.WriteF32(object.TransportOffsetY)
+		block.WriteF32(object.TransportOffsetZ)
+	} else {
+		block.WriteF32(object.X)
+		block.WriteF32(object.Y)
+		block.WriteF32(object.Z)
+	}
 	block.WriteF32(object.Orientation)
 	block.WriteF32(0)
 	block.WriteU32(uint32(object.GUID))
