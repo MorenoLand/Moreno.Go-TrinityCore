@@ -13670,6 +13670,39 @@ func (s *Server) creatureComboPointsPreCast(m *creatureMotion, spell wotlk.Spell
 	return points > 0
 }
 
+// pruneCreatureSpellCooldowns mirrors SpellHistory::Update's spell sweep
+// (SpellHistory.cpp:141-158) for a creature caster: an entry whose
+// CooldownEnd has passed is erased, and erasing it also erases
+// _categoryCooldowns[CategoryId] (EraseCooldown, SpellHistory.h:140-144) —
+// so a same-category entry expiring after the holder was set kills the
+// shared category entry even when the holder's own CategoryEnd is still
+// future. The pet twin is prunePetSpellCooldowns (pet_cooldowns.go); the
+// player twin is sweepExpiredSpellCooldowns (spells.go). Runs at every
+// creature cooldown read (creatureSpellHistoryReady) and write
+// (recordCreatureSpellCooldown), the same points C++'s per-tick
+// Unit::Update sweep covers (Unit.cpp:3018).
+func (s *Server) pruneCreatureSpellCooldowns(m *creatureMotion, now time.Time) {
+	if m == nil {
+		return
+	}
+	for categoryID, categoryEnd := range m.SpellCategoryCooldowns {
+		if categoryEnd.Before(now) {
+			delete(m.SpellCategoryCooldowns, categoryID)
+		}
+	}
+	for spellID, cooldownEnd := range m.SpellCooldowns {
+		if !cooldownEnd.Before(now) {
+			continue
+		}
+		if categoryID := m.SpellCooldownCategories[spellID]; categoryID != 0 {
+			delete(m.SpellCategoryCooldowns, categoryID)
+		}
+		delete(m.SpellCooldowns, spellID)
+		delete(m.SpellCooldownCategories, spellID)
+		delete(m.SpellCooldownCategoryEnds, spellID)
+	}
+}
+
 // creatureSpellHistoryReady mirrors the unit-cooldown arm of
 // Spell::CheckCast (Spell.cpp:5207-5211) for creature casters via
 // SpellHistory::IsReady/HasCooldown (SpellHistory.cpp:187-196, 473-487): the
@@ -13683,6 +13716,7 @@ func (s *Server) creatureSpellHistoryReady(m *creatureMotion, spell wotlk.Spell,
 		return true
 	}
 	now := time.Now()
+	s.pruneCreatureSpellCooldowns(m, now)
 	if end, ok := m.SpellCooldowns[spell.ID]; ok && now.Before(end) {
 		return false
 	}
@@ -13736,6 +13770,11 @@ func (s *Server) recordCreatureSpellCooldown(m *creatureMotion, spell wotlk.Spel
 		return
 	}
 	now := time.Now()
+	// Prune before writing: a stale expired entry must not kill the
+	// category this cast is about to set (pruneCreatureSpellCooldowns
+	// drops it and its category side effect first, mirroring C++'s
+	// per-tick Update running ahead of the next StartCooldown).
+	s.pruneCreatureSpellCooldowns(m, now)
 	if m.SpellCooldowns == nil {
 		m.SpellCooldowns = make(map[uint32]time.Time)
 	}

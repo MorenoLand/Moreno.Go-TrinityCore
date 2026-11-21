@@ -542,12 +542,26 @@ func (s *session) removeArenaSpellCooldowns() {
 	}
 	s.playerStateMu.Lock()
 	kept := s.player.Cooldowns[:0]
+	erasedCategories := make(map[uint32]struct{})
 	for _, cd := range s.player.Cooldowns {
 		if _, drop := cleared[cd.Spell]; !drop {
 			kept = append(kept, cd)
+		} else if cd.Category != 0 {
+			erasedCategories[cd.Category] = struct{}{}
 		}
 	}
 	s.player.Cooldowns = kept
+	// SpellHistory::ResetCooldowns (SpellHistory.h:98-115) erases each
+	// matching entry via ResetCooldown -> EraseCooldown
+	// (SpellHistory.h:140-144), which also erases
+	// _categoryCooldowns[CategoryId] — so a surviving entry of an erased
+	// spell's category loses its category arm, mirrored by zeroing its
+	// CategoryEnd (the resetPlayerCooldown twin of this arm).
+	for i := range s.player.Cooldowns {
+		if _, erased := erasedCategories[s.player.Cooldowns[i].Category]; erased {
+			s.player.Cooldowns[i].CategoryEnd = 0
+		}
+	}
 	s.playerStateMu.Unlock()
 	for spellID := range cleared {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(s.playerGUID, spellID), true)

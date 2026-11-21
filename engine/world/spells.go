@@ -49161,6 +49161,47 @@ func buildCooldownEvent(casterGUID uint64, spellID uint32) []byte {
 	return buf.Bytes()
 }
 
+// sweepExpiredSpellCooldowns mirrors SpellHistory::Update's spell sweep
+// (SpellHistory.cpp:141-158): an entry whose CooldownEnd has passed is
+// erased, and erasing it also erases _categoryCooldowns[CategoryId]
+// (EraseCooldown, SpellHistory.h:140-144) — so a same-category entry
+// expiring after the holder was set kills the shared category entry even
+// when the holder's own CategoryEnd is still future. Mirrored here by
+// zeroing CategoryEnd on the surviving rows of each erased row's category
+// (the player model has no separate category map; the row scan reads the
+// last matching row as the holder). OnHold rows never sweep: their End is
+// now + 30 days (infinityCooldownDuration). Runs at every cooldown read
+// (blocked/holder below) and every write (replaceSpellCooldownEntry), the
+// same points C++'s per-tick Update covers: a read sweep can only see
+// rows that expired after the last write, and a write sweep drops rows
+// that expired before the new entry, so a stale row can never kill a
+// holder added after it expired.
+func (s *session) sweepExpiredSpellCooldowns(nowUnix int64) {
+	if s == nil || s.player == nil {
+		return
+	}
+	kept := s.player.Cooldowns[:0]
+	erasedCategories := make(map[uint32]struct{})
+	for _, cd := range s.player.Cooldowns {
+		if cd.End <= nowUnix {
+			if cd.Category != 0 {
+				erasedCategories[cd.Category] = struct{}{}
+			}
+			continue
+		}
+		kept = append(kept, cd)
+	}
+	s.player.Cooldowns = kept
+	if len(erasedCategories) == 0 {
+		return
+	}
+	for i := range s.player.Cooldowns {
+		if _, erased := erasedCategories[s.player.Cooldowns[i].Category]; erased {
+			s.player.Cooldowns[i].CategoryEnd = 0
+		}
+	}
+}
+
 // playerCategoryCooldownBlocked mirrors SpellHistory::HasCooldown's category
 // arm (SpellHistory.cpp:473-487) over the single _categoryCooldowns holder:
 // EraseCooldown (SpellHistory.h:140-144) erases _categoryCooldowns[CategoryId]
@@ -49168,14 +49209,14 @@ func buildCooldownEvent(casterGUID uint64, spellID uint32) []byte {
 // with the holder spell's own cooldown even when CategoryEnd is still future.
 // The holder is the last row AddCooldown'd for the category (SpellHistory.cpp:395-407
 // overwrites the single entry per category; the GetRemainingCooldown twin at
-// interrupt.go:702 already reads the last matching row). Residual: a
-// same-category entry expiring after the holder was set also erases the
-// shared entry in C++ (the spell sweep's EraseCooldown); Go keeps the
-// holder until its own End passes.
+// interrupt.go:702 already reads the last matching row). The sweep above
+// runs first, so a same-category entry expiring after the holder was set
+// already killed the shared entry in C++'s per-tick Update.
 func (s *session) playerCategoryCooldownBlocked(categoryID uint32, nowUnix int64) bool {
 	if s == nil || s.player == nil || categoryID == 0 {
 		return false
 	}
+	s.sweepExpiredSpellCooldowns(nowUnix)
 	for i := len(s.player.Cooldowns) - 1; i >= 0; i-- {
 		cd := s.player.Cooldowns[i]
 		if cd.Category != categoryID {
@@ -49194,6 +49235,7 @@ func (s *session) playerCategoryCooldownHolder(categoryID uint32, nowUnix int64)
 	if s == nil || s.player == nil || categoryID == 0 {
 		return 0, false
 	}
+	s.sweepExpiredSpellCooldowns(nowUnix)
 	for i := len(s.player.Cooldowns) - 1; i >= 0; i-- {
 		cd := s.player.Cooldowns[i]
 		if cd.Category != categoryID {
@@ -49442,6 +49484,7 @@ func (s *Server) spellCooldownDurationsForItem(ctx context.Context, spell wotlk.
 // one, so the cast gates, ModifyCooldown and ResetCooldown always see
 // one live entry per spell.
 func (s *session) replaceSpellCooldownEntry(entry spellCooldown) {
+	s.sweepExpiredSpellCooldowns(time.Now().Unix())
 	kept := s.player.Cooldowns[:0]
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell != entry.Spell {

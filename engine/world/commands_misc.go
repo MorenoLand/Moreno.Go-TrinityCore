@@ -1170,8 +1170,11 @@ func clearCreatureCooldowns(owner *session, motion *creatureMotion) {
 }
 
 // clearCreatureCooldown mirrors SpellHistory::ResetCooldown(spellId, true)
-// for a creature target: only the spell's own entry is erased, category
-// cooldowns untouched (SpellHistory.cpp:441-455), and SMSG_CLEAR_COOLDOWN
+// for a creature target: the spell's own entry is erased, and erasing it
+// also erases _categoryCooldowns[CategoryId] (EraseCooldown,
+// SpellHistory.h:140-144) — so a surviving entry of the reset spell's
+// category loses its category arm, mirrored by deleting the shared
+// category entry for the reset spell's stored category. SMSG_CLEAR_COOLDOWN
 // fires to the owner only when the spell held a cooldown.
 func clearCreatureCooldown(owner *session, motion *creatureMotion, spellID uint32) {
 	if owner == nil || motion == nil || owner.server == nil {
@@ -1180,9 +1183,13 @@ func clearCreatureCooldown(owner *session, motion *creatureMotion, spellID uint3
 	owner.server.motionMu.Lock()
 	_, removed := motion.SpellCooldowns[spellID]
 	if removed {
+		categoryID := motion.SpellCooldownCategories[spellID]
 		delete(motion.SpellCooldowns, spellID)
 		delete(motion.SpellCooldownCategories, spellID)
 		delete(motion.SpellCooldownCategoryEnds, spellID)
+		if categoryID != 0 {
+			delete(motion.SpellCategoryCooldowns, categoryID)
+		}
 	}
 	owner.server.motionMu.Unlock()
 	if removed {

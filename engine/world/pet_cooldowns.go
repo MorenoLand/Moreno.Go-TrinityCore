@@ -113,6 +113,12 @@ func (s *Server) petSpellCooldownReady(motion *creatureMotion, spell wotlk.Spell
 	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
+	// Prune before reading: C++'s per-tick Update (SpellHistory.cpp:141-158
+	// via Unit.cpp:3018) erases expired entries and their shared category
+	// entry (EraseCooldown) ahead of every HasCooldown consult, so a
+	// same-category entry expiring after the holder was set frees the
+	// category here too; recordPetSpellCooldown only prunes on write.
+	prunePetSpellCooldowns(motion, now)
 	if end, ok := motion.SpellCooldowns[spell.ID]; ok && end.After(now) {
 		return false
 	}
@@ -303,10 +309,11 @@ func (s *Server) petGlobalCooldownActive(motion *creatureMotion, spell wotlk.Spe
 // owner player for pets (Object.cpp:2246 — only Pet objects carry
 // UNIT_MASK_PET, Pet.cpp:49), and with .cheat cooldown on that player the
 // just-cast spell's own RecoveryTime cooldown entry on the original caster
-// (the pet) is erased. Like C++ SpellHistory::ResetCooldown(spellId, true)
-// only the spell's own entry is cleared — category cooldowns are untouched
-// (SpellHistory.cpp:441-455). SMSG_CLEAR_COOLDOWN (spell id then caster
-// guid) goes to the owner player, which is this session. The
+// (the pet) is erased. Erasing it also erases _categoryCooldowns[CategoryId]
+// (EraseCooldown, SpellHistory.h:140-144), so a surviving entry of the reset
+// spell's category loses its category arm — mirrored by deleting the shared
+// category entry for the reset spell's stored category. SMSG_CLEAR_COOLDOWN
+// (spell id then caster guid) goes to the owner player, which is this session. The
 // SetSpellModTakingSpell(this, false) arm of the same block has no reader
 // on the pet path — the Go pet path has no spell-mod-taking model
 // (documented standing gap) — so it stays unbridged. Runs for triggered
@@ -321,9 +328,13 @@ func (s *session) resetPetSpellCooldownCheat(motion *creatureMotion, spellID uin
 	s.server.motionMu.Lock()
 	_, removed := motion.SpellCooldowns[spellID]
 	if removed {
+		categoryID := motion.SpellCooldownCategories[spellID]
 		delete(motion.SpellCooldowns, spellID)
 		delete(motion.SpellCooldownCategories, spellID)
 		delete(motion.SpellCooldownCategoryEnds, spellID)
+		if categoryID != 0 {
+			delete(motion.SpellCategoryCooldowns, categoryID)
+		}
 	}
 	s.server.motionMu.Unlock()
 	if !removed {
