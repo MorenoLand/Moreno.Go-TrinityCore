@@ -309,11 +309,21 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 		// applications whose targets left the area are removed on the 500ms
 		// target-map pass, like C++.
 		for holderGUID := range object.AuraHolders {
-			if _, ok := inRadius[holderGUID]; ok {
+			if _, ok := inRadius[holderGUID]; !ok {
+				s.expireDynobjHolderAura(object, holderGUID, spellID)
+				delete(object.AuraHolders, holderGUID)
 				continue
 			}
-			s.expireDynobjHolderAura(object, holderGUID, spellID)
-			delete(object.AuraHolders, holderGUID)
+			// Aura::UpdateTargetMap (SpellAuras.cpp:666-672): an application
+			// still in the area is re-validated every pass — a target failing
+			// CanBeAppliedOn is removed now and re-applied on a later pass
+			// when it passes again. The IsInWorld half rides inRadius
+			// membership; the CheckAreaTarget half is the script-handler
+			// check below (a no-op true when no handler is registered).
+			if !s.fireAuraCheckAreaTarget(ctx, spellID, object.CasterGUID, object.Map, object.InstanceID, holderGUID) {
+				s.expireDynobjHolderAura(object, holderGUID, spellID)
+				delete(object.AuraHolders, holderGUID)
+			}
 		}
 		// The newly applied aura's first tick aligns to the dynobj's shared
 		// amplitude schedule (SpellAuras.cpp:815-843) instead of starting a
@@ -424,11 +434,21 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 		inRadius[tm.guid] = struct{}{}
 	}
 	for holderGUID := range object.AuraHolders {
-		if _, ok := inRadius[holderGUID]; ok {
+		if _, ok := inRadius[holderGUID]; !ok {
+			s.expireDynobjHolderAura(object, holderGUID, spellID)
+			delete(object.AuraHolders, holderGUID)
 			continue
 		}
-		s.expireDynobjHolderAura(object, holderGUID, spellID)
-		delete(object.AuraHolders, holderGUID)
+		// Aura::UpdateTargetMap (SpellAuras.cpp:666-672): an application
+		// still in the area is re-validated every pass — a target failing
+		// CanBeAppliedOn is removed now and re-applied on a later pass
+		// when it passes again. The IsInWorld half rides inRadius
+		// membership; the CheckAreaTarget half is the script-handler
+		// check below (a no-op true when no handler is registered).
+		if !s.fireAuraCheckAreaTarget(ctx, spellID, object.CasterGUID, object.Map, object.InstanceID, holderGUID) {
+			s.expireDynobjHolderAura(object, holderGUID, spellID)
+			delete(object.AuraHolders, holderGUID)
+		}
 	}
 	if object.AuraHolders == nil {
 		object.AuraHolders = make(map[uint64]struct{})

@@ -37345,6 +37345,7 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		slot = freeSlot
 		s.auraSlots[spellID] = slot
 	}
+	freshSlot := !ok
 
 	// Aura::CalcMaxCharges (SpellAuras.cpp:951-962): the charge count folds
 	// the caster's spell-mod owner's SPELLMOD_CHARGES mods. Computed before
@@ -37568,6 +37569,33 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	}
 	if effectMask == 0 {
 		effectMask = 0x01
+	}
+	// Unit::IsHighestExclusiveAura (Unit.cpp:13991): a fresh aura whose
+	// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
+	// is never applied — the dynobj UpdateTargetMap leg (SpellAuras.cpp:696,
+	// addUnit=false) and the direct-cast leg (Unit::_RemoveNoStackAurasDueToAura,
+	// Unit.cpp:3648, aura->Remove()). Evaluated on the first surviving aura
+	// effect, the one whose amount this record carries; the purge half stays
+	// out (dynobj applications never purge, like applyAuraToTarget, and the
+	// direct-cast purge legs are a separate gap). A suppressed apply leaves
+	// no phantom presence entry or fresh slot behind.
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found {
+			for index, effect := range sp.Effects {
+				if effectMask&(1<<uint(index)) == 0 || effect.Aura == 0 {
+					continue
+				}
+				if s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras).suppressed {
+					delete(s.auras, spellID)
+					if freshSlot {
+						delete(s.auraSlots, spellID)
+					}
+					s.castMu.Unlock()
+					return
+				}
+				break
+			}
+		}
 	}
 	aura := &activeAura{
 		SpellID:            spellID,
