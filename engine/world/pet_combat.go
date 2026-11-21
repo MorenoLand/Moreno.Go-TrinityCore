@@ -7621,6 +7621,13 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	if s == nil || s.server == nil || caster == nil || targetGUID == 0 {
 		return false
 	}
+	// Spell::CheckEffectTarget charm arm (Spell.cpp:7395-7412) at
+	// AddUnitTarget time (Spell.cpp:2097-2100) — see checkEffectTargetCharm.
+	// Pet casts are direct spell hits; no persistent-area-aura application
+	// flows through this funnel.
+	if !s.checkEffectTargetCharm(spell, effect, caster.GUID, targetGUID) {
+		return false
+	}
 	effectMask, recalculateMask := PetAuraEffectMask(spell), uint8(0)
 	var amounts, baseAmounts [3]int32
 	for index, candidate := range spell.Effects {

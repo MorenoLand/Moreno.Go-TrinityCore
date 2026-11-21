@@ -7130,6 +7130,76 @@ func charmAuraForHighLevel(aura uint32) bool {
 	return aura == spellAuraModPossess || aura == spellAuraCharm || aura == spellAuraAoeCharm
 }
 
+// casterLevelByGUID resolves a caster's level for CheckEffectTarget-style
+// gates: the session player's level, a foreign session's level, or a
+// creature motion's level. Unresolvable GUIDs report false, and the
+// level arm is skipped, mirroring CheckCast's unresolvable-GUID pass.
+func (s *session) casterLevelByGUID(guid uint64) (uint32, bool) {
+	if guid == 0 || s == nil || s.server == nil {
+		return 0, false
+	}
+	if guid == s.playerGUID && s.player != nil {
+		return uint32(s.player.Level), true
+	}
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		return uint32(ts.player.Level), true
+	}
+	if m := s.findCreatureMotion(guid); m != nil {
+		return uint32(m.Level), true
+	}
+	return 0, false
+}
+
+// checkEffectTargetCharm mirrors the charm-family arm of
+// Spell::CheckEffectTarget (Spell.cpp:7395-7412) at AddUnitTarget time
+// (Spell.cpp:2097-2100): a charm/possess effect is pruned from a single
+// target's effect mask when the target is mounted, already charmed, or
+// above the effect's CalculateDamage level cap — while the spell's other
+// effects still hit. CheckCast's checkCharmCast (Spell.cpp:6044-6087)
+// fails the whole cast for the wire target only, so area-added targets
+// reach this gate alone. The controllable-vehicle arm stays out (no
+// vehicle-kit model on motions, per the CheckCast twin); player targets
+// carry no charm model. Unresolvable target GUIDs pass, and an
+// unresolvable caster skips the level arm only.
+func (s *session) checkEffectTargetCharm(spell wotlk.Spell, eff wotlk.SpellEffect, casterGUID, targetGUID uint64) bool {
+	if !isCharmFamilyAura(eff.Aura) {
+		return true
+	}
+	if targetGUID == 0 || s == nil || s.server == nil {
+		return true
+	}
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		if ts.isPlayerMounted() {
+			return false
+		}
+		if level, ok := s.casterLevelByGUID(casterGUID); ok {
+			if value := eff.CalcValueForLevel(spell, level); value != 0 && int32(ts.player.Level) > value {
+				return false
+			}
+		}
+		return true
+	}
+	if s.player == nil {
+		return true
+	}
+	tm := s.findCreatureMotion(targetGUID)
+	if tm == nil {
+		return true
+	}
+	if tm.UnitFlags&unitFlagMount != 0 {
+		return false
+	}
+	if tm.Charmed || tm.CharmerGUID != 0 {
+		return false
+	}
+	if level, ok := s.casterLevelByGUID(casterGUID); ok {
+		if value := eff.CalcValueForLevel(spell, level); value != 0 && int32(tm.Level) > value {
+			return false
+		}
+	}
+	return true
+}
+
 // casterHasCharmedCreature bridges Unit::GetCharmedGUID() for the CheckCast
 // charm arm (Spell.cpp:6060-6061): any creature motion on the caster's
 // map/instance whose CharmerGUID is the caster counts as a charmed unit,
@@ -15077,12 +15147,33 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 	if len(hitTargets) == 0 && len(friendlyEffectTargets) == 0 {
 		// Spell::DoProcessTargetContainer(m_UniqueItemInfo) (Spell.cpp:3734):
-		// an item-target open-lock cast holds no unit or GO target, so the
-		// empty-list return below would otherwise drop the item arm
-		// entirely - C++ still runs EffectOpenLock on the item target.
+		// an item-target cast holds no unit or GO target, so the
+		// empty-list return below would otherwise drop the item arms
+		// entirely - C++ still runs the item effects on the item target
+		// (_handle_immediate_phase runs the container after the HIT
+		// loop, regardless of the unit list). The open-lock arm was the
+		// first carve-out; the same container feeds disenchant,
+		// prospecting/milling and the three enchant effects, whose
+		// handlers resolve the wire item target directly (AddItemTarget,
+		// Spell.cpp:2258-2280, reached via SelectImplicitTargetObjectTargets,
+		// Spell.cpp:1578-1580, when the object target is null and an item
+		// target is present). Each handler no-ops without a wire item.
 		for _, eff := range spell.Effects {
-			if eff.Effect == spellEffectOpenLock {
+			switch eff.Effect {
+			case spellEffectOpenLock:
 				s.handleEffectOpenLockItem(ctx, target, spell, eff, castItemGUID != 0 || castItemEntry != 0)
+			case spellEffectDisenchant:
+				s.handleEffectDisenchant(ctx, target, spell)
+			case spellEffectProspecting:
+				s.handleEffectProspectMilling(ctx, target, spell, spellEffectProspecting)
+			case spellEffectMilling:
+				s.handleEffectProspectMilling(ctx, target, spell, spellEffectMilling)
+			case spellEffectEnchantItem:
+				s.handleEffectEnchantItemPerm(ctx, target, spell, eff, castItemEntry)
+			case spellEffectEnchantItemTemporary:
+				s.handleEffectEnchantItemTmp(ctx, target, spell, eff)
+			case spellEffectEnchantItemPrismatic:
+				s.handleEffectEnchantItemPrismatic(ctx, target, spell, eff)
 			}
 		}
 		// Spell missed, do not trigger effects — but the channel still
@@ -37790,6 +37881,26 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 					if s.isImmunedToSpellEffect(sp, i, casterSess) {
 						immuneMask |= 1 << uint(i)
 					}
+					// Spell::CheckEffectTarget charm arm (Spell.cpp:7395-7412)
+					// at AddUnitTarget time (Spell.cpp:2097-2100): a charm/
+					// possess effect is pruned from this target's mask when
+					// the target is mounted or above the effect's
+					// CalculateDamage level cap — the other effects still
+					// hit. Player targets carry no charm model; the
+					// controllable-vehicle arm stays out (no vehicle-kit
+					// model). Persistent-area-aura applications never pass
+					// through AddUnitTarget in C++, so they skip the arm.
+					// A zero casterLevel keeps the old behavior for the cap
+					// arm only.
+					if !persistentAreaAura && isCharmFamilyAura(eff.Aura) {
+						if s.isPlayerMounted() {
+							immuneMask |= 1 << uint(i)
+						} else if casterLevel > 0 && s.player != nil {
+							if value := eff.CalcValueForLevel(sp, uint32(casterLevel)); value != 0 && int32(s.player.Level) > value {
+								immuneMask |= 1 << uint(i)
+							}
+						}
+					}
 				}
 			case casterMotion != nil:
 				if s.isImmuneToSpellCreatureCaster(sp, casterFriendly) {
@@ -37801,6 +37912,20 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 					}
 					if s.isImmunedToSpellEffectCreatureCaster(sp, i, casterFriendly) {
 						immuneMask |= 1 << uint(i)
+					}
+					// Spell::CheckEffectTarget charm arm (Spell.cpp:7395-7412)
+					// at AddUnitTarget time — same prune as the player-caster
+					// branch above: mounted or above the effect's
+					// CalculateDamage level cap drops only the charm effect's
+					// bit. Persistent-area-aura applications skip the arm.
+					if !persistentAreaAura && isCharmFamilyAura(eff.Aura) {
+						if s.isPlayerMounted() {
+							immuneMask |= 1 << uint(i)
+						} else if casterLevel > 0 && s.player != nil {
+							if value := eff.CalcValueForLevel(sp, uint32(casterLevel)); value != 0 && int32(s.player.Level) > value {
+								immuneMask |= 1 << uint(i)
+							}
+						}
 					}
 				}
 			}
@@ -41607,6 +41732,13 @@ var mixologyBonusTable = map[uint32]mixologyBonus{
 
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool, castItemGUID uint64, triggeredByAura bool, periodicInitialDelay *uint32) {
 	if s.player == nil {
+		return
+	}
+	// Spell::CheckEffectTarget charm arm (Spell.cpp:7395-7412) at
+	// AddUnitTarget time (Spell.cpp:2097-2100) — see checkEffectTargetCharm.
+	// Persistent-area-aura applications never pass through AddUnitTarget
+	// in C++ (Aura::Application), so they skip the gate.
+	if !persistentAreaAura && !s.checkEffectTargetCharm(spell, eff, casterGUID, targetGUID) {
 		return
 	}
 	channelTargetGUID := uint64(0)

@@ -4024,7 +4024,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// per cast, not once per effect-6 effect. Gated on spellKnown like
 	// the tail.
 	if spellKnown {
-		s.creatureEffectApplyAura(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeAuraEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets, prevent)
+		s.creatureEffectApplyAura(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeAuraEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets, prevent, triggered)
 	}
 	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334-2381) runs
 	// its SpellScript hooks before the per-effect DoTargetSpellHit
@@ -10152,7 +10152,7 @@ func (s *Server) creatureEffectDurabilityDamage(ctx context.Context, m *creature
 	}
 }
 
-func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, prevent *spellEffectPreventState) {
+func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, prevent *spellEffectPreventState, triggered bool) {
 	if s == nil || m == nil {
 		return
 	}
@@ -10282,7 +10282,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			}
 			continue
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false, nil, 0)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false, nil, 0, triggered)
 	}
 	if hasAreaAura {
 		// Caster-owned area-aura fan-out (area_auras.go): runs after
@@ -10525,7 +10525,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		if d := object.NextAuraTick.Sub(now); d > 0 {
 			sharedDelayMs = uint32(d / time.Millisecond)
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true, &sharedDelayMs, mask)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true, &sharedDelayMs, mask, false)
 	}
 }
 
@@ -10549,7 +10549,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 // schedule, not a private period later. Nil keeps the default
 // periodicTickInitialDelay; the merge re-arm never takes it, like the
 // session twin.
-func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool, periodicInitialDelay *uint32, allowedMask uint8) {
+func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool, periodicInitialDelay *uint32, allowedMask uint8, triggered bool) {
 	if s == nil || m == nil || targetGUID == 0 {
 		return
 	}
@@ -10629,6 +10629,13 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		if allowedMask != 0 && allowedMask&(1<<uint(i)) == 0 {
 			continue
 		}
+		// Spell::CheckEffectTarget charm arm (Spell.cpp:7395-7412) at
+		// AddUnitTarget time (Spell.cpp:2097-2100) — see
+		// checkEffectTargetCharmForMotion. Persistent-area-aura
+		// applications never pass through AddUnitTarget in C++.
+		if !persistentAreaAura && !s.checkEffectTargetCharmForMotion(spell, eff, m, target) {
+			continue
+		}
 		if creatureImmuneToSpellEffect(s, targetKey, spell, i, stats, s.isTotemGUID(targetGUID), nil, true, s.creatureFriendlyToTarget(m, targetGUID)) {
 			continue
 		}
@@ -10704,16 +10711,16 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			// here; a fresh apply starts at zero by construction.
 			existing.RuptureBonusDurationMs = 0
 			// Spell.cpp:2854 resetPeriodicTimer gate, the applyAuraToTarget
-			// creature-branch twin (spells.go:42542): a stackable re-cast
-			// keeps the periodic countdown. The server funnel carries no
-			// triggered context, so the TRIGGERED_DONT_RESET_PERIODIC_TIMER
-			// term is absent — a triggered creature re-cast resets the
-			// timer here. Aura::RefreshTimers (SpellAuras.cpp:930-940)
+			// creature-branch twin (spells.go:43206): a stackable re-cast
+			// keeps the periodic countdown, and a triggered re-cast keeps
+			// it too — TRIGGERED_DONT_RESET_PERIODIC_TIMER rides
+			// TRIGGERED_FULL_MASK, which the funnel's triggered flag
+			// models. Aura::RefreshTimers (SpellAuras.cpp:930-940)
 			// recomputes the amplitude and zeroes the tick counter on
 			// every refresh; only the timer restart is gated. The
 			// amplitude here is the raw DBC value like the fresh
 			// record's (no haste fold on the server path).
-			resetPeriodic := spell.StackAmount < 2
+			resetPeriodic := spell.StackAmount < 2 && !triggered
 			existing.PeriodMs = eff.AuraPeriod
 			existing.TickCount = 0
 			if existing.Timer != nil {
@@ -13827,6 +13834,33 @@ func (s *Server) creatureCharmPreCast(m *creatureMotion, spell wotlk.Spell, targ
 			continue
 		}
 		if value := eff.CalcValueForLevel(spell, uint32(m.Level)); value != 0 && int32(tm.Level) > value {
+			return false
+		}
+	}
+	return true
+}
+
+// checkEffectTargetCharmForMotion is the Server twin of
+// (*session).checkEffectTargetCharm for a creature caster (m) and a
+// creature target: the charm-family arm of Spell::CheckEffectTarget
+// (Spell.cpp:7395-7412) at AddUnitTarget time (Spell.cpp:2097-2100).
+// Player targets of creature casts ride the session funnel
+// (applyAuraFromCaster), never this one.
+func (s *Server) checkEffectTargetCharmForMotion(spell wotlk.Spell, eff wotlk.SpellEffect, m, target *creatureMotion) bool {
+	if !isCharmFamilyAura(eff.Aura) {
+		return true
+	}
+	if target == nil {
+		return true
+	}
+	if target.UnitFlags&unitFlagMount != 0 {
+		return false
+	}
+	if target.Charmed || target.CharmerGUID != 0 {
+		return false
+	}
+	if m != nil {
+		if value := eff.CalcValueForLevel(spell, casterLevel(m)); value != 0 && int32(target.Level) > value {
 			return false
 		}
 	}
