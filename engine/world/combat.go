@@ -2816,10 +2816,12 @@ type creatureStats struct {
 	Rank             uint32 // creature_template.rank (SharedDefines.h CreatureEliteType); feeds Creature::isElite (Creature.cpp:2344-2350)
 	NPCFlags         uint32 // creature_template.npcflag; live value behind Lua CreatureMethods::GetNPCFlags/SetNPCFlags (UNIT_NPC_FLAGS)
 	CanFly           bool
-	MoveGround       uint32 // creature_template_movement.Ground (ObjectMgr.cpp field 44); missing row keeps the C++ default Run=1, so the query COALESCEs to 1
-	MoveSwim         bool   // creature_template_movement.Swim (field 45); missing row keeps the C++ default true, so the query COALESCEs to 1
-	MoveChase        uint32 // creature_template_movement.Chase (CreatureData.h:96-100); 0=Run, 1=CanWalk, 2=AlwaysWalk; missing row keeps the C++ default Run=0
-	MoveRandom       uint32 // creature_template_movement.Random (CreatureData.h:103-108); 0=Walk, 1=CanRun, 2=AlwaysRun; missing row keeps the C++ default Walk=0
+	MoveGround       uint32  // creature_template_movement.Ground (ObjectMgr.cpp field 44); missing row keeps the C++ default Run=1, so the query COALESCEs to 1
+	MoveSwim         bool    // creature_template_movement.Swim (field 45); missing row keeps the C++ default true, so the query COALESCEs to 1
+	MoveChase        uint32  // creature_template_movement.Chase (CreatureData.h:96-100); 0=Run, 1=CanWalk, 2=AlwaysWalk; missing row keeps the C++ default Run=0
+	MoveRandom       uint32  // creature_template_movement.Random (CreatureData.h:103-108); 0=Walk, 1=CanRun, 2=AlwaysRun; missing row keeps the C++ default Walk=0
+	MoveFlight       uint32  // creature_template_movement.Flight (CreatureData.h:87-94); 0=None, 1=DisableGravity, 2=CanFly; feeds the per-tick UpdateMovementFlags fly leg
+	HoverHeight      float32 // creature_template.HoverHeight (Creature.cpp:537 UNIT_FIELD_HOVERHEIGHT); C++ DB default 1.0; feeds the UpdateMovementFlags isInAir hover tolerance
 	ReactState       uint8
 	ReactStateKnown  bool
 	// CreatureType mirrors creature_template.type (SharedDefines.h creature
@@ -2910,6 +2912,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	var healthMod, manaMod, armorMod, damageMod, baseVariance, templateScale float64
 	var modelid1 int64
 	var vehicleID int64
+	var hoverHeight float64
 
 	row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT 
 		COALESCE(maxlevel, 1), 
@@ -2937,9 +2940,10 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.BaseVariance, 1.0),
 		COALESCE(ct.scale, 1.0),
 		COALESCE(ct.modelid1, 0),
-		COALESCE(ct.VehicleId, 0)
+		COALESCE(ct.VehicleId, 0),
+		COALESCE(ct.HoverHeight, 1.0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &rangeAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &rank, &npcFlags, &flight, &moveGround, &moveSwim, &moveChase, &moveRandom, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &rangeAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &rank, &npcFlags, &flight, &moveGround, &moveSwim, &moveChase, &moveRandom, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID, &hoverHeight); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -2984,6 +2988,8 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.TypeFlags = uint32(typeFlags)
 	stats.NPCFlags = uint32(npcFlags)
 	stats.CanFly = flight != 0
+	stats.MoveFlight = uint32(flight)
+	stats.HoverHeight = float32(hoverHeight)
 	stats.MoveGround = uint32(moveGround)
 	stats.MoveSwim = moveSwim != 0
 	stats.MoveChase = uint32(moveChase)

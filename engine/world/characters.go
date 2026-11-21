@@ -1673,6 +1673,23 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.worldReady.Store(false)
 	s.farTeleportPending = false
 	state := *s.player
+	// MovementHandler.cpp:91 (HandleMoveWorldportAck): the far-teleport
+	// relocation adds the hover offset — GetHoverOffset() (Unit.h:1648)
+	// is UNIT_FIELD_HOVERHEIGHT (1.0 for players, Player.cpp:546) while
+	// the HOVER flag is set, 0 otherwise. Go writes the field as 1.0
+	// (player_state.go) and the flag rides the hover aura (movement.go),
+	// so a hovering player relocates 1.0yd above the raw destination;
+	// without the bump the player lands sunk into the floor. The
+	// initial-login path skips it: C++ never runs the ack handler at
+	// login, and the saved Z already carries the SetHover raise
+	// (Unit.cpp:13779). The fall baseline follows the relocated Z
+	// (MovementHandler.cpp:92, SetFallInformation(0, GetPositionZ())) —
+	// teleportToOptions seeds it with the raw destination Z.
+	if !s.initialLoginPending && s.hasAuraType(spellAuraHover) {
+		state.Z += 1
+		s.player.Z = state.Z
+		s.lastFallZ, s.lastFallTime = state.Z, 0
+	}
 	if !s.validTrinityMapID(state.Map) || (!s.initialLoginPending && !validTrinityMapCoordinates(state.X, state.Y, state.Z, state.Orientation)) {
 		return false
 	}

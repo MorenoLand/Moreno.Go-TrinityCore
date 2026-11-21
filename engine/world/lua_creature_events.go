@@ -4367,11 +4367,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// MoveFall is MotionMaster::MoveFall (MotionMaster.cpp:919-955)
 	// for creatures: AddUnitMovementFlag(MOVEMENTFLAG_FALLING) plus a
-	// fall spline to the ground height. Go has no creature spline
-	// sender and no vmap height query, so the spline-to-ground half
-	// stays out; the client-visible leg is the fall-mode packet —
-	// SMSG_SPLINE_MOVE_NORMAL_FALL, the SetFeatherFall(false) leg's
-	// opcode — sent fire-and-forget. MOVEMENTFLAG_FALLING is transient
+	// fall spline to the ground height. The ground half resolves via
+	// Server.mapHeight (Map::GetHeight twin); a failed lookup keeps the
+	// fire-and-forget fall packet only. MOVEMENTFLAG_FALLING is transient
 	// in C++ (cleared on landing), so no latch is kept on the motion.
 	// Rooted units do not fall in C++ (MotionMaster.cpp:937-939); the
 	// ScriptRooted gate is the Go twin, and the stunned half rides the
@@ -4386,8 +4384,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.motionMu.Unlock()
 			return nil, nil
 		}
-		mapID, instanceID, x, y, guid := m.Map, m.InstanceID, m.X, m.Y, m.GUID
+		mapID, instanceID, x, y, z, guid := m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID
 		phase := m.PhaseMask
+		// MotionMaster.cpp:919-955: the fall spline ends at the ground
+		// height, so the motion settles there with the fall packet.
+		if ground, ok := s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch); ok && z > ground {
+			m.Z = ground
+		}
 		s.motionMu.Unlock()
 		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, protocol.OpcodeSMSG_SPLINE_MOVE_NORMAL_FALL, phase)
 		return nil, nil
@@ -6285,7 +6288,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if speed <= 0 {
 			speed = creatureSplineVelocity(motion, false)
 		}
-		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed)
+		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed, false, animTierNone)
 		return nil, nil
 	}
 	// MoveAlongSplineChain is MotionMaster::MoveAlongSplineChain

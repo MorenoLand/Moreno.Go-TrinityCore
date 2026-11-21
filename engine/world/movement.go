@@ -2627,8 +2627,9 @@ func (s *session) updateFallInformationIfNeed(info movementInfo, opcode uint16) 
 
 // HandleFall mirrors TrinityCore Player::HandleFall (Player.cpp:25369-25418).
 // Documented deltas: no sWorld->getRate(RATE_DAMAGE_FALL) multiplier (defaults to 1.0;
-// Go has no world-rate config); no UpdateGroundPositionZ leg (no ground-height model);
-// isImmuneToDamage does not consume aura charges (Go models no charge counters).
+// Go has no world-rate config); no UpdateGroundPositionZ leg (it feeds only the
+// C++ debug log, Player.cpp:25413-25415); isImmuneToDamage does not consume aura
+// charges (Go models no charge counters).
 func (s *session) handleFall(ctx context.Context, info movementInfo) {
 	// Player.cpp:25380: !isDead() — Unit::isDead (Unit.h:1142) is
 	// deathState DEAD || CORPSE, which covers released ghosts (they
@@ -2693,9 +2694,9 @@ func (s *session) handleFall(ctx context.Context, info movementInfo) {
 		before := s.player.Health
 		dealt := s.environmentalDamage(ctx, damageFall, damage)
 		// Reference Player.cpp:25406-25410: final_damage < original_health credits
-		// FALL_WITHOUT_DYING with the fall distance in centimeters. The returned
-		// value is the post-negation damage, so god-cheat falls (final_damage 0)
-		// credit exactly like C++.
+		// FALL_WITHOUT_DYING with the fall distance in centimeters. God-cheat
+		// falls never reach this block: CHEAT_GOD zeroes damage ahead of the
+		// damage>0 gate above (Player.cpp:25390-25401), so no credit fires.
 		if s.player.Health > 0 && dealt < before {
 			s.updateAchievementCriteria(criteriaTypeFallWithoutDying, 0, uint32(zDiff*100))
 		}

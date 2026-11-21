@@ -96,11 +96,14 @@ type creatureMotion struct {
 	NPCFlagsKnown         bool   // set by the event-surface SetNPCFlags/SetFlag(82)/RemoveFlag(82) bridges; gates the motion->spawn overlay so untouched creatures keep the DB/game-event value
 	DisableReputationGain bool   // Creature::DisableReputationGain (Creature.h:320-321, default false); Lua IsReputationGainDisabled/SetDisableReputationGain
 	CanFly                bool
-	MoveGround            uint32 // creature_template_movement.Ground via loadCreatureStats; 0=None, 1=Run, 2=Hover (CreatureData.h)
-	MoveSwim              bool   // creature_template_movement.Swim via loadCreatureStats
-	MoveChase             uint32 // creature_template_movement.Chase via loadCreatureStats; 0=Run, 1=CanWalk, 2=AlwaysWalk (CreatureData.h:96-100)
-	MoveRandom            uint32 // creature_template_movement.Random via loadCreatureStats; 0=Walk, 1=CanRun, 2=AlwaysRun (CreatureData.h:103-108)
-	MoveKnown             bool   // set at the stats-backed creation sites; pets/totems built without stats read the C++ defaults instead
+	MoveGround            uint32  // creature_template_movement.Ground via loadCreatureStats; 0=None, 1=Run, 2=Hover (CreatureData.h)
+	MoveSwim              bool    // creature_template_movement.Swim via loadCreatureStats
+	MoveChase             uint32  // creature_template_movement.Chase via loadCreatureStats; 0=Run, 1=CanWalk, 2=AlwaysWalk (CreatureData.h:96-100)
+	MoveRandom            uint32  // creature_template_movement.Random via loadCreatureStats; 0=Walk, 1=CanRun, 2=AlwaysRun (CreatureData.h:103-108)
+	MoveFlight            uint32  // creature_template_movement.Flight via loadCreatureStats; 0=None, 1=DisableGravity, 2=CanFly (CreatureData.h:87-94); feeds the per-tick UpdateMovementFlags fly leg
+	HoverHeight           float32 // creature_template.HoverHeight via loadCreatureStats (C++ default 1.0); feeds the UpdateMovementFlags isInAir hover tolerance
+	MechanicImmuneMask    uint32  // creature_template.MechanicImmuneMask via loadCreatureStats; bit (i-1) is mechanic immunity (Creature.cpp:2279-2313); feeds the 191 normalization cap in creatureRunSpeedRate (Unit.cpp:8755-8772)
+	MoveKnown             bool    // set at the stats-backed creation sites; pets/totems built without stats read the C++ defaults instead
 	ReactState            uint8
 	ReactStateKnown       bool
 	EmoteState            uint32 // UNIT_NPC_EMOTESTATE live value: Lua CreatureMethods::EmoteState (SetUInt32Value twin), init from template emote at spawn
@@ -777,8 +780,7 @@ const creatureTypeFlagBossMob = 0x4
 // folds only MOD_INCREASE_SWIM_SPEED (58) into the swim rate and then
 // multiplies by the template speed_run (banked on BaseRunRate), so the
 // swim speed is BaseRunRate * 4.722222 — the aura-58 fold has no Go
-// creature model (residual) and the 191 normalization cap shares the
-// run path's no-bridge (no MechanicImmuneMask on the motion). Waypoint
+// creature model (residual). Waypoint
 // LAND/TAKEOFF set only AnimationTier (cosmetic), unmodeled.
 // The 0.66 searched-assistance multiplier (MoveSplineInit.cpp:118) is
 // applied below: it folds over the selected speed for every spline,
@@ -792,6 +794,33 @@ func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
 		}
 		speed = base * creatureBaseSwimSpeed
 	} else if walk || (motion != nil && motion.Walking) {
+		speed = motion.Speed
+	} else {
+		speed = motion.RunSpeed
+	}
+	if motion != nil && motion.AlreadySearchedAssistance {
+		speed *= 0.66
+	}
+	return speed
+}
+
+// creatureSplineVelocityExplicit is the SetWalk(false) twin of
+// creatureSplineVelocity (MoveSplineInit::Launch, MoveSplineInit.cpp:106-121):
+// args.walk=false clears WALKING from moveFlagsForSpeed, so an explicit
+// per-leg walk=false beats the persistent flag in both directions. The
+// explicit-SetWalk sites (flee, home, waypoint RUN, chase Run, random
+// AlwaysRun, chain walk=false, follow) use this form; Point-backed
+// launches keep the inherit form, since Point/MovePoint generators never
+// call SetWalk and correctly inherit the persistent flag.
+func creatureSplineVelocityExplicit(motion *creatureMotion, walk bool) float32 {
+	var speed float32
+	if motion != nil && motion.Swimming {
+		base := float32(1.0)
+		if motion.BaseRunRate > 0 {
+			base = motion.BaseRunRate
+		}
+		speed = base * creatureBaseSwimSpeed
+	} else if walk {
 		speed = motion.Speed
 	} else {
 		speed = motion.RunSpeed
@@ -929,9 +958,7 @@ func (s *Server) creatureAuraAmountsByType(key creatureAuraKey, auraType uint32)
 // template speed_run (banked on BaseRunRate) multiplies the rate, matching
 // the `speed *= ToCreature()->GetCreatureTemplate()->speed_run` leg.
 // MOVE_WALK returns early in C++ so walk is untouched; MOVE_SWIM/FLIGHT
-// have no Go creature model; the 191 normalization cap needs
-// MechanicImmuneMask, which creatureMotion doesn't carry (documented
-// no-bridge); the minion follow catch-up arm has no Go pet-follow-speed
+// have no Go creature model; the minion follow catch-up arm has no Go pet-follow-speed
 // model (documented no-bridge).
 func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
 	// A script-set rate replaces the aura fold outright: C++ keeps a
@@ -971,6 +998,24 @@ func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotio
 		rate *= 1 + float32(mainMod)/100
 	}
 	rate *= base
+	// Unit::UpdateSpeed MOVE_RUN (Unit.cpp:8755-8772): a 191
+	// SPELL_AURA_USE_NORMAL_MOVEMENT_SPEED aura caps the rate at
+	// normalization / baseMoveSpeed[MOVE_RUN] (creatureBaseRunSpeed 7.0),
+	// unless the template MechanicImmuneMask carries SNARE (11) or DAZE
+	// (27) immunity — bits (mech-1), i.e. 10 and 26.
+	if motion != nil && motion.MechanicImmuneMask&(1<<10|1<<26) == 0 {
+		var norm int32
+		for _, a := range s.creatureAuraAmountsByType(key, spellAuraUseNormalMovementSpeed) {
+			if a > norm {
+				norm = a
+			}
+		}
+		if norm > 0 {
+			if maxRate := float32(norm) / creatureBaseRunSpeed; rate > maxRate {
+				rate = maxRate
+			}
+		}
+	}
 	var slow int32
 	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
 		if a < slow {
@@ -1504,36 +1549,39 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			WanderSteps: 2 + rand.Intn(9), // urand(2,10), RandomMovementGenerator.cpp:DoInitialize
 			Health:      health,
 			// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
-			PlayerDamageReq:  health / 2,
-			MaxHealth:        st.MaxHealth,
-			BaseMaxHealth:    st.MaxHealth,
-			Armor:            st.Armor,
-			Resistances:      st.Resistances,
-			MinDamage:        st.MinDamage,
-			MaxDamage:        st.MaxDamage,
-			Level:            st.Level,
-			AttackTime:       st.AttackTime,
-			RangedAttackTime: st.RangedAttackTime,
-			CombatReach:      st.CombatReach,
-			UnitFlags:        st.UnitFlags,
-			FlagsExtra:       st.FlagsExtra,
-			TypeFlags:        st.TypeFlags,
-			Rank:             st.Rank,
-			NPCFlags:         st.NPCFlags,
-			UnitClass:        st.UnitClass,
-			CanFly:           st.CanFly,
-			MoveGround:       st.MoveGround,
-			MoveSwim:         st.MoveSwim,
-			MoveChase:        st.MoveChase,
-			MoveRandom:       st.MoveRandom,
-			MoveKnown:        true,
-			ReactState:       st.ReactState,
-			ReactStateKnown:  st.ReactStateKnown,
-			CreatureType:     st.CreatureType,
-			AIName:           st.AIName,
-			BaseScale:        st.Scale,
-			DisplayID:        st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
-			NativeDisplayID:  st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
+			PlayerDamageReq:    health / 2,
+			MaxHealth:          st.MaxHealth,
+			BaseMaxHealth:      st.MaxHealth,
+			Armor:              st.Armor,
+			Resistances:        st.Resistances,
+			MinDamage:          st.MinDamage,
+			MaxDamage:          st.MaxDamage,
+			Level:              st.Level,
+			AttackTime:         st.AttackTime,
+			RangedAttackTime:   st.RangedAttackTime,
+			CombatReach:        st.CombatReach,
+			UnitFlags:          st.UnitFlags,
+			FlagsExtra:         st.FlagsExtra,
+			TypeFlags:          st.TypeFlags,
+			Rank:               st.Rank,
+			NPCFlags:           st.NPCFlags,
+			UnitClass:          st.UnitClass,
+			CanFly:             st.CanFly,
+			MoveGround:         st.MoveGround,
+			MoveSwim:           st.MoveSwim,
+			MoveChase:          st.MoveChase,
+			MoveRandom:         st.MoveRandom,
+			MoveFlight:         st.MoveFlight,
+			HoverHeight:        st.HoverHeight,
+			MechanicImmuneMask: st.MechanicImmuneMask,
+			MoveKnown:          true,
+			ReactState:         st.ReactState,
+			ReactStateKnown:    st.ReactStateKnown,
+			CreatureType:       st.CreatureType,
+			AIName:             st.AIName,
+			BaseScale:          st.Scale,
+			DisplayID:          st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
+			NativeDisplayID:    st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
 		}
 		if st.UnitClass == 2 || st.UnitClass == 8 {
 			motion.MaxPowers[0] = st.Mana
@@ -1745,34 +1793,37 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				Level:      st.Level,
 				Health:     health,
 				// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
-				PlayerDamageReq:  health / 2,
-				MaxHealth:        st.MaxHealth,
-				BaseMaxHealth:    st.MaxHealth,
-				Armor:            st.Armor,
-				MinDamage:        st.MinDamage,
-				MaxDamage:        st.MaxDamage,
-				AttackTime:       st.AttackTime,
-				RangedAttackTime: st.RangedAttackTime,
-				CombatReach:      st.CombatReach,
-				UnitFlags:        st.UnitFlags,
-				FlagsExtra:       st.FlagsExtra,
-				TypeFlags:        st.TypeFlags,
-				Rank:             st.Rank,
-				NPCFlags:         st.NPCFlags,
-				UnitClass:        st.UnitClass,
-				CanFly:           st.CanFly,
-				MoveGround:       st.MoveGround,
-				MoveSwim:         st.MoveSwim,
-				MoveChase:        st.MoveChase,
-				MoveRandom:       st.MoveRandom,
-				MoveKnown:        true,
-				ReactState:       st.ReactState,
-				ReactStateKnown:  st.ReactStateKnown,
-				Name:             name,
-				ScriptName:       scriptName,
-				BaseScale:        st.Scale,
-				DisplayID:        st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
-				NativeDisplayID:  st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
+				PlayerDamageReq:    health / 2,
+				MaxHealth:          st.MaxHealth,
+				BaseMaxHealth:      st.MaxHealth,
+				Armor:              st.Armor,
+				MinDamage:          st.MinDamage,
+				MaxDamage:          st.MaxDamage,
+				AttackTime:         st.AttackTime,
+				RangedAttackTime:   st.RangedAttackTime,
+				CombatReach:        st.CombatReach,
+				UnitFlags:          st.UnitFlags,
+				FlagsExtra:         st.FlagsExtra,
+				TypeFlags:          st.TypeFlags,
+				Rank:               st.Rank,
+				NPCFlags:           st.NPCFlags,
+				UnitClass:          st.UnitClass,
+				CanFly:             st.CanFly,
+				MoveGround:         st.MoveGround,
+				MoveSwim:           st.MoveSwim,
+				MoveChase:          st.MoveChase,
+				MoveRandom:         st.MoveRandom,
+				MoveFlight:         st.MoveFlight,
+				HoverHeight:        st.HoverHeight,
+				MechanicImmuneMask: st.MechanicImmuneMask,
+				MoveKnown:          true,
+				ReactState:         st.ReactState,
+				ReactStateKnown:    st.ReactStateKnown,
+				Name:               name,
+				ScriptName:         scriptName,
+				BaseScale:          st.Scale,
+				DisplayID:          st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
+				NativeDisplayID:    st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
 			}
 			motions := s.motionMapLocked(motion.Map, instanceID)
 			motions[creatureGUID] = motion
@@ -4232,7 +4283,9 @@ func (s *Server) launchCreatureFleeLeg(motion *creatureMotion, targetX, targetY 
 	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 	mapID := motion.Map
 	destX, destY := fleePoint(fromX, fromY, motion.Orientation, targetX, targetY, targetKnown)
-	speed := creatureSplineVelocity(motion, false)
+	// FleeingMovementGenerator.cpp:179 calls SetWalk(false), so the flee
+	// leg runs even when the persistent WALKING flag is set.
+	speed := creatureSplineVelocityExplicit(motion, false)
 	if speed < 0.001 {
 		motion.FleeNextAt = now.Add(time.Duration(800+rand.Intn(701)) * time.Millisecond)
 		s.motionMu.Unlock()
@@ -4490,7 +4543,22 @@ const (
 // priority (ACTIVE chase over DEFAULT point) is unmodeled, so the
 // tick resumes pursuit only once the spline lands.
 func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool) bool {
-	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk))
+	// HomeMovementGenerator.cpp:79 calls SetWalk(false), so a home leg
+	// runs even when the persistent WALKING flag is set; Point-backed
+	// launches keep the inherit form (Point generators never SetWalk).
+	if moveType == movementGeneratorHome {
+		return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocityExplicit(motion, walk), false, animTierNone)
+	}
+	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTierNone)
+}
+
+// launchCreatureScriptSplineAnim is the animation-tier arm of
+// launchCreatureScriptSpline: MoveLand (Ground 0) and MoveTakeoff
+// (Hover 2) set the tier via MoveSplineInit::SetAnimation
+// (MotionMaster.cpp:674-696, UnitDefines.h:81-88); the tier rides the
+// wire as the Animation spline flag + tier byte (buildMonsterMove).
+func (s *Server) launchCreatureScriptSplineAnim(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, animTier int) bool {
+	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTier)
 }
 
 // launchCreatureScriptSplineSpeed is the speed-taking core of
@@ -4500,7 +4568,7 @@ func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY
 // through here while every other script leg uses the wrapper above.
 // A non-chain launch clears a running chain (MotionMaster takes a
 // new generator, the old one finalizes without informing).
-func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32) bool {
+func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32, flying bool, animTier int) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -4536,7 +4604,7 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	motion.ScriptMoveDestZ = destZ
 	motion.ScriptFollowInformed = false
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, walk, 0, false, phase, transportGUID)
+	s.broadcastMonsterMoveFlagsInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, walk, 0, false, phase, transportGUID, flying, animTier)
 	return true
 }
 
@@ -4868,7 +4936,7 @@ func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, p
 	radius := reachSum + motion.ScriptFollowDist
 	destX := tx + radius*float32(math.Cos(float64(absAngle)))
 	destY := ty + radius*float32(math.Sin(float64(absAngle)))
-	speed := creatureSplineVelocity(motion, false)
+	speed := creatureSplineVelocityExplicit(motion, false)
 	if speed < 0.001 {
 		return true
 	}
@@ -5304,7 +5372,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			motion.Moving = false
 			motion.Evading = false
 		} else if homeDist > 0.5 {
-			speed := creatureSplineVelocity(motion, false)
+			speed := creatureSplineVelocityExplicit(motion, false)
 			if speed < 0.001 {
 				// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
 				// velocity below 0.001 fails validation — no spline is launched and no
@@ -5321,7 +5389,11 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 				return
 			}
-			duration := splineDurationMs(float64(homeDist), speed)
+			// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the
+			// home duration runs on the 3D distance, not the 2D threshold
+			// distance above (a flying evade or cliff home would otherwise
+			// arrive early and fire JustReachedHome early).
+			duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ)), speed)
 			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
 			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 			motion.Moving = true
@@ -6818,13 +6890,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// Creature::UpdateMovementFlags swim leg (Creature.cpp:2779-2816):
 	// SetSwim(IsSwimAllowed() && IsInWater()) — the movement-template
 	// Swim flag (motion.MoveSwim, creature_template_movement.Swim) and
-	// the map liquid state. Only the swim leg runs here: the fly/gravity/
-	// hover legs of the same function have no Go twin (no per-motion
-	// ground-height model). The C++ gates ride along: a player-controlled
-	// creature (m_playerMovingMe) keeps script-set flags — the charmed
-	// early-return above covers charm/possess control — and
-	// CREATURE_FLAG_EXTRA_NO_MOVE_FLAGS_UPDATE leaves the flag to
-	// scripts. A flip broadcasts SMSG_SPLINE_MOVE_START_SWIM/STOP_SWIM,
+	// the map liquid state. The fly/gravity/hover legs of the same
+	// function run below on Server.mapHeight. The C++ gates ride along:
+	// a player-controlled creature (m_playerMovingMe) keeps script-set
+	// flags — the charmed early-return above covers charm/possess
+	// control — and CREATURE_FLAG_EXTRA_NO_MOVE_FLAGS_UPDATE leaves the
+	// flag to scripts. A flip broadcasts SMSG_SPLINE_MOVE_START_SWIM/STOP_SWIM,
 	// the SetSwim bridge's packet. Residual: a driven vehicle base has
 	// no per-motion driver marker in Go, so C++'s m_playerMovingMe skip
 	// does not cover it here; its splines never launch from this path.
@@ -6837,6 +6908,52 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				opcode = protocol.OpcodeSMSG_SPLINE_MOVE_START_SWIM
 			}
 			s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, opcode, motion.PhaseMask)
+		}
+		// Creature::UpdateMovementFlags fly/gravity/hover legs
+		// (Creature.cpp:2779-2816), same gate and cadence as the swim
+		// leg above (every Creature::Update). ground is Server.mapHeight
+		// (Map::GetHeight twin, terrain.go), not C++ GetFloorZ (no
+		// game-object-floor / m_staticFloorZ leg); a failed height lookup
+		// keeps the current flags. The !IsFalling() gate is omitted — Go
+		// has no per-creature falling latch — and the !isInAir
+		// RemoveUnitMovementFlag(FALLING) leg with it; the hover-height Z
+		// fold (Unit.cpp:13789-13803) stays out with the SetHover bridge.
+		if ground, ok := s.mapHeight(motion.Map, motion.X, motion.Y, motion.Z, true, terrainDefaultHeightSearch); ok {
+			canHover := motion.MoveGround == 2 || motion.Hovering // Creature::CanHover (Creature.h:107)
+			hoverH := float32(0)
+			if canHover {
+				hoverH = motion.HoverHeight
+			}
+			isInAir := motion.Z > ground+hoverH+terrainGroundTolerance || motion.Z < ground-terrainGroundTolerance
+			hasHoverAura := s.creatureHasAuraType(creatureAuraKeyForMotion(motion), spellAuraHover)
+			if motion.MoveFlight != 0 && isInAir { // IsFlightAllowed (CreatureData.h:128)
+				if motion.MoveFlight == 2 { // CreatureFlightMovementType::CanFly
+					if !motion.Flying {
+						motion.Flying = true
+						s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_SET_FLYING, motion.PhaseMask)
+					}
+				} else if !motion.GravityDisabled { // DisableGravity
+					motion.GravityDisabled = true
+					s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_DISABLE, motion.PhaseMask)
+				}
+				if !hasHoverAura && motion.Hovering {
+					motion.Hovering = false
+					s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_HOVER, motion.PhaseMask)
+				}
+			} else {
+				if motion.Flying {
+					motion.Flying = false
+					s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_FLYING, motion.PhaseMask)
+				}
+				if motion.GravityDisabled {
+					motion.GravityDisabled = false
+					s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_ENABLE, motion.PhaseMask)
+				}
+				if motion.Health > 0 && (canHover || hasHoverAura) && !motion.Hovering {
+					motion.Hovering = true
+					s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER, motion.PhaseMask)
+				}
+			}
 		}
 	}
 	if isCreaturePassive(motion) && motion.InCombat {
@@ -7166,7 +7283,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// (combat/wander resume); only critters take the evade-home arm.
 		homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
 		if motion.CreatureType == 8 && homeDist > 0.5 {
-			speed := creatureSplineVelocity(motion, false)
+			speed := creatureSplineVelocityExplicit(motion, false)
 			if speed < 0.001 {
 				// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
 				// velocity below 0.001 fails validation — no spline is launched and no
@@ -7179,7 +7296,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 				return
 			}
-			duration := splineDurationMs(float64(homeDist), speed)
+			// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the
+			// home duration runs on the 3D distance, not the 2D threshold
+			// distance above.
+			duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ)), speed)
 			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
 			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 			motion.Moving = true
@@ -7259,8 +7379,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// Unit::IsWithinMeleeRangeAt (Unit.cpp:599-612) — the
 		// DoMeleeAttackIfReady gate (CoreAI/UnitAI.cpp:61-68) — measures 3D
 		// distance (dz included). The 2D dist above keeps driving the XY
-		// shorten math and the spline duration below (the chase spline ends
-		// at the victim's Z, so its final 3D gap is the XY gap).
+		// shorten math; the spline duration below runs on the 3D travel
+		// distance to the shortened ring point at the victim's Z
+		// (ChaseMovementGenerator.cpp:180-207, Spline.cpp:152-156).
 		dist3D := float32(distance3D(motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z))
 		// Creature::Update no-path evade arm (Creature.cpp:924-930, CREATURE_NOPATH_EVADE_TIME
 		// = 5 * IN_MILLISECONDS, CreatureData.h:139) — document-only, no Go bridge.
@@ -10025,8 +10146,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						// The 2D dist can sit inside the archer stop distance
 						// while the 3D band check above passed (large dz): never
 						// launch onto the victim's center in that case.
-						if speed := creatureSplineVelocity(motion, chaseWalk(motion)); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) {
-							duration := splineDurationMs(float64(dist), speed)
+						if speed := creatureSplineVelocityExplicit(motion, chaseWalk(motion)); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) {
+							// ChaseMovementGenerator.cpp:180-207 shortens the path to the
+							// victim's ring (ShortenPathUntilDist) before Launch, so the
+							// spline duration runs on the shortened 3D travel distance to
+							// the ring point at the victim's Z (Spline.cpp:152-156), not
+							// the 2D center distance.
+							travelDist := float32(distance3D(motion.X, motion.Y, motion.Z, destX, destY, target.Z))
+							duration := splineDurationMs(float64(travelDist), speed)
 							s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true, motion.PhaseMask, motion.TransportGUID)
 							motion.X, motion.Y, motion.Z = destX, destY, target.Z
 							motion.ChaseTX, motion.ChaseTY = target.X, target.Y
@@ -10765,8 +10892,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		point := motion.Points[motion.NextIdx]
 		destX, destY, destZ = point.X, point.Y, point.Z
-		walk = point.MoveType == 0 // WAYPOINT_MOVE_TYPE_WALK (WaypointDefines.h:26); default RUN
-		speed = creatureSplineVelocity(motion, walk)
+		// WaypointMovementGenerator.cpp:355-366: RUN calls SetWalk(false)
+		// (clears the persistent flag), WALK calls SetWalk(true), and
+		// LAND/TAKEOFF set no walk leg, so they inherit the persistent
+		// flag via the MoveSplineInit ctor default.
+		walk = point.MoveType == 0 || ((point.MoveType == 2 || point.MoveType == 3) && motion.Walking) // WAYPOINT_MOVE_TYPE_WALK (WaypointDefines.h:26); default RUN
+		speed = creatureSplineVelocityExplicit(motion, walk)
 
 		// WaypointMovementGenerator::StartMove (WaypointMovementGenerator.cpp):
 		// "if (waypoint.orientation && waypoint.delay) init.SetFacing(waypoint.orientation)"
@@ -10830,7 +10961,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// template Random type — AlwaysRun runs, CanRun follows the owner's
 		// walk flag, Walk always walks.
 		walk = randomWalk(motion)
-		speed = creatureSplineVelocity(motion, walk)
+		speed = creatureSplineVelocityExplicit(motion, walk)
 	} else {
 		// MoveType 0 is IDLE_MOTION_TYPE (MovementDefines.h:28): Creature::Initialize
 		// (Creature.cpp:543-545) demotes RANDOM to IDLE when wander_distance is 0,

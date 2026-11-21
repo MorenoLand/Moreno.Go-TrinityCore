@@ -200,7 +200,7 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	}
 	speed := link.Velocity
 	if speed <= 0 {
-		speed = creatureSplineVelocity(motion, run.Walk)
+		speed = creatureSplineVelocityExplicit(motion, run.Walk)
 	}
 	// The wait scaling below compares against the C++ actual duration,
 	// which Launch computes from the capped velocity (capSplineVelocity),
@@ -210,7 +210,7 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	run.LinkActualMs += splineDurationMs(float64(dist), speed)
 	pointID, walk := run.PointID, run.Walk
 	s.motionMu.Unlock()
-	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed)
+	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, false, animTierNone)
 }
 
 // moveCirclePath is MotionMaster::MoveCirclePath

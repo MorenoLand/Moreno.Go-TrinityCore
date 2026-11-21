@@ -852,7 +852,29 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 	return block.Bytes()
 }
 
-func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, facing float32, hasFacing bool, transportGUID uint64) []byte {
+// splineFlagFlying is MoveSplineFlag::Flying (0x00002000,
+// MoveSplineFlag.h:40): smooth (catmullrom) interpolation + flying
+// animation. Set on the wire only where C++ calls MoveSplineInit::SetFly
+// (MoveSplineInit.h:146) — the MoveCirclePath flying branch, the
+// FlightPath generator (taxi.go already sends it), and the three script
+// MovebyPath legs (razorscale's is dead code, arthas/chromie + eye of
+// acherus unported); no other generator sets it, so waypoint/chase/
+// follow splines stay linear even for flying creatures.
+// splineFlagAnimation is MoveSplineFlag::Animation (0x00200000): the
+// flags word carries the bit (it is NOT inside Mask_No_Monster_Move)
+// and the tier byte + effect_start_time follow the flags, before the
+// duration (MovementPacketBuilder.cpp:71-79). AnimationTier values are
+// UnitDefines.h:81-88 (Ground 0, Swim 1, Hover 2, Fly 3, Submerged 4);
+// animTierNone (-1) sends no animation leg at all.
+const (
+	splineFlagFlying    uint32 = 0x00002000
+	splineFlagAnimation uint32 = 0x00200000
+	animTierGround             = 0
+	animTierHover              = 2
+	animTierNone               = -1
+)
+
+func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, facing float32, hasFacing bool, transportGUID uint64, flying bool, animTier int) []byte {
 	packet := protocol.NewBuffer(64)
 	packet.WritePackedGUID(rawGUID)
 	if transportGUID != 0 {
@@ -875,14 +897,29 @@ func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, dest
 		// (MovementPacketBuilder.cpp:58-61): facing type 4
 		// (MonsterMoveFacingAngle) followed by the f32 angle. The Final_Angle
 		// bit is inside Mask_Final_Facing, which WriteCommonMonsterMovePart
-		// strips from the wire SplineFlags (Mask_No_Monster_Move), so the
-		// flags field below stays 0 exactly like C++.
+		// strips from the wire SplineFlags (Mask_No_Monster_Move), so it
+		// never lands in the flags word below (only Flying/Animation do).
 		packet.WriteU8(4) // MonsterMoveFacingAngle
 		packet.WriteF32(facing)
 	} else {
 		packet.WriteU8(0) // MonsterMoveNormal
 	}
-	packet.WriteU32(0)        // SplineFlags (Linear)
+	splineFlags := uint32(0)
+	if flying {
+		splineFlags |= splineFlagFlying
+	}
+	if animTier >= 0 {
+		splineFlags |= splineFlagAnimation
+	}
+	packet.WriteU32(splineFlags)
+	if animTier >= 0 {
+		// MovementPacketBuilder.cpp:73-76: the animation leg writes the
+		// tier byte + effect_start_time between the flags and the
+		// duration; the tier value itself is stripped from the flags
+		// word (Mask_Animations), so the flags above stay tier-free.
+		packet.WriteU8(uint8(animTier))
+		packet.WriteU32(0) // effect_start_time
+	}
 	packet.WriteU32(duration) // Duration in ms
 	packet.WriteU32(1)        // Points count
 	packet.WriteF32(destX)
@@ -946,7 +983,7 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 	// only by Creature::SetWalk, Creature.cpp:3017, i.e. persistent walk state).
 	// Go sends the mode packet per walk node so walk-speed splines animate as
 	// walk instead of run-in-place; deliberate client-visible improvement.
-	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, 0, false, transportGUID)
+	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, 0, false, transportGUID, false, animTierNone)
 	moveOpcode := protocol.OpcodeSMSG_MONSTER_MOVE
 	if transportGUID != 0 {
 		moveOpcode = protocol.OpcodeSMSG_MONSTER_MOVE_TRANSPORT
@@ -991,7 +1028,19 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 }
 
 func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool, phase uint32, transportGUID uint64) {
-	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, facing, hasFacing, transportGUID)
+	s.broadcastMonsterMoveFlagsInInstance(mapID, instanceID, rawGUID, startX, startY, startZ, destX, destY, destZ, duration, walk, facing, hasFacing, phase, transportGUID, false, animTierNone)
+}
+
+// broadcastMonsterMoveFlagsInInstance is broadcastMonsterMoveInInstance
+// with the spline flags C++ sets via MoveSplineInit::SetFly /
+// SetAnimation: flying rides the MoveCirclePath flying branch
+// (MotionMaster.cpp:851-855) and animTier the MoveLand/MoveTakeoff and
+// waypoint LAND/TAKEOFF legs (Ground 0 / Hover 2, UnitDefines.h:81-88).
+// Every other launch passes flying=false, animTier=animTierNone — no
+// other generator sets either flag, so their packets are byte-identical
+// to before.
+func (s *Server) broadcastMonsterMoveFlagsInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool, phase uint32, transportGUID uint64, flying bool, animTier int) {
+	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, facing, hasFacing, transportGUID, flying, animTier)
 	moveOpcode := protocol.OpcodeSMSG_MONSTER_MOVE
 	if transportGUID != 0 {
 		moveOpcode = protocol.OpcodeSMSG_MONSTER_MOVE_TRANSPORT

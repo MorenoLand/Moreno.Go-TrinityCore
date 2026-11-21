@@ -481,7 +481,7 @@ func (s *session) handleWpUnload(ctx context.Context) bool {
 			s.server.motionMu.Lock()
 			homeX, homeY, homeZ := motion.HomeX, motion.HomeY, motion.HomeZ
 			s.server.motionMu.Unlock()
-			s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, true, movementGeneratorHome, 0, false)
+			s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, 0, false)
 		}
 		s.npcCreatureChat(motion, 0x0C, languageUniversal, "Path unloaded.", float64(s.server.Config.ChatListenRangeSay))
 		return true
