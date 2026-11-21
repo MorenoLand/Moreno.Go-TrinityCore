@@ -42660,6 +42660,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		purge = append(purge, highest.purge...)
 	}
 	s.server.auraMu.Unlock()
+	// Aura::_ApplyForTarget (SpellAuras.cpp:579-584), creature-target twin
+	// of the player-branch park above: a player caster whose aura spell
+	// starts its cooldown on event parks an infinity (onHold) cooldown
+	// entry that blocks recast while the aura is active. Fires per target
+	// application like C++; the entry overwrite is idempotent.
+	if casterGUID != 0 && s.server.spellIsCooldownStartedOnEvent(spell) {
+		if casterSess := s.server.findSessionByGUID(casterGUID); casterSess != nil && casterSess.playerGUID == casterGUID {
+			casterSess.startSpellCooldownOnHold(ctx, spell, castItemGUID)
+		}
+	}
 	// No-stack purge on apply: AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
 	for _, p := range purge {
 		s.server.removeCreatureAura(targetKey, p.spellID)
@@ -48781,6 +48791,19 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		if spellID == 47788 && mode == auraRemoveByExpire && removedAura != nil && removedAura.CasterGUID != 0 {
 			if casterSess := s.findSessionByGUID(removedAura.CasterGUID); casterSess != nil && casterSess.playerGUID == removedAura.CasterGUID {
 				casterSess.guardianSpiritGlyphCooldown()
+			}
+		}
+		// Aura::_UnapplyForTarget (SpellAuras.cpp:611-613), creature-target
+		// twin of the player funnel's release above: removing a
+		// cooldown-started-on-event aura releases the caster's infinity
+		// cooldown via SendCooldownEvent. No remove-mode gate in C++;
+		// a caster with no live session has no live cooldown list to
+		// release (onHold entries are never saved).
+		if removedAura != nil && removedAura.CasterGUID != 0 && s.Data != nil {
+			if casterSess := s.findSessionByGUID(removedAura.CasterGUID); casterSess != nil && casterSess.playerGUID == removedAura.CasterGUID {
+				if auraSpell, found, err := s.Data.Spell(spellID); err == nil && found && s.spellIsCooldownStartedOnEvent(auraSpell) {
+					casterSess.sendSpellCooldownEvent(auraSpell)
+				}
 			}
 		}
 	}

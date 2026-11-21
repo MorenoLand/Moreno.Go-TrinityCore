@@ -529,7 +529,23 @@ func (s *Server) removeAllMinionsByEntry(ctx context.Context, mapID, instanceID 
 	if s == nil {
 		return
 	}
+	owner := s.findSessionByGUID(ownerGUID)
 	for _, m := range s.minionsByEntry(mapID, instanceID, ownerGUID, entry) {
+		// Unit::RemoveFromWorld minion leg (Unit.cpp:6137-6139, reached via
+		// TempSummon::UnSummon from RemoveAllMinionsByEntry, Unit.cpp:6196):
+		// unsummoning a minion created by a cooldown-started-on-event spell
+		// releases the owner's infinity cooldown via SendCooldownEvent.
+		// Read the creating spell before the despawn, like the
+		// expireTempSummonGuardian twin; a zero value means no creating
+		// spell and no release.
+		if owner != nil && m.PetID != 0 && s.CharactersStore != nil && s.CharactersStore.DB != nil && s.Data != nil {
+			var createdBySpell int64
+			if err := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(CreatedBySpell, 0) FROM character_pet WHERE id = ? AND owner = ?", m.PetID, ownerGUID).Scan(&createdBySpell); err == nil && createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) {
+				if minionSpell, found, serr := s.Data.Spell(uint32(createdBySpell)); serr == nil && found && s.spellIsCooldownStartedOnEvent(minionSpell) {
+					owner.sendSpellCooldownEvent(minionSpell)
+				}
+			}
+		}
 		s.despawnCreatureMotion(ctx, m.Map, m.InstanceID, m.GUID)
 	}
 }
