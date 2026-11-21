@@ -60,22 +60,22 @@
 -- FindNearestGameObject(GO_DR_PORTCULLIS 175185, 40.0f) ->
 -- UseDoorOrButton, FindNearestCreature(NPC_LORD_VICTOR_NEFARIUS 10162,
 -- 75.0f) -> AI()->SetData(1, 1), then EVENT_SUMMONED_2 2s ->
--- MovePath(GYTH_PATH_1 1379681, false) via the 2026-11-21 MovePath
--- bridge). The C++ SetData switch is on data only (type ignored).
--- The pre-fight timers run outside the combat scheduler (C++ drains
--- them in the !UpdateVictim branch); engaging Gyth mid-chain discards
--- the pending ones via the combat drain's default arm, the same
--- observable outcome as the Lua cancel on ev1 — they do NOT fire
--- regardless of combat state.
--- NEFARIUS_PATH_2/3 1379671/1379672 are enum-only here (no bridge
--- consumes them; Nefarius walks them via his own AI, which C++ leaves
--- unscripted — victor:SetData(1, 1) is a no-op dispatch).
+-- MovePath(GYTH_PATH_1 11037448, false) via the 2026-11-21 MovePath
+-- bridge (TDB 26091 waypoint_data x8 of the 1379681 enum id). The C++
+-- SetData switch is on data only (type ignored). The pre-fight timers
+-- run outside the combat scheduler (C++ drains them in the
+-- !UpdateVictim branch); engaging Gyth mid-chain discards the pending
+-- ones via the combat drain's default arm, the same observable outcome
+-- as the Lua cancel on ev1 — they do NOT fire regardless of combat state.
+-- NEFARIUS_PATH_2/3 11037368/11037376 (TDB 26091 x8 of the 1379671/
+-- 1379672 enums) are walked by Victor's own AI — his SetData(1, 1)
+-- arms are ported in boss_nefarian.lua (ev41), not a no-op dispatch.
 
 local ENTRY_GYTH = 10339
 
 local NPC_LORD_VICTOR_NEFARIUS = 10162
 local GO_DR_PORTCULLIS = 175185
-local GYTH_PATH_1 = 1379681
+local GYTH_PATH_1 = 11037448 -- boss_gyth.cpp:39 enum 1379681; TDB 26091 waypoint_data x8
 
 local SPELL_CORROSIVE_ACID = 16359
 local SPELL_FLAMEBREATH = 16390
@@ -206,7 +206,7 @@ end
 -- EVENT_SUMMONED_1 in 1s. EVENT_SUMMONED_1 (UpdateAI !UpdateVictim
 -- branch): AddAura(SPELL_REND_MOUNTS 16167, me), portcullis
 -- UseDoorOrButton, victor SetData(1, 1), then EVENT_SUMMONED_2 in 2s.
--- EVENT_SUMMONED_2: MovePath(GYTH_PATH_1 1379681, false).
+-- EVENT_SUMMONED_2: MovePath(GYTH_PATH_1 11037448, false).
 local function onSummoned2(creature, _)
     creature:MovePath(GYTH_PATH_1, false)
 end

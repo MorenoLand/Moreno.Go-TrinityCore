@@ -17248,7 +17248,7 @@ func init() {
 	// (mother_smolderweb latch convention; RemoveAura(16167) bridged
 	// on the handler surface). Pre-fight SetData(1, 1) chain ported
 	// (ev41 -> AddAura 16167, portcullis UseDoorOrButton, victor
-	// SetData(1, 1), MovePath 1379681); Reset/JustDied instance
+	// SetData(1, 1), MovePath 11037448); Reset/JustDied instance
 	// arms unmodeled. UpdateAI combat-branch CASTING gates ported as
 	// 500ms IsCasting defers; Reset _Reset / JustDied _JustDied covered
 	// by the cancel on 2/4/23.

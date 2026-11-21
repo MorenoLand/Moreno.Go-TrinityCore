@@ -49,7 +49,8 @@
 -- via ev41 (boss_the_beast.cpp:98-148), triggered by
 -- at_the_beast.lua (RegisterServerEvent 24, triggers 2066/2067,
 -- TDB-verified in at_census_2026-11-15.md). DATA_BEAST_REACHED:
--- _beastReached latch, MovePath(BEAST_MOVEMENT_ID 1379690, true),
+-- _beastReached latch, MovePath(BEAST_MOVEMENT_ID 11037520, true),
+-- (TDB 26091 waypoint_data x8 of the 1379690 enum id).
 -- FindNearbyOrcs (GetCreaturesInGrid NPC_BLACKHAND_ELITE 10317, 50.0f)
 -- -> each orc MoveTo(1, GetRandomPoint(OrcsRunawayPosition, 5.0f))
 -- + OrcDeathEvent suicide (CastSpell self 7, triggered) at 6s +
@@ -105,7 +106,7 @@ local SPELL_FINKLE_IS_EINHORN = 16710
 local SPELL_EFFECT_SKINNING = 95 -- SharedDefines.h:906
 local SPELL_SUICIDE = 7 -- boss_the_beast.cpp:36
 local NPC_BLACKHAND_ELITE = 10317 -- boss_the_beast.cpp:44
-local BEAST_MOVEMENT_ID = 1379690 -- boss_the_beast.cpp:41
+local BEAST_MOVEMENT_ID = 11037520 -- boss_the_beast.cpp:41 enum 1379690; TDB 26091 waypoint_data x8
 local DATA_BEAST_REACHED = 1 -- boss_the_beast.cpp:39
 local DATA_BEAST_ROOM = 2 -- boss_the_beast.cpp:40
 local REACT_PASSIVE = 0 -- UnitDefines.h

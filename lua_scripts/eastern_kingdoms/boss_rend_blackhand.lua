@@ -60,8 +60,9 @@
 -- All 32 pre-fight events ported: Nefarius Talk 0-8 + Rend Talk 1-2
 -- (creature:Talk), SetFacingToObject / SetFacingTo, PerformEmote
 -- (TALK 1 / QUESTION 6 / ROAR 15 / POINT 25, SharedDefines.h),
--- MovePath(REND_PATH_1 1379680, false) + victor MovePath(NEFARIUS_
--- PATH_1 1379670, true), NearTeleportTo x2 (creature:NearTeleport),
+-- MovePath(REND_PATH_1 11037440, false) + victor MovePath(NEFARIUS_
+-- PATH_1 11037360, true), NearTeleportTo x2 (creature:NearTeleport),
+-- (TDB 26091 waypoint_data x8 of the 1379680/1379670 enum ids).
 -- SummonCreature(NPC_GYTH 10339, GythLoc, CORPSE_TIMED_DESPAWN 5 =
 -- the C++ SummonCreature default; the Go bridge defaults to MANUAL
 -- 7), portcullis UseDoorOrButton
@@ -79,9 +80,11 @@
 -- Go DespawnOrUnsummon takes ms only (respawn delay has no twin).
 -- (3) IsSummonedBy's SetImmuneToPC(false) has no engine model
 -- (boss_ai.go:16589); ev22 ports DoZoneInCombat() only.
--- (4) victor->AI()->SetData(1, 1)/(1, 2) are no-op dispatches in C++
--- (Nefarius has no AI script); the Lua SetData calls fire ev41 on
--- entry 10162 with no handler, same no-op.
+-- (4) victor->AI()->SetData(1, 1)/(1, 2) dispatch to Victor's own AI
+-- script (boss_victor_nefariusAI::SetData, boss_nefarian.cpp:236-247)
+-- and ARE ported — the ev41 arms live in boss_nefarian.lua (SetData
+-- (1, 1) -> PATH_2/CHAOS legs, (1, 2) -> SUCCESS legs); the old
+-- "Nefarius has no AI script, no-op dispatch" claim was wrong.
 -- SPELL_FRENZY (8269) and SPELL_KNOCKDOWN (13360) are defined in the
 -- file's spell enum but never cast by the AI -- omitted by design
 -- (shadowvosh ice-armor precedent).
@@ -119,8 +122,8 @@ end
 local NPC_LORD_VICTOR_NEFARIUS = 10162
 local NPC_GYTH = 10339
 local GO_DR_PORTCULLIS = 175185
-local NEFARIUS_PATH_1 = 1379670
-local REND_PATH_1 = 1379680
+local NEFARIUS_PATH_1 = 11037360 -- boss_rend_blackhand.cpp enum 1379670; TDB 26091 waypoint_data x8
+local REND_PATH_1 = 11037440 -- boss_rend_blackhand.cpp enum 1379680; TDB 26091 waypoint_data x8
 local AREATRIGGER = 1 -- blackrock_spire.h:88
 local AREATRIGGER_BLACKROCK_STADIUM = 2026 -- blackrock_spire.h:90
 local EMOTE_ONESHOT_TALK = 1 -- SharedDefines.h:1938

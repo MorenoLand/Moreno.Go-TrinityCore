@@ -1862,6 +1862,17 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 			inMelee := dist <= allowedRange
 			mainReady := now.Sub(sess.lastSwing) >= mainSpeed
 			offReady := sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) >= offSpeed
+			// TrinityCore Player::Update (Player.cpp:1118): the whole
+			// melee block runs only when !HasUnitState(UNIT_STATE_CASTING)
+			// — a cast-bar or channeled cast suppresses both swings (and
+			// the swing-error packets) until it ends. The attack timers
+			// keep decrementing in Unit::Update (Unit.cpp:455-461), so
+			// lastSwing/lastOffhandSwing are left untouched here and the
+			// next swing fires as soon as the cast ends if its interval
+			// elapsed during the cast. nonMeleeCastInProgress is the
+			// UNIT_STATE_CASTING twin (cast-bar activeCast + channel
+			// activeChannel, spells.go:4646).
+			casting := sess.nonMeleeCastInProgress()
 			// TrinityCore Player::Update melee block (Player.cpp:1116-1180): an
 			// attack-ready swing that cannot land reports a single swing-error
 			// packet to the client, latched on m_swingErrorMsg so it is not
@@ -1871,7 +1882,7 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 			// no error packets, it only skips; and a swing that can land
 			// resets the latch.
 			badFacing := !hasInArc(sess.player.Orientation, sess.player.X, sess.player.Y, target.X, target.Y, 2*math.Pi/3)
-			if mainReady {
+			if mainReady && !casting {
 				if !inMelee {
 					if sess.swingErrorMsg != 1 {
 						_ = sess.write(uint16(protocol.OpcodeSMSG_ATTACK_SWING_NOT_IN_RANGE), nil, true)
@@ -1887,7 +1898,7 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 				}
 			}
 
-			if inMelee && !badFacing {
+			if inMelee && !badFacing && !casting {
 				// Main hand attack
 				if mainReady {
 					if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) < attackDisplayDelay {

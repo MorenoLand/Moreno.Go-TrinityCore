@@ -85,8 +85,9 @@
 -- (boss_nefarian.cpp:215); the barrier-cast / AttackStart legs still
 -- have no bridges — the timers are armed from the gossip select (the
 -- BeginEvent site) and combat begins on pull; no
--- summon model — the Nefarian summon and the
--- chromatic-chaos/vaelastrasz-spawn UBRS casts stay out; the drakonid
+-- summon model — the Nefarian summon stays out (the
+-- chromatic-chaos 16337 / vaelastrasz-spawn 16354 UBRS casts ARE
+-- ported below, ev41); the drakonid
 -- waves ARE summoned (onNefariusSpawnAdd) and the SummonedCreatureDies
 -- bone-construct transformation IS PORTED below (dead drakonids ->
 -- entry 14605, not-selectable, passive, boss_nefarian.cpp:223-232);
@@ -98,25 +99,31 @@
 -- (the file's only SummonCreature calls are :344/:352, both Nefarius's).
 -- no movement model — the Nefarian summon's MovePoint-to-throne and
 -- the MovementInform point-1 DoZoneInCombat/AttackStart arms are
--- skipped (nefarian fights from where it stands); no SetData
--- bearer and no path/gameobject bridges — the UBRS-only arms
--- (EVENT_PATH_2/EVENT_PATH_3 MovePath, EVENT_CHAOS_1/2 gyth-facing
--- 10339, EVENT_SUCCESS_1/2 portcullis gameobjects 164726/175186 +
--- DespawnOrUnsummon, FindNearestGameObject) are not modeled.
+-- skipped (nefarian fights from where it stands). PORTED (2026-11-21):
+-- the UBRS SetData machine (boss_nefarian.cpp:236-300) — ev41 (type 1,
+-- data 1/2) dispatched from Gyth/Rend; EVENT_PATH_2 MovePath(
+-- NEFARIUS_PATH_2 11037368, false) + EVENT_CHAOS_1/2 gyth-facing
+-- (FindNearestCreature 10339, 75.0f) + Talk(9) + self-cast 16337 +
+-- SetFacingTo(1.570796); EVENT_SUCCESS_1/2 nearest-player Talk(10) +
+-- portcullis 164726/175186 SetGoState(GO_STATE_ACTIVE 0) + self-cast
+-- 16354 + DespawnOrUnsummon(1s). EVENT_PATH_3 is never scheduled in
+-- C++ — NEFARIUS_PATH_3 stays enum-only. DELTA: C++ runs the machine
+-- in the !UpdateVictim branch and the combat switch has no case for
+-- the pre-fight ids, so a leg firing mid-combat is consumed silently;
+-- the Lua legs fire regardless — unobservable in UBRS (Victor never
+-- enters combat there).
 -- FindNearestCreature IS bridged (lua_creature_events.go:6756) — the
 -- stale claim lumped it with FindNearestGameObject — and Reset()'s
 -- FindNearestCreature(NPC_NEFARIAN 11583, 1000.0f, true) gate IS
 -- ported now (see onNefariusReset): it guards the _Reset()
 -- NOT_STARTED write (boss_nefarian.cpp:187-189). EVENT_CHAOS_1's
 -- FindNearestCreature(NPC_GYTH 10339, 75.0f, true) + SetFacingToObject
--- leg (boss_nefarian.cpp:263-267) stays out — unreachable, no SetData
--- bearer, no MovePath bridge. FindNearest_
+-- leg (boss_nefarian.cpp:263-267) IS ported now (see the UBRS ev41
+-- machine below). FindNearest_
 -- GameObject IS bridged (lua_creature_events.go:2072; GO UseDoorOrButton /
 -- SetGoState / GetGoState too, :1127/:1095/:1080) — the stale "no bridge"
--- claim is retracted — but the portcullis arms stay out: they fire only
--- from the unported pre-fight event machine (no SetData bearer, no
--- MovePath bridge), the same unreachable verdict as the FindNearestCreature
--- arms above; the EVENT_SHADOW_BOLT ResetThreatList arm IS
+-- claim is retracted — and the portcullis arms ARE ported now
+-- (EVENT_SUCCESS_1, see below); the EVENT_SHADOW_BOLT ResetThreatList arm IS
 -- ported (:223 — ResetAllThreat bridged, lua_objects.go); the
 -- canDespawn/DespawnTimer/FAIL encounter-state arm (SetBossState
 -- + bone-construct grid despawn) IS PORTED below (tick 236); the
@@ -496,6 +503,11 @@ end
 -- The throne arms do NOT run on death (Reset never runs on death);
 -- only the timer cancel + state clear ride along (ev4 used to share
 -- onNefariusReset — the throne arms on the death path were unfaithful).
+-- Forward declaration (tharon_ja idiom): onNefariusDied cancels the
+-- UBRS machine timers, but ubrsCancelTimers is assigned below — a
+-- later `local function` here would shadow this slot with nil.
+local ubrsCancelTimers
+
 local function onNefariusDied(event, creature)
     creature:SetBossState(7, 3)
     local data = instanceDataOf(creature)
@@ -503,6 +515,10 @@ local function onNefariusDied(event, creature)
         data.nefarianInProgress = false
     end
     cancelTimers(creature:GetGUIDLow())
+    -- C++ _JustDied events.Reset() is the only clear of the UBRS
+    -- pre-fight machine (boss_nefarian.cpp:236-247 note above); Reset
+    -- in UBRS never touches it.
+    ubrsCancelTimers(creature:GetGUIDLow())
     nefariusInit(creature:GetGUIDLow())
 end
 
@@ -801,6 +817,138 @@ local function onNefariusSummonedCreatureDies(event, creature, summon, killer)
     end
 end
 
+-- Victor Nefarius (UBRS): C++ boss_victor_nefariusAI::SetData
+-- (boss_nefarian.cpp:236-247) + the !UpdateVictim pre-fight event
+-- machine (:248-300). The bearer is live: creature:SetData fires ev41
+-- with (event, creature, type, data) (lua_creature_events.go:911);
+-- Gyth's EVENT_SUMMONED_1 dispatches (1, 1) and Rend's JustDied
+-- dispatches (1, 2). The machine runs on its own ubrsTimers table:
+-- C++ Reset in UBRS (map != 469) calls only Initialize()
+-- (SpawnedAdds = 0) and never touches the EventMap — only _JustDied
+-- (events.Reset()) clears it — so Reset/ev2/ev23/ev24 leave these
+-- timers alone and only ev4 (onNefariusDied) cancels them.
+-- The !UpdateVictim-branch delta is noted in the header.
+local SAY_CHAOS_SPELL = 9 -- boss_nefarian.cpp:55
+local SAY_SUCCESS = 10 -- boss_nefarian.cpp:56
+local SPELL_CHROMATIC_CHAOS = 16337 -- boss_nefarian.cpp:117
+local SPELL_VAELASTRASZZ_SPAWN = 16354 -- boss_nefarian.cpp:118
+local NPC_GYTH = 10339 -- boss_nefarian.cpp:110
+local GO_PORTCULLIS_ACTIVE = 164726 -- boss_nefarian.cpp:95
+local GO_PORTCULLIS_TOBOSSROOMS = 175186 -- boss_nefarian.cpp:96
+local GO_STATE_ACTIVE = 0 -- SharedDefines.h:1661
+local NEFARIUS_PATH_2 = 11037368 -- boss_nefarian.cpp:89 enum 1379671; TDB 26091 waypoint_data x8
+local NEFARIUS_PATH_3 = 11037376 -- boss_nefarian.cpp:90 enum 1379672; TDB 26091 waypoint_data x8; EVENT_PATH_3 never scheduled
+
+local ubrsTimers = {}
+
+ubrsCancelTimers = function(guid)
+    local per = ubrsTimers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        ubrsTimers[guid] = nil
+    end
+end
+
+local function ubrsSchedule(guid, key, delay, fn)
+    local per = ubrsTimers[guid]
+    if not per then
+        per = {}
+        ubrsTimers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Forward declarations (tharon_ja / gal_darah idiom): the chain
+-- references later handlers from earlier ones; plain assignments
+-- below, never re-declared with `local function`.
+local onVictorPath2, onVictorChaos1, onVictorChaos2,
+    onVictorSuccess1, onVictorSuccess2
+
+-- C++ EVENT_PATH_2 (boss_nefarian.cpp:258-261): MovePath(
+-- NEFARIUS_PATH_2, false), then EVENT_CHAOS_1 in 7s.
+onVictorPath2 = function(creature, guid)
+    creature:MovePath(NEFARIUS_PATH_2, false)
+    ubrsSchedule(guid, "chaos1", 7000, function() onVictorChaos1(creature, guid) end)
+end
+
+-- C++ EVENT_CHAOS_1 (boss_nefarian.cpp:262-269): face Gyth + Talk(9)
+-- only if Gyth is found within 75.0f; EVENT_CHAOS_2 in 2s
+-- unconditionally (the schedule sits outside the if).
+onVictorChaos1 = function(creature, guid)
+    local gyth = creature:FindNearestCreature(NPC_GYTH, 75.0, true)
+    if gyth then
+        creature:SetFacingToObject(gyth)
+        creature:Talk(SAY_CHAOS_SPELL)
+    end
+    ubrsSchedule(guid, "chaos2", 2000, function() onVictorChaos2(creature, guid) end)
+end
+
+-- C++ EVENT_CHAOS_2 (boss_nefarian.cpp:270-273): DoCast(
+-- SPELL_CHROMATIC_CHAOS) with no target = AITARGET_SELF default
+-- (UnitAI.cpp:113), self-cast; then face 1.570796.
+onVictorChaos2 = function(creature, guid)
+    creature:CastSpell(creature, SPELL_CHROMATIC_CHAOS)
+    creature:SetFacingTo(1.570796)
+end
+
+-- C++ EVENT_SUCCESS_1 (boss_nefarian.cpp:274-285): face the nearest
+-- player within 60.0f + Talk(10) + both portcullises to GO_STATE_ACTIVE
+-- (0), only if a player is found; EVENT_SUCCESS_2 in 4s
+-- unconditionally. SelectNearestPlayer rides the rend idiom:
+-- GetPlayersInGrid(60) + nearest by distance (alive-only, as C++).
+onVictorSuccess1 = function(creature, guid)
+    local best = nil
+    local bestDist = nil
+    for _, plr in ipairs(creature:GetPlayersInGrid(60.0)) do
+        local d = creature:GetDistance(plr)
+        if bestDist == nil or d < bestDist then
+            best = plr
+            bestDist = d
+        end
+    end
+    if best then
+        creature:SetFacingToObject(best)
+        creature:Talk(SAY_SUCCESS)
+        local portcullis1 = creature:FindNearestGameObject(GO_PORTCULLIS_ACTIVE, 65.0)
+        if portcullis1 then
+            portcullis1:SetGoState(GO_STATE_ACTIVE)
+        end
+        local portcullis2 = creature:FindNearestGameObject(GO_PORTCULLIS_TOBOSSROOMS, 80.0)
+        if portcullis2 then
+            portcullis2:SetGoState(GO_STATE_ACTIVE)
+        end
+    end
+    ubrsSchedule(guid, "success2", 4000, function() onVictorSuccess2(creature, guid) end)
+end
+
+-- C++ EVENT_SUCCESS_2 (boss_nefarian.cpp:286-289): DoCast(me,
+-- SPELL_VAELASTRASZZ_SPAWN) then DespawnOrUnsummon(1s).
+onVictorSuccess2 = function(creature, guid)
+    creature:CastSpell(creature, SPELL_VAELASTRASZZ_SPAWN)
+    creature:DespawnOrUnsummon(1000)
+end
+
+-- C++ SetData (boss_nefarian.cpp:236-247): type == 1 && data == 1 ->
+-- StopMoving + EVENT_PATH_2 in 9s; type == 1 && data == 2 ->
+-- EVENT_SUCCESS_1 in 5s.
+local function onVictorSetData(_, creature, setType, setValue)
+    if setType ~= 1 then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if setValue == 1 then
+        creature:StopMoving()
+        ubrsSchedule(guid, "path2", 9000, function() onVictorPath2(creature, guid) end)
+    elseif setValue == 2 then
+        ubrsSchedule(guid, "success1", 5000, function() onVictorSuccess1(creature, guid) end)
+    end
+end
+
 RegisterCreatureGossipEvent(ENTRY_VICTOR_NEFARIUS, 1, onNefariusGossipHello)
 RegisterCreatureGossipEvent(ENTRY_VICTOR_NEFARIUS, 2, onNefariusGossipSelect)
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 2, onNefariusReset)
@@ -821,6 +969,7 @@ end)
 -- calls Reset() outright; onNefariusReset is its idempotent twin.
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 24, onNefariusReset)
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 21, onNefariusSummonedCreatureDies)
+RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 41, onVictorSetData)
 
 RegisterCreatureEvent(ENTRY_NEFARIAN, 1, nefarianEnterCombat)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 2, nefarianLeaveCombat)
