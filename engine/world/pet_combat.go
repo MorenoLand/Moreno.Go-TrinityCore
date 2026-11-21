@@ -7472,7 +7472,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		// removes it before the no-stack purge). Evaluated before the
 		// same-spell replacement below so a suppressed pet cast keeps the
 		// existing aura.
-		highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, targetSess.activeAuras)
+		highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, targetSess.activeAuras, false)
 		if highest.suppressed {
 			targetSess.castMu.Unlock()
 			return false
@@ -7696,7 +7696,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
 	// is never applied (SpellAuras.cpp:696, addUnit=false; Unit.cpp:3648
 	// removes it before the no-stack purge).
-	highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, s.server.activeCreatureAuras[targetKey])
+	highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, s.server.activeCreatureAuras[targetKey], false)
 	if highest.suppressed {
 		s.server.auraMu.Unlock()
 		return false

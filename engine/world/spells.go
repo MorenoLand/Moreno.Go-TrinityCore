@@ -37650,10 +37650,14 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	// is never applied — the dynobj UpdateTargetMap leg (SpellAuras.cpp:696,
 	// addUnit=false) and the direct-cast leg (Unit::_RemoveNoStackAurasDueToAura,
 	// Unit.cpp:3648, aura->Remove()). Evaluated on the first surviving aura
-	// effect, the one whose amount this record carries; the strictly-higher
-	// purges ride the no-stack purge below for direct casts (a persistent-area
-	// application never purges, Aura::UpdateTargetMap, SpellAuras.cpp:643-767).
-	// A suppressed apply leaves no phantom presence entry or fresh slot behind.
+	// effect, the one whose amount this record carries. The strictly-higher
+	// purges ride the no-stack purge below for direct casts; a persistent-area
+	// application purges them too — IsHighestExclusiveAura(this, true) at
+	// SpellAuras.cpp:696 removes strictly-lower peers immediately, and an
+	// exact tie is a no-op there (dynobj verdict), so only the CanStackWith
+	// purge terms stay out for dynobj applies. A suppressed apply leaves no
+	// phantom presence entry or fresh slot behind, but the strictly-lower
+	// peers the :696 scan already removed stay removed.
 	var exclusivePurge []rankPurgeTarget
 	if s.server != nil && s.server.Data != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
@@ -37664,13 +37668,25 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				if persistentAreaAura && primaryIndex >= 0 && index != primaryIndex {
 					continue
 				}
-				verdict := s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras)
+				verdict := s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras, persistentAreaAura)
 				if verdict.suppressed {
 					delete(s.auras, spellID)
 					if freshSlot {
 						delete(s.auraSlots, spellID)
 					}
 					s.castMu.Unlock()
+					// Aura::UpdateTargetMap (SpellAuras.cpp:696): the
+					// IsHighestExclusiveAura(this, true) scan removes
+					// strictly-lower peers immediately, before a
+					// strictly-higher peer suppresses the new aura —
+					// those removals stand on suppress. The direct-cast
+					// leg drops them instead (Unit.cpp:3648 returns
+					// before the purge loop).
+					if persistentAreaAura {
+						for _, purgeID := range verdict.purge {
+							s.removeAura(purgeID.spellID)
+						}
+					}
 					return
 				}
 				exclusivePurge = verdict.purge
@@ -37733,17 +37749,23 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	// self-cast callers create the aura with a foreign caster. The
 	// item term takes 0: no caller of this funnel carries a cast item
 	// (the boss_ai.go server-path twin passes 0 the same way).
-	// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) issues no purge:
-	// a persistent-area application only skips when it cannot stack
-	// and never strips the target's other auras — the applyAuraToTarget
-	// twin of this block carries the same !persistentAreaAura gate.
+	// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) issues no CanStackWith
+	// purge: a persistent-area application only skips when it cannot stack
+	// — the CanStackWith pre-check early-returns true for a dynobj aura
+	// (SpellAuras.cpp:1889-1896), so the rank-chain, spell-group,
+	// spell-specific and single-target terms never fire there. The
+	// IsHighestExclusiveAura(this, true) removals at :696 still run, so
+	// the strictly-lower peers ride below in both legs — the
+	// applyAuraToTarget twin of this block carries the same split.
 	var purgeIDs []rankPurgeTarget
-	if !persistentAreaAura && s.server != nil && s.server.Data != nil {
+	if s.server != nil && s.server.Data != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
-			purgeIDs = s.server.rankChainNoStackPurge(sp, casterGUID, 0, s.activeAuras)
-			purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(sp, casterGUID, s.activeAuras)...)
-			purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(sp, casterGUID, s.activeAuras)...)
-			purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(sp, casterGUID, s.activeAuras)...)
+			if !persistentAreaAura {
+				purgeIDs = s.server.rankChainNoStackPurge(sp, casterGUID, 0, s.activeAuras)
+				purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(sp, casterGUID, s.activeAuras)...)
+				purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(sp, casterGUID, s.activeAuras)...)
+				purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(sp, casterGUID, s.activeAuras)...)
+			}
 			purgeIDs = append(purgeIDs, exclusivePurge...)
 		}
 	}
@@ -40784,18 +40806,26 @@ func popcount8(v uint8) int {
 // the target itself, which C++ never removes (SpellAuras.cpp:696,
 // "no removing of area auras from the original owner, as that completely
 // cancels them"); a strictly lower new effect suppresses the whole new aura
-// (Unit.cpp:3648 / SpellAuras.cpp:696, addUnit=false); an exact tie purges
-// the existing aura via the CanStackWith rule-4 term (SpellAuras.cpp:1928,
-// "existing aura is lower/equal"), honoring the trigger-spell mutual
-// exclusion (SpellAuras.cpp:1901-1906) like the companion purge functions.
-// Purges already collected stay applied when a later comparison suppresses
-// the new aura, matching C++'s immediate removals before its early return.
+// (Unit.cpp:3648 / SpellAuras.cpp:696, addUnit=false). On a direct cast an
+// exact tie purges the existing aura via the CanStackWith rule-4 term
+// (SpellAuras.cpp:1928, "existing aura is lower/equal"), honoring the
+// trigger-spell mutual exclusion (SpellAuras.cpp:1901-1906) like the
+// companion purge functions. On a dynobj application (dynobj=true, the
+// Aura::UpdateTargetMap leg) an exact tie neither purges nor suppresses:
+// IsHighestExclusiveAuraEffect no-ops on diff==0 (Unit.cpp:14001-14036)
+// and the CanStackWith pre-check early-returns true for a dynobj aura
+// (SpellAuras.cpp:1889-1896), so both auras coexist. Purges already
+// collected stay in the verdict when a later comparison suppresses the new
+// aura, matching C++'s immediate removals before its early return — the
+// direct-cast callers drop them (Unit::_RemoveNoStackAurasDueToAura,
+// Unit.cpp:3648, returns before the purge loop), the dynobj callers apply
+// them (SpellAuras.cpp:696 removes peers before the addUnit=false leg).
 type exclusiveHighestVerdict struct {
 	purge      []rankPurgeTarget
 	suppressed bool
 }
 
-func (s *Server) exclusiveHighestVerdict(newSpell wotlk.Spell, eff wotlk.SpellEffect, newAmount int32, targetGUID uint64, existing map[uint32]*activeAura) exclusiveHighestVerdict {
+func (s *Server) exclusiveHighestVerdict(newSpell wotlk.Spell, eff wotlk.SpellEffect, newAmount int32, targetGUID uint64, existing map[uint32]*activeAura, dynobj bool) exclusiveHighestVerdict {
 	var out exclusiveHighestVerdict
 	if s == nil || s.Data == nil {
 		return out
@@ -40839,6 +40869,15 @@ func (s *Server) exclusiveHighestVerdict(newSpell wotlk.Spell, eff wotlk.SpellEf
 				}
 				out.purge = append(out.purge, rankPurgeTarget{spellID: id, slot: aura.Slot})
 			default:
+				if dynobj {
+					// Aura::UpdateTargetMap (SpellAuras.cpp:696 + :703):
+					// an exact tie neither removes the peer nor
+					// suppresses the new aura — the trigger-spell
+					// mutual exclusion never runs either, since the
+					// CanStackWith dynobj early-return
+					// (SpellAuras.cpp:1889-1896) fires first.
+					continue
+				}
 				if auraTriggersSpell(newSpell, id) || auraTriggersSpell(exSpell, newSpell.ID) {
 					continue
 				}
@@ -41705,10 +41744,18 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
 		// is never applied (SpellAuras.cpp:696, addUnit=false; Unit.cpp:3648
 		// removes it before the no-stack purge). The strictly-higher purges
-		// are applied below with the other no-stack purges.
-		highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, targetSess.activeAuras)
+		// are applied below — with the other no-stack purges on a direct
+		// cast, on their own for a persistent-area application
+		// (SpellAuras.cpp:696 removes them before the addUnit=false leg,
+		// so they stand even when the new aura is suppressed).
+		highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, targetSess.activeAuras, persistentAreaAura)
 		if highest.suppressed {
 			targetSess.castMu.Unlock()
+			if persistentAreaAura {
+				for _, purgeID := range highest.purge {
+					targetSess.removeAura(purgeID.spellID)
+				}
+			}
 			return
 		}
 
@@ -41835,8 +41882,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// single-target aura registers on its caster's single-cast list and
 		// purges the caster's other single-target-with auras on other
 		// targets. Steal-created auras skip registration (Unit.cpp:4028).
+		// The dance never runs for a persistent-area application — it goes
+		// through _CreateAuraApplication/_ApplyAura, never _AddAura.
 		var scPurge []singleCastEntry
-		if !skipSingleCastReg && spellIsSingleTarget(spell) {
+		if !persistentAreaAura && !skipSingleCastReg && spellIsSingleTarget(spell) {
 			scPurge = s.server.registerSingleCastAura(spell, aura)
 		}
 		// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh
@@ -41852,19 +41901,21 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// and dynamic-object paths create the aura with a foreign caster
 		// (Unit::RemoveAurasDueToSpellBySteal, Unit.cpp:4020:
 		// createInfo.SetCasterGUID(aura->GetCasterGUID())).
-		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) issues no purge:
-		// a persistent-area application only skips when it cannot stack
-		// (the CanStackWith gate above) and never strips the target's
-		// other auras. Two overlapping dynobjs otherwise strip each
-		// other's applications on every 500ms refresh.
+		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) issues no
+		// CanStackWith purge: a persistent-area application only skips
+		// when it cannot stack (the CanStackWith gate above). Two
+		// overlapping dynobjs would otherwise strip each other's
+		// applications on every 500ms refresh. The
+		// IsHighestExclusiveAura(this, true) removals at :696 still run,
+		// so the strictly-lower peers ride below in both legs.
 		var purgeIDs []rankPurgeTarget
 		if !persistentAreaAura {
 			purgeIDs = s.server.rankChainNoStackPurge(spell, casterGUID, aura.ItemGUID, targetSess.activeAuras)
 			purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
 			purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
 			purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(spell, casterGUID, targetSess.activeAuras)...)
-			purgeIDs = append(purgeIDs, highest.purge...)
 		}
+		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
 		// Aura::_ApplyForTarget (SpellAuras.cpp:579-584): a player caster
 		// whose aura spell starts its cooldown on event parks an infinity
@@ -42757,10 +42808,18 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
 	// is never applied (SpellAuras.cpp:696, addUnit=false; Unit.cpp:3648
 	// removes it before the no-stack purge). The strictly-higher purges
-	// are applied below with the other no-stack purges.
-	highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.server.activeCreatureAuras[targetKey])
+	// are applied below — with the other no-stack purges on a direct
+	// cast, on their own for a persistent-area application
+	// (SpellAuras.cpp:696 removes them before the addUnit=false leg,
+	// so they stand even when the new aura is suppressed).
+	highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.server.activeCreatureAuras[targetKey], persistentAreaAura)
 	if highest.suppressed {
 		s.server.auraMu.Unlock()
+		if persistentAreaAura {
+			for _, p := range highest.purge {
+				s.server.removeCreatureAura(targetKey, p.spellID)
+			}
+		}
 		return
 	}
 
@@ -42826,9 +42885,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420): a fresh
 	// single-target aura registers on its caster's single-cast list and
 	// purges the caster's other single-target-with auras on other targets.
-	// Steal-created auras skip registration (Unit.cpp:4028).
+	// Steal-created auras skip registration (Unit.cpp:4028). The dance
+	// never runs for a persistent-area application — it goes through
+	// _CreateAuraApplication/_ApplyAura, never _AddAura.
 	var scPurge []singleCastEntry
-	if !skipSingleCastReg && spellIsSingleTarget(spell) {
+	if !persistentAreaAura && !skipSingleCastReg && spellIsSingleTarget(spell) {
 		scPurge = s.server.registerSingleCastAura(spell, aura)
 	}
 	// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh aura
@@ -42841,16 +42902,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// new aura's caster — the casterGUID param — because the
 	// dynamic-object path creates the aura with the object's caster
 	// (Unit.cpp:4020 shape).
-	// Same no-purge arm as the player path above (Aura::UpdateTargetMap
-	// never strips auras — it only skips unstackable applications).
+	// Same split as the player path above: the CanStackWith terms stay
+	// out for a persistent-area application, the :696 strictly-lower
+	// EXCLUSIVE_HIGHEST removals ride below in both legs.
 	var purge []rankPurgeTarget
 	if !persistentAreaAura {
 		purge = s.server.rankChainNoStackPurge(spell, casterGUID, aura.ItemGUID, s.server.activeCreatureAuras[targetKey])
 		purge = append(purge, s.server.spellGroupNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
 		purge = append(purge, s.server.spellSpecificNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
 		purge = append(purge, s.server.singleTargetNoStackPurge(spell, casterGUID, s.server.activeCreatureAuras[targetKey])...)
-		purge = append(purge, highest.purge...)
 	}
+	purge = append(purge, highest.purge...)
 	s.server.auraMu.Unlock()
 	// Aura::_ApplyForTarget (SpellAuras.cpp:579-584), creature-target twin
 	// of the player-branch park above: a player caster whose aura spell

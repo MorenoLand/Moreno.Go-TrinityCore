@@ -10436,9 +10436,19 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			}
 			stopAuraUpkeepTimer(existing)
 		}
-		highest := s.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.activeCreatureAuras[targetKey])
+		highest := s.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.activeCreatureAuras[targetKey], persistentAreaAura)
 		if highest.suppressed {
 			s.auraMu.Unlock()
+			// Aura::UpdateTargetMap (SpellAuras.cpp:696): the :696 scan
+			// removes strictly-lower peers before a strictly-higher peer
+			// suppresses the new aura — those removals stand on suppress.
+			// The direct-cast leg drops them instead (Unit.cpp:3648
+			// returns before the purge loop).
+			if persistentAreaAura {
+				for _, p := range highest.purge {
+					s.removeCreatureAura(targetKey, p.spellID)
+				}
+			}
 			continue
 		}
 		slot := uint8(len(s.activeCreatureAuras[targetKey]) % 64)
@@ -10492,11 +10502,26 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		// this arm; the refresh-only branch below is the right leg.
 		castMerged[targetGUID] = struct{}{}
 		s.refreshCreaturePhaseOverrideLocked(targetKey)
-		scPurge := s.registerSingleCastAura(spell, aura)
-		purge := s.rankChainNoStackPurge(spell, m.GUID, 0, s.activeCreatureAuras[targetKey])
-		purge = append(purge, s.spellGroupNoStackPurge(spell, m.GUID, s.activeCreatureAuras[targetKey])...)
-		purge = append(purge, s.spellSpecificNoStackPurge(spell, m.GUID, s.activeCreatureAuras[targetKey])...)
-		purge = append(purge, s.singleTargetNoStackPurge(spell, m.GUID, s.activeCreatureAuras[targetKey])...)
+		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) issues no
+		// CanStackWith purge and runs no _AddAura single-target dance
+		// (Unit.cpp:3397-3420) — a dynobj application only skips when it
+		// cannot stack (the :703 pre-check early-returns true for a dynobj
+		// aura, SpellAuras.cpp:1889-1896), so the rank-chain, spell-group,
+		// spell-specific and single-target terms never fire there, and the
+		// dance never registers. The IsHighestExclusiveAura(this, true)
+		// removals at :696 still run, so the strictly-lower peers ride
+		// below in both legs.
+		var scPurge []singleCastEntry
+		if !persistentAreaAura {
+			scPurge = s.registerSingleCastAura(spell, aura)
+		}
+		var purge []rankPurgeTarget
+		if !persistentAreaAura {
+			purge = s.rankChainNoStackPurge(spell, m.GUID, 0, s.activeCreatureAuras[targetKey])
+			purge = append(purge, s.spellGroupNoStackPurge(spell, m.GUID, s.activeCreatureAuras[targetKey])...)
+			purge = append(purge, s.spellSpecificNoStackPurge(spell, m.GUID, s.activeCreatureAuras[targetKey])...)
+			purge = append(purge, s.singleTargetNoStackPurge(spell, m.GUID, s.activeCreatureAuras[targetKey])...)
+		}
 		purge = append(purge, highest.purge...)
 		s.auraMu.Unlock()
 		for _, p := range purge {
