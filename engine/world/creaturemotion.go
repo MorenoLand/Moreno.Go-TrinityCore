@@ -4594,6 +4594,16 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	phase := motion.PhaseMask
 	transportGUID := motion.TransportGUID
 	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+	// HomeMovementGenerator::SetTargetLocation
+	// (HomeMovementGenerator.cpp:78): every home spline carries
+	// SetFacing(home orientation), applied at finalize
+	// (MoveSpline.cpp:46-50 final angle) — the packet arm of the
+	// same rule the evade-home launches and the finalize sites
+	// already carry (motion.Orientation = motion.HomeO).
+	facing, hasFacing := float32(0), false
+	if moveType == movementGeneratorHome {
+		facing, hasFacing = motion.HomeO, true
+	}
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
@@ -4605,7 +4615,7 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	motion.ScriptMoveDestZ = destZ
 	motion.ScriptFollowInformed = false
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveFlagsInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, walk, 0, false, phase, transportGUID, flying, animTier)
+	s.broadcastMonsterMoveFlagsInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, walk, facing, hasFacing, phase, transportGUID, flying, animTier)
 	return true
 }
 

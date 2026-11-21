@@ -283,18 +283,14 @@ func (s *Server) moveCirclePath(ctx context.Context, motion *creatureMotion, cen
 		})
 		angle += step
 	}
-	// MotionMaster.cpp:851-856: the IsFlying branch sets SetFly +
-	// SetCyclic + SetAnimation(Hover); the ground branch walks
-	// (SetWalk(true)) with no flags. motion.Flying is the
-	// MOVEMENTFLAG_FLYING twin (the per-tick UpdateMovementFlags fly
-	// leg); a grounded circle carries neither flag.
-	flying, animTier := false, animTierNone
-	if motion.Flying {
-		flying, animTier = true, animTierHover
+	animTier := animTierNone
+	if flying {
+		animTier = animTierHover
 	}
 	motion.SplineChain = &splineChainRun{
 		Links:    []splineChainLink{{Velocity: speed, Points: points}},
 		Cyclic:   true,
+		Walk:     walk,
 		Flying:   flying,
 		AnimTier: animTier,
 	}
