@@ -26,58 +26,83 @@ const (
 	unitFieldBytes2                = 122
 )
 
+// visibilityDistanceOverride is the VisibilityDistances table twin
+// (ObjectDefines.h:28-37, Object.cpp:58-66): a creature_addon /
+// creature_template_addon visibilityDistanceType selects the range at
+// which the creature is visible (Creature::LoadCreaturesAddon,
+// Creature.cpp:2675-2676). Normal (0) means no override, so the map
+// range applies; out-of-range values clamp to Normal, matching the
+// ObjectMgr load validation (ObjectMgr.cpp:785-789, 1326-1330).
+func visibilityDistanceOverride(typ uint8) (float64, bool) {
+	switch typ {
+	case 1:
+		return 25, true
+	case 2:
+		return 50, true
+	case 3:
+		return 200, true
+	case 4:
+		return 400, true
+	case 5:
+		return maxVisibilityDistance, true
+	default:
+		return 0, false
+	}
+}
+
 type creatureSpawn struct {
-	GUID             uint32
-	RawGUID          uint64
-	Entry            uint32
-	Map              uint32
-	X                float32
-	Y                float32
-	Z                float32
-	Orientation      float32
-	Model            uint32
-	Faction          uint32
-	NPCFlags         uint32
-	UnitFlags        uint32
-	UnitFlags2       uint32
-	DynamicFlags     uint32
-	CreatedByGUID    uint64
-	CreatedBySpell   uint32
-	Level            uint32
-	Health           uint32
-	MaxHealth        uint32
-	RegenerateHealth bool
-	Mana             uint32
-	Scale            float32
-	HoverHeight      float32
-	BoundingRadius   float32
-	CombatReach      float32
-	WalkSpeed        float32
-	RunSpeed         float32
-	AttackTime       uint32
-	RangedAttack     uint32
-	Mount            uint32
-	Bytes1           uint32
-	Bytes2           uint32
-	Emote            uint32
-	emoteStateKnown  bool // set by applyCreatureMotionToSpawn when Lua overrode Emote via the motion record (forces the field into the update mask even when clearing to 0)
-	standStateKnown  bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes1 byte 0 via the motion record (forces the field into the update mask even when standing back up to 0)
-	mountKnown       bool // set by applyCreatureMotionToSpawn when Lua overrode Mount via the motion record (forces the field into the update mask even when dismounting to 0)
-	sheathStateKnown bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes2 byte 0 via the motion record (forces the field into the update mask even when unarming to 0)
-	pvpFlagsKnown    bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes2 byte 1 via the motion record (forces the field into the update mask even when clearing sanctuary to 0)
-	ScriptTargetGUID uint64
-	targetKnown      bool // set by applyCreatureMotionToSpawn when Lua overrode the visual target via the motion record (forces the field into the update mask even when clearing to 0)
-	Item1            uint32
-	Item2            uint32
-	Item3            uint32
-	TransportGUID    uint64
-	TransportX       float32
-	TransportY       float32
-	TransportZ       float32
-	TransportO       float32
-	FlagsExtra       uint32
-	TypeFlags        uint32
-	PhaseMask        uint32 // live phase for the create fan-out gate (Object.cpp:1659-1662): DB c.phaseMask for respawns, summoner phase for summons/totems/pets; 0 = unset, read as PHASEMASK_NORMAL (1) by the helper
+	GUID                   uint32
+	RawGUID                uint64
+	Entry                  uint32
+	Map                    uint32
+	X                      float32
+	Y                      float32
+	Z                      float32
+	Orientation            float32
+	Model                  uint32
+	Faction                uint32
+	NPCFlags               uint32
+	UnitFlags              uint32
+	UnitFlags2             uint32
+	DynamicFlags           uint32
+	CreatedByGUID          uint64
+	CreatedBySpell         uint32
+	Level                  uint32
+	Health                 uint32
+	MaxHealth              uint32
+	RegenerateHealth       bool
+	Mana                   uint32
+	Scale                  float32
+	HoverHeight            float32
+	BoundingRadius         float32
+	CombatReach            float32
+	WalkSpeed              float32
+	RunSpeed               float32
+	AttackTime             uint32
+	RangedAttack           uint32
+	Mount                  uint32
+	Bytes1                 uint32
+	Bytes2                 uint32
+	Emote                  uint32
+	VisibilityDistanceType uint8 // creature_addon / creature_template_addon visibilityDistanceType (Creature.cpp:2675-2676); 0 = Normal, no override
+	emoteStateKnown        bool  // set by applyCreatureMotionToSpawn when Lua overrode Emote via the motion record (forces the field into the update mask even when clearing to 0)
+	standStateKnown        bool  // set by applyCreatureMotionToSpawn when Lua overrode Bytes1 byte 0 via the motion record (forces the field into the update mask even when standing back up to 0)
+	mountKnown             bool  // set by applyCreatureMotionToSpawn when Lua overrode Mount via the motion record (forces the field into the update mask even when dismounting to 0)
+	sheathStateKnown       bool  // set by applyCreatureMotionToSpawn when Lua overrode Bytes2 byte 0 via the motion record (forces the field into the update mask even when unarming to 0)
+	pvpFlagsKnown          bool  // set by applyCreatureMotionToSpawn when Lua overrode Bytes2 byte 1 via the motion record (forces the field into the update mask even when clearing sanctuary to 0)
+	ScriptTargetGUID       uint64
+	targetKnown            bool // set by applyCreatureMotionToSpawn when Lua overrode the visual target via the motion record (forces the field into the update mask even when clearing to 0)
+	Item1                  uint32
+	Item2                  uint32
+	Item3                  uint32
+	TransportGUID          uint64
+	TransportX             float32
+	TransportY             float32
+	TransportZ             float32
+	TransportO             float32
+	FlagsExtra             uint32
+	TypeFlags              uint32
+	PhaseMask              uint32 // live phase for the create fan-out gate (Object.cpp:1659-1662): DB c.phaseMask for respawns, summoner phase for summons/totems/pets; 0 = unset, read as PHASEMASK_NORMAL (1) by the helper
 }
 
 func creatureSpawnHealth(regenerate bool, current, maximum uint32) uint32 {
@@ -159,6 +184,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		COALESCE(ca.bytes1, cta.bytes1, 0),
 		COALESCE(ca.bytes2, cta.bytes2, 0),
 		COALESCE(ca.emote, cta.emote, 0),
+		COALESCE(ca.visibilityDistanceType, cta.visibilityDistanceType, 0),
 		COALESCE(eq.ItemID1, 0),
 		COALESCE(eq.ItemID2, 0),
 		COALESCE(eq.ItemID3, 0),
@@ -268,9 +294,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	seenGUIDs := make(map[uint32]struct{})
 	spawns := make([]creatureSpawn, 0)
 	count := 0
-	for rows.Next() {		var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3, flagsExtra, typeFlags int64
+	for rows.Next() {
+		var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, visDistType, item1, item2, item3, flagsExtra, typeFlags int64
 		var x, y, z, orientation, scale, hoverHeight, walkSpeed, runSpeed float64
-		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3, &flagsExtra, &typeFlags); err != nil {
+		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &visDistType, &item1, &item2, &item3, &flagsExtra, &typeFlags); err != nil {
 			return nil, count, err
 		}
 		if _, dup := seenGUIDs[uint32(guid)]; dup {
@@ -278,13 +305,15 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		}
 		seenGUIDs[uint32(guid)] = struct{}{}
 		visRange := distance
-		if s.creatureScriptFarVisible(state.Map, state.InstanceID, uint32(guid), uint32(entry)) {
+		if override, ok := visibilityDistanceOverride(uint8(visDistType)); ok {
+			visRange = override
+		} else if s.creatureScriptFarVisible(state.Map, state.InstanceID, uint32(guid), uint32(entry)) {
 			visRange = maxVisibilityDistance
 		}
 		if math.Hypot(x-float64(state.X), y-float64(state.Y)) > visRange || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
 			continue
 		}
-		spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3), FlagsExtra: uint32(flagsExtra), TypeFlags: uint32(typeFlags)}
+		spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), VisibilityDistanceType: uint8(visDistType), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3), FlagsExtra: uint32(flagsExtra), TypeFlags: uint32(typeFlags)}
 		if over, ok := modelEquipOverrides[spawn.GUID]; ok {
 			applyGameEventModelEquip(&spawn, over)
 		}
@@ -351,7 +380,9 @@ func (s *Server) creatureVisibleToGhostSeer(state playerState, spawn *creatureSp
 		return false
 	}
 	sightRange := s.visibilityRangeForMap(state.Map)
-	if s.creatureScriptFarVisible(state.Map, state.InstanceID, spawn.GUID, spawn.Entry) {
+	if override, ok := visibilityDistanceOverride(spawn.VisibilityDistanceType); ok {
+		sightRange = override
+	} else if s.creatureScriptFarVisible(state.Map, state.InstanceID, spawn.GUID, spawn.Entry) {
 		sightRange = maxVisibilityDistance
 	}
 	if sightRange <= 0 {
