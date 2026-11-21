@@ -4883,8 +4883,10 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// the ApplyAuraName switch — so both loops run in effect-index order
 		// here, not the fixed type order the twins used to run in (a spell
 		// with eff0 charge and eff1 learn failing both now reports the charge
-		// failure, as C++ does). The mana-leech arm takes castItem (its
-		// power-type leg is skipped for item casts, Spell.cpp:6142-6143).
+		// failure, as C++ does). The aura-bounced recheck interleaves inside
+		// the aura loop (Spell.cpp:6155-6162). The mana-leech arm takes
+		// castItem (its power-type leg is skipped for item casts,
+		// Spell.cpp:6142-6143).
 		for i := range spell.Effects {
 			if failure, reason := s.checkCastEffectAt(ctx, spell, i, target, spellID, target.UnitGUID, checkCastPerEffectOptions{castItem: true}); failure != 0 {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
@@ -4892,17 +4894,18 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				return true
 			}
 		}
+		itemApproximateMask, itemNonAuraMask := checkCastAuraMasks(spell)
 		for i := range spell.Effects {
 			if failure, reason := s.checkCastAuraAt(ctx, spell, i, target, checkCastPerEffectOptions{castItem: true}); failure != 0 {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", reason, "failure", failure)
 				return true
 			}
-		}
-		if failure := s.checkAuraBouncedCast(spell, target); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "aura-bounced validation", "failure", failure)
-			return true
+			if failure := s.checkAuraBouncedCastAt(spell, i, target, itemApproximateMask, itemNonAuraMask); failure != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "aura-bounced validation", "failure", failure)
+				return true
+			}
 		}
 		if failure := s.checkTradeSlotCast(target, true); failure != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)

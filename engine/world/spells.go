@@ -4049,8 +4049,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// here, not the fixed type order the twins used to run in (a spell with
 	// eff0 charge and eff1 learn failing both now reports the charge
 	// failure, as C++ does). The dispel pre-check above stays ahead of both
-	// loops (Spell.cpp:5520-5565), and the aura-bounced recheck + trade-slot
-	// block below stay after them (Spell.cpp:6155-6181).
+	// loops (Spell.cpp:5520-5565), and the trade-slot block below stays
+	// after them (Spell.cpp:6164-6181). The aura-bounced recheck interleaves
+	// inside the aura loop (Spell.cpp:6155-6162: the switch arm then the
+	// bounced check per effect index, so a bounce at eff_i beats a gated
+	// aura-arm failure at eff_j>i).
 	for i := range spell.Effects {
 		if failure, reason := s.checkCastEffectAt(ctx, spell, i, target, spellID, wireUnitGUID, checkCastPerEffectOptions{}); failure != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
@@ -4058,24 +4061,25 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
+	// Aura-bounced masks (Spell.cpp:5567-5568, built in the effect-switch
+	// loop, complete before the aura-switch loop): the per-effect recheck
+	// below reads the whole-spell masks, exactly as C++ does.
+	approximateMask, nonAuraMask := checkCastAuraMasks(spell)
 	for i := range spell.Effects {
 		if failure, reason := s.checkCastAuraAt(ctx, spell, i, target, checkCastPerEffectOptions{}); failure != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", reason, "failure", failure)
 			return true
 		}
-	}
-
-	// Aura-bounced gate (Spell::CheckCast per-effect loop tail,
-	// Spell.cpp:6155-6162): a pure-aura non-area spell fails with
-	// SPELL_FAILED_AURA_BOUNCED when the unit target already carries a
-	// strictly more powerful same-type aura under an EXCLUSIVE_HIGHEST
-	// spell group. C++ relative order places this recheck after the
-	// ApplyAuraName switch and before the trade-slot block.
-	if failure := s.checkAuraBouncedCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "aura-bounced validation", "failure", failure)
-		return true
+		// Aura-bounced gate (Spell::CheckCast per-effect loop tail,
+		// Spell.cpp:6155-6162): runs per effect index right after the
+		// ApplyAuraName switch arm, so a bounce at eff_i beats a gated
+		// aura-arm failure at eff_j>i.
+		if failure := s.checkAuraBouncedCastAt(spell, i, target, approximateMask, nonAuraMask); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "aura-bounced validation", "failure", failure)
+			return true
+		}
 	}
 
 	// Trade-slot gate (Spell::CheckCast, Spell.cpp:6164-6181): the last
@@ -4086,8 +4090,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// SPELL_FAILED_ITEM_ALREADY_ENCHANTED when an enchant is already
 	// deferred into the trade. C++ relative order places this block after
 	// the per-effect loop's AURA_BOUNCED recheck (Spell.cpp:6155-6162, now
-	// bridged by checkAuraBouncedCast), so it wires after the
-	// aura-bounced leg.
+	// bridged per effect by checkAuraBouncedCastAt inside the aura loop),
+	// so it wires after the aura-bounced leg.
 	if failure := s.checkTradeSlotCast(target, false); failure != 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "trade-slot validation", "failure", failure)
@@ -8172,25 +8176,15 @@ func (s *session) checkCasterAuras(spell wotlk.Spell) (uint8, uint32) {
 	return result, mechanic
 }
 
-// checkAuraBouncedCast mirrors the AURA_BOUNCED recheck at the end of the
-// per-effect loop in Spell::CheckCast (Spell.cpp:6155-6162): for a spell
-// whose every effect is an aura effect — any non-aura effect sets
-// nonAuraEffectMask (Spell.cpp:6022-6027) and disables the recheck for the
-// whole spell — and which does not target an area
-// (SpellInfo::IsTargetingArea, SpellInfo.cpp:1039-1045), each aura effect
-// fails with SPELL_FAILED_AURA_BOUNCED when the unit target already
-// carries a strictly more powerful aura of the same aura type under an
-// EXCLUSIVE_HIGHEST spell-group stack rule
-// (Unit::IsHighestExclusiveAuraEffect, Unit.cpp:14001-14036, with
-// removeOtherAuraApplications=false at CheckCast). AURA_BOUNCED carries no
-// extra WriteCastResultInfo params, so castFailedExtParams needs no case
-// (verified Spell.cpp:3974-4160). Returns the SPELL_FAILED_* result code,
-// 0 on success.
-func (s *session) checkAuraBouncedCast(spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
-	if s == nil || s.player == nil || s.server == nil {
-		return 0
-	}
-	var approximateMask, nonAuraMask uint8
+// checkCastAuraMasks builds the per-effect masks of the CheckCast
+// per-effect loops (Spell.cpp:5567-5568, filled at the end of each
+// effect-switch iteration, Spell.cpp:6022-6027): approximateAuraEffectMask
+// marks the aura effects (SpellEffectInfo::IsAura, SpellInfo.cpp:370-373),
+// nonAuraEffectMask marks the non-aura effects
+// (SpellEffectInfo::IsEffect, SpellInfo.cpp:360-363). The masks are
+// whole-spell: the bounced recheck reads the completed masks even though
+// it runs per effect index in the aura-switch loop.
+func checkCastAuraMasks(spell wotlk.Spell) (approximateMask, nonAuraMask uint8) {
 	for i, eff := range spell.Effects {
 		if i >= 8 {
 			break
@@ -8202,7 +8196,33 @@ func (s *session) checkAuraBouncedCast(spell wotlk.Spell, target protocol.SpellT
 			nonAuraMask |= 1 << uint(i)
 		}
 	}
+	return approximateMask, nonAuraMask
+}
+
+// checkAuraBouncedCastAt mirrors the AURA_BOUNCED recheck at the end of one
+// iteration of the per-effect aura-switch loop in Spell::CheckCast
+// (Spell.cpp:6155-6162): it runs right after the ApplyAuraName switch arm
+// for the same effect index, so a bounce at eff_i beats a gated aura-arm
+// failure at eff_j>i. For a spell whose every effect is an aura effect —
+// any non-aura effect sets nonAuraEffectMask (Spell.cpp:6022-6027) and
+// disables the recheck for the whole spell — and which does not target an
+// area (SpellInfo::IsTargetingArea, SpellInfo.cpp:1039-1045), the effect
+// at index fails with SPELL_FAILED_AURA_BOUNCED when the unit target
+// already carries a strictly more powerful aura of the same aura type
+// under an EXCLUSIVE_HIGHEST spell-group stack rule
+// (Unit::IsHighestExclusiveAuraEffect, Unit.cpp:14001-14036, with
+// removeOtherAuraApplications=false at CheckCast). AURA_BOUNCED carries no
+// extra WriteCastResultInfo params, so castFailedExtParams needs no case
+// (verified Spell.cpp:3974-4160). Returns the SPELL_FAILED_* result code,
+// 0 on success.
+func (s *session) checkAuraBouncedCastAt(spell wotlk.Spell, index int, target protocol.SpellTargetData, approximateMask, nonAuraMask uint8) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
 	if nonAuraMask != 0 {
+		return 0
+	}
+	if approximateMask&(1<<uint(index)) == 0 {
 		return 0
 	}
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || target.UnitGUID == 0 {
@@ -8211,16 +8231,9 @@ func (s *session) checkAuraBouncedCast(spell wotlk.Spell, target protocol.SpellT
 	if spellInfoTargetsArea(spell) {
 		return 0
 	}
-	for i, eff := range spell.Effects {
-		if i >= 8 {
-			break
-		}
-		if approximateMask&(1<<uint(i)) == 0 {
-			continue
-		}
-		if !s.isHighestExclusiveAuraEffect(spell, eff.Aura, s.spellEffectCheckCastValue(spell, eff, i), approximateMask, target.UnitGUID) {
-			return spellFailedAuraBounced
-		}
+	eff := spell.Effects[index]
+	if !s.isHighestExclusiveAuraEffect(spell, eff.Aura, s.spellEffectCheckCastValue(spell, eff, index), approximateMask, target.UnitGUID) {
+		return spellFailedAuraBounced
 	}
 	return 0
 }
@@ -26682,15 +26695,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 	}
+	funnelApproximateMask, funnelNonAuraMask := checkCastAuraMasks(spell)
 	for i := range spell.Effects {
 		if failure, reason := s.checkCastAuraAt(ctx, spell, i, funnelWireTarget, checkCastPerEffectOptions{triggeredCharge: true, skipLearnGlyphFeed: true, castItem: castItemGUID != 0}); failure != 0 {
 			rejectTriggeredCast("triggered " + reason)
 			return
 		}
-	}
-	if failure := s.checkAuraBouncedCast(spell, funnelWireTarget); failure != 0 {
-		rejectTriggeredCast("triggered aura spell bounced by stronger aura")
-		return
+		if failure := s.checkAuraBouncedCastAt(spell, i, funnelWireTarget, funnelApproximateMask, funnelNonAuraMask); failure != 0 {
+			rejectTriggeredCast("triggered aura spell bounced by stronger aura")
+			return
+		}
 	}
 	// CheckCast trade-slot tail (Spell.cpp:6164-6187), DOCUMENTED VACUOUS:
 	// the block opens on the TARGET_FLAG_TRADE_ITEM mask, which the funnel

@@ -2191,7 +2191,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			return
 		}
 		// Spell::CheckCast aura-bounced tail (Spell.cpp:6155-6162), the
-		// server-side twin of the session checkAuraBouncedCast: a spell
+		// server-side twin of the session checkAuraBouncedCastAt: a spell
 		// whose every effect is an aura effect, not targeting an area,
 		// fizzles when the unit target already carries a strictly more
 		// powerful aura of the same type under an EXCLUSIVE_HIGHEST
@@ -13507,7 +13507,7 @@ func (s *Server) creatureCharmPreCast(m *creatureMotion, spell wotlk.Spell, targ
 // creatureAuraBouncedPreCast mirrors the AURA_BOUNCED recheck at the end of
 // the per-effect loop in Spell::CheckCast (Spell.cpp:6155-6162) for a
 // creature caster, the server-side twin of the session
-// checkAuraBouncedCast: for a spell whose every effect is an aura effect
+// checkAuraBouncedCastAt: for a spell whose every effect is an aura effect
 // (any non-aura effect sets nonAuraEffectMask and disables the recheck)
 // and which does not target an area, each aura effect fizzles when the
 // unit target already carries a strictly more powerful aura of the same
