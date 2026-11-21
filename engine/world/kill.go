@@ -2931,6 +2931,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				if motion.BossAI != nil {
 					motion.BossAI.OnReset(ctx, s, motion)
 				}
+				// BossAI::_Reset (ScriptedCreature.cpp:499-510): the
+				// respawn reset restores the default loot mode (Creature::
+				// Respawn, Creature.cpp:2198, runs ai->Reset()); the Lua
+				// On_Reset pre-fire above runs ahead of it, as in evade.
+				motion.LootMode = lootModeDefault
 			}
 		}
 	}
@@ -3010,6 +3015,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			if motion.BossAI != nil {
 				motion.BossAI.OnReset(ctx, s, motion)
 			}
+			// BossAI::_Reset (ScriptedCreature.cpp:499-510): the respawn
+			// reset restores the default loot mode (Creature::Respawn,
+			// Creature.cpp:2198, runs ai->Reset()); the Lua On_Reset
+			// pre-fire above runs ahead of it, as in evade.
+			motion.LootMode = lootModeDefault
 			s.broadcastCreatureValuesUpdateInInstance(item.key.MapID, item.key.InstanceID, motion.GUID, map[int]uint32{unitFieldHealth: motion.Health, unitFieldDynamicFlags: 0})
 		}
 		s.deleteCreatureRespawnRow(ctx, respawn.GUID, respawn.Map, respawn.InstanceID)

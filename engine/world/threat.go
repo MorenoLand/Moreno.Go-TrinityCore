@@ -41,9 +41,13 @@ type ThreatManager struct {
 	// ThreatReference::UpdateTauntState (ThreatManager.cpp:125-129):
 	// victim GUID -> detaunt-aura expiry. A zero expiry means the aura
 	// carries no duration and the state lives until the aura is removed.
-	// Read through tauntStateLocked, which lets a live taunt win over a
-	// live detaunt exactly like C++ (the demotion only fires for a
-	// state below TAUNT).
+	// Per-reference: the state dies with the ref — RemoveThreat and
+	// ClearThreat purge it like tauntExpiry (PurgeThreatListRef,
+	// ThreatManager.cpp:801-811; ClearAllThreat, :483-492) — so a
+	// re-added victim starts at NONE instead of sorting DETAUNT forever
+	// on a stale zero expiry. Read through tauntStateLocked, which lets
+	// a live taunt win over a live detaunt exactly like C++ (the demotion
+	// only fires for a state below TAUNT).
 	detauntExpiry map[uint64]time.Time
 	// tempMods mirrors ThreatReference::_tempModifier (ThreatManager.h:299):
 	// the additive-constant from SPELL_AURA_MOD_TOTAL_THREAT (aura 103)
@@ -2528,6 +2532,9 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 		tm.fixateGUID = 0
 	}
 	delete(tm.tauntExpiry, victim)
+	// ThreatManager.cpp:801-811 (PurgeThreatListRef): the detaunt state
+	// dies with the reference, like the taunt state above.
+	delete(tm.detauntExpiry, victim)
 	delete(tm.offline, victim)
 	if tm.currentVictim == victim {
 		tm.currentVictim = 0
@@ -2646,6 +2653,9 @@ func (tm *ThreatManager) ClearThreat() {
 	tm.currentVictim = 0
 	tm.fixateGUID = 0
 	tm.tauntExpiry = make(map[uint64]time.Time)
+	// ThreatManager.cpp:483-492 (ClearAllThreat): every reference is
+	// freed, so the per-reference detaunt state dies with them.
+	tm.detauntExpiry = make(map[uint64]time.Time)
 }
 
 // GetCurrentVictim returns the current primary threat target.

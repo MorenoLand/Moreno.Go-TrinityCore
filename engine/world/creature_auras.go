@@ -1662,8 +1662,8 @@ func (s *Server) removeCreatureAurasWithMechanic(key creatureAuraKey, mechanicMa
 // attackTimeAuraModFactor converts one live attack-time aura amount into the
 // Unit::ApplyAttackTimePercentMod swing-interval multiplier
 // (Unit.cpp:10847-10864 via ApplyPercentModFloatVar, Unit.cpp:10842-10845):
-// a positive amount slows the swing (x 100/(100+amount)), a negative amount
-// speeds it up (x (100+|amount|)/100). Each effect multiplies the running
+// a positive amount speeds the swing (x 100/(100+amount)), a negative amount
+// slows it (x (100+|amount|)/100). Each effect multiplies the running
 // UNIT_FIELD_BASEATTACKTIME field and m_modAttackSpeedPct by the same
 // factor, so GetAttackTime (field/m, Unit.cpp:8609-8613) always returns the
 // pristine base — only the actual swing timer (GetAttackTime*m, reset at

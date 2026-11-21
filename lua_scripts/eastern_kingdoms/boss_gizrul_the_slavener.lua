@@ -50,15 +50,18 @@
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention).
--- IsSummonedBy's MovePath(GIZRUL_PATH = 402450, false) ports via
+-- IsSummonedBy's MovePath(GIZRUL_PATH, false) ports via
 -- creature:MovePath on ev22 (CREATURE_EVENT_ON_SUMMONED, fired from
 -- summonTempCreature for the halycon JustDied SummonCreature); the
 -- one-shot finalize (home = last node, LastWaypointID 0, MoveType
 -- idle) runs in the waypoint launch leg. Gizrul is a temp summon, so
--- the path starts at his summon position; the path id is a DB
--- waypoint_data id, not verifiable from the tree.
+-- the path starts at his summon position. TDB 26091 waypoint_data id
+-- 3219600 = C++ enum 402450 x8 (boss_gizrul_the_slavener.cpp:59);
+-- the 402450 rows were renumbered in 26091 (same 6 nodes, TDB
+-- 25101-verified identical), so the C++ id finds nothing on the
+-- reference DB.
 
-local GIZRUL_PATH = 402450
+local GIZRUL_PATH = 3219600 -- TDB 26091 id; C++ GIZRUL_PATH = 402450
 
 local SPELL_FATAL_BITE = 16495
 local SPELL_INFECTED_BITE = 16128

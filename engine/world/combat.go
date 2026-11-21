@@ -109,8 +109,10 @@ type combatTarget struct {
 //     handleAttackSwing) as lag compensation — a deliberate delta.
 //   - resetAttackTimer multiplies by m_modAttackSpeedPct (SPELL_AURA_MOD_MELEE_HASTE
 //     / MOD_RANGED_HASTE via Unit::applyAttackTimePercentMod, Unit.cpp:10851-10864);
-//     Go's getHastedMeleeSpeed/getHastedRangedSpeed model rating haste only, so
-//     aura-driven attack-speed changes never alter swing cadence.
+//     Go folds the aura legs into the swing interval via attackTimeAuraFactor
+//     (melee_stats.go / aura_haste.go, sign-branched per ApplyAttackTimePercentMod;
+//     the creature twin is creatureAttackTimeFactor, creature_auras.go:1709).
+//     The rating-only claim that used to stand here was stale.
 //   - The m_attackTimer init (Unit.cpp:316-318, all zero) means the first swing
 //     fires on the next update tick; Go's handleAttackSwing likewise never
 //     swings — it only sets the victim (Unit::Attack never swings, and this

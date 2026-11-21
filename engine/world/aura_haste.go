@@ -1,23 +1,28 @@
 package world
 
-// attackSpeedFactor composes the C++ m_modAttackSpeedPct product
-// (Unit::ApplyAttackTimePercentMod, Unit.cpp:10847-10864): every aura arm
-// multiplies the attack-time divisor by (1 + amount/100), positive amounts
-// speeding the swing up and negative amounts slowing it down. The rating
-// legs ride the same path (Player::ApplyRatingMod, Player.cpp:5607-5616),
-// so rating and aura factors are uniformly multiplicative here.
-func attackSpeedFactor(amounts []int32) float32 {
-	f := float32(1)
+// attackTimeAuraFactor folds live attack-time aura amounts into the
+// Unit::ApplyAttackTimePercentMod swing-interval multiplier
+// (Unit.cpp:10847-10864): the C++ field and m_modAttackSpeedPct scale
+// together, so the steady-state interval (resetAttackTimer,
+// Unit.cpp:580: GetAttackTime * m_modAttackSpeedPct = the field) moves by
+// 100/(100+amount) for a positive amount (haste: interval shrinks) and by
+// (100-amount)/100 for a negative amount (slow: interval grows) — see
+// attackTimeAuraModFactor in creature_auras.go, which carries the same
+// per-amount branch. The old (1 + amount/100) divisor form agreed with
+// this only for positive amounts; a -36 Mass Slow (30035, aura 193)
+// slowed a 2000ms swing to 3125ms in Go instead of C++'s 2720ms.
+func attackTimeAuraFactor(amounts []int32) float64 {
+	f := 1.0
 	for _, a := range amounts {
-		f *= 1 + float32(a)/100
+		f *= attackTimeAuraModFactor(a)
 	}
 	return f
 }
 
 // attackSpeedAuraFactor folds the live amounts of one aura type into the
-// m_modAttackSpeedPct-style product (see attackSpeedFactor above).
-func (s *session) attackSpeedAuraFactor(auraType uint32) float32 {
-	return attackSpeedFactor(s.auraTypeModifiers(auraType))
+// ApplyAttackTimePercentMod interval multiplier (see attackTimeAuraFactor).
+func (s *session) attackSpeedAuraFactor(auraType uint32) float64 {
+	return attackTimeAuraFactor(s.auraTypeModifiers(auraType))
 }
 
 // meleeHaste138Factor mirrors AuraEffect::HandleModMeleeSpeedPct
@@ -25,8 +30,10 @@ func (s *session) attackSpeedAuraFactor(auraType uint32) float32 {
 // applies to base and offhand attacks under the exclusive-same-effect
 // spell-group gate (GetHighestExclusiveSameEffectSpellGroupValue,
 // Unit.cpp:13967), reused from the stat-aura winner-takes-all fold
-// (statWinners in aura_stats.go). Ungrouped effects always apply.
-func (s *session) meleeHaste138Factor() float32 {
+// (statWinners in aura_stats.go). Ungrouped effects always apply. The
+// return is the ApplyAttackTimePercentMod interval multiplier (see
+// attackTimeAuraFactor), not a divisor.
+func (s *session) meleeHaste138Factor() float64 {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return 1
 	}
@@ -60,7 +67,7 @@ func (s *session) meleeHaste138Factor() float32 {
 	for _, w := range statWinners(cands, s.server.petAuraStackGroups()) {
 		amounts = append(amounts, w.amount)
 	}
-	return attackSpeedFactor(amounts)
+	return attackTimeAuraFactor(amounts)
 }
 
 // combatSlowLiveAmounts mirrors the exclusive gate of

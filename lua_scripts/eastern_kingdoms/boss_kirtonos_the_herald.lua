@@ -62,7 +62,8 @@
 --   stale (creature:Despawn() is bridged, lua_creature_events.go:3318).
 -- - IsSummonedBy + MovementInform INTRO_1..6 choreography PORTED
 --   below (ev22 + ev6 + MovePath/MoveTo bridges): INTRO_1 MovePath(
---   KIRTONOS_PATH = 105061, false); waypoint arrival at node index 13
+--   KIRTONOS_PATH = 840488, false) — TDB 26091 id (C++ enum 105061 x8,
+--   same 14 nodes); waypoint arrival at node index 13
 --   (POINT_KIRTONOS_LAND, the C++ _currentNode index — ev6's id arg,
 --   not the DB point id) -> INTRO_2 after 1500ms; INTRO_2 MoveTo
 --   PosMove[0] + INTRO_3 after 1s; INTRO_3 gate SetGoState(READY) +
@@ -109,7 +110,7 @@ local POS_MOVE = { -- C++ PosMove[2] (boss_kirtonos_the_herald.cpp:71-75)
     {299.4884, 92.76137, 105.6335},
     {314.8673, 90.30210, 101.6459},
 }
-local KIRTONOS_PATH = 105061
+local KIRTONOS_PATH = 840488 -- TDB 26091 id; C++ enum KIRTONOS_PATH = 105061
 local POINT_KIRTONOS_LAND = 13 -- C++ _currentNode index, not the DB point id
 local EMOTE_SUMMONED = 0
 local EMOTE_ONESHOT_ROAR = 15 -- SharedDefines.h:1950

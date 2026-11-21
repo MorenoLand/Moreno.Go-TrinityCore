@@ -5074,6 +5074,15 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	}
 	motion.InCombat = false
 	motion.TargetGUID = 0
+	// BossAI::_Reset (ScriptedCreature.cpp:499-510): the native reset
+	// restores the default loot mode — the engine arm, not the script's:
+	// Eluna fires the Lua On_Reset (event 23) ahead of this, and the
+	// _Reset arm runs after it, so a script Reset that set a mode is
+	// still restored to default here. Only boss scripts mutate LootMode
+	// in-tree (shattered executioner HM modes, XT-002, Sartharion,
+	// Flame Leviathan, Yogg-Saron, Vezax), so the unconditional restore
+	// is a no-op for every other creature.
+	motion.LootMode = lootModeDefault
 	// MotionMaster::Clear (the MoveTargetedHome twin, MotionMaster.cpp:551):
 	// evade drops the ACTIVE chase/follow slots with the engagement.
 	motion.ScriptChaseTargetGUID = 0
