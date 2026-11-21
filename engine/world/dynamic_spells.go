@@ -75,6 +75,14 @@ type dynamicSpellObjectState struct {
 	// lose the aura on the next update pass, and the set scopes the
 	// despawn strip to this object's applications.
 	AuraHolders map[uint64]struct{}
+	// AuraHolderMasks carries the FillTargetMap effect mask last applied
+	// (or adopted) per holder — the Go analog of the AuraApplication
+	// effect mask Aura::UpdateTargetMap compares against the fresh target
+	// map (SpellAuras.cpp:672-679). A holder whose mask changed is
+	// stripped and re-applied with the new mask; comparing FillTargetMap
+	// masks, not the post-immunity record mask, keeps a partially immune
+	// target from churning every pass.
+	AuraHolderMasks map[uint64]uint8
 }
 
 // dynobjAuraEffect is one aura effect of a DynObjAura's effect mask.
@@ -151,6 +159,171 @@ func dynobjPrimaryEffect(list []dynobjAuraEffect) *dynobjAuraEffect {
 		return &list[0]
 	}
 	return nil
+}
+
+// dynobjCheckType is one SpellTargetCheckTypes selection
+// (SpellInfo.cpp:218-330) as DynObjAura::FillTargetMap derives it per
+// effect (SpellAuras.cpp:2763-2785).
+type dynobjCheckType uint8
+
+const (
+	dynobjCheckDefault dynobjCheckType = iota
+	dynobjCheckEnemy
+	dynobjCheckAlly
+	dynobjCheckParty
+	dynobjCheckRaid
+	dynobjCheckRaidClass
+	dynobjCheckEntry
+)
+
+// dynobjCheckTypeForTarget maps an implicit target value to its
+// SpellImplicitTargetInfo check type (SpellInfo.cpp:218-330).
+func dynobjCheckTypeForTarget(target uint32) dynobjCheckType {
+	switch target {
+	case 2, 6, 15, 16, 24, 28, 53, 54, 93, 104:
+		return dynobjCheckEnemy
+	case 4, 21, 29, 30, 31, 45, 59:
+		return dynobjCheckAlly
+	case 3, 20, 33, 34, 35, 37:
+		return dynobjCheckParty
+	case 56, 57, 58:
+		return dynobjCheckRaid
+	case 61:
+		return dynobjCheckRaidClass
+	case 7, 8, 38, 40, 46, 60, 110:
+		return dynobjCheckEntry
+	default:
+		return dynobjCheckDefault
+	}
+}
+
+// dynobjTargetIsDestRef reports the TARGET_REFERENCE_TYPE_DEST rows
+// (SpellInfo.cpp:218-330): only those TargetB values override TargetA's
+// check type in DynObjAura::FillTargetMap (SpellAuras.cpp:2763-2785).
+func dynobjTargetIsDestRef(target uint32) bool {
+	switch target {
+	case 8, 16, 28, 29, 31, 34, 52, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 107:
+		return true
+	default:
+		return false
+	}
+}
+
+// dynobjEffectCheckType mirrors DynObjAura::FillTargetMap's per-effect
+// selection-type derivation (SpellAuras.cpp:2770-2774): TargetA's check
+// type, or TargetB's when TargetB is DEST-reference.
+func dynobjEffectCheckType(eff wotlk.SpellEffect) dynobjCheckType {
+	check := dynobjCheckTypeForTarget(eff.ImplicitTargetA)
+	if dynobjTargetIsDestRef(eff.ImplicitTargetB) {
+		check = dynobjCheckTypeForTarget(eff.ImplicitTargetB)
+	}
+	return check
+}
+
+// dynobjTargetMasks builds the per-target effect mask
+// (DynObjAura::FillTargetMap, SpellAuras.cpp:2763-2785): each aura effect
+// selects its own targets by check type and sets its bit on them.
+// enemy/friendly/def are the candidate sets for the ENEMY, ALLY/PARTY/
+// RAID and DEFAULT/ENTRY selections; inParty and inRaid narrow the
+// friendly set for PARTY/RAID effects (a nil predicate keeps the whole
+// friendly set — no group context degrades to the friendly sweep rather
+// than dropping the caster, which always passes IsInPartyWith).
+func dynobjTargetMasks(effects []dynobjAuraEffect, enemy, friendly, def map[uint64]struct{}, inParty, inRaid func(uint64) bool) map[uint64]uint8 {
+	masks := make(map[uint64]uint8)
+	add := func(set map[uint64]struct{}, bit uint8, keep func(uint64) bool) {
+		for guid := range set {
+			if keep != nil && !keep(guid) {
+				continue
+			}
+			masks[guid] |= bit
+		}
+	}
+	for _, ae := range effects {
+		bit := uint8(1 << uint(ae.Index))
+		switch dynobjEffectCheckType(ae.Effect) {
+		case dynobjCheckEnemy:
+			add(enemy, bit, nil)
+		case dynobjCheckAlly:
+			add(friendly, bit, nil)
+		case dynobjCheckParty:
+			add(friendly, bit, inParty)
+		case dynobjCheckRaid:
+			add(friendly, bit, inRaid)
+		case dynobjCheckRaidClass:
+			// RAID_CLASS also requires the target's class to match the
+			// referer's; the passes carry no class per GUID, so the raid
+			// membership half stands in — no RAID_CLASS dynobj effect in
+			// the seed, so the refinement is unobservable there.
+			add(friendly, bit, inRaid)
+		case dynobjCheckEntry:
+			// ENTRY has no faction arm in WorldObjectSpellTargetCheck
+			// (Spell.cpp:8316) — the entry filter lives in the
+			// selection helpers, not the area check — so it rides the
+			// DEFAULT set like C++.
+			add(def, bit, nil)
+		default:
+			add(def, bit, nil)
+		}
+	}
+	return masks
+}
+
+// dynobjDefaultTargets sweeps every unit in the dynobj cylinder for a
+// TARGET_CHECK_DEFAULT effect (DynObjAura::FillTargetMap,
+// SpellAuras.cpp:2763-2785 via WorldObjectSpellAreaTargetCheck,
+// Spell.cpp:8409-8430): the DEFAULT arm runs no faction check, so
+// enemies and allies alike are selected — the cylinder (2D dist + |dz|
+// <= radius) around the dynobj, alive, not flying, on the object's
+// map/instance. Totems are included: only the ENEMY/ALLY/PARTY/RAID
+// arms reject them (Spell.cpp:8333/8342/8354).
+func (s *Server) dynobjDefaultTargets(object *dynamicSpellObjectState) map[uint64]struct{} {
+	targets := make(map[uint64]struct{})
+	if s == nil || object == nil {
+		return targets
+	}
+	radius := float64(object.Radius)
+	inCylinder := func(x, y, z float32) bool {
+		dx, dy := float64(x-object.X), float64(y-object.Y)
+		if dx*dx+dy*dy > radius*radius {
+			return false
+		}
+		dz := float64(z - object.Z)
+		return dz <= radius && -dz <= radius
+	}
+	s.sessionsMu.RLock()
+	var players []*session
+	for sess := range s.sessions {
+		if sess != nil && sess.player != nil && sess.player.Map == object.Map && sess.player.InstanceID == object.InstanceID {
+			players = append(players, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, vs := range players {
+		if vs.player == nil || vs.inFlight {
+			continue
+		}
+		if !inCylinder(vs.player.X, vs.player.Y, vs.player.Z) {
+			continue
+		}
+		if vs.player.Health == 0 && object.SpellData.Attributes&spellAttr0Passive == 0 && object.SpellData.AttributesEx1&spellAttr2CanTargetDead == 0 {
+			continue
+		}
+		targets[vs.playerGUID] = struct{}{}
+	}
+	s.motionMu.Lock()
+	var motions []*creatureMotion
+	for _, tm := range s.motionMapLocked(object.Map, object.InstanceID) {
+		if tm != nil {
+			motions = append(motions, tm)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, tm := range motions {
+		if inCylinder(tm.X, tm.Y, tm.Z) {
+			targets[tm.GUID] = struct{}{}
+		}
+	}
+	return targets
 }
 
 func dynamicSpellGUID(low uint32) uint64 { return (dynamicObjectHighGUID << 48) | uint64(low) }
@@ -374,16 +547,74 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			continue
 		}
 		target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagDestLocation, Destination: protocol.SpellTargetLocation{X: object.X, Y: object.Y, Z: object.Z}}
-		areaTargets := caster.spellAreaEnemyTargets(ctx, object.SpellData, target)
-		if isFriendlyAreaSpell(object.SpellData) {
-			// DynObjAura::FillTargetMap (SpellAuras.cpp:2763) picks the
-			// check type per effect from its implicit targets; the enemy
-			// path above only covers TARGET_CHECK_ENEMY, so friendly
-			// persistent-area auras route through the ALLY/PARTY/RAID path.
-			areaTargets = caster.spellFriendlyAreaTargets(ctx, object.SpellData, target)
+		// DynObjAura::FillTargetMap (SpellAuras.cpp:2763-2785) picks the
+		// check type per effect from its implicit targets, so the
+		// target map carries a per-effect bitmask — the old whole-spell
+		// sweep applied every effect to every target in one set, and a
+		// DEFAULT-check effect (27085/42939 eff1 trigger, 31266 eff1,
+		// 47346 eff1 — tgtA 1/0) rode the enemy sweep and never reached
+		// friendlies standing in the patch. Each check class sweeps
+		// only when an aura effect needs it; the friendly sweep runs
+		// unchecked (a harmful spell can carry a friendly-area effect,
+		// Holy Nova 15237), and the DEFAULT set is a fresh cylinder
+		// sweep since neither spell sweep selects without a faction leg.
+		needsEnemy, needsFriendly, needsDefault := false, false, false
+		for _, ae := range object.AuraEffects {
+			switch dynobjEffectCheckType(ae.Effect) {
+			case dynobjCheckEnemy:
+				needsEnemy = true
+			case dynobjCheckAlly, dynobjCheckParty, dynobjCheckRaid, dynobjCheckRaidClass:
+				needsFriendly = true
+			default:
+				needsDefault = true
+			}
 		}
-		inRadius := make(map[uint64]struct{}, len(areaTargets))
-		for _, targetGUID := range areaTargets {
+		var enemySet, friendlySet, defaultSet map[uint64]struct{}
+		if needsEnemy {
+			enemySet = make(map[uint64]struct{})
+			for _, guid := range caster.spellAreaEnemyTargets(ctx, object.SpellData, target) {
+				enemySet[guid] = struct{}{}
+			}
+		}
+		if needsFriendly {
+			friendlySet = make(map[uint64]struct{})
+			for _, guid := range caster.spellFriendlyAreaTargetsUnchecked(ctx, object.SpellData, target) {
+				friendlySet[guid] = struct{}{}
+			}
+		}
+		if needsDefault {
+			defaultSet = s.dynobjDefaultTargets(object)
+		}
+		_, partyMembers, raidMembers, inGroup := caster.friendlyGroupSnapshot()
+		dynobjGroupMember := func(guid uint64, members map[uint64]struct{}) bool {
+			if _, ok := members[guid]; ok {
+				return true
+			}
+			if m := s.findCreatureMotion(object.Map, object.InstanceID, guid); m != nil {
+				owner := m.OwnerGUID
+				if owner == 0 {
+					owner = m.CharmOwnerGUID
+				}
+				_, ok := members[owner]
+				return ok
+			}
+			return false
+		}
+		inParty := func(guid uint64) bool {
+			if guid == caster.playerGUID {
+				return true
+			}
+			return inGroup && dynobjGroupMember(guid, partyMembers)
+		}
+		inRaid := func(guid uint64) bool {
+			if guid == caster.playerGUID {
+				return true
+			}
+			return inGroup && dynobjGroupMember(guid, raidMembers)
+		}
+		masks := dynobjTargetMasks(object.AuraEffects, enemySet, friendlySet, defaultSet, inParty, inRaid)
+		inRadius := make(map[uint64]struct{}, len(masks))
+		for targetGUID := range masks {
 			// Aura::UpdateTargetMap (SpellAuras.cpp:700-701): dynobj auras
 			// don't hit flying targets.
 			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.inFlight {
@@ -396,9 +627,28 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 		// applications whose targets left the area are removed on the 500ms
 		// target-map pass, like C++.
 		for holderGUID := range object.AuraHolders {
+			if _, ok := masks[holderGUID]; !ok {
+				// No effect selects this target anymore (left the area
+				// for every effect, or the check-type split dropped it).
+				s.expireDynobjHolderAura(object, holderGUID, spellID)
+				delete(object.AuraHolders, holderGUID)
+				delete(object.AuraHolderMasks, holderGUID)
+				continue
+			}
 			if _, ok := inRadius[holderGUID]; !ok {
 				s.expireDynobjHolderAura(object, holderGUID, spellID)
 				delete(object.AuraHolders, holderGUID)
+				delete(object.AuraHolderMasks, holderGUID)
+				continue
+			}
+			if prev, hasPrev := object.AuraHolderMasks[holderGUID]; hasPrev && prev != masks[holderGUID] {
+				// Aura::UpdateTargetMap (SpellAuras.cpp:672-679): an
+				// application whose effect mask changed is unapplied
+				// and recreated with the new mask — strip it here and
+				// let the apply loop below re-apply it with the new mask.
+				s.expireDynobjHolderAura(object, holderGUID, spellID)
+				delete(object.AuraHolders, holderGUID)
+				delete(object.AuraHolderMasks, holderGUID)
 				continue
 			}
 			// Aura::UpdateTargetMap (SpellAuras.cpp:666-672): an application
@@ -410,21 +660,24 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			if !s.fireAuraCheckAreaTarget(ctx, spellID, object.CasterGUID, object.Map, object.InstanceID, holderGUID) {
 				s.expireDynobjHolderAura(object, holderGUID, spellID)
 				delete(object.AuraHolders, holderGUID)
+				delete(object.AuraHolderMasks, holderGUID)
 			}
 		}
 		// The newly applied aura's first tick aligns to the dynobj's shared
 		// amplitude schedule (SpellAuras.cpp:815-843) instead of starting a
 		// private period timer: a target entering just before a tick takes
 		// damage almost immediately, and all applications tick in phase.
-		// The apply below loops the dynobj's whole effect list (the
-		// MAX_EFFECT_MASK aura), primary first so the fresh record takes
+		// The apply below loops the target's masked effects only (the
+		// FillTargetMap bitmask), primary first so the fresh record takes
 		// the primary's AuraType and periodic timer; later effects merge
 		// through the castMerged funnel (refreshAuraEffectBasepoints +
 		// EffectMask OR) without touching the timer. Each effect's first
 		// tick aligns to its own shared schedule (its own NextTick).
-		primary := dynobjPrimaryEffect(object.AuraEffects)
-		for _, targetGUID := range areaTargets {
+		for targetGUID, mask := range masks {
 			if _, ok := inRadius[targetGUID]; !ok {
+				continue
+			}
+			if _, ok := object.AuraHolders[targetGUID]; ok {
 				continue
 			}
 			if caster.hasDynamicAreaAura(targetGUID, object.SpellData.ID) {
@@ -449,6 +702,24 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			if s.findSessionByGUID(targetGUID) == nil && s.dynobjCreatureTargetImmune(ctx, object.SpellData, targetGUID, object.Map, object.InstanceID, isFriendlyAreaSpell(object.SpellData)) {
 				continue
 			}
+			// The masked primary follows dynobjPrimaryEffect's rule
+			// restricted to the target's mask: first periodic effect in
+			// the mask, else the first masked effect — a leading dummy
+			// outside the mask must not own the record's timer.
+			var primary *dynobjAuraEffect
+			for i := range object.AuraEffects {
+				ae := &object.AuraEffects[i]
+				if mask&(1<<uint(ae.Index)) == 0 {
+					continue
+				}
+				if primary == nil {
+					primary = ae
+				}
+				if ae.PeriodMs > 0 {
+					primary = ae
+					break
+				}
+			}
 			if primary != nil {
 				castMerged := make(map[uint64]struct{})
 				applyOne := func(ae dynobjAuraEffect) {
@@ -460,7 +731,7 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 				}
 				applyOne(*primary)
 				for _, ae := range object.AuraEffects {
-					if ae.Index == primary.Index {
+					if ae.Index == primary.Index || mask&(1<<uint(ae.Index)) == 0 {
 						continue
 					}
 					applyOne(ae)
@@ -477,6 +748,10 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 				object.AuraHolders = make(map[uint64]struct{})
 			}
 			object.AuraHolders[targetGUID] = struct{}{}
+			if object.AuraHolderMasks == nil {
+				object.AuraHolderMasks = make(map[uint64]uint8)
+			}
+			object.AuraHolderMasks[targetGUID] = mask
 		}
 	}
 	// Caster-owned area auras (area_auras.go) share this 100ms tick's
@@ -502,8 +777,17 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 	}
 	spell := object.SpellData
 	spellID := uint32(object.SpellID)
-	friendly := isFriendlyAreaSpell(spell)
-	inRadius := make(map[uint64]struct{})
+	// DynObjAura::FillTargetMap (SpellAuras.cpp:2763-2785) selects per
+	// effect, so the pass keeps one candidate set per check class and
+	// lets dynobjTargetMasks split them — the old single friendly
+	// verdict (isFriendlyAreaSpell, whole-spell) applied every effect
+	// to every target in one set, so a DEFAULT-check effect (27085/
+	// 42939 eff1 trigger, 31266 eff1, 47346 eff1 — tgtA 1/0) never
+	// reached friendlies in a hostile patch, and a friendly effect of
+	// a harmful spell never reached allies.
+	enemySet := make(map[uint64]struct{})
+	friendlySet := make(map[uint64]struct{})
+	defaultSet := make(map[uint64]struct{})
 	playerTargets := make(map[uint64]*session)
 	s.sessionsMu.RLock()
 	var players []*session
@@ -520,13 +804,15 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 		if distance3D(vs.player.X, vs.player.Y, vs.player.Z, object.X, object.Y, object.Z) > float64(object.Radius) {
 			continue
 		}
-		if friendly != s.creatureFriendlyToTarget(caster, vs.playerGUID) {
-			continue
-		}
 		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 			continue
 		}
-		inRadius[vs.playerGUID] = struct{}{}
+		defaultSet[vs.playerGUID] = struct{}{}
+		if s.creatureFriendlyToTarget(caster, vs.playerGUID) {
+			friendlySet[vs.playerGUID] = struct{}{}
+		} else {
+			enemySet[vs.playerGUID] = struct{}{}
+		}
 		playerTargets[vs.playerGUID] = vs
 	}
 	type creatureTarget struct {
@@ -545,15 +831,67 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 		if distance3D(tm.x, tm.y, tm.z, object.X, object.Y, object.Z) > float64(object.Radius) {
 			continue
 		}
-		if friendly != s.creatureFriendlyToTarget(caster, tm.guid) {
-			continue
+		defaultSet[tm.guid] = struct{}{}
+		if s.creatureFriendlyToTarget(caster, tm.guid) {
+			friendlySet[tm.guid] = struct{}{}
+		} else {
+			enemySet[tm.guid] = struct{}{}
 		}
-		inRadius[tm.guid] = struct{}{}
 	}
+	// PARTY/RAID membership resolves through the caster's owner
+	// (Unit::IsInPartyWith, Unit.cpp:12126): a wild caster has no group,
+	// so only itself passes; a pet/charmed caster's owner's group decides.
+	ownerGUID := caster.OwnerGUID
+	if ownerGUID == 0 {
+		ownerGUID = caster.CharmOwnerGUID
+	}
+	var partyMembers, raidMembers map[uint64]struct{}
+	var inGroup bool
+	if ownerSess := s.findSessionByGUID(ownerGUID); ownerSess != nil {
+		_, partyMembers, raidMembers, inGroup = ownerSess.friendlyGroupSnapshot()
+	}
+	memberOf := func(guid uint64, members map[uint64]struct{}) bool {
+		if _, ok := members[guid]; ok {
+			return true
+		}
+		if m := s.findCreatureMotion(object.Map, object.InstanceID, guid); m != nil {
+			owner := m.OwnerGUID
+			if owner == 0 {
+				owner = m.CharmOwnerGUID
+			}
+			_, ok := members[owner]
+			return ok
+		}
+		return false
+	}
+	inParty := func(guid uint64) bool {
+		if guid == caster.GUID {
+			return true
+		}
+		return inGroup && memberOf(guid, partyMembers)
+	}
+	inRaid := func(guid uint64) bool {
+		if guid == caster.GUID {
+			return true
+		}
+		return inGroup && memberOf(guid, raidMembers)
+	}
+	masks := dynobjTargetMasks(object.AuraEffects, enemySet, friendlySet, defaultSet, inParty, inRaid)
 	for holderGUID := range object.AuraHolders {
-		if _, ok := inRadius[holderGUID]; !ok {
+		if _, ok := masks[holderGUID]; !ok {
 			s.expireDynobjHolderAura(object, holderGUID, spellID)
 			delete(object.AuraHolders, holderGUID)
+			delete(object.AuraHolderMasks, holderGUID)
+			continue
+		}
+		if prev, hasPrev := object.AuraHolderMasks[holderGUID]; hasPrev && prev != masks[holderGUID] {
+			// Aura::UpdateTargetMap (SpellAuras.cpp:672-679): an
+			// application whose effect mask changed is unapplied and
+			// recreated with the new mask — strip it here and let the
+			// apply loop below re-apply it with the new mask.
+			s.expireDynobjHolderAura(object, holderGUID, spellID)
+			delete(object.AuraHolders, holderGUID)
+			delete(object.AuraHolderMasks, holderGUID)
 			continue
 		}
 		// Aura::UpdateTargetMap (SpellAuras.cpp:666-672): an application
@@ -565,6 +903,7 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 		if !s.fireAuraCheckAreaTarget(ctx, spellID, object.CasterGUID, object.Map, object.InstanceID, holderGUID) {
 			s.expireDynobjHolderAura(object, holderGUID, spellID)
 			delete(object.AuraHolders, holderGUID)
+			delete(object.AuraHolderMasks, holderGUID)
 		}
 	}
 	if object.AuraHolders == nil {
@@ -579,7 +918,7 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 	if d := object.NextAuraTick.Sub(time.Now()); d > 0 {
 		sharedDelayMs = uint32(d / time.Millisecond)
 	}
-	for guid := range inRadius {
+	for guid, mask := range masks {
 		if _, ok := object.AuraHolders[guid]; ok {
 			continue
 		}
@@ -594,6 +933,10 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 				continue
 			}
 			object.AuraHolders[guid] = struct{}{}
+			if object.AuraHolderMasks == nil {
+				object.AuraHolderMasks = make(map[uint64]uint8)
+			}
+			object.AuraHolderMasks[guid] = mask
 			continue
 		}
 		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) runs the
@@ -624,14 +967,20 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 			// (Unit::AddAura, Unit.cpp:12291-12297), so a target immune
 			// to only one of the dynobj's effects keeps the rest — the
 			// Aura::UpdateTargetMap mask-strip arm (SpellAuras.cpp:687-695).
-			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs, true, false, 0)
+			// The FillTargetMap mask rides allowedMask, so a recipient
+			// selected by one effect takes only that effect's bit.
+			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs, true, false, mask)
 		} else {
 			if s.dynobjCreatureTargetImmune(ctx, spell, guid, object.Map, object.InstanceID, s.creatureFriendlyToTarget(caster, guid)) {
 				continue
 			}
-			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil, true, &sharedDelayMs, 0)
+			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil, true, &sharedDelayMs, mask)
 		}
 		object.AuraHolders[guid] = struct{}{}
+		if object.AuraHolderMasks == nil {
+			object.AuraHolderMasks = make(map[uint64]uint8)
+		}
+		object.AuraHolderMasks[guid] = mask
 	}
 }
 
