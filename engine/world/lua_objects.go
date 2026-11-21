@@ -3551,26 +3551,60 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return []any{false}, nil
 	}
-	// luaSpellCooldownEnd reads the motion's spell-cooldown expiry
-	// (SpellCooldowns carries time.Time expiries, boss_ai.go:2776).
-	luaSpellCooldownEnd := func(spell uint32) (time.Time, bool) {
-		motion := luaTapMotion()
-		if motion == nil {
-			return time.Time{}, false
+	// luaCreatureCooldownEnds resolves a creature's cooldown ends for
+	// spell, pruning expired entries first under motionMu
+	// (SpellHistory::Update per-tick sweep, Unit.cpp:3018, via
+	// pruneCreatureSpellCooldowns — the same point
+	// creatureSpellHistoryReady prunes at): the spell's own end from
+	// SpellCooldowns and its DBC category's end from
+	// SpellCategoryCooldowns (the _categoryCooldowns twin,
+	// last-setter-wins per recordCreatureSpellCooldown). The category
+	// resolves from the DBC row, falling back to the recorded
+	// SpellCooldownCategories entry when the spell has no DBC row —
+	// the file's documented deviation (GetCreatureSpellCooldownDelay
+	// comment) that the Go model tracks cooldowns without spell DBC
+	// rows. No same-category scan is needed: the category-keyed map
+	// already holds the last setter's end. The returned category is 0
+	// when the motion no longer resolves or the spell has no category.
+	luaCreatureCooldownEnds := func(spell uint32) (ownEnd, catEnd time.Time, ownOK, catOK bool, category uint32) {
+		if s.server == nil {
+			return time.Time{}, time.Time{}, false, false, 0
 		}
-		end, ok := motion.SpellCooldowns[spell]
-		return end, ok && time.Now().Before(end)
+		if s.server.Data != nil {
+			if spellInfo, found, spellErr := s.server.Data.Spell(spell); spellErr == nil && found {
+				category = spellInfo.Category
+			}
+		}
+		now := time.Now()
+		s.server.motionMu.Lock()
+		defer s.server.motionMu.Unlock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil {
+			return time.Time{}, time.Time{}, false, false, 0
+		}
+		s.server.pruneCreatureSpellCooldowns(motion, now)
+		ownEnd, ownOK = motion.SpellCooldowns[spell]
+		if category == 0 {
+			category = motion.SpellCooldownCategories[spell]
+		}
+		if category != 0 {
+			catEnd, catOK = motion.SpellCategoryCooldowns[category]
+		}
+		return ownEnd, catEnd, ownOK, catOK, category
 	}
 	// HasSpellCooldown is CreatureMethods::HasSpellCooldown
 	// (CreatureMethods.h:321-331, Trinity):
-	// GetSpellHistory()->HasCooldown(spellId).
+	// GetSpellHistory()->HasCooldown(spellId) — the spell's own entry
+	// or its DBC category's entry (SpellHistory.cpp:473-487); the
+	// prune inside luaCreatureCooldownEnds makes presence imply
+	// unexpired, matching C++'s per-tick Update sweep.
 	methods["HasSpellCooldown"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		_, active := luaSpellCooldownEnd(spell)
-		return []any{active}, nil
+		_, _, ownOK, catOK, _ := luaCreatureCooldownEnds(spell)
+		return []any{ownOK || catOK}, nil
 	}
 	// AddSpellCooldown is SpellHistory::AddCooldown
 	// (SpellHistory.cpp:395-407) for creatures: the per-spell entry in
@@ -3646,14 +3680,20 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// (CreatureMethods.h:590-605, Trinity):
 	// GetSpellHistory()->GetRemainingCooldown, in milliseconds (0 when no
 	// cooldown; the SpellInfo-exists gate has no Go twin — the Go model
-	// tracks cooldowns without spell DBC rows).
+	// tracks cooldowns without spell DBC rows). The own entry's End
+	// answers first (SpellHistory.cpp:494-515); only a spell with no
+	// own entry falls through to its DBC category's end.
 	methods["GetCreatureSpellCooldownDelay"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		end, active := luaSpellCooldownEnd(spell)
-		if !active {
+		ownEnd, catEnd, ownOK, catOK, _ := luaCreatureCooldownEnds(spell)
+		end, ok := ownEnd, ownOK
+		if !ok {
+			end, ok = catEnd, catOK
+		}
+		if !ok {
 			return []any{uint32(0)}, nil
 		}
 		remaining := end.Sub(time.Now())
@@ -3664,18 +3704,17 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	}
 	// HasCategoryCooldown is CreatureMethods::HasCategoryCooldown
 	// (CreatureMethods.h:260-279, Trinity): the spell has a nonzero
-	// category and is on cooldown.
+	// DBC category and is on cooldown — GetSpellHistory()->HasCooldown
+	// (SpellHistory.cpp:473-487), own entry or category entry. The old
+	// arm read only the spell's own end, so a category cooldown set by
+	// a sibling spell answered false.
 	methods["HasCategoryCooldown"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		motion := luaTapMotion()
-		if motion == nil || motion.SpellCooldownCategories[spell] == 0 {
-			return []any{false}, nil
-		}
-		_, active := luaSpellCooldownEnd(spell)
-		return []any{active}, nil
+		_, _, ownOK, catOK, category := luaCreatureCooldownEnds(spell)
+		return []any{category != 0 && (ownOK || catOK)}, nil
 	}
 	// GetAITargetsCount is CreatureMethods::GetAITargetsCount
 	// (CreatureMethods.h:841-853, Trinity): the threatened-by-me list size.
