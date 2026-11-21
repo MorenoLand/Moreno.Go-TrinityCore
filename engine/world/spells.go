@@ -11698,6 +11698,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	entryNearbySpell := isEntryNearbySpell(spell)
 	goNearbyEntrySpell := isGONearbyEntrySpell(spell)
 	entryAreaSpell := isEntryAreaSpell(spell)
+	corpseAreaSpell := isCorpseAreaSpell(spell)
 	goAreaSpell := isGOAreaSpell(spell)
 	goConeSpell := isGOConeSpell(spell)
 	friendlyConeSpell := isFriendlyConeSpell(spell)
@@ -11736,6 +11737,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// AddUnitTarget verdict in the roll block ahead of shareWireOutcome.
 	nearbyBranchPick := uint64(0)
 	goAreaBranchRan, goConeBranchRan := false, false
+	corpseAreaBranchRan := false
 	friendlyConeBranchRan := false
 	wireGOMask := spellGOWireEffectMask(spell)
 	nearbyGOMask := spellGOListArmEffectMask(spell, implicitTargetGONearbyEntry)
@@ -11865,6 +11867,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// — every unit in the area matching the entry conditions becomes a
 		// target; an empty area never fails the cast.
 		hitTargets = s.spellEntryAreaTargetsWithCenters(ctx, spell, spellID, target, clientEntryAreaCenters)
+	} else if corpseAreaSpell {
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227):
+		// TARGET_CORPSE_SRC_AREA_ENEMY (93) — every corpse in the area
+		// whose owner is online becomes a target; an empty area never
+		// fails the cast.
+		hitTargets = s.spellCorpseAreaTargets(ctx, spell)
+		corpseAreaBranchRan = true
 	} else if goNearbyEntrySpell {
 		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
 		// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) — the single nearest
@@ -11977,6 +11986,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if isGOConeSpell(spell) && !goConeBranchRan {
 		coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
 		rejoinLaunchGOs(coneTargets, coneMasks)
+	}
+	// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) runs per effect,
+	// so a corpse-area (93) leg selects its corpses even when an earlier
+	// else-if branch won the spell-level selection (enemy-area,
+	// friendly-area, nearby, entry-area, or a GO branch) — the launch
+	// twin of the GO-area rejoin above. The branch-ran guard keeps a
+	// pure corpse-area spell on its own branch's single selection
+	// instead of scanning twice. Corpses join hitTargets deduped, ahead
+	// of the channeled check and the area rolls, so they ride the packet
+	// and seed the resurrect effects' fan-out; they take no unit hit
+	// roll (the rollAreaTargetReflect keep below), no AoE-cap/threat
+	// share, and unit damage/heal arms skip them (guards below).
+	if isCorpseAreaSpell(spell) && !corpseAreaBranchRan {
+		for _, guid := range s.spellCorpseAreaTargets(ctx, spell) {
+			seenCorpse := false
+			for _, listed := range hitTargets {
+				if listed == guid {
+					seenCorpse = true
+					break
+				}
+			}
+			if !seenCorpse {
+				hitTargets = append(hitTargets, guid)
+			}
+		}
 	}
 	// Spell::SelectImplicitConeTargets (Spell.cpp:1176) runs per effect,
 	// so a friendly-cone (59/60) leg selects its cone even when an earlier
@@ -12190,7 +12224,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// effects and the reflector's aura was never consumed.
 	var reflectedAoETrips []uint64
 	var reflectedAllyTrips []uint64
-	if areaSpell || friendlyAreaSpell || entryAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell {
+	if areaSpell || friendlyAreaSpell || entryAreaSpell || corpseAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell {
 		var aoeMisses []protocol.SpellMissStatus
 		hitTargets, reflectedAoETrips, aoeMisses = s.rollAreaTargetReflect(ctx, spell, hitTargets)
 		missStatus = append(missStatus, aoeMisses...)
@@ -12276,7 +12310,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// The area-roll block above ran exactly for these categories; a wire
 	// roll below must not clobber its lists or misses (Spell.cpp:2117
 	// merges by GUID, never replaces the list).
-	listRollRan := areaSpell || friendlyAreaSpell || entryAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell
+	listRollRan := areaSpell || friendlyAreaSpell || entryAreaSpell || corpseAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell
 	// dropWireTarget removes one entry from the flat hit list without
 	// disturbing the others (Spell.cpp:2117 merges by GUID; a miss on one
 	// entry never removes another). A single-target list empties to nil,
@@ -12763,7 +12797,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// missStatus GUIDs, so only effect firing changes. The cap divisor
 	// is unchanged: a shared miss joins the partition miss set and a
 	// shared trip joins the trip list, both counted like the rolled path.
-	if !(areaSpell || friendlyAreaSpell || entryAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell) {
+	if !(areaSpell || friendlyAreaSpell || entryAreaSpell || corpseAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell) {
 		shareWireOutcome := func(list []uint64, trips *[]uint64, missSet *map[uint64]struct{}, miss protocol.SpellMissStatus) []uint64 {
 			kept := make([]uint64, 0, len(list))
 			shared := false
@@ -13564,7 +13598,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// index is recorded: ChainTarget 1 has no jumps, so the falloff reads 0.
 	// GO wire primaries stay out: the wire-GO block below rejoins them under
 	// its explicit-mask gate.
-	if (areaSpell || friendlyListSpell || friendlyNearbySpell || hostileNearbySpell || entryNearbySpell || goNearbyEntrySpell) && spellHasTargetObjectEffect(spell) {
+	if (areaSpell || friendlyListSpell || corpseAreaSpell || friendlyNearbySpell || hostileNearbySpell || entryNearbySpell || goNearbyEntrySpell) && spellHasTargetObjectEffect(spell) {
 		anchor := target.UnitGUID
 		if anchor != 0 && uint16(anchor>>48) != 0xF110 {
 			primaryInList := false
@@ -15487,7 +15521,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			effectList = playerSpellTargetSelectFiltered(targetSelectFiltered, effectIndex, effectList)
 			for _, guid := range effectList {
-				if guid == 0 || uint16(guid>>48) == 0xF110 {
+				if guid == 0 || uint16(guid>>48) == 0xF110 || uint16(guid>>48) == 0xF101 {
 					continue
 				}
 				if _, missed := missedTargets[guid]; missed {
@@ -15606,7 +15640,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				explicitOnlyInsta := explicitTargetInsta && (areaSpell || friendlyListSpell) && !explicitAreaInsta && !instaCasterTargetA && !instaCasterTargetB
 				instaCasterOnlyTrip := (instaCasterTargetA || instaCasterTargetB) && !isAreaEnemyTargetType(eff.ImplicitTargetA) && !isAreaEnemyTargetType(eff.ImplicitTargetB)
 				for _, effectTarget := range instaList {
-					if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 {
+					if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 && uint16(effectTarget>>48) != 0xF101 {
 						s.executeSpellInstantKill(effCtx, effectTarget, spellID)
 					}
 				}
@@ -15844,7 +15878,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.server.getSpellCustomAttr(spellID)&SpellCustomAttrShareDamage != 0 {
 					count := 0
 					for _, effectTarget := range dmgList {
-						if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
+						if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 && uint16(effectTarget>>48) != 0xF101 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
 							count++
 						}
 					}
@@ -15911,8 +15945,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					seenCap := make(map[uint64]struct{})
 					countCap := func(guid uint64) {
 						// m_UniqueTargetInfo holds unit targets only (Spell.cpp:7761);
-						// GO guids ride the flat list via AddGOTarget, never the divisor.
-						if guid != 0 && uint16(guid>>48) != 0xF110 {
+						// GO guids ride the flat list via AddGOTarget, and corpse
+						// guids via AddCorpseTarget, never the divisor.
+						if guid != 0 && uint16(guid>>48) != 0xF110 && uint16(guid>>48) != 0xF101 {
 							if _, dup := seenCap[guid]; !dup {
 								seenCap[guid] = struct{}{}
 								aoeCapDivisor++
@@ -15986,7 +16021,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// SchoolDMG :322 null-returns on a null unitTarget): a GO guid riding
 					// the flat list must not resolve through the combat-target fallback
 					// to an unrelated creature.
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
@@ -16632,7 +16667,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// GOTargetInfo targets never take unit heals (Spell.cpp:2193;
 					// Heal :1393 null-returns on a null unitTarget): a GO guid riding the
 					// flat list must not default to the caster's session and heal the caster.
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					targetHeal := heal
@@ -16789,7 +16824,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// GOTargetInfo targets never take unit heals (Spell.cpp:2193;
 					// Heal :1393 null-returns on a null unitTarget): a GO guid riding the
 					// flat list must not default to the caster's session and heal the caster.
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					if s.effectTargetMaxHealth(effCtx, effectTarget) == 0 {
@@ -16861,7 +16896,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				for _, effectTarget := range energizeList {
 					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					s.energizeEffectTarget(effCtx, spell, spellID, eff, effectTarget)
@@ -16934,7 +16969,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				for _, effectTarget := range energizePctList {
 					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					s.energizePctEffectTarget(effCtx, spell, spellID, eff, effectTarget)
@@ -17003,7 +17038,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				for _, effectTarget := range burnTargets {
 					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					// SpellEffects.cpp:1383: the drained power is dealt as
@@ -17109,7 +17144,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					for _, effectTarget := range triggerList {
 						// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
-						if uint16(effectTarget>>48) == 0xF110 {
+						if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 							continue
 						}
 						s.triggerSpellEffectTarget(effCtx, spellID, spell, eff, effectTarget)
@@ -17311,7 +17346,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				for _, effectTarget := range skillList {
 					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					s.applySkillStepEffect(ctx, spell, eff, casterLevel, effectTarget)
@@ -17782,7 +17817,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				for _, effectTarget := range threatList {
 					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					s.applySpellThreat(effCtx, spell, effectTarget, amount)
@@ -17837,7 +17872,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				for _, effectTarget := range maxHealthList {
 					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID, eff.CalcValueForLevel(spell, casterLevel))
@@ -18336,7 +18371,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range dispelList {
-					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
+					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					// isReflected flips the positivity gate inside (Unit.cpp:4608-4612):
@@ -18408,7 +18443,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range dispelMechanicList {
-					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
+					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					s.handleEffectDispelMechanic(effCtx, effectTarget, spell, eff)
@@ -18457,7 +18492,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range killCreditList {
-					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
+					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					s.handleEffectKillCredit(effCtx, effectTarget, eff.MiscValue)
@@ -18512,7 +18547,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 				}
 				for _, effectTarget := range killCreditGroupList {
-					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
+					if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					s.handleEffectKillCreditGroup(effCtx, effectTarget, spellID, eff.MiscValue)
@@ -18736,7 +18771,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				hasUnitTarget := false
 				for _, effectTarget := range leapBackList {
-					if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 {
+					if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 && uint16(effectTarget>>48) != 0xF101 {
 						hasUnitTarget = true
 						break
 					}
@@ -19503,7 +19538,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				for _, effectTarget := range drainTargets {
 					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
-					if uint16(effectTarget>>48) == 0xF110 {
+					if uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 						continue
 					}
 					// SpellEffects.cpp:1274: damage < 0 returns before any
@@ -26013,6 +26048,13 @@ func (s *session) triggeredSpellHitResult(ctx context.Context, spell wotlk.Spell
 	if uint16(targetGUID>>48) == 0xF110 {
 		return protocol.SpellMissNone
 	}
+	// A corpse GUID never runs the unit hit table either: C++ holds
+	// corpse targets in m_UniqueCorpseTargetInfo (Spell.cpp:2281
+	// AddCorpseTarget, no miss roll), never as unit TargetInfos — the
+	// same fallback hazard as the GO arm above.
+	if uint16(targetGUID>>48) == 0xF101 {
+		return protocol.SpellMissNone
+	}
 	tgt, haveTgt := s.getCombatTarget(ctx, targetGUID)
 	targetLevel := uint8(1)
 	var targetFaction uint32
@@ -27859,6 +27901,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			selectionTargets = hitTargets
 		case isEntryAreaSpell(spell):
 			hitTargets = s.spellEntryAreaTargetsWithCenters(ctx, spell, spellID, spellTarget, funnelEntryAreaCenters)
+			selectionTargets = hitTargets
+		case isCorpseAreaSpell(spell):
+			hitTargets = s.spellCorpseAreaTargets(ctx, spell)
 			selectionTargets = hitTargets
 		case isFriendlyConeSpell(spell):
 			friendlyConeBranchRan = true
@@ -30400,6 +30445,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if eff.Effect != spellEffectOpenLock && uint16(effectTarget>>48) == 0xF110 {
 				continue
 			}
+			// CorpseTargetInfo targets never take unit effects (Spell.cpp:2281;
+			// the hit-target handlers null-return on a null unitTarget): a corpse
+			// guid riding the flat list must not resolve through the combat-target
+			// fallback to an unrelated creature. Resurrect effects read
+			// m_corpseTarget and run below, so they are exempt.
+			if uint16(effectTarget>>48) == 0xF101 && eff.Effect != spellEffectResurrect && eff.Effect != spellEffectResurrectNew {
+				continue
+			}
 			if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
 				s.executeSpellInstantKill(ctx, effectTarget, spellID)
 			} else if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
@@ -30465,7 +30518,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// (the launch path already excludes trips this way).
 					shareCount := 0
 					for _, et := range effectTargets {
-						if uint16(et.guid>>48) == 0xF110 {
+						if uint16(et.guid>>48) == 0xF110 || uint16(et.guid>>48) == 0xF101 {
 							continue
 						}
 						if !et.reflected {
@@ -30579,7 +30632,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 								}
 								// Same m_UniqueTargetInfo-only rule as the
 								// effect-2 divisor above (Spell.cpp:7764).
-								if uint16(guid>>48) == 0xF110 {
+								if uint16(guid>>48) == 0xF110 || uint16(guid>>48) == 0xF101 {
 									continue
 								}
 								if _, dup := weaponCounted[guid]; dup {
@@ -31003,7 +31056,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// when the effect has a unit target, mirroring the
 				// client arm's has-unit-target gate.
 				s.jumpToSpellTarget(ctx, spell, eff, casterLevel, effectTarget)
-				if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 && s.player != nil {
+				if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 && uint16(effectTarget>>48) != 0xF101 && s.player != nil {
 					s.lastFallTime, s.lastFallZ = 0, s.player.Z
 				}
 			} else if eff.Effect == spellEffectPlaySound {
@@ -31184,7 +31237,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// mask records — the dedicated GO block's Masked handlers
 				// already filter this way, and open-lock is the loop's
 				// only GO arm outside it.
-				if uint16(effectTarget>>48) != 0xF110 || goMaskedTargetMemberForEffect(goEffectMasks, spellTarget, selectionTargets, effectIndex, eff, effectTarget) {
+				if (uint16(effectTarget>>48) != 0xF110 && uint16(effectTarget>>48) != 0xF101) || goMaskedTargetMemberForEffect(goEffectMasks, spellTarget, selectionTargets, effectIndex, eff, effectTarget) {
 					s.handleEffectOpenLock(ctx, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: effectTarget}, spell, eff, castItemGUID != 0)
 				}
 			} else if eff.Effect == spellEffectRedirectThreat {
@@ -36571,6 +36624,14 @@ func (s *session) rollAreaTargetReflect(ctx context.Context, spell wotlk.Spell, 
 		// fallback below could otherwise resolve it to an unrelated
 		// creature row and drop or trip it on a bogus verdict.
 		if uint16(guid>>48) == 0xF110 {
+			kept = append(kept, guid)
+			continue
+		}
+		// CorpseTargetInfo targets never roll SpellHitResult either
+		// (Spell.cpp:2281 AddCorpseTarget, no miss roll): a corpse guid
+		// riding a corpse-area list keeps its place unconditionally —
+		// the same combat-target fallback hazard as the GO arm above.
+		if uint16(guid>>48) == 0xF101 {
 			kept = append(kept, guid)
 			continue
 		}
@@ -55939,7 +56000,7 @@ func (s *session) handleEffectPullTowards(eff wotlk.SpellEffect, hitTargets []ui
 		reach = 1.5
 	}
 	for _, effectTarget := range hitTargets {
-		if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
+		if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 			continue
 		}
 		var tx, ty, tz float32
@@ -56000,7 +56061,7 @@ func (s *session) handleEffectPullTowardsDest(eff wotlk.SpellEffect, target prot
 		return
 	}
 	for _, effectTarget := range hitTargets {
-		if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 {
+		if effectTarget == 0 || uint16(effectTarget>>48) == 0xF110 || uint16(effectTarget>>48) == 0xF101 {
 			continue
 		}
 		var tx, ty, tz float32

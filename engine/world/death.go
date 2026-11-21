@@ -2435,6 +2435,37 @@ type corpseTarget struct {
 
 func isCorpseGUID(guid uint64) bool { return uint16(guid>>48) == 0xF101 }
 
+// listCorpsesOnMap lists the non-bones corpses on a map+instance: the
+// characters.corpse rows Spell::SearchAreaTargets visits through the
+// corpse grid (Spell.cpp:1881-1888, GRID_MAP_TYPE_MASK_CORPSE). The row
+// guid is the owner's player GUID (lookupCorpse twin); the corpse GUID is
+// owner | 0xF101<<48. Bones (type 0) never pass SpellInfo::CheckTarget
+// (SpellInfo.cpp:1700) and are excluded here, like loadCorpse does.
+func (s *Server) listCorpsesOnMap(ctx context.Context, mapID, instanceID uint32) []corpseTarget {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return nil
+	}
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT guid, posX, posY, posZ, corpseType FROM corpse WHERE mapId = ? AND instanceId = ? AND corpseType <> ?", mapID, instanceID, corpseTypeBones)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	corpses := make([]corpseTarget, 0)
+	for rows.Next() {
+		var ownerLow uint32
+		var corpse corpseTarget
+		if err := rows.Scan(&ownerLow, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Type); err != nil {
+			continue
+		}
+		corpse.GUID = uint64(ownerLow) | (uint64(0xF101) << 48)
+		corpse.OwnerGUID = uint64(ownerLow)
+		corpse.MapID = mapID
+		corpse.InstanceID = instanceID
+		corpses = append(corpses, corpse)
+	}
+	return corpses
+}
+
 // lookupCorpse mirrors ObjectAccessor::GetCorpse: the corpse row for a corpse
 // GUID on the caster's map+instance, or false when the row is missing or
 // lives on another map/instance (a stale or foreign corpse GUID resolves to
