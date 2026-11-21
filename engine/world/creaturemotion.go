@@ -335,9 +335,9 @@ type creatureMotion struct {
 	// LastOffhandAttack is the offhand twin of LastAttack for
 	// CREATURE_FLAG_EXTRA_USE_OFFHAND_ATTACK creatures (Creature.cpp:539/
 	// 585 SetCanDualWield; UnitAI.cpp:78-80 DoMeleeAttackIfReady fires the
-	// offhand swing on its own timer). Anchored half an interval behind
-	// the first mainhand swing (Unit::Attack, Unit.cpp:5745, delays the
-	// offhand timer by 50% of the base attack time at engage).
+	// offhand swing on its own timer). Seeded so the first offhand swing
+	// lands 50% of the UNHASTED base attack time after engage (Unit::Attack,
+	// Unit.cpp:5743-5744).
 	LastOffhandAttack time.Time
 	// Boundary carries the instance LoadBossBoundaries polygons for this
 	// boss (area_boundary.go; BossAI ctor SetBoundary,
@@ -5153,8 +5153,8 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:311): the leash's
 	// last-damaged timer resets with the evade.
 	motion.LastDamaged = time.Time{}
-	// Unit::Attack (Unit.cpp:5745) re-delays the offhand swing by 50% of
-	// the base attack time on every re-engage, so the offhand stamp
+	// Unit::Attack (Unit.cpp:5743-5744) re-delays the offhand swing by 50%
+	// of the unhasted base attack time on every re-engage, so the offhand stamp
 	// resets with the evade — otherwise a re-engaged dual-wielder would
 	// swing offhand immediately on a stale stamp.
 	motion.LastOffhandAttack = time.Time{}
@@ -9901,14 +9901,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// CREATURE_FLAG_EXTRA_USE_OFFHAND_ATTACK 0x800, CreatureData.h:48)
 		// swings OFF_ATTACK on its own timer, same BaseAttackTime
 		// (Creature.cpp:586-587 SetAttackTime(OFF_ATTACK, BaseAttackTime)).
-		// Unit::Attack (Unit.cpp:5745) delays the offhand by 50% of the base
-		// attack time on engage; Go has no engage timestamp on the motion,
+		// Unit::Attack (Unit.cpp:5743-5744) delays the offhand by 50% of the
+		// unhasted base attack time on engage; Go has no engage timestamp
+		// on the motion,
 		// so the delay counts from the first in-range tick instead — the
 		// first offhand swing can land up to half an interval late after a
 		// long chase; steady-state cadence is exact.
 		if motion.FlagsExtra&creatureFlagExtraUseOffhandAttack != 0 {
 			if motion.LastOffhandAttack.IsZero() {
-				motion.LastOffhandAttack = now.Add(-attackTime / 2)
+				// Unit::Attack (Unit.cpp:5743-5744) delays the offhand
+				// timer by 50% of the UNHASTED UNIT_FIELD_BASEATTACKTIME
+				// (motion.AttackTime is that pristine field); seeding
+				// from the hasted attackTime would shrink the delay
+				// under haste.
+				baseAttackTime := time.Duration(motion.AttackTime) * time.Millisecond
+				if baseAttackTime <= 0 {
+					baseAttackTime = 2 * time.Second
+				}
+				motion.LastOffhandAttack = now.Add(-(attackTime - baseAttackTime/2))
 			}
 			if now.Sub(motion.LastOffhandAttack) >= attackTime {
 				s.executeCreatureMeleeSwing(ctx, motion, target, now, false, true)

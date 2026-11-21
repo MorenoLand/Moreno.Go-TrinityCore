@@ -1350,19 +1350,27 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					elapsed := now.Sub(motion.LastAttack)
 					if elapsed < cSwing {
 						rem := cSwing - elapsed
-						hasted := calcParryHastedRemaining(rem, cSpeed)
-						motion.LastAttack = now.Add(-(cSwing - hasted))
-						// Unit::HandleParry (Unit.cpp:1484-1496) cuts the
-						// victim's OFF_ATTACK timer by the same 20% of the
-						// remaining swing, so the offhand stamp moves with
-						// the mainhand one when the creature dual-wields.
+						// Unit::HandleParry (Unit.cpp:1484-1496) is either/or:
+						// the OFF_ATTACK timer takes the haste only when its
+						// remaining time is shorter than the base timer's
+						// (haveOffhandWeapon() && offtime < basetime);
+						// otherwise only the base timer is cut. An unseeded
+						// offhand stamp falls through to the base arm — at
+						// engage C++ holds offtime at base + 50%, longer than
+						// basetime — and an expired offhand timer is a C++
+						// no-op (0 remaining takes neither band).
+						offRem := time.Duration(-1)
 						if motion.FlagsExtra&creatureFlagExtraUseOffhandAttack != 0 && !motion.LastOffhandAttack.IsZero() {
-							offElapsed := now.Sub(motion.LastOffhandAttack)
-							if offElapsed < cSwing {
-								offRem := cSwing - offElapsed
-								offHasted := calcParryHastedRemaining(offRem, cSpeed)
-								motion.LastOffhandAttack = now.Add(-(cSwing - offHasted))
+							if offElapsed := now.Sub(motion.LastOffhandAttack); offElapsed < cSwing {
+								offRem = cSwing - offElapsed
 							}
+						}
+						if offRem >= 0 && offRem < rem {
+							offHasted := calcParryHastedRemaining(offRem, cSpeed)
+							motion.LastOffhandAttack = now.Add(-(cSwing - offHasted))
+						} else {
+							hasted := calcParryHastedRemaining(rem, cSpeed)
+							motion.LastAttack = now.Add(-(cSwing - hasted))
 						}
 					}
 				}
