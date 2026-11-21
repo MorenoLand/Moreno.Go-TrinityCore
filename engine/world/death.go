@@ -2419,6 +2419,68 @@ func (s *session) loadCorpse(ctx context.Context) (corpseRecord, bool) {
 	return corpse, true
 }
 
+// corpseTarget is one in-world corpse as Spell::AddCorpseTarget sees it:
+// the characters.corpse row keyed by the corpse GUID (HighGuid 0xF101, low
+// 32 bits = owner player GUID), scoped to the caster's map+instance the way
+// ObjectAccessor::GetCorpse is (Corpse::GetMap / the map corpse grid).
+type corpseTarget struct {
+	GUID        uint64
+	OwnerGUID   uint64
+	MapID       uint32
+	InstanceID  uint32
+	X, Y, Z     float32
+	Orientation float32
+	Type        uint32
+}
+
+func isCorpseGUID(guid uint64) bool { return uint16(guid>>48) == 0xF101 }
+
+// lookupCorpse mirrors ObjectAccessor::GetCorpse: the corpse row for a corpse
+// GUID on the caster's map+instance, or false when the row is missing or
+// lives on another map/instance (a stale or foreign corpse GUID resolves to
+// no object, like C++'s null GetCorpseTarget).
+func (s *Server) lookupCorpse(ctx context.Context, corpseGUID uint64, mapID, instanceID uint32) (corpseTarget, bool) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || !isCorpseGUID(corpseGUID) {
+		return corpseTarget{}, false
+	}
+	var corpse corpseTarget
+	row := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, mapId, instanceId, posX, posY, posZ, orientation, corpseType FROM corpse WHERE guid = ?", uint32(corpseGUID&0xFFFFFFFF))
+	var guid uint32
+	if err := row.Scan(&guid, &corpse.MapID, &corpse.InstanceID, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Orientation, &corpse.Type); err != nil {
+		return corpseTarget{}, false
+	}
+	if corpse.MapID != mapID || corpse.InstanceID != instanceID {
+		return corpseTarget{}, false
+	}
+	corpse.GUID = corpseGUID
+	corpse.OwnerGUID = uint64(guid)
+	return corpse, true
+}
+
+// corpseHitTargetOwnerGUID mirrors the m_corpseTarget arm of
+// Spell::EffectResurrect / EffectResurrectNew (SpellEffects.cpp:256-257,
+// 4280-4281): a corpse hit target resolves to its owner's player GUID when
+// the corpse exists on the caster's map+instance and the owner is online
+// (ObjectAccessor::FindPlayer twin); a non-corpse GUID passes through
+// unchanged.
+func (s *session) corpseHitTargetOwnerGUID(ctx context.Context, targetGUID uint64) (uint64, bool) {
+	if !isCorpseGUID(targetGUID) {
+		return targetGUID, true
+	}
+	if s == nil || s.server == nil || s.player == nil {
+		return 0, false
+	}
+	corpse, ok := s.server.lookupCorpse(ctx, targetGUID, s.player.Map, s.player.InstanceID)
+	if !ok {
+		return 0, false
+	}
+	ts := s.server.findSessionByGUID(corpse.OwnerGUID)
+	if ts == nil || ts.player == nil {
+		return 0, false
+	}
+	return corpse.OwnerGUID, true
+}
+
 // handleReclaimCorpse mirrors WorldSession::HandleReclaimCorpse: a ghost in
 // range of its own resurrectable corpse after the reclaim delay elapses is
 // resurrected (half health/mana, full in battlegrounds) and the corpse is
@@ -2659,13 +2721,13 @@ func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
 	}
 }
 
-// applyResurrectNewToTargets mirrors the unit-target arm of
-// Spell::EffectResurrectNew (SpellEffects.cpp:246-275): each dead player hit
-// target without an active resurrect request gets a request from the caster
-// carrying the effect damage as health and MiscValue as mana. The
-// m_corpseTarget arm has no Go model (no corpse targets on the client path);
-// the self-cast arm lives in applySelfResurrectEffect.
-func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
+// applyResurrectNewToTargets mirrors Spell::EffectResurrectNew
+// (SpellEffects.cpp:246-275): each dead player hit target without an active
+// resurrect request gets a request from the caster carrying the effect damage
+// as health and MiscValue as mana. A corpse hit target resolves to its owner
+// (the m_corpseTarget arm, SpellEffects.cpp:256-257); the self-cast arm lives
+// in applySelfResurrectEffect.
+func (s *session) applyResurrectNewToTargets(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
@@ -2680,6 +2742,11 @@ func (s *session) applyResurrectNewToTargets(spell wotlk.Spell, eff wotlk.SpellE
 	reclaimDelayApplies := spell.AttributesEx3&spellAttr3IgnoreResurrectionTimer == 0
 	for _, targetGUID := range hitTargets {
 		if targetGUID == 0 || targetGUID == s.playerGUID || uint16(targetGUID>>48) == 0xF110 {
+			continue
+		}
+		if ownerGUID, ok := s.corpseHitTargetOwnerGUID(ctx, targetGUID); ok {
+			targetGUID = ownerGUID
+		} else if isCorpseGUID(targetGUID) {
 			continue
 		}
 		targetSess := s.server.findSessionByGUID(targetGUID)

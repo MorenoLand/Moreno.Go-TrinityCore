@@ -194,9 +194,12 @@ func spellMissingExplicitTargetMask(spell wotlk.Spell, baseMask uint32) uint32 {
 // from target 23 (TARGET_GAMEOBJECT_TARGET — the only TARGET-reference GOBJ
 // row; 40/51/52/108 use CASTER/SRC/DEST references and contribute nothing),
 // and TARGET_FLAG_GAMEOBJECT_ITEM from target 26
-// (TARGET_GAMEOBJECT_ITEM_TARGET). The CORPSE bits never survive
-// GetExplicitTargetMask (TARGET_OBJECT_TYPE_CORPSE hits the default arm),
-// so the null arm's CORPSE leg is dead in C++. The SRC/DEST-location and
+// (TARGET_GAMEOBJECT_ITEM_TARGET). The CORPSE bits arrive via the
+// GetMissingTargetMask extension below: a resurrect spell's effect 18/113
+// carries used type CORPSE_ALLY (SpellInfo.cpp:636,731) and its implicit
+// targets provide no corpse bit, so the missing mask ORs
+// TARGET_FLAG_CORPSE_ALLY into the explicit mask (SpellInfo.cpp:3358-3371;
+// effect 116 likewise contributes CORPSE_ENEMY). The SRC/DEST-location and
 // TRAJ legs are irrelevant to the null arm. The GetMissingTargetMask
 // extension (SpellInfo.cpp:3364) for EFFECT_IMPLICIT_TARGET_EXPLICIT
 // effects rides spellMissingExplicitTargetMask above.
@@ -206,17 +209,18 @@ func spellMissingExplicitTargetMask(spell wotlk.Spell, baseMask uint32) uint32 {
 // selection/self fallbacks run. A gameobject wire target is never adopted as
 // the explicit unit target — C++ keeps it as the GO object target on the
 // GOTargetInfo path (Go's gameobject_destructible.go wire-GO append is the
-// mirror). Corpse wire targets are always dropped: GetExplicitTargetMask
-// never produces corpse bits (SpellInfo.cpp:134-212), so the C++ CORPSE arm
-// always removes them. A unit wire target (player, creature, pet, minipet —
-// C++ ToUnit covers them all, including a not-released player corpse) needs
-// a unit bit in the mask.
+// mirror). A corpse wire target is kept exactly when the explicit mask needs
+// corpse bits (resurrect 18/113, skin 116) — C++ keeps it as the corpse
+// object target (Spell.cpp:674-675) and SelectEffectTypeImplicitTargets
+// (Spell.cpp:1785-1805) feeds it to AddCorpseTarget. A unit wire target
+// (player, creature, pet, minipet — C++ ToUnit covers them all, including a
+// not-released player corpse) needs a unit bit in the mask.
 func explicitWireTargetFitsMask(spell wotlk.Spell, target protocol.SpellTargetData) bool {
 	if target.Flags&protocol.SpellTargetFlagGameObject != 0 {
 		return false
 	}
 	if target.Flags&(protocol.SpellTargetFlagCorpseEnemy|protocol.SpellTargetFlagCorpseAlly) != 0 {
-		return false
+		return spellExplicitObjectTargetMask(spell)&(targetFlagCorpseAlly|targetFlagCorpseEnemy) != 0
 	}
 	return spellExplicitObjectTargetMask(spell)&targetFlagUnitMask != 0
 }
@@ -399,8 +403,11 @@ func (s *session) explicitSelectionTargetOK(ctx context.Context, spell wotlk.Spe
 //     and the guid type decides, not the flag: a GO guid sent with only the
 //     Unit flag is kept as the GO target when the mask takes gameobjects,
 //     dropped otherwise — never adopted as a unit, so the faction/blocked
-//     gates never run on a getCombatTarget reconstruction of it;
-//     corpse wire targets have no Go model.
+//     gates never run on a getCombatTarget reconstruction of it; a corpse
+//     guid (0xF101) is likewise kept as the corpse target when the mask
+//     takes corpse bits (resurrect 18/113, skin 116) and the corpse row
+//     exists on the caster's map+instance, adopted as the corpse GUID so it
+//     rides hitTargets and the GO packet's hit list like C++'s AddCorpseTarget.
 //   - the selection/self fallbacks run only when NO wire object target was sent
 //     at all (Spell.cpp:668 — the else branch): the selection additionally needs
 //     the unit-mask gate and a passing CheckExplicitTarget (Spell.cpp:678-690,
@@ -413,10 +420,11 @@ func (s *session) explicitSelectionTargetOK(ctx context.Context, spell wotlk.Spe
 //
 // Validation (CheckExplicitTarget):
 //   - null-target arm (SpellInfo.cpp:1784-1790): BAD_TARGETS when the explicit
-//     mask needs a unit or gameobject target and none was adopted, with the
-//     GAMEOBJECT_ITEM + itemTarget escape (SpellInfo.cpp:1787). A fitting
-//     gameobject wire target satisfies the arm like C++'s non-null GO object
-//     target.
+//     mask needs a unit, gameobject, or corpse target and none was adopted,
+//     with the GAMEOBJECT_ITEM + itemTarget escape (SpellInfo.cpp:1787). A
+//     fitting gameobject wire target satisfies the arm like C++'s non-null
+//     GO object target, and a fitting corpse wire target like C++'s non-null
+//     corpse object target.
 //   - unit gates (SpellInfo.cpp:1793-1816): the IsValidAttackTarget/
 //     IsValidAssistTarget flag gates (spellTargetUnitBlocked) and the
 //     hostility/faction gates (explicitTargetFactionBlocked, BAD_TARGETS).
@@ -452,11 +460,28 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 	// CheckExplicitTarget unit gates never run on it (SpellInfo.cpp:1793,
 	// ToUnit null). The guid type, not the flag, decides adoption.
 	wireGO := wireObject && uint16(target.UnitGUID>>48) == 0xF110
-	wireUnit := !wireGO && target.UnitGUID != 0 && target.Flags&protocol.SpellTargetFlagGameObject == 0 &&
+	// A corpse guid resolves by guid type, not by flag, like C++'s
+	// SpellCastTargets::Update (Spell.cpp:462): a 0xF101 guid sent with only
+	// the Unit flag is still a corpse target, never a unit.
+	wireCorpse := wireObject && uint16(target.UnitGUID>>48) == 0xF101
+	wireUnit := !wireGO && !wireCorpse && target.UnitGUID != 0 && target.Flags&protocol.SpellTargetFlagGameObject == 0 &&
 		target.Flags&(protocol.SpellTargetFlagUnit|protocol.SpellTargetFlagUnitMinipet) != 0
 	switch {
 	case wireUnit && explicitWireTargetFitsMask(spell, target):
 		adoptedUnit = target.UnitGUID
+	case wireCorpse && explicitWireTargetFitsMask(spell, target):
+		// Spell::InitExplicitTargets (Spell.cpp:668-678) keeps a corpse wire
+		// target when the explicit mask needs corpse bits; the corpse must
+		// exist on the caster's map+instance (ObjectAccessor::GetCorpse
+		// twin) or the adoption fails and the null arm below rejects the
+		// cast. The adopted corpse GUID rides hitTargets like C++'s
+		// AddCorpseTarget (Spell.cpp:2281) and lands in the GO packet's hit
+		// list (Spell.cpp:4515-4517).
+		if s.player != nil {
+			if _, ok := s.server.lookupCorpse(ctx, target.UnitGUID, s.player.Map, s.player.InstanceID); ok {
+				adoptedUnit = target.UnitGUID
+			}
+		}
 	case !wireObject && s.selection != 0 && s.player.CritterGUID != 0 && s.selection == s.player.CritterGUID &&
 		spellExplicitUnitTargetMask(spell)&targetFlagUnitMinipet != 0:
 		// Spell::InitExplicitTargets selection arm (Spell.cpp:678-690) for
@@ -475,7 +500,11 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 	}
 	if adoptedUnit != 0 {
 		target.UnitGUID = adoptedUnit
-		target.Flags |= protocol.SpellTargetFlagUnit
+		// A corpse adoption keeps its corpse flags: the Unit flag would make
+		// the START/GO target data read the guid as a unit (Spell.cpp:248).
+		if !isCorpseGUID(adoptedUnit) {
+			target.Flags |= protocol.SpellTargetFlagUnit
+		}
 	} else if wireUnit {
 		target.UnitGUID = 0
 		target.Flags &^= protocol.SpellTargetFlagUnit | protocol.SpellTargetFlagUnitMinipet
@@ -495,9 +524,10 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 			target.Flags &^= protocol.SpellTargetFlagUnit | protocol.SpellTargetFlagUnitMinipet | protocol.SpellTargetFlagGameObject | protocol.SpellTargetFlagCorpseEnemy | protocol.SpellTargetFlagCorpseAlly
 		}
 	} else if wireObject && target.Flags&protocol.SpellTargetFlagGameObject == 0 {
-		// Corpse wire target: C++ removes it (Spell.cpp:674-675) — the
-		// explicit mask never carries corpse bits — and Go has no
-		// corpse-target model downstream.
+		// Corpse wire target that failed adoption (the mask needs no corpse
+		// bits, or the corpse row is missing/stale): C++ removes it
+		// (Spell.cpp:674-675) — the null arm below then rejects the cast
+		// when the mask needed a corpse target.
 		target.UnitGUID = 0
 		target.Flags &^= protocol.SpellTargetFlagCorpseEnemy | protocol.SpellTargetFlagCorpseAlly
 	}
@@ -516,7 +546,7 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 		wireGOSatisfies := spellGameObjectTargetGUID(target) != 0 &&
 			spellExplicitObjectTargetMask(spell)&(targetFlagGameObject|targetFlagGameObjectItem) != 0
 		if !wireGOSatisfies {
-			if needed := spellExplicitObjectTargetMask(spell); needed&(targetFlagUnitMask|targetFlagGameObject|targetFlagGameObjectItem) != 0 {
+			if needed := spellExplicitObjectTargetMask(spell); needed&(targetFlagUnitMask|targetFlagGameObject|targetFlagGameObjectItem|targetFlagCorpseAlly|targetFlagCorpseEnemy) != 0 {
 				if needed&targetFlagGameObjectItem == 0 || target.Flags&protocol.SpellTargetFlagItemWireMask == 0 || target.ItemGUID == 0 {
 					return 0, target, spellFailedBadTargets, "no explicit target for mask-needing spell"
 				}

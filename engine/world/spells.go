@@ -3080,6 +3080,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// Self-cast-only spells keep the legacy read: their explicit mask is empty
 	// (no C++ adoption) and the dedicated arm below owns their target slot.
 	targetGUID := uint64(0)
+	// corpseTargetGUID carries the wire corpse target (if any) past the
+	// owner rebind below: C++ CheckRange reads only GetUnitTarget(), which
+	// is null for a corpse-targeted cast, so the whole range block is
+	// skipped for corpse targets (Spell.cpp:6540-6572).
+	corpseTargetGUID := uint64(0)
 	if isSelfCastOnly(spell) {
 		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 			// A gameobject wire guid is not a unit target: GetUnitTarget
@@ -3287,12 +3292,26 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 
 	// Corpse-specific target checks (SpellInfo::CheckTarget, SpellInfo.cpp:1697-1710):
-	// documented no-bridge. The CORPSE_BONES reject, the owner rebind
-	// (unitTarget = ObjectAccessor::FindPlayer(corpse->GetOwnerGUID())), and
-	// the ownerless-corpse BAD_TARGETS reject all require a corpse-typed
-	// target — Go has no corpse-target model on the client path (targetGUID
-	// can only name units), so the ToCorpse() leg never fires. Sits ahead of
-	// the corpseOwner/unit section in C++ CheckTarget order.
+	// a bare-bones corpse rejects with BAD_TARGETS, the owner is rebound as
+	// the unit target for the gates below (only-players, dead-target,
+	// creature-type, aura/LOS arms), and an ownerless corpse — no row, or
+	// the owner offline (ObjectAccessor::FindPlayer twin) — rejects with
+	// BAD_TARGETS. Sits ahead of the corpseOwner/unit section in C++ CheckTarget order.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if targetGUID != 0 && isCorpseGUID(targetGUID) {
+		corpseTargetGUID = targetGUID
+		corpse, ok := s.server.lookupCorpse(ctx, targetGUID, s.player.Map, s.player.InstanceID)
+		ownerSess := (*session)(nil)
+		if ok {
+			ownerSess = s.server.findSessionByGUID(corpse.OwnerGUID)
+		}
+		if !ok || corpse.Type == corpseTypeBones || ownerSess == nil || ownerSess.player == nil {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "corpse target invalid", "failReason", spellFailedBadTargets)
+			return true
+		}
+		targetGUID = corpse.OwnerGUID
+	}
 
 	// Only-target-players gate (SpellInfo::CheckTarget, SpellInfo.cpp:1712-1713):
 	// a spell with SPELL_ATTR3_ONLY_TARGET_PLAYERS rejects a non-player unit
@@ -3888,8 +3907,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// spells also have range check". The behind/facing/unit-LOS/dest-LOS
 	// arms ride the CheckTarget block above (Spell.cpp:5372-5413); only the
 	// pure range arms (unit, GO, dest) move here. The ammo leg stays in
-	// CheckItems (WEAPON_DAMAGE arm, Spell.cpp:7113-7178).
-	if targetGUID != 0 && targetGUID != s.playerGUID {
+	// CheckItems (WEAPON_DAMAGE arm, Spell.cpp:7113-7178). A corpse target
+	// skips the block whole: C++ CheckRange reads only GetUnitTarget(),
+	// which is null for a corpse-targeted cast (Spell.cpp:6540-6572).
+	if targetGUID != 0 && targetGUID != s.playerGUID && corpseTargetGUID == 0 {
 		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 			pReach := float32(1.5)
 			if s.player.CombatReach > 0 {
@@ -9524,6 +9545,13 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 	}
 	live := make([]uint64, 0, len(targets))
 	for _, guid := range targets {
+		// Corpse targets always hit: C++ CorpseTargetInfo::DoTargetSpellHit
+		// (Spell.cpp:2696-2708) resolves the corpse and applies the effects
+		// with no PreprocessSpellHit arms (no evade/immunity/miss path).
+		if isCorpseGUID(guid) {
+			live = append(live, guid)
+			continue
+		}
 		// For a reflected cast the DoTargetSpellHit arrival arms run on
 		// the reflector (the C++ TargetInfo target); the retargeted
 		// caster only receives the effects. The non-reflect case is the
@@ -9693,6 +9721,11 @@ func (s *session) revalidateUnk4ArrivalTargets(spell wotlk.Spell, targets []uint
 	}
 	live := make([]uint64, 0, len(targets))
 	for _, guid := range targets {
+		// Corpse targets always hit (Spell.cpp:2696-2708, no preprocess arms).
+		if isCorpseGUID(guid) {
+			live = append(live, guid)
+			continue
+		}
 		if s.server != nil && s.player != nil {
 			if high := uint16(guid >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
 				if s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, guid) {
@@ -18008,7 +18041,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self + dead-target request chain
 				s.applySelfResurrectEffect(spell)
-				s.applyResurrectNewToTargets(spell, eff, hitTargets)
+				s.applyResurrectNewToTargets(effCtx, spell, eff, hitTargets)
 			case spellEffectTeleportUnits: // 5: SPELL_EFFECT_TELEPORT_UNITS (EffectTeleportUnits, SpellEffects.cpp:1199)
 				if s.player == nil {
 					break
@@ -30598,7 +30631,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if effectTarget == s.playerGUID {
 					s.applySelfResurrectEffect(spell)
 				} else {
-					s.applyResurrectNewToTargets(spell, eff, []uint64{effectTarget})
+					s.applyResurrectNewToTargets(ctx, spell, eff, []uint64{effectTarget})
 				}
 			} else if eff.Effect == 6 || (eff.Aura != 0 && eff.Effect != spellEffectPersistentAreaAura) { // SPELL_EFFECT_APPLY_AURA
 				// Spell::EffectPersistentAA (SpellEffects.cpp:1729) runs in
@@ -58968,6 +59001,13 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	if targetGUID == 0 || s.server == nil || s.player == nil {
 		return
 	}
+	// A corpse hit target resolves to its owner (the m_corpseTarget arm,
+	// SpellEffects.cpp:4280-4281); an unresolvable corpse takes nothing.
+	if ownerGUID, ok := s.corpseHitTargetOwnerGUID(ctx, targetGUID); ok {
+		targetGUID = ownerGUID
+	} else if isCorpseGUID(targetGUID) {
+		return
+	}
 	targetSess := s.server.findSessionByGUID(targetGUID)
 	if targetSess == nil || targetSess.player == nil {
 		return
@@ -59002,8 +59042,9 @@ func (s *session) handleEffectResurrect(ctx context.Context, targetGUID uint64, 
 	// CASTER, so the stored location is the resurrector's position (the
 	// accept path teleports the ghost there before resurrecting). Storing
 	// zeros teleported every accepted player resurrection to map 0 (0,0,0).
-	// The m_corpseTarget arm has no Go model (no corpse targets on the client
-	// path — spells.go target check notes); appliedAura is 0 on this path.
+	// The corpse arm above resolves the log target to the corpse's owner,
+	// like C++ ExecuteLogEffectResurrect(effIndex, player); appliedAura is 0
+	// on this path.
 	targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
 	// Spell::SendResurrectRequest (Spell.cpp:4693-4709): the fourth byte
 	// overrides the corpse-reclaim delay for spells carrying
