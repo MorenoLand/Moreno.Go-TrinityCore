@@ -17281,8 +17281,8 @@ func init() {
 	// port overwrites the live fatal-bite timer (EventMap semantics —
 	// voone pummel precedent). SPELL_FRENZY 8269 is enum-only in C++
 	// (never cast), omitted by design. IsSummonedBy's MovePath
-	// (GIZRUL_PATH 402450) is documented-only — no MotionMaster
-	// bridge (the_beast precedent). UpdateAI combat-branch CASTING
+	// (GIZRUL_PATH 402450, false) ports via creature:MovePath on ev22
+	// (one-shot finalize in the waypoint launch leg). UpdateAI combat-branch CASTING
 	// gates ported as 500ms IsCasting defers. Reset _Reset /
 	// JustDied _JustDied covered by the cancel on 2/4/23. Entry 10268 verifiable from the C++ sources:
 	// blackrock_spire.h:66 names NPC_GIZRUL_THE_SLAVENER = 10268
@@ -18323,8 +18323,10 @@ func init() {
 	// (tick47): the 8 combat arms defer 500ms while IsCasting()
 	// (lua_creature_events.go:1950), no re-arm consumed; the
 	// non-victim intro branch is unmodeled, so it stays ungated.
-	// Documented-only: intro choreography, gate/brazier GO arms,
-	// go_brazier_of_the_herald (no bridges).
+	// Intro choreography PORTED (ev22 IsSummonedBy + ev6 MovementInform
+	// + MovePath/MoveTo bridges): INTRO_1..6 path, gate/brazier GO arms
+	// via FindNearestGameObject; go_brazier_of_the_herald ported in the
+	// same Lua file.
 	RegisterLuaBoss("boss_kirtonos_the_herald", 10506)
 	// instance_scholomance.cpp audit (map 289, "SC", EK loader decl :122 /
 	// call :300 follows kirtonos_the_herald): InstanceMapScript only — no

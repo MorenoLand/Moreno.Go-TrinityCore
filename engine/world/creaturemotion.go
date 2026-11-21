@@ -636,9 +636,18 @@ type creatureMotion struct {
 	PetReact        uint8 // 0: passive, 1: defensive, 2: aggressive
 	AutocastSpells  []uint32
 
-	PathID         uint32
-	Points         []waypointPoint
-	NextIdx        int
+	PathID  uint32
+	Points  []waypointPoint
+	NextIdx int
+	// PathOneShot is the MovePath(pathId, false) twin
+	// (MotionMaster.cpp:1016-1023, WaypointMovementGenerator.cpp:374-378):
+	// a non-repeating path ends after its last node instead of looping.
+	// False is the repeating default every existing patrol carries.
+	PathOneShot bool
+	// PathStarted marks a path run in progress: at least one node has
+	// launched. It distinguishes the pre-first-node NextIdx==0 from the
+	// post-last-node wrap the one-shot finalize keys on.
+	PathStarted    bool
 	LastWaypointID uint32 // node id of the last waypoint arrival (Creature::_currentWaypointNodeInfo.first, WaypointMovementGenerator.cpp:264); 0 before the first arrival, the C++ (0,0) default
 	Walking        bool   // persistent MOVEMENTFLAG_WALKING (Creature::SetWalk, Creature.cpp:3012); folded into creatureSplineVelocity, distinct from per-spline walk velocity
 
@@ -2772,6 +2781,37 @@ func (s *Server) startCreatureWaypoint(ctx context.Context, motion *creatureMoti
 	motion.PathID = pathID
 	motion.Points = points
 	motion.NextIdx = 0
+	motion.PathOneShot = false
+	motion.PathStarted = false
+	motion.MoveType = 2
+	motion.WaitUntil = time.Now().Add(time.Second)
+	return true
+}
+
+// startCreaturePath mirrors the parameterized arm of
+// MotionMaster::MovePath (MotionMaster.cpp:1016-1023): installs the
+// waypoint generator on the waypoint_data path `pathID`, repeating
+// when `repeatable` is true, one-shot otherwise. A pathId of 0 is a
+// no-op (C++ early return); a missing or empty path is a no-op,
+// matching C++'s failed path load. The run restarts at the first node
+// with the DoInitialize 1s hold, and a spline already in flight
+// finishes first (C++ StopMoving has no Go twin here) — the same
+// deltas as startCreatureWaypoint.
+func (s *Server) startCreaturePath(ctx context.Context, motion *creatureMotion, pathID uint32, repeatable bool) bool {
+	if s == nil || motion == nil || pathID == 0 {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	points := s.loadWaypoints(ctx, pathID)
+	if len(points) == 0 {
+		return false
+	}
+	motion.PathID = pathID
+	motion.Points = points
+	motion.NextIdx = 0
+	motion.PathOneShot = !repeatable
+	motion.PathStarted = false
 	motion.MoveType = 2
 	motion.WaitUntil = time.Now().Add(time.Second)
 	return true
@@ -10412,6 +10452,29 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	var hasFacing bool
 	walk := true
 	if motion.MoveType == 2 {
+		// WaypointMovementGenerator::ComputeNextNode + StartMove
+		// (WaypointMovementGenerator.cpp:290-315, 374-378): a
+		// non-repeating path ends after its last node — ComputeNextNode
+		// returns false, so StartMove finalizes instead of launching:
+		// home becomes the last node (owner orientation),
+		// UpdateCurrentWaypointInfo(0, 0) clears the last-arrival id,
+		// and the generator stops (MoveType drops to idle; the
+		// DoFinalize SetWalk(false) leg clears the walk flag). The
+		// WaypointPathEnded AI hook has no Eluna event, so it stays
+		// out. NextIdx wrapped to 0 when the last node launched and
+		// PathStarted marks a run in progress, so a fresh path
+		// (NextIdx 0, not started) launches its first node normally.
+		if motion.PathOneShot && motion.PathStarted && motion.NextIdx == 0 {
+			last := motion.Points[len(motion.Points)-1]
+			motion.HomeX, motion.HomeY, motion.HomeZ = last.X, last.Y, last.Z
+			motion.HomeO = motion.Orientation
+			motion.LastWaypointID = 0
+			motion.MoveType = 0
+			motion.Walking = false
+			motion.PathOneShot = false
+			motion.PathStarted = false
+			return
+		}
 		point := motion.Points[motion.NextIdx]
 		destX, destY, destZ = point.X, point.Y, point.Z
 		walk = point.MoveType == 0 // WAYPOINT_MOVE_TYPE_WALK (WaypointDefines.h:26); default RUN
@@ -10427,6 +10490,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			facing, hasFacing = point.Orientation, true
 		}
 		motion.NextIdx = (motion.NextIdx + 1) % len(motion.Points)
+		motion.PathStarted = true
 		if speed < 0.001 {
 			// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
 			// velocity below 0.001 fails validation — no spline is launched and no
@@ -10449,9 +10513,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// (RandomMovementGenerator carries no such arm. The orientation in
 		// C++ SetHomePosition(x,y,z,o) carries the owner's CURRENT orientation
 		// (WaypointMovementGenerator.cpp:297-300: o = owner->GetOrientation()),
-		// so HomeO tracks it; the non-repeating-path end-of-path arm stays
-		// unmodeled (WaypointMovementGenerator.cpp:297-309 — Go paths repeat
-		// by default.)
+		// so HomeO tracks it; the non-repeating-path end-of-path arm
+		// (WaypointMovementGenerator.cpp:297-309) runs at the top of
+		// this branch, keyed on PathOneShot + PathStarted + NextIdx==0.
 		motion.HomeX, motion.HomeY, motion.HomeZ = destX, destY, destZ
 		motion.HomeO = motion.Orientation
 	} else if motion.MoveType == 1 {

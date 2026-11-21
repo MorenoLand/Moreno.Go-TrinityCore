@@ -298,6 +298,8 @@ func (s *session) npcMovementReset(ctx context.Context, motion *creatureMotion, 
 	if pathLoaded {
 		motion.PathID = 0
 		motion.Points = points
+		motion.PathOneShot = false
+		motion.PathStarted = false
 	}
 	motion.NextIdx = 0
 	motion.Moving = false

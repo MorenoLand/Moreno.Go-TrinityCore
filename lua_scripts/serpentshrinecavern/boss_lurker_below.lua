@@ -48,7 +48,7 @@
 -- Go rotate leg): the per-tick HasInArc + SPOUT_DIST(100 yd) +
 -- IsInWater player pick and the triggered 37433 per-player casts,
 -- the SPOUT_ANIM 42835 upkeep, the melee suppression (the passive
--- gate, creaturemotion.go:6533) and the MovementInform
+-- gate, creaturemotion.go:6642) and the MovementInform
 -- react-aggressive flip all ride the pump + the ev28 handler.
 -- Whirl 18s (20s right after a spout) -> DoCast self 37660,
 -- re-arm 18000 (C++-exact). CheckTimer 15s then 2s -> inRange =
@@ -381,7 +381,7 @@ local function lurkerTick(creature, guid)
         -- SPOUT_ANIM 42835 upkeep re-casts every 1s; the countdown
         -- ends the machine and the MovementInform handler flips
         -- react back to aggressive. The C++ melee suppression rides
-        -- the REACT_PASSIVE gate (creaturemotion.go:6533).
+        -- the REACT_PASSIVE gate (creaturemotion.go:6642).
         if st.rot > 0 then
             local arc = math.pi / 10
             for _, p in ipairs(playersInInstanceRaw(creature)) do

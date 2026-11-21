@@ -5270,8 +5270,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// GetCurrentWaypointInfo, the node id the waypoint generator last
 	// reported on arrival (WaypointMovementGenerator.cpp:264); 0 before
 	// the first arrival or for pathless creatures, the C++ (0,0) default.
-	// The path-end (0,0) reset (WaypointMovementGenerator.cpp:313) stays
-	// out: Go paths loop, so the last arrival stands.
+	// The path-end (0,0) reset (WaypointMovementGenerator.cpp:313) runs
+	// in the waypoint launch leg for one-shot paths (startCreaturePath).
 	methods["GetCurrentWaypointId"] = luaNoArgs(func() any {
 		s.motionMu.Lock()
 		defer s.motionMu.Unlock()
@@ -5283,6 +5283,32 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// hold; pathless or empty paths no-op.
 	methods["MoveWaypoint"] = func(ctx context.Context, _ []any) ([]any, error) {
 		s.startCreatureWaypoint(ctx, motion)
+		return nil, nil
+	}
+	// MovePath is MotionMaster::MovePath (MotionMaster.cpp:1016-1023):
+	// installs the waypoint generator on the waypoint_data path `pathId`,
+	// repeating when `repeatable` is true, one-shot otherwise (Eluna has
+	// no MovePath; this is a new Go bridge on the MoveWaypoint precedent).
+	// A pathId of 0 no-ops (C++ early return); a missing or empty path
+	// no-ops (C++ failed path load). The run restarts at the first node
+	// after the DoInitialize 1s hold. The one-shot finalize
+	// (WaypointMovementGenerator.cpp:290-315: home becomes the last node,
+	// LastWaypointID resets to 0, generator stops) runs in the waypoint
+	// launch leg; the WaypointPathEnded AI hook has no Eluna event.
+	methods["MovePath"] = func(ctx context.Context, args []any) ([]any, error) {
+		pathID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		repeatable := false
+		if len(args) >= 2 {
+			b, ok := args[1].(bool)
+			if !ok {
+				return nil, fmt.Errorf("MovePath requires a bool repeatable")
+			}
+			repeatable = b
+		}
+		s.startCreaturePath(ctx, motion, pathID, repeatable)
 		return nil, nil
 	}
 	// MoveRotate is MotionMaster::MoveRotate (MotionMaster.cpp:1031-1039):

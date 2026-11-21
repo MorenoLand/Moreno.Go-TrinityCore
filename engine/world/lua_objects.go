@@ -3875,6 +3875,26 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, nil
 	}
+	// MovePath is MotionMaster::MovePath (MotionMaster.cpp:1016-1023),
+	// the session-creature twin of the handler binding.
+	methods["MovePath"] = func(ctx context.Context, args []any) ([]any, error) {
+		pathID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		repeatable := false
+		if len(args) >= 2 {
+			b, ok := args[1].(bool)
+			if !ok {
+				return nil, fmt.Errorf("MovePath requires a bool repeatable")
+			}
+			repeatable = b
+		}
+		if motion := luaTapMotion(); motion != nil {
+			s.server.startCreaturePath(ctx, motion, pathID, repeatable)
+		}
+		return nil, nil
+	}
 	// SetWalk is Creature::SetWalk (Creature.cpp:3012-3021), the
 	// session-creature twin of the handler binding.
 	methods["SetWalk"] = func(_ context.Context, args []any) ([]any, error) {

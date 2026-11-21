@@ -145,6 +145,8 @@ func (s *session) wpRefreshMotion(ctx context.Context, motion *creatureMotion, p
 	motion.MoveType = moveType
 	motion.PathID = pathID
 	motion.NextIdx = 0
+	motion.PathOneShot = false
+	motion.PathStarted = false
 	if moveType == 2 && pathID != 0 {
 		motion.Points = s.server.loadWaypoints(ctx, pathID)
 	} else {

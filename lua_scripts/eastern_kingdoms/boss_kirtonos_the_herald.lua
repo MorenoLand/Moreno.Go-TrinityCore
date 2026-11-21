@@ -13,7 +13,7 @@
 -- "kirtonos"/"Kirtonos" for the script registration (loader lines and
 -- instance_scholomance.cpp's GO_GATE_KIRTONOS guid arms only otherwise).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
+-- 6 OnReachWP, 22 OnSummoned, 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Verifiable numbers (file's own enums): SPELL_SWOOP = 18144 /
 -- SPELL_WING_FLAP = 12882 / SPELL_PIERCE_ARMOR = 6016 / SPELL_DISARM =
@@ -60,18 +60,20 @@
 --   ResetDoorOrButton stays out (no bridge); _JustDied() leg stays out;
 --   the old "no despawn bridge" on the 5s DespawnOrUnsummon arm was
 --   stale (creature:Despawn() is bridged, lua_creature_events.go:3318).
--- - IsSummonedBy + MovementInform INTRO_1..6 choreography: MovePath(
---   KIRTONOS_PATH = 105061) and MovePoint (no MotionMaster bridge —
---   selin_fireheart precedent); the gate SetGoState(GO_STATE_READY) arm
---   (instance-model blocked); SetFacingTo (bridged) / SetWalk (no bridge)
---   / SetDisableGravity (bridged); Talk(EMOTE_SUMMONED = 0) and the EMOTE_ONESHOT_ROAR
---   (emote legs fire inside the unmodeled intro); the INTRO_5 staff equip
---   arm fires inside the same unmodeled intro choreography (the combat
---   transform-toggle staff legs are ported in onTransform); UNIT_FLAG_NON_ATTACKABLE/NOT_SELECTABLE and
---   REACT_PASSIVE/REACT_AGGRESSIVE flag legs (the SetFlag(59)/
---   SetReactState bridges exist since 2026-10-20, but these legs fire
---   inside the unported MovementInform intro choreography, so they
---   stay out — koltira / eye_of_acherus precedents for the machine).
+-- - IsSummonedBy + MovementInform INTRO_1..6 choreography PORTED
+--   below (ev22 + ev6 + MovePath/MoveTo bridges): INTRO_1 MovePath(
+--   KIRTONOS_PATH = 105061, false); waypoint arrival at node index 13
+--   (POINT_KIRTONOS_LAND, the C++ _currentNode index — ev6's id arg,
+--   not the DB point id) -> INTRO_2 after 1500ms; INTRO_2 MoveTo
+--   PosMove[0] + INTRO_3 after 1s; INTRO_3 gate SetGoState(READY) +
+--   SetFacingTo(0.01745329) + INTRO_4 after 3s; INTRO_4 brazier
+--   SetGoState(READY) + SetWalk(true) + SetDisableGravity(false) +
+--   DoCast(KIRTONOS_TRANSFORM) + SetCanFly(false) + INTRO_5 after 1s;
+--   INTRO_5 PerformEmote(ROAR) + staff equip + RemoveFlag(
+--   NON_ATTACKABLE|NOT_SELECTABLE) + SetReactState(AGGRESSIVE) +
+--   INTRO_6 after 5s; INTRO_6 MoveTo PosMove[1]. The gate/brazier
+--   SetGoState legs use the same FindNearestGameObject pattern as
+--   JustDied/EnterEvadeMode (entries unique in the instance).
 -- - go_brazier_of_the_herald::OnGossipHello (GameObjectScript, registered
 --   by new go_brazier_of_the_herald): me->UseDoorOrButton() is ported via
 --   go:UseDoorOrButton (bridged, engine/world/lua_objects.go:1113) on the
@@ -103,6 +105,18 @@ local WEAPON_KIRTONOS_STAFF = 11365
 local GO_BRAZIER_OF_THE_HERALD = 175564
 local GO_GATE_KIRTONOS = 175570 -- scholomance.h:48
 local POS_SUMMON = {315.028, 70.53845, 102.1496, 0.3859715} -- C++ PosSummon[0]
+local POS_MOVE = { -- C++ PosMove[2] (boss_kirtonos_the_herald.cpp:71-75)
+    {299.4884, 92.76137, 105.6335},
+    {314.8673, 90.30210, 101.6459},
+}
+local KIRTONOS_PATH = 105061
+local POINT_KIRTONOS_LAND = 13 -- C++ _currentNode index, not the DB point id
+local EMOTE_SUMMONED = 0
+local EMOTE_ONESHOT_ROAR = 15 -- SharedDefines.h:1950
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
+local UNIT_FLAG_NON_ATTACKABLE = 0x00000002
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local SOUND_SCREECH = 557
 
 local SPELL_SWOOP = 18144
@@ -242,6 +256,80 @@ local function onTransform(creature, guid)
     schedule(guid, "transform", math.random(16000, 18000), function() onTransform(creature, guid) end)
 end
 
+-- C++ INTRO_6 (boss_kirtonos_the_herald.cpp:186-187): MovePoint(0,
+-- PosMove[1]) via creature:MoveTo (MovePoint bridge, thrall-guard
+-- precedent); the ev28 arrival has no C++ arm.
+local function onIntro6(creature, guid)
+    creature:MoveTo(0, POS_MOVE[2][1], POS_MOVE[2][2], POS_MOVE[2][3])
+end
+
+-- C++ INTRO_5 (:179-185): roar emote, staff equip (slot 0 only),
+-- clear NON_ATTACKABLE|NOT_SELECTABLE, REACT_AGGRESSIVE, INTRO_6 in 5s.
+local function onIntro5(creature, guid)
+    creature:PerformEmote(EMOTE_ONESHOT_ROAR)
+    creature:SetEquipmentSlots(WEAPON_KIRTONOS_STAFF, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE)
+    creature:RemoveFlag(59, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    schedule(guid, "intro6", 5000, function() onIntro6(creature, guid) end)
+end
+
+-- C++ INTRO_4 (:170-177): brazier READY, walk, gravity off, transform
+-- cast, can-fly off, INTRO_5 in 1s.
+local function onIntro4(creature, guid)
+    local brazier = creature:FindNearestGameObject(GO_BRAZIER_OF_THE_HERALD, 100.0)
+    if brazier then brazier:SetGoState(1) end -- GO_STATE_READY
+    creature:SetWalk(true)
+    creature:SetDisableGravity(false)
+    creature:CastSpell(creature, SPELL_KIRTONOS_TRANSFORM)
+    creature:SetCanFly(false)
+    schedule(guid, "intro5", 1000, function() onIntro5(creature, guid) end)
+end
+
+-- C++ INTRO_3 (:164-168): gate READY, face 0.01745329, INTRO_4 in 3s.
+local function onIntro3(creature, guid)
+    local gate = creature:FindNearestGameObject(GO_GATE_KIRTONOS, 100.0)
+    if gate then gate:SetGoState(1) end -- GO_STATE_READY
+    creature:SetFacingTo(0.01745329)
+    schedule(guid, "intro4", 3000, function() onIntro4(creature, guid) end)
+end
+
+-- C++ INTRO_2 (:160-162): MovePoint(0, PosMove[0]) via creature:MoveTo,
+-- INTRO_3 in 1s.
+local function onIntro2(creature, guid)
+    creature:MoveTo(0, POS_MOVE[1][1], POS_MOVE[1][2], POS_MOVE[1][3])
+    schedule(guid, "intro3", 1000, function() onIntro3(creature, guid) end)
+end
+
+-- C++ INTRO_1 (:157-159): MovePath(KIRTONOS_PATH, false).
+local function onIntro1(creature, guid)
+    creature:MovePath(KIRTONOS_PATH, false)
+end
+
+-- C++ MovementInform (:141-145): WAYPOINT_MOTION_TYPE arrival at node
+-- index POINT_KIRTONOS_LAND (13) schedules INTRO_2 after 1500ms. The
+-- ev6 id arg is the node index (C++ _currentNode), matching the C++
+-- check exactly; other waypoint arrivals are ignored.
+local function onReachWP(_, creature, moveType, pointId)
+    if moveType ~= 2 then -- WAYPOINT_MOTION_TYPE
+        return
+    end
+    if pointId == POINT_KIRTONOS_LAND then
+        local guid = creature:GetGUIDLow()
+        schedule(guid, "intro2", 1500, function() onIntro2(creature, guid) end)
+    end
+end
+
+-- C++ IsSummonedBy (:127-134): INTRO_1 in 500ms, gravity off, passive,
+-- NON_ATTACKABLE|NOT_SELECTABLE, Talk(EMOTE_SUMMONED).
+local function onSummoned(_, creature)
+    local guid = creature:GetGUIDLow()
+    creature:SetDisableGravity(true)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:SetFlag(59, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+    creature:Talk(EMOTE_SUMMONED)
+    schedule(guid, "intro1", 500, function() onIntro1(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -315,6 +403,8 @@ end
 RegisterCreatureEvent(ENTRY_KIRTONOS, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_KIRTONOS, 2, onEvade)
 RegisterCreatureEvent(ENTRY_KIRTONOS, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_KIRTONOS, 6, onReachWP)
+RegisterCreatureEvent(ENTRY_KIRTONOS, 22, onSummoned)
 RegisterCreatureEvent(ENTRY_KIRTONOS, 23, onReset)
 
 RegisterGameObjectGossipEvent(GO_BRAZIER_OF_THE_HERALD, 1, onBrazierGossip)

@@ -29,7 +29,7 @@
 -- SPELL_FRENZY (8269) is defined in the file's spell enum but never
 -- cast by the AI — omitted by design (shadowvosh ice-armor precedent).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
+-- 22 OnSummoned, 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++ JustEngagedWith event schedule + UpdateAI event
 -- machine):
@@ -50,9 +50,15 @@
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention).
--- Documented-only (no bridges on the Lua surface): IsSummonedBy's
--- MovePath(GIZRUL_PATH = 402450) gates on MotionMaster (the_beast
--- MovePath precedent); GIZRUL_PATH is enum-only here.
+-- IsSummonedBy's MovePath(GIZRUL_PATH = 402450, false) ports via
+-- creature:MovePath on ev22 (CREATURE_EVENT_ON_SUMMONED, fired from
+-- summonTempCreature for the halycon JustDied SummonCreature); the
+-- one-shot finalize (home = last node, LastWaypointID 0, MoveType
+-- idle) runs in the waypoint launch leg. Gizrul is a temp summon, so
+-- the path starts at his summon position; the path id is a DB
+-- waypoint_data id, not verifiable from the tree.
+
+local GIZRUL_PATH = 402450
 
 local SPELL_FATAL_BITE = 16495
 local SPELL_INFECTED_BITE = 16128
@@ -104,6 +110,10 @@ local function onInfectedBite(creature, guid)
     schedule(guid, "fatalbite", {8000, 10000}, function() onFatalBite(creature, guid) end)
 end
 
+local function onSummoned(_, creature)
+    creature:MovePath(GIZRUL_PATH, false)
+end
+
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_gizrul_the_slavener.cpp:64 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_gizrul_the_slavener.cpp:64 base call first)
@@ -140,4 +150,5 @@ end
 RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 4, onDied)
+RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 22, onSummoned)
 RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 23, onReset)
