@@ -1911,16 +1911,16 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	// (Player.cpp:8712-8749) is server-driven only, via
 	// Player::RemovedInsignia (Player.cpp:8486, bones conversion +
 	// CORPSE_DYNFLAG_LOOTABLE + level stashed in loot.gold + lootRecipient)
-	// reached from Spell::EffectSkinPlayerCorpse (SpellEffects.cpp:5126).
-	// Go has no EffectSkinPlayerCorpse trigger, no corpse INSERT on death,
-	// and no per-corpse loot store, so the insignia/bones regen path
-	// (AV/Wintergrasp FillLoot(PLAYER_CORPSE_LOOT_ENTRY, LootTemplates_Creature)
-	// + gold = urand(50,150)*0.016*pow(level/5.76,2.5)*RATE_DROP_MONEY,
-	// Player.cpp:8727-8742; OWNER/NONE permission on lootRecipient;
-	// HandleLootMoney corpse arm LootHandler.cpp:128-139 shareMoney=false;
-	// DoLootRelease corpse arm LootHandler.cpp:311-322 clearing loot and
-	// CORPSE_DYNFLAG_LOOTABLE) has no bridge until a bones-loot trigger
-	// exists; the cheat-gate silent return is the only reachable arm.
+	// reached from Spell::EffectSkinPlayerCorpse (SpellEffects.cpp:5126),
+	// ported as sendBonesLoot (loot.go) with the bones loot store on the
+	// registry entry (death.go) — the AV/Wintergrasp
+	// FillLoot(PLAYER_CORPSE_LOOT_ENTRY, LootTemplates_Creature) + gold
+	// formula (Player.cpp:8727-8742), OWNER/NONE permission on
+	// lootRecipient, the HandleLootMoney corpse arm (LootHandler.cpp:128-139,
+	// shareMoney=false) and the DoLootRelease corpse arm
+	// (LootHandler.cpp:311-322, clearing loot and CORPSE_DYNFLAG_LOOTABLE)
+	// are all bridged. The cheat-gate silent return stays: a
+	// client-initiated CMSG_LOOT on bones has no C++ twin either.
 	if high != 0xF130 && high != 0xF150 {
 		return true
 	}
@@ -2382,6 +2382,107 @@ func (s *session) fishingHoleNearby(ctx context.Context, bobber *dynamicGameObje
 // !guid.IsItem()); the handleLoot paths are corpse loot of creatures and
 // gameobjects only, so the !IsItem leg is vacuous here. Item loot (items.go)
 // and fishing (LOOT_FISHING) never take this path, matching C++.
+// playerCorpseLootEntry mirrors PLAYER_CORPSE_LOOT_ENTRY
+// (SharedDefines.h:3143): the creature loot template entry the SendLoot
+// bones arm fills from in Alterac Valley and Wintergrasp
+// (Player.cpp:8733/8737).
+const playerCorpseLootEntry = 1
+
+// sendBonesLoot mirrors the corpse arm of Player::SendLoot
+// (Player.cpp:8712-8749, 8896-8912): the server-driven open of a
+// RemovedInsignia bones object for the looter. The client never opens
+// this window itself — CMSG_LOOT with a bones GUID is dropped by the
+// cheat gate (LootHandler.cpp:229-233) — so this is the only entry
+// point, reached from removedInsignia.
+func (s *session) sendBonesLoot(ctx context.Context, bonesGUID uint64, mapID, instanceID uint32) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	// Player::SendLoot (Player.cpp:8526-8527): opening new loot releases
+	// the previously open loot first.
+	if prev := s.activeLoot; prev != nil {
+		s.doLootRelease(prev)
+	}
+	low := uint32(bonesGUID & 0xFFFFFFFF)
+	entry, _, ok := s.server.bonesLootSnapshot(mapID, instanceID, low)
+	if !ok {
+		// Player.cpp:8716-8720: no bones, or not bones — release.
+		_ = s.sendLootReleaseResponse(bonesGUID)
+		return
+	}
+	// Player.cpp:8727-8742: on the first open (loot_type LOOT_NONE)
+	// the loot is filled — the AV / Wintergrasp template roll plus
+	// the level-stash gold formula — before the permission check. The
+	// fill runs even for a non-recipient viewer; the permission arm
+	// below answers them with an error instead of a window.
+	if !entry.lootFilled {
+		pLevel := entry.lootLevel
+		fill := &activeLootState{TargetGUID: bonesGUID, MapID: mapID, InstanceID: instanceID, LootType: lootTypeSkinning, Items: make(map[uint8]lootItem), QuestItems: make(map[uint8]lootItem)}
+		// Player.cpp:8731-8737: the AV battleground fill, else the
+		// Wintergrasp zone fill, both from PLAYER_CORPSE_LOOT_ENTRY.
+		fillTemplate := false
+		if bgTypeID, _, _, bgOK := battlegroundTypeForMap(s.player.Map); s.bgData.InstanceID != 0 && bgOK && bgTypeID == 1 { // BATTLEGROUND_AV
+			fillTemplate = true
+		} else if s.player.Zone == WGZoneID {
+			fillTemplate = true
+		}
+		if fillTemplate {
+			var wdb *sql.DB
+			if s.server.WorldStore != nil {
+				wdb = s.server.WorldStore.DB
+			}
+			if wdb != nil {
+				s.server.fillLootTemplate(ctx, wdb, "creature_loot_template", playerCorpseLootEntry, lootModeDefault, fill)
+			}
+		}
+		// Player.cpp:8741: gold = urand(50,150) * 0.016 *
+		// pow(level/5.76, 2.5) * RATE_DROP_MONEY. The level is the
+		// stash consumed here; a re-open after a fully-looted release
+		// rolls from 0.
+		rate := s.server.Config.RateDropMoney
+		gold := uint32(float64(50+rand.Intn(101)) * 0.016 * math.Pow(float64(pLevel)/5.76, 2.5) * rate)
+		// First writer wins; re-read the stored fill so concurrent
+		// opens share one roll.
+		if s.server.storeBonesLootFilled(mapID, instanceID, low, gold, fill.Items, fill.QuestItems, fill.NormalSlotCount) {
+			entry.lootFilled = true
+			entry.lootGold = gold
+			entry.lootItems = fill.Items
+			entry.lootQuestItems = fill.QuestItems
+			entry.lootNormalSlotCount = fill.NormalSlotCount
+		} else {
+			entry, _, ok = s.server.bonesLootSnapshot(mapID, instanceID, low)
+			if !ok {
+				_ = s.sendLootReleaseResponse(bonesGUID)
+				return
+			}
+		}
+	}
+	// Player.cpp:8744-8747: the recipient alone gets OWNER permission;
+	// anyone else gets NONE — and the tail answers NONE with
+	// LOOT_ERROR_DIDNT_KILL on the cleared loot GUID (Player.cpp:8911-8912).
+	if entry.lootRecipient != s.playerGUID {
+		_ = s.sendLootError(0, 0)
+		return
+	}
+	// Player.cpp:8896-8900: LOOT_INSIGNIA is sent to the client as
+	// LOOT_SKINNING (Loot.h:94's "sending LOOT_CORPSE" note is stale;
+	// the switch maps INSIGNIA to SKINNING). The skinning type also
+	// keeps the group permission ladder off in sendLootResponse and
+	// skips the UNIT_FLAG_LOOTING leg (Player.cpp:8911-8912), which
+	// only fires for LOOT_CORPSE.
+	loot := &activeLootState{
+		TargetGUID: bonesGUID, MapID: mapID, InstanceID: instanceID,
+		LootType: lootTypeSkinning, Money: entry.lootGold,
+		Items: copyLootItems(entry.lootItems), QuestItems: copyLootItems(entry.lootQuestItems),
+		NormalSlotCount: entry.lootNormalSlotCount,
+	}
+	loot.addViewer(s)
+	s.activeLoot = loot
+	// sendLootResponse directly, not finishLootOpen: the
+	// UNIT_FLAG_LOOTING set there has no C++ twin on this arm.
+	_ = s.sendLootResponse(ctx, loot)
+}
+
 func (s *session) finishLootOpen(ctx context.Context, loot *activeLootState) bool {
 	if s.sendLootResponse(ctx, loot) != nil {
 		return false
@@ -3065,7 +3166,18 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 			return true
 		}
 	}
-	if high := uint16(s.activeLoot.TargetGUID >> 48); high == 0x4000 {
+	if high := uint16(s.activeLoot.TargetGUID >> 48); high == 0xF101 {
+		// HandleLootMoneyOpcode (LootHandler.cpp:128-139) Corpse arm:
+		// the bones loot is taken only when the bones still stand
+		// within INTERACTION_DISTANCE (5.0); a missing or far bones
+		// leaves loot null and skips the money block silently. The
+		// take is never shared (shareMoney=false).
+		bones, _, ok := s.server.bonesLootSnapshot(s.activeLoot.MapID, s.activeLoot.InstanceID, uint32(s.activeLoot.TargetGUID&0xFFFFFFFF))
+		if !ok || s.player == nil || distance3D(s.player.X, s.player.Y, s.player.Z, bones.x, bones.y, bones.z) > 5.0 {
+			return true
+		}
+		shareMoney = false
+	} else if high == 0x4000 {
 		// HandleLootMoneyOpcode (LootHandler.cpp:134-139) Item arm: money in
 		// a container item's loot is taken with no distance or permission
 		// gate and is never shared (shareMoney=false). A container the
@@ -3107,6 +3219,11 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	// container loot with the take.
 	if s.activeLoot.StoredContainerGUID != 0 {
 		s.server.removeStoredContainerLootMoney(ctx, s.activeLoot.StoredContainerGUID)
+	}
+	// The bones loot is a view of bones->loot (Player.cpp:8724), so the
+	// money take lands on the shared object too.
+	if uint16(s.activeLoot.TargetGUID>>48) == 0xF101 {
+		s.server.syncBonesLoot(s.activeLoot.MapID, s.activeLoot.InstanceID, uint32(s.activeLoot.TargetGUID&0xFFFFFFFF), s.activeLoot.Money, s.activeLoot.Items, s.activeLoot.QuestItems)
 	}
 
 	// HandleLootMoneyOpcode (LootHandler.cpp:160): NotifyMoneyRemoved fires
@@ -3216,6 +3333,13 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		// player's map returns null), so the answer is the release, not
 		// LOOT_ERROR_TOO_FAR.
 		if !s.gameObjectLootTakeAllowed(ctx) {
+			return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
+		}
+	} else if high == 0xF101 {
+		// HandleAutostoreLootItemOpcode (LootHandler.cpp:71-79) Corpse
+		// arm: the bones must still stand; unlike the creature arm
+		// there is no distance check here, only the null check.
+		if _, _, ok := s.server.bonesLootSnapshot(s.activeLoot.MapID, s.activeLoot.InstanceID, uint32(s.activeLoot.TargetGUID&0xFFFFFFFF)); !ok {
 			return s.sendLootReleaseResponse(s.activeLoot.TargetGUID) == nil
 		}
 	} else if s.activeLoot.LootItemGUID == 0 {
@@ -3336,7 +3460,11 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		}
 	}
 
-	return s.storeTakenLootRow(ctx, s.activeLoot, lootSlot, it, isQuestItem, questIndex)
+	stored := s.storeTakenLootRow(ctx, s.activeLoot, lootSlot, it, isQuestItem, questIndex)
+	if stored && uint16(s.activeLoot.TargetGUID>>48) == 0xF101 {
+		s.server.syncBonesLoot(s.activeLoot.MapID, s.activeLoot.InstanceID, uint32(s.activeLoot.TargetGUID&0xFFFFFFFF), s.activeLoot.Money, s.activeLoot.Items, s.activeLoot.QuestItems)
+	}
+	return stored
 }
 
 // gameObjectLootTakeAllowed mirrors the GameObject arm of
@@ -3865,6 +3993,24 @@ func (s *session) destroyItemInstanceCount(ctx context.Context, instanceGUID uin
 // cleanup gate, and the round-robin looter broadcast on the
 // not-fully-looted creature arm. Player::SendLoot (Player.cpp:8526-8527)
 // runs this for the previously open loot before opening a new one.
+// bonesLootReleaseAllowed mirrors the gate ahead of the fully-looted
+// legs of WorldSession::DoLootRelease's corpse arm
+// (LootHandler.cpp:311-315): the bones must still stand on the
+// player's current map, within INTERACTION_DISTANCE (5.0).
+func (s *session) bonesLootReleaseAllowed(loot *activeLootState) bool {
+	if s == nil || s.server == nil || loot == nil || s.player == nil {
+		return false
+	}
+	if loot.MapID != s.player.Map || loot.InstanceID != s.player.InstanceID {
+		return false
+	}
+	bones, _, ok := s.server.bonesLootSnapshot(loot.MapID, loot.InstanceID, uint32(loot.TargetGUID&0xFFFFFFFF))
+	if !ok {
+		return false
+	}
+	return distance3D(s.player.X, s.player.Y, s.player.Z, bones.x, bones.y, bones.z) <= 5.0
+}
+
 func (s *session) doLootRelease(loot *activeLootState) {
 	if s == nil || loot == nil {
 		return
@@ -3878,6 +4024,12 @@ func (s *session) doLootRelease(loot *activeLootState) {
 	// it never answers LOOT_ERROR_TOO_FAR.
 	releasedRoundRobin := loot.RoundRobinPlayer == s.playerGUID
 	cleanupAllowed := s.lootReleaseCleanupAllowed(loot)
+	if uint16(targetGUID>>48) == 0xF101 {
+		// DoLootRelease's corpse arm (LootHandler.cpp:311-315) gates
+		// its cleanup legs on the bones still standing within
+		// INTERACTION_DISTANCE of the player.
+		cleanupAllowed = s.bonesLootReleaseAllowed(loot)
+	}
 	if uint16(targetGUID>>48) == 0xF110 {
 		// DoLootRelease's GameObject arm (LootHandler.cpp:270-313) gates
 		// its cleanup legs (door use, fishing-hole use-count, loot-state
@@ -3891,6 +4043,11 @@ func (s *session) doLootRelease(loot *activeLootState) {
 	// Loot::isLooted (Loot.h:236) including the multi-drop rows.
 	fullyLooted := lootFullyLooted(loot)
 	s.releaseActiveLootCleanup(cleanupAllowed)
+	// DoLootRelease corpse arm (LootHandler.cpp:316-322): a fully-looted
+	// release clears the bones loot and strips CORPSE_DYNFLAG_LOOTABLE.
+	if uint16(targetGUID>>48) == 0xF101 && fullyLooted && cleanupAllowed {
+		s.server.clearBonesLoot(loot.MapID, loot.InstanceID, uint32(targetGUID&0xFFFFFFFF))
+	}
 	if releasedRoundRobin && cleanupAllowed && !fullyLooted && s.server != nil && s.groupID != 0 && uint16(loot.TargetGUID>>48) != 0xF110 {
 		s.server.groupsMu.Lock()
 		grp := s.server.groups[s.groupID]

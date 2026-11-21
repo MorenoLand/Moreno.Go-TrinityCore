@@ -49,11 +49,17 @@ const (
 	broadcastTextRiseAlly = 33055 // TEXT_RISE_ALLY (spell_dk.cpp:2786)
 	chatRaidBossWhisper   = 0x2A  // CHAT_MSG_RAID_BOSS_WHISPER (SharedDefines.h:3204)
 
-	corpseFlagBones     uint32 = 0x01
-	corpseFlagUnk2      uint32 = 0x04
-	corpseFlagLootable  uint32 = 0x20 // CORPSE_FLAG_LOOTABLE (Corpse.h:45)
-	playerFlagHideHelm  uint32 = 0x00000400
-	playerFlagHideCloak uint32 = 0x00000800
+	corpseFlagBones    uint32 = 0x01
+	corpseFlagUnk2     uint32 = 0x04
+	corpseFlagLootable uint32 = 0x20 // CORPSE_FLAG_LOOTABLE (Corpse.h:45)
+	// corpseDynFlagLootable mirrors CORPSE_DYNFLAG_LOOTABLE
+	// (SharedDefines.h:3140): the dynamic flag RemovedInsignia sets on
+	// the bones so the looter's client shows them lootable
+	// (Player.cpp:8510), stripped when the loot is fully taken
+	// (LootHandler.cpp:321).
+	corpseDynFlagLootable uint32 = 0x0001
+	playerFlagHideHelm    uint32 = 0x00000400
+	playerFlagHideCloak   uint32 = 0x00000800
 
 	teamAlliance uint32 = 469
 	teamHorde    uint32 = 67
@@ -356,6 +362,26 @@ type corpseBonesEntry struct {
 	phaseMask                    uint32
 	x, y, z, orientation         float32
 	createdAt                    time.Time
+	// lootLevel is the RemovedInsignia stash (Player::RemovedInsignia,
+	// Player.cpp:8513-8515): the victim's level is stored in the bones'
+	// loot gold field until the first SendLoot fills it, then consumed
+	// (Player.cpp:8729-8731 reads it into pLevel and loot.clear() drops
+	// it, so a re-open after a fully-looted release rolls gold from 0).
+	// lootRecipient is the looter the insignia belongs to
+	// (Player.cpp:8514); lootFilled marks the first-open fill
+	// (Player.cpp:8727-8742), after which lootGold/lootItems are the
+	// rolled window instead of the stash.
+	lootLevel      uint32
+	lootRecipient  uint64
+	lootFilled     bool
+	lootGold       uint32
+	lootItems      map[uint8]lootItem
+	lootQuestItems map[uint8]lootItem
+	// lootNormalSlotCount is the fill-time NormalSlotCount
+	// (activeLootState's display-slot base, Loot.cpp:618-703): the
+	// items vector never shrinks on take, so the base is captured at
+	// fill time and survives takes.
+	lootNormalSlotCount uint8
 }
 
 // corpseLowGUID returns the map-scoped low GUID for a corpse object,
@@ -539,6 +565,140 @@ func (s *Server) registerCorpseBones(mapID, instanceID uint32, ownerLow uint64, 
 	}
 	e := entry
 	s.corpseBones[corpseKey{mapID: mapID, instanceID: instanceID, ownerLow: ownerLow}] = &e
+}
+
+// bonesEntryLocked returns the bones entry for a map-assigned low GUID,
+// resolving the owner through the reverse mapping first (the
+// ObjectAccessor::GetCorpse twin); the caller holds corpseMu.
+func (s *Server) bonesEntryLocked(mapID, instanceID uint32, low uint32) (*corpseBonesEntry, uint64, bool) {
+	if s.corpseOwnerByGUID == nil || s.corpseBones == nil {
+		return nil, 0, false
+	}
+	ownerLow, ok := s.corpseOwnerByGUID[corpseGUIDKey{mapID: mapID, instanceID: instanceID, low: low}]
+	if !ok {
+		return nil, 0, false
+	}
+	entry, ok := s.corpseBones[corpseKey{mapID: mapID, instanceID: instanceID, ownerLow: ownerLow}]
+	if entry == nil {
+		return nil, 0, false
+	}
+	return entry, ownerLow, true
+}
+
+// setBonesInsigniaLoot attaches the RemovedInsignia loot record to a
+// converted bones object (Player.cpp:8510-8515): the dynamic lootable
+// flag, the victim's level stashed as the loot gold, and the looter as
+// lootRecipient. It returns the bones GUID, or 0 when no bones stand
+// for the owner on the map.
+func (s *Server) setBonesInsigniaLoot(mapID, instanceID uint32, ownerLow uint64, level uint32, recipient uint64) uint64 {
+	if s == nil {
+		return 0
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	entry, ok := s.corpseBones[corpseKey{mapID: mapID, instanceID: instanceID, ownerLow: ownerLow}]
+	if entry == nil || !ok {
+		return 0
+	}
+	entry.dynamicFlags |= corpseDynFlagLootable
+	entry.lootLevel = level
+	entry.lootRecipient = recipient
+	entry.lootFilled = false
+	entry.lootGold = 0
+	entry.lootItems = nil
+	entry.lootQuestItems = nil
+	return uint64(0xF101)<<48 | uint64(entry.lowGUID)
+}
+
+// bonesLootSnapshot copies a bones entry's loot state for a SendLoot
+// open (Player::SendLoot, Player.cpp:8712-8749 reads bones->loot
+// through the same object the other arms mutate, so the open works
+// from a snapshot taken under the registry lock).
+func (s *Server) bonesLootSnapshot(mapID, instanceID uint32, low uint32) (corpseBonesEntry, uint64, bool) {
+	if s == nil {
+		return corpseBonesEntry{}, 0, false
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	entry, ownerLow, ok := s.bonesEntryLocked(mapID, instanceID, low)
+	if !ok {
+		return corpseBonesEntry{}, 0, false
+	}
+	return *entry, ownerLow, true
+}
+
+// storeBonesLootFilled records the first-open fill on a bones entry
+// (Player.cpp:8727-8742: FillLoot + the gold formula, after which
+// loot_type is no longer LOOT_NONE). First writer wins: a concurrent
+// open re-reads the stored fill instead of rolling its own.
+func (s *Server) storeBonesLootFilled(mapID, instanceID uint32, low uint32, gold uint32, items, questItems map[uint8]lootItem, normalSlotCount uint8) bool {
+	if s == nil {
+		return false
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	entry, _, ok := s.bonesEntryLocked(mapID, instanceID, low)
+	if !ok || entry.lootFilled {
+		return false
+	}
+	entry.lootFilled = true
+	entry.lootGold = gold
+	entry.lootLevel = 0
+	entry.lootItems = copyLootItems(items)
+	entry.lootQuestItems = copyLootItems(questItems)
+	entry.lootNormalSlotCount = normalSlotCount
+	return true
+}
+
+// syncBonesLoot writes a take back to the bones entry (the loot window
+// is a view of bones->loot, Player.cpp:8724, so money and item takes
+// land on the shared object, not only on the viewer's copy).
+func (s *Server) syncBonesLoot(mapID, instanceID uint32, low uint32, gold uint32, items, questItems map[uint8]lootItem) {
+	if s == nil {
+		return
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	entry, _, ok := s.bonesEntryLocked(mapID, instanceID, low)
+	if !ok || !entry.lootFilled {
+		return
+	}
+	entry.lootGold = gold
+	entry.lootItems = copyLootItems(items)
+	entry.lootQuestItems = copyLootItems(questItems)
+}
+
+// clearBonesLoot runs the fully-looted release leg on a bones object
+// (WorldSession::DoLootRelease corpse arm, LootHandler.cpp:311-322):
+// loot.clear() plus the CORPSE_DYNFLAG_LOOTABLE strip. The level stash
+// stays consumed (Player.cpp:8731), so a later re-open rolls gold
+// from 0, as in C++.
+func (s *Server) clearBonesLoot(mapID, instanceID uint32, low uint32) {
+	if s == nil {
+		return
+	}
+	s.corpseMu.Lock()
+	defer s.corpseMu.Unlock()
+	entry, _, ok := s.bonesEntryLocked(mapID, instanceID, low)
+	if !ok {
+		return
+	}
+	entry.lootFilled = false
+	entry.lootGold = 0
+	entry.lootItems = nil
+	entry.lootQuestItems = nil
+	entry.dynamicFlags &^= corpseDynFlagLootable
+}
+
+func copyLootItems(in map[uint8]lootItem) map[uint8]lootItem {
+	if in == nil {
+		return nil
+	}
+	out := make(map[uint8]lootItem, len(in))
+	for slot, it := range in {
+		out[slot] = it
+	}
+	return out
 }
 
 // expireCorpseBones despawns bones past the 60-minute horizon
@@ -1609,7 +1769,19 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	// carry no DB row (save-skip), so the in-memory BG corpse is
 	// invisible to this check — that half needs the bones registry.
 	if !(s.player.repopOnLogin && s.player.loadedCorpseRow) {
+		// Battleground/arena corpses carry no DB row (the
+		// Player.cpp:4867-4868 save-skip), so the row check misses them;
+		// the session snapshot is the in-memory GetCorpseByPlayer twin
+		// there (Map.cpp:4629-4631) — RemovedInsignia's forced repop of
+		// a BG victim reaches this branch and must not mint a second
+		// corpse over the one about to become bones.
+		hasCorpse := false
 		if corpse, ok := s.loadCorpse(ctx); ok && corpse.MapID == s.player.Map {
+			hasCorpse = true
+		} else if s.player.hasCorpse && s.player.corpseMap == s.player.Map {
+			hasCorpse = true
+		}
+		if hasCorpse {
 			if s.player.Race == 4 {
 				s.applyAura(20584)
 			}
@@ -1664,8 +1836,24 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	// time and its PvP type is preserved — instead of the convert+rewrite a
 	// fresh death performs.
 	keepCorpseRow := s.player.repopOnLogin && s.player.loadedCorpseRow
+	// Corpse::Create (Corpse.cpp:72-94) fails on !IsPositionValid()
+	// (Trinity::IsValidMapCoord, GridDefines.h:216-234 — finite
+	// coordinates within the map half-size, the validMovementPosition
+	// twin); Player::CreateCorpse (Player.cpp:4822-4826) returns
+	// nullptr and BuildPlayerRepop (Player.cpp:4649-4656) aborts — no
+	// ghost, no reclaim-delay packet. The ghost auras were already cast
+	// above, so they ride along as in C++. A login keeps its row by
+	// design and never reaches CreateCorpse, so the check skips it.
+	if !keepCorpseRow && !validMovementPosition(s.player.X, s.player.Y, s.player.Z, s.player.Orientation) {
+		if s.player.Race == 4 {
+			s.applyAura(20584)
+		}
+		s.applyAura(8326)
+		s.debug("buildPlayerRepop: death position invalid, no corpse created", "account", s.accountName, "guid", s.playerGUID)
+		return
+	}
 	if !keepCorpseRow {
-		s.convertCorpseToBones(ctx, false)
+		s.convertCorpseToBones(ctx, false, false)
 		// A new corpse object is about to be created below: if the
 		// previous death's bones still stand on this map, release the
 		// mapping now — the bones keep their low GUID and the new
@@ -1854,10 +2042,18 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 	// (Player.cpp:5155); set by the movement undermap leg (movement.go).
 	s.player.PlayerFlags &^= playerFlagOutOfBounds
 
-	// In battlegrounds, automatically queue for wave resurrection (Go-original:
-	// C++ queues only when the ghost talks to the spirit healer and sends
-	// CMSG_AREA_SPIRIT_HEALER_QUEUE; the time packet below keeps the client rez
-	// timer in sync since these ghosts never sent a query).
+	// In battlegrounds, automatically queue for wave resurrection.
+	// C++ queues only on the queue/gossip opcodes, but the client
+	// behavior the queue reproduces is automatic: players are
+	// automatically included in the resurrection wave upon appearing
+	// at the graveyard, and the time-until-resurrection dialog appears
+	// on joining the wave (Wowpedia, "Spirit Guide" — verified
+	// 2026-11-21). The queue/gossip opcodes are the re-join paths for
+	// ghosts who left the wave, not the entry path; removing this
+	// block would leave repopped ghosts out of the wave until they
+	// talked to the healer, contradicting the automatic inclusion.
+	// The time packet below keeps the client rez timer in sync since
+	// these ghosts never sent a query.
 	if s.inBattlegroundWaveMap() {
 		if s.server != nil {
 			s.server.spiritWaveMu.Lock()
@@ -2391,14 +2587,24 @@ func (s *session) shouldCreateCorpseBones(mapID uint32) bool {
 // spawnCorpseBones mirrors Player::SpawnCorpseBones and Map::ConvertCorpseToBones:
 // remove the resurrectable corpse from persistence, then optionally create ownerless bones at its stored location.
 func (s *session) spawnCorpseBones(ctx context.Context) {
-	s.convertCorpseToBones(ctx, false)
+	s.convertCorpseToBones(ctx, false, false)
 }
 
 func (s *session) spawnLoadedCorpseBones(ctx context.Context) {
-	s.convertCorpseToBones(ctx, true)
+	s.convertCorpseToBones(ctx, true, false)
 }
 
-func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible bool) {
+// convertCorpseToBonesInsignia mirrors the ConvertCorpseToBones call
+// inside Player::RemovedInsignia (Player.cpp:8505): the insignia leg
+// creates bones regardless of the DEATH_BONES configs
+// (Map.cpp:4650-4654, `insignia || ...`) and returns the bones GUID,
+// or 0 when no corpse stood to convert (GetCorpseByPlayer miss,
+// Map.cpp:4629-4631).
+func (s *session) convertCorpseToBonesInsignia(ctx context.Context) uint64 {
+	return s.convertCorpseToBones(ctx, true, true)
+}
+
+func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible, insignia bool) uint64 {
 	corpse, ok := s.loadCorpseObject(ctx)
 	if !ok {
 		// Battleground/arena corpses have no DB row (the
@@ -2406,29 +2612,28 @@ func (s *session) convertCorpseToBones(ctx context.Context, destroyVisible bool)
 		// in-memory corpse object all the same (Map::ConvertCorpseToBones
 		// works off GetCorpseByPlayer, Map.cpp:4629-4631); the session
 		// snapshot taken at spawnCorpseObject is that object here.
-		s.convertSessionCorpseToBones(ctx, destroyVisible)
-		return
+		return s.convertSessionCorpseToBones(ctx, destroyVisible, insignia)
 	}
 	if destroyVisible {
 		s.despawnCorpseObject(corpse.MapID, corpse.InstanceID, corpse.X, corpse.Y, corpse.Z)
 	}
 	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones); err != nil {
-		return
+		return 0
 	}
-	if !s.shouldCreateCorpseBones(corpse.MapID) {
+	if !insignia && !s.shouldCreateCorpseBones(corpse.MapID) {
 		s.server.dropCorpseGUIDMapping(corpse.MapID, corpse.InstanceID, s.playerGUID)
-		return
+		return 0
 	}
-	s.createCorpseBones(corpse.MapID, corpse.InstanceID, corpse.DisplayID, corpse.Bytes1, corpse.Bytes2, corpse.GuildID, corpse.DynamicFlags, corpse.PhaseMask, corpse.X, corpse.Y, corpse.Z, corpse.Orientation)
+	return s.createCorpseBones(corpse.MapID, corpse.InstanceID, corpse.DisplayID, corpse.Bytes1, corpse.Bytes2, corpse.GuildID, corpse.DynamicFlags, corpse.PhaseMask, corpse.X, corpse.Y, corpse.Z, corpse.Orientation, insignia)
 }
 
 // convertSessionCorpseToBones is the no-row half of ConvertCorpseToBones:
 // a battleground/arena corpse converts from the session snapshot, never
 // from the DB. With no snapshot there is no corpse object to convert,
 // matching the GetCorpseByPlayer miss.
-func (s *session) convertSessionCorpseToBones(ctx context.Context, destroyVisible bool) {
+func (s *session) convertSessionCorpseToBones(ctx context.Context, destroyVisible, insignia bool) uint64 {
 	if s == nil || s.server == nil || s.player == nil || !s.player.hasCorpse {
-		return
+		return 0
 	}
 	// Snapshot before the despawn below clears it: despawnCorpseObject
 	// zeroes the session snapshot as the m_corpse clear does. The corpse
@@ -2441,12 +2646,12 @@ func (s *session) convertSessionCorpseToBones(ctx context.Context, destroyVisibl
 	if destroyVisible {
 		s.despawnCorpseObject(mapID, instanceID, x, y, z)
 	}
-	if !s.shouldCreateCorpseBones(mapID) {
+	if !insignia && !s.shouldCreateCorpseBones(mapID) {
 		s.server.dropCorpseGUIDMapping(mapID, instanceID, s.playerGUID)
-		return
+		return 0
 	}
 	bytes1, bytes2 := corpseAppearance(s.player)
-	s.createCorpseBones(mapID, instanceID, displayID, bytes1, bytes2, s.player.GuildID, 0, s.currentPlayerPhaseMask(), x, y, z, orientation)
+	return s.createCorpseBones(mapID, instanceID, displayID, bytes1, bytes2, s.player.GuildID, 0, s.currentPlayerPhaseMask(), x, y, z, orientation, insignia)
 }
 
 // createCorpseBones broadcasts the bones create block for a converted
@@ -2457,14 +2662,20 @@ func (s *session) convertSessionCorpseToBones(ctx context.Context, destroyVisibl
 // the corpse object (Map::RemoveCorpse, Map.cpp:4610-4621), so the session
 // snapshot goes with it — a later conversion must not re-bone the stale
 // position, and the next corpse mints fresh via releaseCorpseGUIDForNewCorpse.
-func (s *session) createCorpseBones(mapID, instanceID, displayID, bytes1, bytes2, guildID, dynamicFlags, phaseMask uint32, x, y, z, orientation float32) {
+func (s *session) createCorpseBones(mapID, instanceID, displayID, bytes1, bytes2, guildID, dynamicFlags, phaseMask uint32, x, y, z, orientation float32, insignia bool) uint64 {
 	if s == nil || s.server == nil {
-		return
+		return 0
 	}
 	if s.player != nil {
 		s.player.hasCorpse = false
 		s.player.corpseMap, s.player.corpseInstanceID = 0, 0
 		s.player.corpseDisplayID, s.player.corpseOrientation = 0, 0
+	}
+	// RemovedInsignia sets CORPSE_DYNFLAG_LOOTABLE on the converted
+	// bones (Player.cpp:8510); the bit rides the create block itself,
+	// not a later update, so it is folded in here.
+	if insignia {
+		dynamicFlags |= corpseDynFlagLootable
 	}
 	lowGUID := s.server.corpseLowGUID(mapID, instanceID, s.playerGUID)
 	corpseGUID := uint64(0xF101)<<48 | uint64(lowGUID)
@@ -2480,6 +2691,7 @@ func (s *session) createCorpseBones(mapID, instanceID, displayID, bytes1, bytes2
 		// center the fan-out on the corpse, not the player.
 		s.server.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), mapID, instanceID, x, y, z, s)
 	}
+	return corpseGUID
 }
 
 // corpseResurrectableExpiry is the Corpse::IsExpired horizon for
@@ -2683,7 +2895,7 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 	// MiscHandler.cpp:1505-1523) resurrects without boning, and the
 	// corpse stays visible at the death location.
 	if toBones {
-		s.convertCorpseToBones(ctx, false)
+		s.convertCorpseToBones(ctx, false, false)
 	}
 	s.persistResurrectionState(ctx)
 	s.sendPlayerUpdate()
@@ -3326,6 +3538,85 @@ func (s *session) applyResurrectNewToTargets(ctx context.Context, spell wotlk.Sp
 		targetSess.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana, 0)
 		targetSess.sendResurrectRequest(s.playerGUID, "", false, reclaimDelayApplies)
 		s.sendResurrectLog(spell.ID, s.playerGUID, targetGUID)
+	}
+}
+
+// removedInsignia mirrors Player::RemovedInsignia
+// (Player.cpp:8486-8520): an enemy removing the insignia of a dead
+// battleground / world-PvP victim forces the victim's repop when the
+// spirit is unreleased, turns the corpse into lootable bones, and
+// opens the insignia loot window for the looter. Reached from
+// Spell::EffectSkinPlayerCorpse (SpellEffects.cpp:5126-5146).
+func (s *session) removedInsignia(ctx context.Context, looter *session) {
+	if s == nil || s.player == nil || looter == nil || looter.player == nil {
+		return
+	}
+	// The corpse stands at the death location; the forced repop below
+	// teleports the victim to the graveyard, so the corpse's map is
+	// captured before it moves.
+	corpseMap, corpseInstance := s.player.Map, s.player.InstanceID
+	// Player.cpp:8489: only in a battleground or a world-PvP zone
+	// (WorldObject::IsInWorldPvpZone, Object.cpp:1122-1130, is the
+	// Wintergrasp zone alone).
+	if s.bgData.InstanceID == 0 && s.player.Zone != WGZoneID {
+		return
+	}
+	// Player.cpp:8493-8498: if not released spirit, do it — m_deathTimer
+	// > 0 is the unreleased countdown (KillPlayer sets it,
+	// Player.cpp:4786; repop clears it, Player.cpp:5135).
+	if !s.deathTimer.IsZero() {
+		s.deathTimer = time.Time{}
+		s.buildPlayerRepop(ctx, false)
+		s.repopAtGraveyard(ctx)
+	}
+	// Player.cpp:8500-8502: _corpseLocation.WorldRelocate() relocates
+	// the stored corpse location to the player's position — the victim
+	// has not moved since death, so the corpse already stands there;
+	// no Go analog is needed.
+	// Player.cpp:8505-8509: convert to bones (the insignia leg creates
+	// them regardless of the DEATH_BONES configs, Map.cpp:4650-4654)
+	// and flag them lootable; a missing corpse ends the call
+	// (Map.cpp:4629-4631).
+	bonesGUID := s.convertCorpseToBonesInsignia(ctx)
+	if bonesGUID == 0 {
+		return
+	}
+	// Player.cpp:8513-8515: the victim's level is stashed in the bones'
+	// loot gold field and the looter is recorded as lootRecipient.
+	if s.server.setBonesInsigniaLoot(corpseMap, corpseInstance, s.playerGUID, uint32(s.player.Level), looter.playerGUID) == 0 {
+		return
+	}
+	// Player.cpp:8516: the looter's loot window opens on the bones.
+	looter.sendBonesLoot(ctx, bonesGUID, corpseMap, corpseInstance)
+}
+
+// handleEffectSkinPlayerCorpse mirrors Spell::EffectSkinPlayerCorpse
+// (SpellEffects.cpp:5126-5146): at SPELL_EFFECT_HANDLE_HIT_TARGET per
+// unit target, or the m_corpseTarget, a dead player target's insignia
+// is removed (RemovedInsignia). Corpse GUIDs resolve to their owner
+// the same way the resurrect arms do (corpseHitTargetOwnerGUID).
+func (s *session) handleEffectSkinPlayerCorpse(ctx context.Context, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	for _, targetGUID := range hitTargets {
+		if targetGUID == 0 || targetGUID == s.playerGUID || uint16(targetGUID>>48) == 0xF110 {
+			continue
+		}
+		if ownerGUID, ok := s.corpseHitTargetOwnerGUID(ctx, targetGUID); ok {
+			targetGUID = ownerGUID
+		} else if isCorpseGUID(targetGUID) {
+			continue
+		}
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess == nil || targetSess.player == nil {
+			continue
+		}
+		// SpellEffects.cpp:5143: the target must be dead.
+		if !targetSess.isDeadOrGhost() {
+			continue
+		}
+		targetSess.removedInsignia(ctx, s)
 	}
 }
 

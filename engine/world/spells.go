@@ -20771,10 +20771,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectAllowRenamePet(effCtx, renameList)
 			case spellEffectSkinPlayerCorpse: // 116: SPELL_EFFECT_SKIN_PLAYER_CORPSE (EffectSkinPlayerCorpse, SpellEffects.cpp:5126)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET: a dead
-				// player target's insignia is removed (RemovedInsignia). Go
-				// has no insignia/corpse-bones model (loot.go:1331-1335) —
-				// explicit no-op so the effect stops hitting the
-				// unhandled-effect debug arm.
+				// player target's insignia is removed (RemovedInsignia,
+				// Player.cpp:8486-8520) — the victim repops if unreleased,
+				// the corpse becomes lootable bones, and the looter's
+				// insignia window opens (sendBonesLoot).
+				s.handleEffectSkinPlayerCorpse(ctx, hitTargets)
 			case spellEffectRedirectThreat: // 130: SPELL_EFFECT_REDIRECT_THREAT (EffectRedirectThreat, SpellEffects.cpp:5411)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target, registering (spellId, unitTarget, damage) on the
@@ -30725,7 +30726,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// guid riding the flat list must not resolve through the combat-target
 			// fallback to an unrelated creature. Resurrect effects read
 			// m_corpseTarget and run below, so they are exempt.
-			if uint16(effectTarget>>48) == 0xF101 && eff.Effect != spellEffectResurrect && eff.Effect != spellEffectResurrectNew {
+			if uint16(effectTarget>>48) == 0xF101 && eff.Effect != spellEffectResurrect && eff.Effect != spellEffectResurrectNew && eff.Effect != spellEffectSkinPlayerCorpse {
 				continue
 			}
 			if eff.Effect == 1 { // SPELL_EFFECT_INSTAKILL
@@ -30961,6 +30962,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				} else {
 					s.applyResurrectNewToTargets(ctx, spell, eff, []uint64{effectTarget})
 				}
+			} else if eff.Effect == spellEffectSkinPlayerCorpse {
+				// Spell::EffectSkinPlayerCorpse (SpellEffects.cpp:5126)
+				// runs at SPELL_EFFECT_HANDLE_HIT_TARGET per unit target
+				// or the m_corpseTarget — the same helper as the
+				// client-cast path.
+				s.handleEffectSkinPlayerCorpse(ctx, []uint64{effectTarget})
 			} else if eff.Effect == 6 || (eff.Aura != 0 && eff.Effect != spellEffectPersistentAreaAura) { // SPELL_EFFECT_APPLY_AURA
 				// Spell::EffectPersistentAA (SpellEffects.cpp:1729) runs in
 				// SPELL_EFFECT_HANDLE_HIT mode — once per effect, never per
