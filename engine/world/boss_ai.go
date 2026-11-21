@@ -10120,41 +10120,23 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 	if hasDest {
 		cx, cy, cz = destX, destY, destZ
 	}
-	auraEffect := persistent
-	auraEffectIndex := -1
-	for i, effect := range spell.Effects {
-		if effect.Effect == spellEffectApplyAura && effect.Aura != 0 {
-			auraEffect = effect
-			auraEffectIndex = i
-			break
+	now := time.Now()
+	effects := dynobjAuraEffectList(spell, int(m.Level), now)
+	if len(effects) == 0 {
+		// No effect carries an Aura: keep the old single-effect
+		// fallback (the last persistent-area row, synthetic index -1)
+		// so the dynobj still spawns carrying the DBC row it used to.
+		effects = []dynobjAuraEffect{{Effect: persistent, Index: -1, PeriodMs: persistent.AuraPeriod, NextTick: now.Add(time.Duration(persistent.AuraPeriod) * time.Millisecond)}}
+		if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+			effects[0].NextTick = now
 		}
 	}
-	periodMs := auraEffect.AuraPeriod
-	if periodMs == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 8 || auraEffect.Aura == 23 || auraEffect.Aura == 24 || auraEffect.Aura == 89) {
-		periodMs = 3000
-	}
-	amount := uint32(0)
-	if auraEffect.BasePoints >= 0 {
-		amount = uint32(auraEffect.BasePoints)
-	}
-	if amount == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 23 || auraEffect.Aura == 89) {
-		amount = uint32(10 + int(m.Level)*2)
-	}
+	primary := dynobjPrimaryEffect(effects)
 	schoolMask := uint8(spell.SchoolMask)
 	if schoolMask == 0 {
 		schoolMask = 1
 	}
-	now := time.Now()
-	// AuraEffect::ResetPeriodic (SpellAuraEffects.cpp:553-563): with
-	// SPELL_ATTR5_START_PERIODIC_AT_APPLY the shared periodic timer
-	// starts AT the amplitude, so the dynobj's first tick fires on the
-	// first world update after creation — the shared schedule starts
-	// now, not a period out.
-	nextAuraTick := now.Add(time.Duration(periodMs) * time.Millisecond)
-	if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
-		nextAuraTick = now
-	}
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(s.nextDynamicSpellLowGUID()), CasterGUID: m.GUID, SpellID: uint64(spell.ID), Map: m.Map, InstanceID: m.InstanceID, X: cx, Y: cy, Z: cz, Orientation: m.Orientation, Radius: radius, CastTime: uint32(now.UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: nextAuraTick, NextTargetMapPass: now, NextUpkeepTick: now.Add(auraUpkeepIntervalMs * time.Millisecond)}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(s.nextDynamicSpellLowGUID()), CasterGUID: m.GUID, SpellID: uint64(spell.ID), Map: m.Map, InstanceID: m.InstanceID, X: cx, Y: cy, Z: cz, Orientation: m.Orientation, Radius: radius, CastTime: uint32(now.UnixMilli()), SpellData: spell, AuraEffect: primary.Effect, AuraEffectIndex: primary.Index, AuraDurationMs: uint32(durationMs), AuraPeriodMs: primary.PeriodMs, AuraAmount: primary.Amount, AuraSchoolMask: schoolMask, AuraEffects: effects, NextAuraTick: primary.NextTick, NextTargetMapPass: now, NextUpkeepTick: now.Add(auraUpkeepIntervalMs * time.Millisecond)}
 	s.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 	friendly := isFriendlyAreaSpell(spell)
 	inRadius := func(x, y, z float32) bool {
@@ -10191,22 +10173,21 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		// schedule, not a private period later.
 		// DynObjAura::UpdateTargetMap (SpellAuras.cpp:687-695) never
 		// registers an immune target — same gate as the 500ms pass
-		// (updateCreatureDynobjTargetMap); the cast-time fill checks it
-		// here because applyAuraFromCaster runs neither the whole-spell
-		// nor the per-effect gate. The friendly verdict rides the
-		// creature-caster helpers, so the school-immunity exemption
-		// (Unit.cpp:7909) applies to a positive spell on a friendly
-		// target while the ID/dispel/mechanic/all-effects arms still
-		// block it, as in C++.
+		// (updateCreatureDynobjTargetMap). The whole-spell half is
+		// checked here; the per-effect half rides applyAuraFromCaster,
+		// which strips each immune effect from the mask internally
+		// (Unit::AddAura, Unit.cpp:12291-12297), so a target immune to
+		// only one of the dynobj's effects keeps the rest. The
+		// friendly verdict rides the creature-caster helpers, so the
+		// school-immunity exemption (Unit.cpp:7909) applies to a
+		// positive spell on a friendly target while the
+		// ID/dispel/mechanic/all-effects arms still block it, as in C++.
 		targetFriendly := s.creatureFriendlyToTarget(m, vs.playerGUID)
 		if vs.isImmuneToSpellCreatureCaster(spell, targetFriendly) {
 			continue
 		}
-		if auraEffectIndex >= 0 && vs.isImmunedToSpellEffectCreatureCaster(spell, auraEffectIndex, targetFriendly) {
-			continue
-		}
 		sharedDelayMs := uint32(object.NextAuraTick.Sub(now) / time.Millisecond)
-		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), periodMs, &sharedDelayMs, true)
+		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), primary.PeriodMs, &sharedDelayMs, true)
 	}
 	type creatureTarget struct {
 		guid    uint64

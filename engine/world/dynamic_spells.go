@@ -39,7 +39,14 @@ type dynamicSpellObjectState struct {
 	AuraPeriodMs    uint32
 	AuraAmount      uint32
 	AuraSchoolMask  uint8
-	NextAuraTick    time.Time
+	// AuraEffects is the DynObjAura effect list (MAX_EFFECT_MASK): every
+	// spell effect carrying an Aura, each with its own period, amount and
+	// shared-tick schedule. AuraEffect/AuraEffectIndex/AuraPeriodMs/
+	// AuraAmount above carry the primary entry (first with a nonzero
+	// period, else the first), which drives the record's single periodic
+	// timer and the NextAuraTick catch-up below.
+	AuraEffects  []dynobjAuraEffect
+	NextAuraTick time.Time
 	// NextTargetMapPass is the next UpdateTargetMap pass deadline. C++
 	// refreshes the dynobj target map every UPDATE_TARGET_MAP_INTERVAL
 	// (500ms, SpellAuras.h:43) — applying the debuff to newcomers via
@@ -68,6 +75,176 @@ type dynamicSpellObjectState struct {
 	// lose the aura on the next update pass, and the set scopes the
 	// despawn strip to this object's applications.
 	AuraHolders map[uint64]struct{}
+	// AuraEffects is every aura effect the patch carries, in DBC order —
+	// SpellEffectInfo::IsAura (SpellInfo.cpp:366-369): an APPLY_AURA (6)
+	// or PERSISTENT_AREA_AURA (27) effect with a nonzero ApplyAuraName.
+	// C++ creates the DynObjAura with MAX_EFFECT_MASK
+	// (SpellEffects.cpp:1763-1768), so every such effect rides the patch
+	// and ticks on its own amplitude. The legacy AuraEffect scalars below
+	// mirror the primary entry (first periodic, else first) — the one the
+	// single-timer aura record ticks — while the passes apply the whole
+	// list, so a patch like 31266 deals its 949/2s damage AND applies its
+	// -71% speed instead of only the speed.
+	AuraEffects []dynobjAuraEffect
+}
+
+// dynobjAuraEffect is one aura effect carried by a persistent-area-aura
+// (dynobj) object, with the spawn-time period/amount folds applied.
+type dynobjAuraEffect struct {
+	Effect     wotlk.SpellEffect
+	Index      int
+	PeriodMs   uint32
+	Amount     uint32
+	SchoolMask uint8
+}
+
+// dynobjAuraEffectPeriod mirrors the amplitude fold the spawn sites apply
+// to one aura effect: the DBC AuraPeriod, defaulting to 3000ms for the
+// periodic damage/heal/trigger/leech/funnel auras when the DBC carries 0.
+func dynobjAuraEffectPeriod(eff wotlk.SpellEffect) uint32 {
+	periodMs := eff.AuraPeriod
+	if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 23 || eff.Aura == 24 || eff.Aura == 89) {
+		periodMs = 3000
+	}
+	return periodMs
+}
+
+// dynobjAuraEffectFor derives one list entry's period/amount/school from
+// the DBC effect, with the spawn sites' folds: the raw DBC base amount
+// (AuraEffect ctor default, SpellAuraEffects.cpp:386 — no +1), the
+// 10+2*level default for a zero periodic damage/trigger/damage-percent
+// amount, and school 1 when the spell carries no school mask.
+func dynobjAuraEffectFor(spell wotlk.Spell, eff wotlk.SpellEffect, index int, casterLevel uint32) dynobjAuraEffect {
+	amount := uint32(0)
+	if eff.BasePoints >= 0 {
+		amount = uint32(eff.BasePoints)
+	}
+	if amount == 0 && (eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 89) {
+		amount = uint32(10 + int(casterLevel)*2)
+	}
+	schoolMask := uint8(spell.SchoolMask)
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	return dynobjAuraEffect{Effect: eff, Index: index, PeriodMs: dynobjAuraEffectPeriod(eff), Amount: amount, SchoolMask: schoolMask}
+}
+
+// dynobjAuraEffects collects every aura effect of a persistent-area-aura
+// spell, in DBC order — the DynObjAura's MAX_EFFECT_MASK effect set
+// (SpellEffects.cpp:1763-1768 via SpellEffectInfo::IsAura,
+// SpellInfo.cpp:366-369). The seed DBC carries 11 such multi-effect
+// spells (31266, 29951, 27085, 42939, 51103, 32686, 21097, 26607,
+// 32717, 31340, 47346); the spawn sites used to keep only one effect —
+// the first Effect-6 or the last Effect-27 — so a patch like 31266
+// applied the -71% speed effect and never dealt its 949/2s damage.
+func dynobjAuraEffects(spell wotlk.Spell, casterLevel uint32) []dynobjAuraEffect {
+	var list []dynobjAuraEffect
+	for i, eff := range spell.Effects {
+		if eff.Aura == 0 {
+			continue
+		}
+		if eff.Effect != spellEffectPersistentAreaAura && eff.Effect != spellEffectApplyAura {
+			continue
+		}
+		list = append(list, dynobjAuraEffectFor(spell, eff, i, casterLevel))
+	}
+	return list
+}
+
+// dynobjPrimaryAuraEffect picks the list entry the single-timer aura
+// record ticks: the first periodic effect (folded period > 0), else the
+// first entry. C++ ticks every effect on its own amplitude, so a second
+// periodic effect at a different amplitude still has no Go timer —
+// that half stays open (same-period pairs 21097/32686/31340 tick only
+// their first periodic leg); the primary at least restores the tick the
+// old single-effect pick dropped entirely (31266-class spells ticked
+// nothing: the last-27 passive carried period 0).
+func dynobjPrimaryAuraEffect(list []dynobjAuraEffect) (dynobjAuraEffect, bool) {
+	if len(list) == 0 {
+		return dynobjAuraEffect{}, false
+	}
+	for _, entry := range list {
+		if entry.PeriodMs > 0 {
+			return entry, true
+		}
+	}
+	return list[0], true
+}
+
+// dynobjAuraEffect is one aura effect of a DynObjAura's effect mask.
+// Spell::EffectPersistentAA creates the dynobj aura with MAX_EFFECT_MASK
+// (SpellEffects.cpp:1755-1756), so every spell effect carrying an Aura is
+// in the mask — not just the first APPLY_AURA row — and
+// DynObjAura::FillTargetMap (SpellAuras.cpp:2763-2785) registers each target
+// with a per-effect bitmask (targets[unit] |= 1 << effIndex). Each entry
+// carries its own amplitude and amount: Aura::UpdateOwner
+// (SpellAuras.cpp:815-843) updates every effect on its own periodic timer,
+// so a damage effect and a slow effect do not share one schedule. The list
+// is DBC order; the primary entry (first with a nonzero period, else the
+// first entry) drives the record's single periodic timer and the dynobj's
+// NextAuraTick catch-up, since Go holds one TickTimer per aura record.
+type dynobjAuraEffect struct {
+	Effect   wotlk.SpellEffect
+	Index    int
+	PeriodMs uint32
+	Amount   uint32
+	NextTick time.Time
+}
+
+// dynobjAuraEffectList builds the DynObjAura effect list for spell at the
+// caster's level: every effect with a nonzero Aura. The per-effect period
+// and amount folds are the spawn sites' old single-effect rules,
+// generalized: the 3000ms default for periodic damage/heal/trigger auras
+// and the level-based default amount for periodic damage/heal auras.
+func dynobjAuraEffectList(spell wotlk.Spell, casterLevel int, now time.Time) []dynobjAuraEffect {
+	var list []dynobjAuraEffect
+	for i, effect := range spell.Effects {
+		// The mask rule matches applyAuraFromCaster's effectMask build:
+		// an effect with no Effect row carries no aura even if the Aura
+		// column is nonzero, so it never enters the list.
+		if effect.Effect == 0 || effect.Aura == 0 {
+			continue
+		}
+		periodMs := effect.AuraPeriod
+		if periodMs == 0 && (effect.Aura == 3 || effect.Aura == 8 || effect.Aura == 23 || effect.Aura == 24 || effect.Aura == 89) {
+			periodMs = 3000
+		}
+		amount := uint32(0)
+		if effect.BasePoints >= 0 {
+			// The AuraEffect ctor default amount is the raw DBC base
+			// (SpellAuraEffects.cpp:386) — no +1.
+			amount = uint32(effect.BasePoints)
+		}
+		if amount == 0 && (effect.Aura == 3 || effect.Aura == 23 || effect.Aura == 89) {
+			amount = uint32(10 + casterLevel*2)
+		}
+		// AuraEffect::ResetPeriodic (SpellAuraEffects.cpp:553-563): with
+		// SPELL_ATTR5_START_PERIODIC_AT_APPLY the shared periodic timer
+		// starts AT the amplitude, so the first tick fires on the first
+		// world update after creation — the shared schedule starts now,
+		// not a period out.
+		nextTick := now.Add(time.Duration(periodMs) * time.Millisecond)
+		if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+			nextTick = now
+		}
+		list = append(list, dynobjAuraEffect{Effect: effect, Index: i, PeriodMs: periodMs, Amount: amount, NextTick: nextTick})
+	}
+	return list
+}
+
+// dynobjPrimaryEffect returns the list entry driving the aura record's
+// single periodic timer: the first effect with a nonzero amplitude, else
+// the first entry (a patch with no periodic effect has no tick at all).
+func dynobjPrimaryEffect(list []dynobjAuraEffect) *dynobjAuraEffect {
+	for i := range list {
+		if list[i].PeriodMs > 0 {
+			return &list[i]
+		}
+	}
+	if len(list) > 0 {
+		return &list[0]
+	}
+	return nil
 }
 
 func dynamicSpellGUID(low uint32) uint64 { return (dynamicObjectHighGUID << 48) | uint64(low) }
@@ -329,10 +506,13 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 		// amplitude schedule (SpellAuras.cpp:815-843) instead of starting a
 		// private period timer: a target entering just before a tick takes
 		// damage almost immediately, and all applications tick in phase.
-		sharedDelayMs := uint32(0)
-		if d := object.NextAuraTick.Sub(now); d > 0 {
-			sharedDelayMs = uint32(d / time.Millisecond)
-		}
+		// The apply below loops the dynobj's whole effect list (the
+		// MAX_EFFECT_MASK aura), primary first so the fresh record takes
+		// the primary's AuraType and periodic timer; later effects merge
+		// through the castMerged funnel (refreshAuraEffectBasepoints +
+		// EffectMask OR) without touching the timer. Each effect's first
+		// tick aligns to its own shared schedule (its own NextTick).
+		primary := dynobjPrimaryEffect(object.AuraEffects)
 		for _, targetGUID := range areaTargets {
 			if _, ok := inRadius[targetGUID]; !ok {
 				continue
@@ -359,7 +539,30 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			if s.findSessionByGUID(targetGUID) == nil && s.dynobjCreatureTargetImmune(ctx, object.SpellData, targetGUID, object.Map, object.InstanceID, isFriendlyAreaSpell(object.SpellData)) {
 				continue
 			}
-			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, object.AuraEffectIndex, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true, 0, false, &sharedDelayMs)
+			if primary != nil {
+				castMerged := make(map[uint64]struct{})
+				applyOne := func(ae dynobjAuraEffect) {
+					sharedDelayMs := uint32(0)
+					if d := ae.NextTick.Sub(now); d > 0 {
+						sharedDelayMs = uint32(d / time.Millisecond)
+					}
+					caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, ae.Effect, ae.Index, object.AuraDurationMs, ae.PeriodMs, ae.Amount, uint32(object.AuraSchoolMask), castMerged, false, object.CasterGUID, true, 0, false, &sharedDelayMs)
+				}
+				applyOne(*primary)
+				for _, ae := range object.AuraEffects {
+					if ae.Index == primary.Index {
+						continue
+					}
+					applyOne(ae)
+				}
+				// refreshAuraEffectBasepoints sets the record's scalar
+				// Amount to the last merged effect's amount, but the
+				// periodic tick reads it for the primary effect — restore
+				// it so a trailing slow/dummy never zeroes the damage.
+				if targetSess := caster.server.findSessionByGUID(targetGUID); targetSess != nil {
+					targetSess.restoreDynobjPrimaryAmount(uint32(object.SpellID), object.CasterGUID, primary.Amount)
+				}
+			}
 			if object.AuraHolders == nil {
 				object.AuraHolders = make(map[uint64]struct{})
 			}
@@ -489,25 +692,24 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 		}
 		// DynObjAura::UpdateTargetMap (SpellAuras.cpp:687-695) never
 		// registers an immune target: whole-spell immunity blocks the
-		// target and per-effect immunity strips the dynobj's single
-		// effect. applyAuraFromCaster runs neither gate (the player-path
-		// twin runs both inside applyAuraToTarget), so the
-		// creature-caster pass checks here; creature targets get the
-		// whole-spell half here too (the per-effect half rides
-		// serverApplyAuraToCreatureTarget). A skipped target is not
-		// registered, so the next pass re-checks it. The friendly
-		// verdict rides the creature-caster helpers, so the
-		// school-immunity exemption (Unit.cpp:7909) applies to a
-		// positive spell on a friendly target while the
+		// target and per-effect immunity strips that effect's mask bit
+		// (serverApplyAuraToCreatureTarget loops every aura effect and
+		// skips the immune ones, so the record keeps the rest). A
+		// skipped target is not registered, so the next pass re-checks
+		// it. The friendly verdict rides the creature-caster helpers,
+		// so the school-immunity exemption (Unit.cpp:7909) applies to
+		// a positive spell on a friendly target while the
 		// ID/dispel/mechanic/all-effects arms still block it, as in C++.
 		if vs, ok := playerTargets[guid]; ok && vs != nil {
 			targetFriendly := s.creatureFriendlyToTarget(caster, guid)
 			if vs.isImmuneToSpellCreatureCaster(spell, targetFriendly) {
 				continue
 			}
-			if object.AuraEffectIndex >= 0 && vs.isImmunedToSpellEffectCreatureCaster(spell, object.AuraEffectIndex, targetFriendly) {
-				continue
-			}
+			// No per-effect pre-check here: applyAuraFromCaster strips
+			// each immune effect from the mask internally
+			// (Unit::AddAura, Unit.cpp:12291-12297), so a target immune
+			// to only one of the dynobj's effects keeps the rest — the
+			// Aura::UpdateTargetMap mask-strip arm (SpellAuras.cpp:687-695).
 			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs, true)
 		} else {
 			if s.dynobjCreatureTargetImmune(ctx, spell, guid, object.Map, object.InstanceID, s.creatureFriendlyToTarget(caster, guid)) {
@@ -734,6 +936,25 @@ func (s *Server) removeDynamicAreaAuras(object *dynamicSpellObjectState) {
 	for _, key := range creatureKeys {
 		s.removeCreatureAura(key, spellID)
 	}
+}
+
+// restoreDynobjPrimaryAmount resets a dynobj aura record's scalar Amount
+// to the primary effect's amount. A multi-effect apply loop merges each
+// later effect through refreshAuraEffectBasepoints, which leaves the
+// scalar on the last merged effect — but the periodic tick reads the
+// scalar for the primary effect, so a trailing slow or dummy would zero
+// or replace the damage. Amounts[] per index are already exact.
+func (s *session) restoreDynobjPrimaryAmount(spellID uint32, casterGUID uint64, amount uint32) {
+	if s == nil || s.player == nil || spellID == 0 {
+		return
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	aura := s.activeAuras[spellID]
+	if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID || !aura.PersistentAreaAura {
+		return
+	}
+	aura.Amount = amount
 }
 
 // removeDynobjAura drops the session's persistent-area aura of spellID when

@@ -21906,28 +21906,18 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 		}
 	}
 	lowGUID := s.server.nextDynamicSpellLowGUID()
-	auraEffect := persistent
-	auraEffectIndex := -1
-	for i, effect := range spell.Effects {
-		if effect.Effect == 6 && effect.Aura != 0 {
-			auraEffect = effect
-			auraEffectIndex = i
-			break
+	now := time.Now()
+	effects := dynobjAuraEffectList(spell, int(s.player.Level), now)
+	if len(effects) == 0 {
+		// No effect carries an Aura: keep the old single-effect
+		// fallback (the last persistent-area row, synthetic index -1)
+		// so the dynobj still spawns carrying the DBC row it used to.
+		effects = []dynobjAuraEffect{{Effect: persistent, Index: -1, PeriodMs: persistent.AuraPeriod, NextTick: now.Add(time.Duration(persistent.AuraPeriod) * time.Millisecond)}}
+		if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+			effects[0].NextTick = now
 		}
 	}
-	periodMs := auraEffect.AuraPeriod
-	if periodMs == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 8 || auraEffect.Aura == 23 || auraEffect.Aura == 24 || auraEffect.Aura == 89) {
-		periodMs = 3000
-	}
-	amount := uint32(0)
-	if auraEffect.BasePoints >= 0 {
-		// The AuraEffect ctor default amount is the raw DBC base
-		// (SpellAuraEffects.cpp:386) — no +1.
-		amount = uint32(auraEffect.BasePoints)
-	}
-	if amount == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 23 || auraEffect.Aura == 89) {
-		amount = uint32(10 + int(s.player.Level)*2)
-	}
+	primary := dynobjPrimaryEffect(effects)
 	// DYNOBJ_AURA_TYPE auras take no done leg at apply: AuraEffect::
 	// CalculateAmount runs SpellDamageBonusDone / SpellHealingBonusDone
 	// only for UNIT_AURA_TYPE (SpellAuraEffects.cpp:506-518), and the
@@ -21938,16 +21928,7 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 	if schoolMask == 0 {
 		schoolMask = 1
 	}
-	// AuraEffect::ResetPeriodic (SpellAuraEffects.cpp:553-563): with
-	// SPELL_ATTR5_START_PERIODIC_AT_APPLY the shared periodic timer
-	// starts AT the amplitude, so the dynobj's first tick fires on the
-	// first world update after creation — the shared schedule starts
-	// now, not a period out.
-	nextAuraTick := time.Now().Add(time.Duration(periodMs) * time.Millisecond)
-	if spell.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
-		nextAuraTick = time.Now()
-	}
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraEffectIndex: auraEffectIndex, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: nextAuraTick, NextTargetMapPass: time.Now(), NextUpkeepTick: time.Now().Add(auraUpkeepIntervalMs * time.Millisecond)}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: primary.Effect, AuraEffectIndex: primary.Index, AuraDurationMs: uint32(durationMs), AuraPeriodMs: primary.PeriodMs, AuraAmount: primary.Amount, AuraSchoolMask: schoolMask, AuraEffects: effects, NextAuraTick: primary.NextTick, NextTargetMapPass: time.Now(), NextUpkeepTick: time.Now().Add(auraUpkeepIntervalMs * time.Millisecond)}
 	s.server.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 }
 
