@@ -1046,9 +1046,10 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 		return
 	}
 
-	// 3. Pet Aggressive Reaction: scan for nearby hostiles within 15 yards
+	// 3. Pet Aggressive Reaction: PetAI::SelectNextTarget's aggressive arm
+	// (PetAI.cpp:349-354) — nearest hostile in the pet's aggro range.
 	if motion.PetReact == PetReactAggressive && motion.PetCommand != PetCommandStay {
-		hostileGUID := s.findNearbyPetHostile(motion, 15.0, players)
+		hostileGUID := s.findNearbyPetHostile(motion, players)
 		if hostileGUID != 0 {
 			motion.TargetGUID = hostileGUID
 			motion.InCombat = true
@@ -1168,20 +1169,75 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 	}
 }
 
-// findNearbyPetHostile scans for nearby hostile creatures within range.
-func (s *Server) findNearbyPetHostile(pet *creatureMotion, maxDist float32, players []playerPos) uint64 {
+// findNearbyPetHostile ports PetAI::SelectNextTarget's aggressive arm
+// (PetAI.cpp:349-354) via Creature::SelectNearestHostileUnitInAggroRange
+// (Creature.cpp:3181-3191) and its NearestHostileUnitInAggroRangeCheck
+// predicate (GridNotifiers.h:1228-1261): IsHostileTo, 3D distance within
+// the per-target Creature::GetAggroRange (Creature.cpp:3130-3174 — 20
+// minus the target-minus-pet level difference, clamped [10, 45], plus
+// both detect-range aura terms, via creatureAggroRange),
+// IsValidAttackTarget, line of sight, and no civilians. The nearest
+// passing candidate wins across players and creatures; the old fixed
+// 15.0 yd 2D scan ignored its players argument, used any-different-faction
+// instead of IsHostileTo, and returned the first map-iteration hit with
+// no LOS/valid-target/civilian checks. The creature loop runs under
+// motionMu and uses factionTemplatesHostile directly (the creature leg
+// of creatureHostileToTarget — findCreatureMotion would self-deadlock
+// under the lock); the player loop runs before the lock is taken.
+func (s *Server) findNearbyPetHostile(pet *creatureMotion, players []playerPos) uint64 {
+	ownDetect := s.creatureAuraTypeSum(creatureAuraKeyForMotion(pet), spellAuraModDetectRange)
+	bestGUID := uint64(0)
+	bestDist := float32(0)
+	consider := func(guid uint64, level uint32, targetDetected int32, x, y, z float32) {
+		aggroRange := creatureAggroRange(pet, level, ownDetect, targetDetected)
+		dist := float32(distance3D(x, y, z, pet.X, pet.Y, pet.Z))
+		if dist > aggroRange || (bestGUID != 0 && dist >= bestDist) {
+			return
+		}
+		if !s.hasLineOfSight(pet.Map, pet.X, pet.Y, pet.Z, x, y, z) {
+			return
+		}
+		bestGUID, bestDist = guid, dist
+	}
+	for _, p := range players {
+		if p.Map != pet.Map || p.InstanceID != pet.InstanceID || p.GUID == 0 || p.IsGM || p.IsDead {
+			continue
+		}
+		if !s.creatureHostileToTarget(pet, p.GUID) {
+			continue
+		}
+		if p.Sess != nil && p.Sess.player != nil {
+			if s.creatureSightInvisibilityBlocked(pet, p.Sess) {
+				continue
+			}
+			if playerSightVictimBlocked(pet, p.Sess.player.UnitFlags, p.Sess.player.UnitFlags&unitFlagPlayerControlled != 0) {
+				continue
+			}
+		}
+		targetDetected := int32(0)
+		if p.Sess != nil {
+			targetDetected = p.Sess.totalAuraModifier(spellAuraModDetectedRange)
+		}
+		consider(p.GUID, uint32(p.Level), targetDetected, p.X, p.Y, p.Z)
+	}
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 	for guid, m := range s.motionMapLocked(pet.Map, pet.InstanceID) {
 		if guid == pet.GUID || m == nil || m.OwnerGUID != 0 || m.Health == 0 || m.InstanceID != pet.InstanceID {
 			continue
 		}
-		dist := float32(math.Hypot(float64(m.X-pet.X), float64(m.Y-pet.Y)))
-		if dist <= maxDist && pet.Faction != m.Faction {
-			return guid
+		if m.FlagsExtra&0x2 != 0 {
+			continue
 		}
+		if !s.factionTemplatesHostile(pet.Faction, m.Faction) {
+			continue
+		}
+		if creatureSightVictimBlocked(pet, m) {
+			continue
+		}
+		consider(guid, m.Level, s.creatureAuraTypeSum(creatureAuraKeyForMotion(m), spellAuraModDetectedRange), m.X, m.Y, m.Z)
 	}
-	return 0
+	return bestGUID
 }
 
 // petCarrionFeederCorpseNear ports spell_hun_pet_carrion_feeder::

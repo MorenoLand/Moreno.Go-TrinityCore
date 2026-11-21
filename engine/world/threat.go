@@ -36,6 +36,16 @@ type ThreatManager struct {
 	// -> taunt-aura expiry. A zero expiry means the aura carries no
 	// duration and the state lives until the aura is removed.
 	tauntExpiry map[uint64]time.Time
+	// tauntOrder mirrors TauntUpdate's incrementing state (:439-458):
+	// victim GUID -> taunt-application sequence. TauntUpdate assigns
+	// TAUNT_STATE_TAUNT (2), then state++ per MOD_TAUNT aura effect in
+	// application order, keyed by caster GUID — so the most recently
+	// applied taunt carries the highest state and sorts first in
+	// CompareReferencesLT (:593-601). A flat 2 ties simultaneous
+	// taunters on threat.
+	tauntOrder map[uint64]uint64
+	// tauntSeq is the monotonic counter feeding tauntOrder.
+	tauntSeq uint64
 	// detauntExpiry mirrors the per-reference detaunt state maintained by
 	// ThreatManager::TauntUpdate (ThreatManager.cpp:439-458) via
 	// ThreatReference::UpdateTauntState (ThreatManager.cpp:125-129):
@@ -193,6 +203,7 @@ func NewThreatManager(motion *creatureMotion) *ThreatManager {
 		updateTimerMs:          threatUpdateIntervalMs,
 		entries:                make(map[uint64]float32),
 		tauntExpiry:            make(map[uint64]time.Time),
+		tauntOrder:             make(map[uint64]uint64),
 		tempMods:               make(map[uint64]int32),
 		offline:                make(map[uint64]bool),
 	}
@@ -432,11 +443,20 @@ func (tm *ThreatManager) ApplyTaunt(victim uint64, durationMs uint32) {
 	if tm.tauntExpiry == nil {
 		tm.tauntExpiry = make(map[uint64]time.Time)
 	}
+	if tm.tauntOrder == nil {
+		tm.tauntOrder = make(map[uint64]uint64)
+	}
 	if durationMs > 0 {
 		tm.tauntExpiry[victim] = time.Now().Add(time.Duration(durationMs) * time.Millisecond)
 	} else {
 		tm.tauntExpiry[victim] = time.Time{}
 	}
+	// TauntUpdate (ThreatManager.cpp:439-458) assigns TAUNT_STATE_TAUNT,
+	// then state++ per MOD_TAUNT aura effect in application order — the
+	// most recently applied taunt sorts first. A re-apply (new aura)
+	// takes a fresh sequence, matching C++'s per-effect map overwrite.
+	tm.tauntSeq++
+	tm.tauntOrder[victim] = tm.tauntSeq
 	// The taunt-state swap marks the client list dirty
 	// (ThreatReference::UpdateTauntState, ThreatManager.cpp:141).
 	tm.needClientUpdate = true
@@ -451,6 +471,7 @@ func (tm *ThreatManager) ClearTaunt(victim uint64) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	delete(tm.tauntExpiry, victim)
+	delete(tm.tauntOrder, victim)
 	// The taunt-state clear marks the client list dirty
 	// (ThreatReference::UpdateTauntState, ThreatManager.cpp:141).
 	tm.needClientUpdate = true
@@ -535,12 +556,15 @@ func (tm *ThreatManager) IsDetaunted(victim uint64) bool {
 }
 
 // tauntStateLocked returns the victim's CompareReferencesLT taunt-state
-// level: TAUNT (2) when a live MOD_TAUNT aura names it, DETAUNT (0)
-// when a live MOD_DETAUNT aura from the owner names it and no taunt
-// does, NONE (1) otherwise. Callers hold tm.mu.
+// level: TAUNT (2) plus its TauntUpdate application sequence when a live
+// MOD_TAUNT aura names it — the most recently applied taunt sorts first
+// (ThreatManager.cpp:439-458, 593-601) — DETAUNT (0) when a live
+// MOD_DETAUNT aura from the owner names it and no taunt does, NONE (1)
+// otherwise. A taunt with no recorded sequence reads plain TAUNT (2).
+// Callers hold tm.mu.
 func (tm *ThreatManager) tauntStateLocked(victim uint64) int {
 	if tm.isTauntedLocked(victim) {
-		return tauntStateTaunt
+		return tauntStateTaunt + int(tm.tauntOrder[victim])
 	}
 	if tm.isDetauntedLocked(victim) {
 		return tauntStateDetaunt
@@ -1994,6 +2018,7 @@ func (tm *ThreatManager) isTauntedLocked(victim uint64) bool {
 	}
 	if !exp.IsZero() && time.Now().After(exp) {
 		delete(tm.tauntExpiry, victim)
+		delete(tm.tauntOrder, victim)
 		return false
 	}
 	return true
@@ -2113,7 +2138,11 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 		if _, ok := tm.entries[tm.fixateGUID]; ok && !tm.isOfflineLocked(tm.fixateGUID) {
 			return tm.fixateGUID
 		}
-		tm.fixateGUID = 0
+		// An offline fixate is skipped but survives (ReselectVictim:540-541):
+		// _fixateRef is cleared only by FixateTarget(nullptr) (:494-506)
+		// or by purging its reference (:801-811) — both already ported
+		// (FixateTarget, RemoveThreat). When the victim comes back
+		// online this arm returns it again; nothing re-applies it.
 	}
 
 	type candidate struct {
@@ -2480,7 +2509,9 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	highest := cands[0]
 	// The taunt-skip leg (ThreatManager.cpp:424-429): a taunting highest
 	// yields to the next available ref with strictly more threat.
-	if highest.tauntState == tauntStateTaunt && len(cands) > 1 && cands[1].threat > highest.threat {
+	// IsTaunting() is _taunted >= TAUNT_STATE_TAUNT (ThreatManager.h:267),
+	// so any sequenced taunt state qualifies, not just flat TAUNT (2).
+	if highest.tauntState >= tauntStateTaunt && len(cands) > 1 && cands[1].threat > highest.threat {
 		highest = cands[1]
 	}
 
@@ -2538,6 +2569,7 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 		tm.fixateGUID = 0
 	}
 	delete(tm.tauntExpiry, victim)
+	delete(tm.tauntOrder, victim)
 	// ThreatManager.cpp:801-811 (PurgeThreatListRef): the detaunt state
 	// dies with the reference, like the taunt state above.
 	delete(tm.detauntExpiry, victim)
@@ -2659,6 +2691,7 @@ func (tm *ThreatManager) ClearThreat() {
 	tm.currentVictim = 0
 	tm.fixateGUID = 0
 	tm.tauntExpiry = make(map[uint64]time.Time)
+	tm.tauntOrder = make(map[uint64]uint64)
 	// ThreatManager.cpp:483-492 (ClearAllThreat): every reference is
 	// freed, so the per-reference detaunt state dies with them.
 	tm.detauntExpiry = make(map[uint64]time.Time)

@@ -7462,6 +7462,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, nextVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 				return
 			}
+			// Creature::SelectVictim (Creature.cpp:1194-1227) for a
+			// threat-less summon: getAttackerForHelper (Unit.cpp:5627-5644)
+			// — own victim, then the owner's PvP/PvE refs — re-evaluated
+			// every UpdateVictim tick (CreatureAI.cpp:251-257). A
+			// player-summoned guardian has no ThreatMgr and skips the
+			// pet diversion above, so on victim death it fell straight
+			// to evade; petSelectNextTarget is the Go twin of the helper
+			// legs (own attackers, then the owner's attackers,
+			// breakable-CC skipped).
+			if summoned && !motion.Charmed && motion.OwnerGUID != 0 && target != nil && target.IsDead {
+				if next := s.petSelectNextTarget(motion, motion.OwnerGUID); next != 0 {
+					s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, motion.TargetGUID, false), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+					motion.TargetGUID = next
+					motion.InCombat = true
+					motion.Moving = true
+					return
+				}
+			}
 			s.triggerCreatureEvade(ctx, motion, now)
 			return
 		}
