@@ -185,7 +185,7 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 			// Player.cpp:1896-1906) falls through to the normal teleport.
 			if g := s.server.findGroupByID(s.groupID); g != nil && g.IsLFG && s.hasBattlegroundEntryPoint() {
 				if mapEntry, found, mapErr := s.server.Data.Map(s.player.Map); mapErr == nil && found && mapEntry.IsDungeon() {
-					s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)
+					s.teleportToBGEntryPoint()
 					return true
 				}
 			}

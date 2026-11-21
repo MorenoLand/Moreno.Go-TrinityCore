@@ -3189,11 +3189,12 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 		if s.hasAuraType(spellAuraSpiritOfRedemption) {
 			s.removeAurasByType(spellAuraModShapeshift)
 		}
+		// Battleground.cpp:850 (RemovePlayerAtLeave, :819): the mount strip
+		// runs at leave; the mount itself is restored at the far ack by
+		// (processDelayedOperations), so the player is mounted again once
+		// the entry-point teleport completes.
+		s.removeAurasByType(spellAuraMounted)
 		// Battleground.cpp:832-835: resurrect on exit, spawning corpse bones.
-		// The SPELL_AURA_MOUNTED strip (Battleground.cpp:830) is deliberately
-		// not mirrored: C++ restores the mount after the teleport via
-		// DELAYED_BG_MOUNT_RESTORE, which has no Go twin, so stripping would
-		// dismount where C++ leaves the player mounted.
 		if s.player.Health == 0 {
 			s.resurrectPlayer(ctx, 1.0)
 			s.spawnCorpseBones(ctx)
@@ -3220,7 +3221,9 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 		// Player::TeleportToBGEntryPoint (Player.cpp:1896-1906); the JoinMap
 		// gate mirrors the arena-end twin (battleground_arena.go) - C++
 		// returns false with no teleport when the entry point is invalid.
-		s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)
+		// The shared helper also arms the DELAYED_BG_* restores, which the
+		// far ack fires via processDelayedOperations.
+		s.teleportToBGEntryPoint()
 	}
 	// Logout from a battleground: the C++ Player object is destroyed, and
 	// bgAfkReporter is runtime-only (Player.h:843, never persisted), so a

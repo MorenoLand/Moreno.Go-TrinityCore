@@ -715,10 +715,8 @@ const creatureTypeFlagBossMob = 0x4
 // affects a launched spline; the MOVE_RUN rate already folds into
 // motion.RunSpeed via SetSpeedRate. The WALKING leg selects MOVE_WALK.
 // Documented no-bridge arms of the same Launch block: the SWIMMING leg
-// of SelectSpeedType (creatureMotion carries no swim flag) and the client
-// speed cap min(velocity, catmullrom||flying ? 50 : max(28, run*4)) —
-// vacuous for template speeds (velocity stays near the base rates).
-// Waypoint LAND/TAKEOFF set only AnimationTier (cosmetic), unmodeled.
+// of SelectSpeedType (creatureMotion carries no swim flag). Waypoint
+// LAND/TAKEOFF set only AnimationTier (cosmetic), unmodeled.
 // The 0.66 searched-assistance multiplier (MoveSplineInit.cpp:118) is
 // applied below: it folds over the selected speed for every spline,
 // including flight, exactly like Launch's unconditional post-select arm.
@@ -733,6 +731,31 @@ func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
 		speed *= 0.66
 	}
 	return speed
+}
+
+// capSplineVelocity mirrors the client speed cap in MoveSplineInit::Launch
+// (MoveSplineInit.cpp:122-123): min(velocity, catmullrom||flying ? 50 :
+// max(28, run*4)), applied unconditionally — including explicit SetVelocity
+// splines, where the 0.66 searched-assistance multiplier does NOT apply
+// (it sits inside the !HasVelocity branch, :106-121). Every launch through
+// the choke points below runs the non-flying leg: chain links never set
+// flying/cattmullrom (SplineChainMovementGenerator::SendPathSpline sets
+// neither), jumps set only Parabolic (MotionMaster::MoveJump), and the one
+// SetFly launch — MoveCirclePath's flying branch — takes the
+// template-selected velocity, which never exceeds max(28, run*4) (it IS
+// the run speed, and 4*run >= run). The cap therefore binds only on
+// explicit velocities: a DB chain velocity or a Lua jump speed above
+// max(28, run*4). Taxi flights ride their own launch (taxi.go) at
+// PLAYER_FLIGHT_SPEED 32, under the flying 50 cap.
+func capSplineVelocity(velocity, runSpeed float32) float32 {
+	cap := float32(28.0)
+	if runSpeed*4 > cap {
+		cap = runSpeed * 4
+	}
+	if velocity > cap {
+		return cap
+	}
+	return velocity
 }
 
 // splineDurationMs mirrors MoveSpline's duration computation
@@ -4193,6 +4216,9 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 		s.motionMu.Unlock()
 		return false
 	}
+	// MoveSplineInit::Launch caps the velocity (capSplineVelocity); the
+	// duration below must derive from the capped speed, like C++.
+	speed = capSplineVelocity(speed, motion.RunSpeed)
 	if moveType != movementGeneratorSplineChain {
 		motion.SplineChain = nil
 	}
@@ -4419,6 +4445,12 @@ func (s *Server) launchCreatureJumpSpline(motion *creatureMotion, destX, destY, 
 		s.motionMu.Unlock()
 		return false
 	}
+	// MoveSplineInit::Launch caps the velocity (capSplineVelocity); the
+	// duration below must derive from the capped speed, like C++. The
+	// parabolic amplitude stays a function of speedZ alone
+	// (MotionMaster::MoveJump computes max_height from speedZ before
+	// SetVelocity, so the cap never touches it).
+	speedXY = capSplineVelocity(speedXY, motion.RunSpeed)
 	dist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)
 	duration := splineDurationMs(float64(dist), speedXY)
 	_, verticalAccel := jumpParabolicParams(speedZ, duration)

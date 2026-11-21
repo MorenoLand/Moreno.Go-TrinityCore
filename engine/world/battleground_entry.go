@@ -14,10 +14,13 @@ func (s *session) setBattlegroundEntryPoint() {
 	setPosition := func(mapID uint32, x, y, z, orientation float32) {
 		s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO = mapID, x, y, z, orientation
 	}
-	s.bgData.TaxiStart, s.bgData.TaxiEnd = 0, 0
+	s.bgData.TaxiStart, s.bgData.TaxiEnd, s.bgData.TaxiFaction = 0, 0, 0
 	if state.TaxiPath != "" {
 		path := strings.Fields(state.TaxiPath)
 		if len(path) >= 3 {
+			if faction, err := strconv.ParseUint(path[0], 10, 32); err == nil {
+				s.bgData.TaxiFaction = uint32(faction)
+			}
 			if start, err := strconv.ParseUint(path[1], 10, 32); err == nil {
 				s.bgData.TaxiStart = uint32(start)
 			}

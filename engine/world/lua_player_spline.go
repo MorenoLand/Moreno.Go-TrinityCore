@@ -64,6 +64,10 @@ func (s *session) launchPlayerJumpSpline(destX, destY, destZ, speedXY, speedZ fl
 	if s.player.Health == 0 || speedXY < 0.01 {
 		return false
 	}
+	// MoveSplineInit::Launch caps the velocity (capSplineVelocity, the
+	// creature leg's twin); the duration below must derive from the
+	// capped speed, like C++.
+	speedXY = capSplineVelocity(speedXY, s.movementSpeeds()[moveTypeRun])
 	dist := distance3D(s.player.X, s.player.Y, s.player.Z, destX, destY, destZ)
 	duration := splineDurationMs(dist, speedXY)
 	_, verticalAccel := jumpParabolicParams(speedZ, duration)

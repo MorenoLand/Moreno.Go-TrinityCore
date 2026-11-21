@@ -3155,6 +3155,11 @@ func (s *session) teleportToBGEntryPoint() {
 	if !s.hasBattlegroundEntryPoint() {
 		return
 	}
+	// Player::TeleportToBGEntryPoint (Player.cpp:1901-1903) schedules the
+	// three DELAYED_BG_* restores before the TeleportTo; the far ack (or
+	// the near ack, when the entry point lands on the same map) fires
+	// them via processDelayedOperations.
+	s.pendingBGDelayedOps = true
 	s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)
 }
 

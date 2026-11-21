@@ -556,8 +556,16 @@ type session struct {
 	// teleport with the revive option resurrects at half health after the
 	// map switch, at the worldport ack (MovementHandler.cpp:145-146), not
 	// at initiation. Same-map teleports revive inline (Player.cpp:1749).
-	teleportReviveAtAck          bool
-	pendingDeserterCast          bool
+	teleportReviveAtAck bool
+	pendingDeserterCast bool
+	// pendingBGDelayedOps carries the DELAYED_BG_MOUNT_RESTORE,
+	// DELAYED_BG_TAXI_RESTORE and DELAYED_BG_GROUP_RESTORE bits that
+	// Player::TeleportToBGEntryPoint schedules (Player.cpp:1901-1903)
+	// before the entry-point TeleportTo; the far ack fires them via
+	// processDelayedOperations (Player::ProcessDelayedOperations,
+	// Player.cpp:1921-1944). C++ schedules all three together and each
+	// arm checks its own condition, so one flag covers the set.
+	pendingBGDelayedOps          bool
 	farTeleportOriginOrientation float32
 	farTeleportOriginMap         uint32
 	farTeleportOriginInstanceID  uint32
@@ -1001,7 +1009,14 @@ type battlegroundLoginData struct {
 	JoinMap    uint32
 	TaxiStart  uint32
 	TaxiEnd    uint32
-	MountSpell uint32
+	// TaxiFaction is the flight-master faction template of the saved taxi
+	// (PlayerTaxi::m_flightMasterFactionId), runtime-only: the
+	// character_battleground_data row carries no faction column, matching
+	// C++ where the faction lives in the taxi object, not m_bgData. The
+	// taxi restore rebuilds the TaxiPath string from it so the resumed
+	// flight keeps the original reputation discount.
+	TaxiFaction uint32
+	MountSpell  uint32
 }
 
 type buybackSlot struct {

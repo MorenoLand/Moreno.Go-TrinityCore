@@ -959,7 +959,7 @@ func (s *session) sendTaxiSegment(f *taxiFlight, segIdx int) bool {
 	if segDist <= 0 {
 		segDist = 1
 	}
-	segDuration := time.Duration(segDist/28.0*1000) * time.Millisecond
+	segDuration := time.Duration(segDist/taxiFlightSpeed*1000) * time.Millisecond
 	if segDuration < 500*time.Millisecond {
 		segDuration = 500 * time.Millisecond
 	}
@@ -976,6 +976,15 @@ func (s *session) sendTaxiSegment(f *taxiFlight, segIdx int) bool {
 	time.AfterFunc(segDuration, func() { s.onTaxiSegmentEnd(f, sg) })
 	return true
 }
+
+// taxiFlightSpeed is PLAYER_FLIGHT_SPEED
+// (FlightPathMovementGenerator.cpp:31): the velocity of a taxi flight
+// spline (init.SetVelocity, :96), launched with SetFly so the Launch
+// client speed cap (50, MoveSplineInit.cpp:123) never binds. The
+// client scales the spline by the provided duration, so the packet
+// duration and the server segment timer below must divide by the same
+// speed.
+const taxiFlightSpeed = 32.0
 
 // sendTaxiMonsterMove broadcasts one flight spline: SMSG_MONSTER_MOVE with
 // Flying | Catmullrom (MoveSplineFlag), the C++ SendDoFlight/MoveTaxiFlight
@@ -996,10 +1005,9 @@ func (s *session) sendTaxiMonsterMove(pts []wotlk.TaxiSplinePoint, splineID uint
 		total += math.Sqrt(float64((point.X-prevX)*(point.X-prevX) + (point.Y-prevY)*(point.Y-prevY) + (point.Z-prevZ)*(point.Z-prevZ)))
 		prevX, prevY, prevZ = point.X, point.Y, point.Z
 	}
-	// Intercontinental flight speed baseline; the client scales the spline
-	// by the provided duration.
-	speed := 28.0
-	duration := uint32((total / speed) * 1000)
+	// The duration is the C++ spline duration at PLAYER_FLIGHT_SPEED;
+	// the client scales the spline by the provided duration.
+	duration := uint32((total / taxiFlightSpeed) * 1000)
 	if duration < 500 {
 		duration = 500
 	}

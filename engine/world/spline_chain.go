@@ -202,6 +202,10 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	if speed <= 0 {
 		speed = creatureSplineVelocity(motion, run.Walk)
 	}
+	// The wait scaling below compares against the C++ actual duration,
+	// which Launch computes from the capped velocity (capSplineVelocity),
+	// so the accumulation must use the capped speed too.
+	speed = capSplineVelocity(speed, motion.RunSpeed)
 	dist := distance3D(motion.X, motion.Y, motion.Z, pt.X, pt.Y, pt.Z)
 	run.LinkActualMs += splineDurationMs(float64(dist), speed)
 	pointID, walk := run.PointID, run.Walk
@@ -243,6 +247,17 @@ func (s *Server) moveCirclePath(ctx context.Context, motion *creatureMotion, cen
 		step = -step
 	}
 	speed := creatureSplineVelocity(motion, false)
+	// MoveSplineInit::Launch (MoveSplineInit.cpp:123) caps the velocity at
+	// 50 for a flying-flag spline — min(velocity, catmullrom||flying ? 50 :
+	// max(28, run*4)) — and MoveCirclePath sets that flag only on the
+	// flying branch (MotionMaster.cpp:851-855, SetFly). The non-flying
+	// leg caps at max(28, run*4), which the run speed never exceeds, so
+	// only a flying circle can bind: a script-set MOVE_RUN rate can push
+	// a flying circle's run speed past 50, where C++ clamps the spline
+	// and Go previously did not.
+	if (motion.CanFly || motion.Flying) && speed > 50 {
+		speed = 50
+	}
 	points := make([]splineChainPoint, 0, int(stepCount))
 	for i := uint8(0); i < stepCount; i++ {
 		points = append(points, splineChainPoint{

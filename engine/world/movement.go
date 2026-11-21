@@ -409,6 +409,12 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 		s.refreshNearbyObjects(ctx)
 	}
 	s.resummonTemporaryPet(ctx)
+	// MovementHandler.cpp:255 (HandleMoveTeleportAck): the delayed
+	// operations fire at the end of the ack, after the pet resummon —
+	// the same tail as the far ack. A same-map entry-point teleport
+	// (a sim player never standing on the BG map) reaches this ack
+	// instead of completeWorldPort, so the BG restores fire here.
+	s.processDelayedOperations(ctx)
 	return true
 }
 

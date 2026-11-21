@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -1671,15 +1672,6 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	originOrientation := s.farTeleportOriginOrientation
 	s.worldReady.Store(false)
 	s.farTeleportPending = false
-	// DELAYED_SPELL_CAST_DESERTER (Player.cpp:1918): a genuinely far Go
-	// entry-teleport BG leave defers the deserter spell cast until the
-	// teleport completes; Go arms pendingDeserterCast in
-	// handleLeaveBattlefield and fires it here, the
-	// ProcessDelayedOperations analog for the far-teleport completion.
-	if s.pendingDeserterCast {
-		s.pendingDeserterCast = false
-		s.castSpellDirect(ctx, deserterSpellBG, s.playerGUID)
-	}
 	state := *s.player
 	if !s.validTrinityMapID(state.Map) || (!s.initialLoginPending && !validTrinityMapCoordinates(state.X, state.Y, state.Z, state.Orientation)) {
 		return false
@@ -1993,6 +1985,9 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 		return false
 	}
 	s.resummonTemporaryPet(ctx)
+	// MovementHandler.cpp:205 (HandleMoveWorldportAck): the delayed
+	// operations fire at the end of the ack, after the pet resummon.
+	s.processDelayedOperations(ctx)
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = s.player.X, s.player.Y, s.player.Z
 	s.farTeleportPending = false
 	s.initialLoginPending = false
@@ -2004,6 +1999,79 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.lfgOnMapChanged(ctx, true)
 	s.persistAckInstanceID()
 	return true
+}
+
+// processDelayedOperations mirrors Player::ProcessDelayedOperations
+// (Player.cpp:1907-1945) as it runs at the end of both teleport acks
+// (MovementHandler.cpp:205 far, :255 near), after the pet resummon.
+// The resurrect and save arms have no Go model —
+// ResurrectUsingRequestData is sync in Go (death.go), and a save
+// deferred across the transfer is a documented no-replay
+// (savePlayerState) — so only the deserter and the three battleground
+// restores are ported. C++ clears m_DelayedOperations at the end
+// (Player.cpp:1944); Go clears pendingBGDelayedOps up front instead —
+// equivalent, since no restore arm re-arms it, so a restore is never
+// fired twice.
+func (s *session) processDelayedOperations(ctx context.Context) {
+	if s == nil || s.player == nil {
+		return
+	}
+	// DELAYED_SPELL_CAST_DESERTER (Player.cpp:1918): a genuinely far Go
+	// entry-teleport BG leave defers the deserter spell cast until the
+	// teleport completes; Go arms pendingDeserterCast in
+	// handleLeaveBattlefield. It fires here, at the ack tail, not at the
+	// head of completeWorldPort: C++ skips the whole tail on the
+	// in-flight early return (MovementHandler.cpp:127-143), and a failed
+	// ack leaves the op pending for the fallback teleport's ack.
+	if s.pendingDeserterCast {
+		s.pendingDeserterCast = false
+		s.castSpellDirect(ctx, deserterSpellBG, s.playerGUID)
+	}
+	if !s.pendingBGDelayedOps {
+		return
+	}
+	s.pendingBGDelayedOps = false
+	// DELAYED_BG_MOUNT_RESTORE (Player.cpp:1921-1927): re-cast the mount
+	// spell captured at the entry point (setBattlegroundEntryPoint) and
+	// clear it; the leave path stripped the aura (Battleground.cpp:830),
+	// so the cast lands on a clean state. A zero mount spell (entered
+	// the BG unmounted) casts nothing.
+	if s.bgData.MountSpell != 0 {
+		mountSpell := s.bgData.MountSpell
+		s.bgData.MountSpell = 0
+		s.castSpellDirect(ctx, mountSpell, s.playerGUID)
+	}
+	// DELAYED_BG_TAXI_RESTORE (Player.cpp:1930-1938): rebuild the taxi
+	// from the saved source/destination nodes and resume the flight.
+	// The faction rides the saved TaxiFaction so the resumed legs keep
+	// the original flight-master reputation discount.
+	if s.bgData.TaxiStart != 0 && s.bgData.TaxiEnd != 0 {
+		start, end, faction := s.bgData.TaxiStart, s.bgData.TaxiEnd, s.bgData.TaxiFaction
+		s.bgData.TaxiStart, s.bgData.TaxiEnd, s.bgData.TaxiFaction = 0, 0, 0
+		s.player.TaxiPath = formatTaxiPath(faction, []uint32{start, end})
+		s.continueTaxiFlight()
+	}
+	// DELAYED_BG_GROUP_RESTORE (Player.cpp:1942-1944): refresh the
+	// leaver's own group list. Group::SendUpdateToPlayer
+	// (Group.cpp:1737) early-returns without a MemberSlot, so a player
+	// who left the group while away gets no packet; the counter
+	// increments per send like broadcastGroupList.
+	if s.groupID != 0 && s.server != nil {
+		if g := s.server.findGroupByID(s.groupID); g != nil {
+			member := false
+			for _, m := range g.Members {
+				if m.GUID == s.playerGUID {
+					member = true
+					break
+				}
+			}
+			if member {
+				counter := atomic.AddUint32(&g.counter, 1) - 1
+				pkt := buildGroupList(s.server, g, s.playerGUID, counter)
+				_ = s.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), pkt, true)
+			}
+		}
+	}
 }
 
 func (s *session) sendSharedQuestDetails(ctx context.Context) error {
