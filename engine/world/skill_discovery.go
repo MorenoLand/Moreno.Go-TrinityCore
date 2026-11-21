@@ -126,6 +126,55 @@ func (s *session) getExplicitDiscoverySpell(reqSpell uint32) uint32 {
 	return 0
 }
 
+// skillDiscoveryRate mirrors RATE_SKILL_DISCOVERY (World.cpp:535):
+// Rate.Skill.Discovery, default 1.0. Go reads no world rates, so the
+// default is the value.
+const skillDiscoveryRate = 1.0
+
+// skillDiscoveryBySkillLine mirrors the reqSpell == 0 rows of
+// skill_discovery_template (SkillDiscovery.cpp LoadSkillDiscoveryTable):
+// keyed by skill line. No such rows are carried in-tree (the table above
+// holds reqSpell > 0 rows only, and world.db's skill_discovery_template
+// is empty), so the map is empty and the skill-line case below never
+// fires until TDB rows are loaded.
+var skillDiscoveryBySkillLine = map[uint32][]skillDiscoveryEntry{}
+
+// getSkillDiscoverySpell mirrors GetSkillDiscoverySpell
+// (SkillDiscovery.cpp:224-257): the first undiscovered entry for the
+// crafted spell whose reqSkillValue the player's total skill value meets
+// and whose chance * RATE_SKILL_DISCOVERY roll passes. The roll is
+// evaluated first per entry, matching the C++ && order (a failed roll
+// consumes the RNG before the skill and known gates are read). The
+// spell case returns 0 on a miss with no fallthrough to the skill-line
+// case; the skill-line case runs only when no spell-case tab exists
+// and the skill line is nonzero. 0 means no discovery.
+func (s *session) getSkillDiscoverySpell(skillID, spellID uint32) uint32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	skillValue := uint32(0)
+	if skillID != 0 {
+		skillValue = uint32(s.playerSkillTotalValue(skillID))
+	}
+	if entries, ok := skillDiscoverySpells[spellID]; ok {
+		for _, entry := range entries {
+			if rand.Float64()*100 < entry.chance*skillDiscoveryRate && entry.reqSkillValue <= skillValue && !discoverySpellKnown(s.player, entry.spellID) {
+				return entry.spellID
+			}
+		}
+		return 0
+	}
+	if skillID == 0 {
+		return 0
+	}
+	for _, entry := range skillDiscoveryBySkillLine[skillID] {
+		if rand.Float64()*100 < entry.chance*skillDiscoveryRate && entry.reqSkillValue <= skillValue && !discoverySpellKnown(s.player, entry.spellID) {
+			return entry.spellID
+		}
+	}
+	return 0
+}
+
 // discoverySpellKnown is the HasSpell predicate shared by the
 // discovery helpers: Active and not Disabled.
 func discoverySpellKnown(state *playerState, spellID uint32) bool {

@@ -1116,8 +1116,9 @@ var bonusSkillLevels = []uint32{75, 150, 225, 300, 375, 450}
 // (high+low)/2, low) and grows the skill through updateSkillPro with the
 // SkillGain.Crafting step (World.cpp:1078 default 1). A gain crossing a
 // bonusSkillLevels threshold runs learnSkillRewardedSpells (UpdateCraftSkill
-// bonus loop). The alchemy-discovery arm (MECHANIC_DISCOVERY,
-// GetSkillDiscoverySpell + LearnSpell) has no Go model — documented no-bridge.
+// bonus loop). The alchemy-discovery arm runs first: a MECHANIC_DISCOVERY
+// (28) craft rolls GetSkillDiscoverySpell on the total skill value and
+// learns the discovered recipe (UpdateCraftSkill, Player.cpp:5800-5805).
 func (s *session) updateCraftSkill(ctx context.Context, spellID uint32) bool {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return false
@@ -1131,6 +1132,11 @@ func (s *session) updateCraftSkill(ctx context.Context, spellID uint32) bool {
 			continue
 		}
 		skillValue := uint32(playerPureSkillValue(s.player, ability.SkillLine))
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.Mechanic == 28 { // MECHANIC_DISCOVERY (SharedDefines.h:1385)
+			if discovered := s.getSkillDiscoverySpell(ability.SkillLine, spellID); discovered != 0 {
+				s.learnSpell(ctx, discovered)
+			}
+		}
 		green := (ability.TrivialRankHigh + ability.TrivialRankLow) / 2
 		chance := skillGainChance(skillValue, ability.TrivialRankHigh, green, ability.TrivialRankLow)
 		oldValue := s.getSkillValue(ability.SkillLine)
