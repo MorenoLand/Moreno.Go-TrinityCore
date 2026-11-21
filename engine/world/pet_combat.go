@@ -6872,14 +6872,14 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// gates are a condition, not a continue: each area target is
 				// its own TargetInfo (Spell.cpp:2405) and still takes the
 				// area legs below.
-				// SPELL_EFFECT_APPLY_AREA_AURA_OWNER (143) never lands on
-				// the aura owner itself (UnitAura::FillTargetMap OWNER arm,
-				// SpellAuras.cpp:2705-2715, selects the charmer/owner only;
-				// static applications strip non-eff-6 bits): a self-targeted
-				// 58818 must not self-apply to the pet — the owner leg below
-				// covers the charmer/owner. The resolved victim is the gate:
-				// an explicitly owner-targeted 143 still applies.
-				if victimGUID := resolveReflectTarget(targetGUID); victimGUID != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) && auraTargetKept(targetGUID) && !(effect.Effect == spellEffectApplyAreaAuraOwner && victimGUID == motion.GUID) {
+				// SPELL_EFFECT_APPLY_AREA_AURA_OWNER (143) never lands via
+				// the hit path at all (UnitAura::FillTargetMap OWNER arm,
+				// SpellAuras.cpp:2705-2715, selects the charmer/owner only,
+				// radius-gated; static applications strip non-eff-6 bits):
+				// a self-targeted 58818 must not self-apply to the pet, and
+				// an owner-targeted 143 must not apply ungated either — the
+				// owner leg below is the sole 143 path, radius-gated.
+				if victimGUID := resolveReflectTarget(targetGUID); victimGUID != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) && auraTargetKept(targetGUID) && effect.Effect != spellEffectApplyAreaAuraOwner {
 					var victim combatTarget
 					if ct, ok := s.getCombatTarget(effCtx, victimGUID); ok {
 						victim = ct
@@ -6908,7 +6908,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					}
 				}
 				for _, casterGUID := range petCasterObjectTargets[i] {
-					if casterGUID == targetGUID || casterGUID == petObjectWireLeg(effect) || !auraTargetKept(casterGUID) {
+					if casterGUID == targetGUID || casterGUID == petObjectWireLeg(effect) || !auraTargetKept(casterGUID) || (effect.Effect == spellEffectApplyAreaAuraOwner && casterGUID == motion.GUID) {
 						continue
 					}
 					cSpell, cEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, casterGUID)
@@ -7028,7 +7028,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					if ownerGUID == 0 {
 						ownerGUID = motion.OwnerGUID
 					}
-					if ownerGUID != 0 && ownerGUID != motion.GUID && ownerGUID != targetGUID && ownerGUID != petObjectWireLeg(effect) {
+					if ownerGUID != 0 && ownerGUID != motion.GUID && ownerGUID != petObjectWireLeg(effect) && (effect.Effect == spellEffectApplyAreaAuraOwner || ownerGUID != targetGUID) {
 						ownerRadius := float32(0)
 						if s.server.Data != nil {
 							if value, ok, err := s.server.Data.SpellRadius(effect.RadiusIndex, uint32(motion.Level)); err == nil && ok {
