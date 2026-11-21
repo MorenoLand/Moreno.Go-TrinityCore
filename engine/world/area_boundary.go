@@ -254,12 +254,7 @@ func creatureWithinBoundary(motion *creatureMotion) bool {
 	if motion == nil {
 		return true
 	}
-	for _, area := range motion.Boundary {
-		if area == nil || !area.within(motion.X, motion.Y, motion.Z) {
-			return false
-		}
-	}
-	return true
+	return pointWithinBoundary(motion.Boundary, motion.X, motion.Y, motion.Z)
 }
 
 // stepCreatureBoundaryCheck mirrors the Creature::Update boundary arm
@@ -284,14 +279,11 @@ func (s *Server) stepCreatureBoundaryCheck(ctx context.Context, motion *creature
 }
 
 // pointWithinBoundary mirrors CreatureAI::IsInBounds
-// (CreatureAI.cpp:411-417) for an arbitrary position against the boss's
-// boundary: every area must contain the point; an empty boundary contains
+// (CreatureAI.cpp:411-417) for an arbitrary position against a boundary:
+// every area must contain the point; an empty boundary contains
 // everything (the C++ no-boundary case, IsInBoundary returning true).
-func pointWithinBoundary(motion *creatureMotion, x, y, z float32) bool {
-	if motion == nil {
-		return true
-	}
-	for _, area := range motion.Boundary {
+func pointWithinBoundary(boundary []areaBoundary, x, y, z float32) bool {
+	for _, area := range boundary {
 		if area == nil || !area.within(x, y, z) {
 			return false
 		}
@@ -325,14 +317,7 @@ func (s *Server) teleportCheaters(motion *creatureMotion) {
 	boundary := append([]areaBoundary(nil), motion.Boundary...)
 	threatMgr := motion.ThreatMgr
 	s.motionMu.Unlock()
-	inBounds := func(x, y, z float32) bool {
-		for _, area := range boundary {
-			if area == nil || !area.within(x, y, z) {
-				return false
-			}
-		}
-		return true
-	}
+	inBounds := func(x, y, z float32) bool { return pointWithinBoundary(boundary, x, y, z) }
 	for _, victimGUID := range threatMgr.EntryGUIDs() {
 		if victimGUID == 0 || victimGUID == motion.GUID {
 			continue
