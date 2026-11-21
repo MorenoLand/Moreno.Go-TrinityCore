@@ -21,8 +21,8 @@
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady (jedoga bar — engagement-only leg,
--- documented). All four C++ scheduled arms are ported below (the
--- erupt schedule is GO-based and stays out); timers cancel on
+-- documented). All five C++ scheduled arms are ported below (the
+-- erupt tile legs stay out — GO arm, below); timers cancel on
 -- 2/4/23 (timers table keyed by GUID, nightbane precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_heigan: JustEngagedWith Talk(SAY_AGGRO 0) + the four event
@@ -64,8 +64,8 @@
 -- (the positional leg rides the Go spell system), DoCastAOE(
 -- SPELL_PLAGUE_CLOUD 29350) 1-arg non-triggered self-cast
 -- (DoCastAOE convention), then the 45s DANCE_END seed. The
--- RescheduleEvent(EVENT_ERUPT, 10s) leg is moot — erupt's whole arm
--- rides GO bridges (below) and is unported. Talk(SAY_TAUNT 2) and
+-- RescheduleEvent(EVENT_ERUPT, 10s) leg is ported (onDance re-seeds
+-- erupt 10s). Talk(SAY_TAUNT 2) and
 -- Talk(EMOTE_DANCE 4) no longer ride an unbridged bar — the king_dred
 -- genuinely-bridgeable-bar objection is lifted by the StopMoving /
 -- SetReactState / AttackStop bridges.
@@ -86,12 +86,14 @@
 -- The old "no DoCastAOE bridge" claims are superseded by the
 -- phase-gating verdict (Oct-13 ICC strip convention).
 -- Unmodeled (no bridges — documented, not wired):
--- EVENT_ERUPT (init 15s, re-armed by the dance arms) — the entire arm
--- rides GO bridges: TeleportCheaters, _eruptTiles populated from the
--- map GO-by-spawnId store (firstEruptionDBGUID 84980, 4 sections of
--- 15/25/23/13), ObjectAccessor GO lookup + tile->CastSpell(trap
--- spell) — no GO-spawnId-store / ObjectAccessor / GO-cast bridges —
--- documented-only.
+-- EVENT_ERUPT tile legs — the tile eruption half stays out:
+-- _eruptTiles populated from the map GO-by-spawnId store
+-- (firstEruptionDBGUID 84980, 4 sections of 15/25/23/13),
+-- ObjectAccessor GO lookup + tile->CastSpell(trap spell) — no
+-- GO-spawnId-store / ObjectAccessor / GO-cast bridges —
+-- documented-only. The TeleportCheaters leg + the erupt schedule
+-- (15s seed, 10s/15s dance re-arms, 3s/10s repeat) ARE ported
+-- (onErupt; creature:TeleportCheaters bridge, area_boundary.go).
 -- Reset's _Reset() SetBossState NOT_STARTED leg PORTED 2026-11-05
 -- (moroes precedent, != DONE-gated per ScriptedCreature.cpp:509-510);
 -- SetReactState(REACT_AGGRESSIVE) IS ported (event 23).
@@ -180,6 +182,7 @@ local function onFever(creature, guid)
 end
 
 local onDance
+local onErupt
 
 local function onDanceEnd(creature, guid)
     dancing[guid] = nil
@@ -192,6 +195,18 @@ local function onDanceEnd(creature, guid)
     creature:StopSpellCast()
     creature:SetReactState(REACT_AGGRESSIVE)
     creature:DoZoneInCombat()
+    -- C++ :183 (EVENT_DANCE_END) — RescheduleEvent(EVENT_ERUPT, 15s).
+    schedule(guid, "erupt", 15000, function() onErupt(creature, guid) end)
+end
+
+onErupt = function(creature, guid)
+    -- C++ boss_heigan.cpp EVENT_ERUPT: TeleportCheaters() first, then
+    -- the tile eruption (GO arm, stays out — no GO-spawnId-store /
+    -- ObjectAccessor / GO-cast bridges). The _safeSection advance is
+    -- unobservable without the tile arm; the repeat (3s dancing /
+    -- 10s fight) is the observable half and is ported.
+    creature:TeleportCheaters()
+    schedule(guid, "erupt", dancing[guid] and 3000 or 10000, function() onErupt(creature, guid) end)
 end
 
 onDance = function(creature, guid)
@@ -204,6 +219,8 @@ onDance = function(creature, guid)
     creature:CastSpell(creature, SPELL_TELEPORT_SELF)
     creature:CastSpell(creature, SPELL_PLAGUE_CLOUD)
     schedule(guid, "dance_end", 45000, function() onDanceEnd(creature, guid) end)
+    -- C++ :174 (EVENT_DANCE) — RescheduleEvent(EVENT_ERUPT, 10s).
+    schedule(guid, "erupt", 10000, function() onErupt(creature, guid) end)
 end
 
 local function heiganEnterCombat(event, creature, target)
@@ -221,6 +238,8 @@ local function heiganEnterCombat(event, creature, target)
     schedule(guid, "disrupt", {15000, 20000}, function() onDisrupt(creature, guid) end)
     schedule(guid, "fever", {10000, 20000}, function() onFever(creature, guid) end)
     schedule(guid, "dance", 90000, function() onDance(creature, guid) end)
+    -- C++ JustEngagedWith (:125): ScheduleEvent(EVENT_ERUPT, 15s).
+    schedule(guid, "erupt", 15000, function() onErupt(creature, guid) end)
 end
 
 local function heiganLeaveCombat(event, creature)

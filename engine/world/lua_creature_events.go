@@ -426,6 +426,35 @@ func (s *Server) despawnCreatureMotion(ctx context.Context, mapID, instanceID ui
 	return
 }
 
+// despawnBossSummons mirrors BossAI::summons.DespawnAll (SummonList::
+// DespawnAll, ScriptedCreature.cpp:505 on _Reset and :515 on _JustDied):
+// every TemporarySummon the boss created despawns when the boss evades or
+// dies. TempSummon::InitSummon (TemporarySummon.cpp:230-245) reports every
+// temp summon to the summoner creature's AI via JustSummoned, so the C++
+// list is exactly the set of motions whose CreatedByGUID is the boss —
+// summonTempCreature already stamps it, so no separate registry is
+// needed. Non-boss creatures keep their summons: only BossAI (native AIs
+// and Lua luaBossAI) carries a SummonList, so the sweep is BossAI-gated.
+// Respawn needs no second sweep: _JustDied already despawned them, and a
+// dead boss summons nothing before its respawn _Reset runs.
+func (s *Server) despawnBossSummons(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || motion.BossAI == nil {
+		return
+	}
+	mapID, instanceID, summonerGUID := motion.Map, motion.InstanceID, motion.GUID
+	s.motionMu.Lock()
+	var doomed []uint64
+	for guid, m := range s.motionMapLocked(mapID, instanceID) {
+		if guid != summonerGUID && m != nil && m.CreatedByGUID == summonerGUID {
+			doomed = append(doomed, guid)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, guid := range doomed {
+		s.despawnCreatureMotion(ctx, mapID, instanceID, guid)
+	}
+}
+
 func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	if s == nil || motion == nil {
 		return nil
@@ -2716,6 +2745,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// TeleportCheaters is BossAI::TeleportCheaters
+	// (ScriptedCreature.cpp:546-557): every player-controlled unit in
+	// the boss's PvE combat refs standing outside the boss boundary is
+	// NearTeleportTo'd to the boss position. The engine twin is
+	// teleportCheaters (area_boundary.go); the sole C++ caller is
+	// Heigan's EVENT_ERUPT (boss_heigan.cpp:189).
+	methods["TeleportCheaters"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		live := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, motion.GUID)
+		s.motionMu.Unlock()
+		if live == nil {
+			return nil, nil
+		}
+		s.teleportCheaters(live)
+		return nil, nil
+	}
 	// ClearThreatList is UnitMethods::ClearThreatList
 	// (UnitMethods.h:1992-1999): ThreatManager::ClearAllThreat via
 	// Unit::GetThreatManager — Go's ClearThreat twin. WARNING: this WIPES
@@ -3999,6 +4044,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		diedArgs := []any{scripting.CreatureEventOnDied, creature, killerObj}
 		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDied, diedArgs...)
 		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDied, diedArgs...)
+		// BossAI::_JustDied (ScriptedCreature.cpp:515): summons.DespawnAll —
+		// this path fires ev4 inline instead of through the fireCreatureDied
+		// choke points, so it sweeps here.
+		s.despawnBossSummons(ctx, motion)
 		return nil, nil
 	}
 	// IsVehicle is Unit::IsVehicle (Unit.h:842): the UNIT_MASK_VEHICLE
@@ -8602,10 +8651,10 @@ func (s *Server) fireCreatureMoveInLOSProximity(ctx context.Context, motion, vic
 // entry then unique, matching SetupStack's merged call list
 // (HookHelpers.h:37-39). The boolean veto gates only
 // ScriptedAI::JustDied: the empty CreatureAI base for plain creatures and
-// BossAI::_JustDied (summon despawn + instance DONE) for bosses — Go has
-// no summon-tracking model to gate and instance encounter clearing already
-// runs unconditionally in the kill paths, so the veto is a provable no-op
-// like the SpellHit ruling and is discarded. The killer is the session's
+// BossAI::_JustDied (summon despawn + instance DONE) for bosses — the summon
+// sweep runs in despawnBossSummons below and instance encounter clearing
+// already runs unconditionally in the kill paths, so the veto is a provable
+// no-op like the SpellHit ruling and is discarded. The killer is the session's
 // luaPlayer: every Go kill path (melee, spell, pet) funnels through
 // session.onCreatureKilled; C++ would push the pet unit on pet kills, a
 // nuance Go's funnel has no model for.
@@ -8645,6 +8694,11 @@ func (s *session) fireCreatureDied(ctx context.Context, motion *creatureMotion) 
 			}
 		}
 	}
+	// BossAI::_JustDied (ScriptedCreature.cpp:515): summons.DespawnAll —
+	// the sweep lives at this death choke point, so the session
+	// player-kill funnel (kill.go) sweeps too, not just the
+	// creature-kill funnels that used to call it per-site.
+	sv.despawnBossSummons(ctx, motion)
 }
 
 // fireCreatureDiedByCreature is the server-side twin of session.fireCreatureDied
@@ -8682,6 +8736,10 @@ func (s *Server) fireCreatureDiedByCreature(ctx context.Context, motion, killer 
 			}
 		}
 	}
+	// BossAI::_JustDied (ScriptedCreature.cpp:515): summons.DespawnAll —
+	// the sweep lives at this death choke point, so every creature-kill
+	// funnel sweeps through one call instead of per-site.
+	s.despawnBossSummons(ctx, motion)
 }
 
 // fireCreatureTargetDied dispatches Eluna CREATURE_EVENT_ON_TARGET_DIED (3)

@@ -5183,6 +5183,9 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	// Flame Leviathan, Yogg-Saron, Vezax), so the unconditional restore
 	// is a no-op for every other creature.
 	motion.LootMode = lootModeDefault
+	// BossAI::_Reset (ScriptedCreature.cpp:505): summons.DespawnAll —
+	// the boss's temp summons despawn on evade, not just on death.
+	s.despawnBossSummons(ctx, motion)
 	// MotionMaster::Clear (the MoveTargetedHome twin, MotionMaster.cpp:551):
 	// evade drops the ACTIVE chase/follow slots with the engagement.
 	motion.ScriptChaseTargetGUID = 0

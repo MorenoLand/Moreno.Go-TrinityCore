@@ -16,7 +16,8 @@ import (
 //
 // Callback audit vs BossAI::_Reset/_JustDied/_JustReachedHome/_JustEngagedWith
 // (ScriptedCreature.cpp:499-544), per implemented BossAI (item 6):
-// _Reset (499-510) vs OnReset — fired at respawn (kill.go:865, mirroring
+// _Reset (499-510) vs OnReset — fired at respawn (kill.go:2932 world /
+// :3016 instance, mirroring
 // ai->Reset() in Creature::Respawn, Creature.cpp:2198) and at evade via
 // OnEvade (mirroring Reset() at the tail of CreatureAI::_EnterEvadeMode,
 // CreatureAI.cpp:237); C++ runs no Reset at first spawn either, so Go's
@@ -28,8 +29,9 @@ import (
 // kresh shieldUsed); luaBossAI is a no-op — its Lua script owns state via
 // the Lua On_Reset event (23) the engine fires (vancleef/mr_smite are
 // Lua-driven; their former Go AIs were deleted as unreachable).
-// summons.DespawnAll() for Lua-tracked summons rides the Lua event-4/23
-// fires — vancleef's blackguards despawn on evade/death and Reset
+// summons.DespawnAll() is engine-guaranteed for bosses
+// (despawnBossSummons in lua_creature_events.go sweeps CreatedByGUID on
+// evade and death) — vancleef's blackguards despawn on evade/death and Reset
 // re-summons them via its SummonBlackguards arm (boss_vancleef.cpp:86-90,
 // ported through the creature:SummonCreature bridge). scheduler.CancelAll()
 // needs no bridge — the AIs are tick-driven and OnReset re-arms their
@@ -40,8 +42,8 @@ import (
 // is covered per-AI (flags/timers linger until the respawn OnReset re-arms
 // them; stale timers stay inert via the OnUpdate !InCombat guard the kill
 // paths set), scheduler.CancelAll() needs no bridge (tick-driven AIs),
-// and summons.DespawnAll() rides the Lua event-4 fire for Lua-tracked
-// summons (vancleef's blackguards). The instance SetBossState(DONE) arm
+// and summons.DespawnAll() runs in the engine death sweep
+// (despawnBossSummons; vancleef's blackguards). The instance SetBossState(DONE) arm
 // runs in rhahkZor.OnDied (instance_deadmines.cpp:228-236 OnUnitDeath,
 // BOSS_RHAHKZOR 0); taragaman/kresh have no C++ arm (placeholder /
 // old-style instance scripts with no boss-state tracking). The kill sites
@@ -51,7 +53,7 @@ import (
 // too. Lua keeps
 // Eluna parity (fireCreatureDied fires Lua event 23 On_Reset then event 4
 // On_Died) with the native hook fired right after, matching the
-// Eluna-first/native-second order used at respawn (kill.go:865).
+// Eluna-first/native-second order used at respawn (kill.go:2932/:3016).
 // _JustReachedHome (520-523) = me->setActive(false): no active model in Go;
 // already documented at creaturemotion.go:659-671 (Eluna event 24 fires, the
 // veto discarded as a provable no-op since only BossAI overrides
@@ -11420,6 +11422,8 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 			if live.BossAI != nil {
 				live.BossAI.OnDied(ctx, s, live)
 			}
+			// summons.DespawnAll rides the fireCreatureDiedByCreature
+			// choke point above now.
 			s.fireCreatureDeathCast(ctx, live, m.GUID)
 			s.fireGuardDeathBroadcast(live, m)
 			s.recordCreatureKillLoot(live, m)
@@ -11665,6 +11669,8 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	if tm.BossAI != nil {
 		tm.BossAI.OnDied(ctx, s, tm)
 	}
+	// summons.DespawnAll rides the fireCreatureDiedByCreature choke
+	// point above now.
 	// CombatAI::JustDied (CombatAI.cpp:68-73): the AICOND_DIE death
 	// cast at the attacker killer — the funnel leg, fired here
 	// because the no-owner arm skips onCreatureKilled.
@@ -21481,10 +21487,12 @@ func init() {
 	// calls it unconditionally, so the port does too) +
 	// SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (ported
 	// 2026-10-23).
-	// EVENT_ERUPT stays out — whole arm rides GO bridges: TeleportCheaters,
-	// GO-by-spawnId tile store firstEruptionDBGUID 84980 sections
-	// 15/25/23/13, ObjectAccessor GO lookup + tile CastSpell. Documented
-	// in the lua file, not wired: GetData(DATA_SAFETY_DANCE 19962139)
+	// EVENT_ERUPT: TeleportCheaters leg + schedule ported
+	// (creature:TeleportCheaters bridge, area_boundary.go; onErupt in
+	// boss_heigan.lua); the tile eruption stays out — GO-by-spawnId
+	// tile store firstEruptionDBGUID 84980 sections 15/25/23/13,
+	// ObjectAccessor GO lookup + tile CastSpell have no bridge.
+	// Documented in the lua file, not wired: GetData(DATA_SAFETY_DANCE 19962139)
 	// (GetData self-read bridged; stay-out is the missing achievement consumer — creature-target criteria gate absent), spell_heigan_eruption (no SpellScript binding
 	// bridge — razelikh precedent), achievement_safety_dance (no
 	// achievement-criteria bridge — snakes precedent). The Naxxramas

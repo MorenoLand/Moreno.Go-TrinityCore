@@ -282,3 +282,94 @@ func (s *Server) stepCreatureBoundaryCheck(ctx context.Context, motion *creature
 	s.triggerCreatureEvade(ctx, motion, now)
 	return motion.Evading
 }
+
+// pointWithinBoundary mirrors CreatureAI::IsInBounds
+// (CreatureAI.cpp:411-417) for an arbitrary position against the boss's
+// boundary: every area must contain the point; an empty boundary contains
+// everything (the C++ no-boundary case, IsInBoundary returning true).
+func pointWithinBoundary(motion *creatureMotion, x, y, z float32) bool {
+	if motion == nil {
+		return true
+	}
+	for _, area := range motion.Boundary {
+		if area == nil || !area.within(x, y, z) {
+			return false
+		}
+	}
+	return true
+}
+
+// teleportCheaters mirrors BossAI::TeleportCheaters
+// (ScriptedCreature.cpp:546-557): every player-controlled unit in the
+// boss's PvE combat refs standing outside the boss boundary is
+// NearTeleportTo'd to the boss position (orientation 0). No boundary
+// means every target is in-bounds (CreatureAI::IsInBoundary returns
+// true), so the sweep is a no-op. The refs are the threat entries
+// (ThreatManager::GetPvECombatRefs twin); a victim is player-controlled
+// when it is a player session or a creature whose owner/charmer resolves
+// to a player session (Unit::IsControlledByPlayer, Unit.h:1168).
+// In-flight players skip, like the engine's own spell-teleport arm
+// (spells.go) — a taxi rider cannot be a combat ref in practice.
+func (s *Server) teleportCheaters(motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	applyBossBoundary(motion)
+	if motion.ThreatMgr == nil || len(motion.Boundary) == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	mapID, instanceID := motion.Map, motion.InstanceID
+	bossX, bossY, bossZ := motion.X, motion.Y, motion.Z
+	boundary := append([]areaBoundary(nil), motion.Boundary...)
+	threatMgr := motion.ThreatMgr
+	s.motionMu.Unlock()
+	inBounds := func(x, y, z float32) bool {
+		for _, area := range boundary {
+			if area == nil || !area.within(x, y, z) {
+				return false
+			}
+		}
+		return true
+	}
+	for _, victimGUID := range threatMgr.EntryGUIDs() {
+		if victimGUID == 0 || victimGUID == motion.GUID {
+			continue
+		}
+		if sess := s.findSessionByGUID(victimGUID); sess != nil && sess.player != nil {
+			if sess.inFlight || inBounds(sess.player.X, sess.player.Y, sess.player.Z) {
+				continue
+			}
+			sess.nearTeleportMove(bossX, bossY, bossZ, 0, true)
+			continue
+		}
+		victim := s.findCreatureMotion(mapID, instanceID, victimGUID)
+		if victim == nil {
+			continue
+		}
+		controlled := false
+		if victim.OwnerGUID != 0 && s.findSessionByGUID(victim.OwnerGUID) != nil {
+			controlled = true
+		} else if victim.Charmed && victim.CharmerGUID != 0 && s.findSessionByGUID(victim.CharmerGUID) != nil {
+			controlled = true
+		}
+		if !controlled {
+			continue
+		}
+		s.motionMu.Lock()
+		motions := s.motionMapLocked(mapID, instanceID)
+		m, ok := motions[victimGUID]
+		if !ok || m == nil || inBounds(m.X, m.Y, m.Z) {
+			s.motionMu.Unlock()
+			continue
+		}
+		m.X, m.Y, m.Z, m.Orientation = bossX, bossY, bossZ, 0
+		m.Moving = false
+		phase := m.PhaseMask
+		s.motionMu.Unlock()
+		_, nearby := buildTeleportMovementPackets(victimGUID, movementInfo{Time: s.gameTimeMilliseconds(), X: bossX, Y: bossY, Z: bossZ, Orientation: 0})
+		s.broadcastCreatureTeleportMovement(mapID, instanceID, victimGUID, bossX, bossY, bossZ, nearby, phase)
+		s.syncCreatureVehiclePassengers(m)
+	}
+}

@@ -2617,6 +2617,8 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		if live.BossAI != nil {
 			live.BossAI.OnDied(ctx, s, live)
 		}
+		// summons.DespawnAll rides the fireCreatureDiedByCreature
+		// choke point above now.
 		// CombatAI::JustDied (CombatAI.cpp:68-73): the AICOND_DIE
 		// death cast at the caster killer — the funnel leg, fired
 		// here because this path skips onCreatureKilled.
@@ -3891,6 +3893,8 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			if live.BossAI != nil {
 				live.BossAI.OnDied(ctx, s, live)
 			}
+			// summons.DespawnAll rides the fireCreatureDiedByCreature
+			// choke point above now.
 			// CombatAI::JustDied (CombatAI.cpp:68-73): the AICOND_DIE
 			// death cast — the killer attribution follows this path's
 			// event-4 killer (the motion itself on the self-trip; the
