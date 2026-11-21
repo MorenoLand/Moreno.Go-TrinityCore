@@ -38285,6 +38285,16 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	if wasInvisibility && s.player != nil && !s.hasAuraType(spellAuraInvisibility) {
 		s.player.AuraVision &^= playerAuraVisionInvis
 	}
+	// Aura::HandleAuraSpecificMods priest remove arm
+	// (SpellAuras.cpp:1732-1750): Guardian Spirit (47788) leaving by
+	// expiry credits the Glyph of Guardian Spirit (63231) on its caster
+	// — the reset + re-add rides the caster's session, so a priest
+	// casting on another player still gets the glyph cooldown.
+	if spellID == 47788 && mode == auraRemoveByExpire && auraWasPresent && removedCasterGUID != 0 && s.server != nil {
+		if casterSess := s.server.findSessionByGUID(removedCasterGUID); casterSess != nil && casterSess.playerGUID == removedCasterGUID {
+			casterSess.guardianSpiritGlyphCooldown()
+		}
+	}
 	// Aura::HandleAuraSpecificMods mage remove arm (SpellAuras.cpp:1581-1588):
 	// Invisibility (66) reaching its duration casts the Invisibility fade
 	// (32612) on the target and stops combat. The C++ cast carries the
@@ -48764,6 +48774,15 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		if spellID == 51690 {
 			s.removeCreatureAura(key, 61851)
 		}
+		// Aura::HandleAuraSpecificMods priest remove arm
+		// (SpellAuras.cpp:1732-1750), creature-target twin of the player
+		// remove leg above: Guardian Spirit (47788) leaving a creature
+		// by expiry still credits the glyph on its player caster.
+		if spellID == 47788 && mode == auraRemoveByExpire && removedAura != nil && removedAura.CasterGUID != 0 {
+			if casterSess := s.findSessionByGUID(removedAura.CasterGUID); casterSess != nil && casterSess.playerGUID == removedAura.CasterGUID {
+				casterSess.guardianSpiritGlyphCooldown()
+			}
+		}
 	}
 	// RegisterAuraEvent OnRemove, creature-target twin of the player
 	// funnel (AuraEffect::HandleEffect's
@@ -49562,6 +49581,36 @@ func (s *session) modifyPlayerSpellCooldown(spellID uint32, cooldownModMs int32)
 	buf.WriteU64(s.playerGUID)
 	buf.WriteI32(cooldownModMs)
 	_ = s.write(uint16(protocol.OpcodeSMSG_MODIFY_COOLDOWN), buf.Bytes(), true)
+}
+
+// guardianSpiritGlyphCooldown applies the Glyph of Guardian Spirit arm of
+// Aura::HandleAuraSpecificMods (SpellAuras.cpp:1732-1750): when Guardian
+// Spirit (47788) leaves by expiry and its caster is a player holding the
+// glyph aura (63231), a live 47788 cooldown is reset (SMSG_CLEAR_COOLDOWN)
+// and re-added at the glyph aura's effect-0 amount in seconds, with the
+// SMSG_SPELL_COOLDOWN packet carrying the same amount in milliseconds. The
+// AddCooldown overload takes category 0 (SpellHistory.h:87-90), so the
+// entry carries no category end. The npcbot branch (SpellAuras.cpp:1721-1730)
+// has no Go model. Runs on the caster's session: both remove funnels
+// resolve the caster session before calling here, so a priest casting on
+// another player still gets the glyph cooldown, not the target. A zero or
+// negative glyph amount takes no cooldown (C++ would write a past end).
+// DORMANT until Spell.dbc ships the 47788/63231 records.
+func (s *session) guardianSpiritGlyphCooldown() {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	glyphAmount, ok := s.server.rankedAuraEffectAmount(s.loadedAuras(), 63231, 0)
+	if !ok || glyphAmount <= 0 {
+		return
+	}
+	if !s.spellHasCooldown(47788) {
+		return
+	}
+	s.resetPlayerCooldown(47788, true)
+	now := time.Now()
+	s.replaceSpellCooldownEntry(spellCooldown{Spell: 47788, End: now.Add(time.Duration(glyphAmount) * time.Second).Unix(), CategoryEnd: now.Unix()})
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, 47788, uint32(glyphAmount)*1000), true)
 }
 
 // handleFarSight processes CMSG_FAR_SIGHT (0x27A).
