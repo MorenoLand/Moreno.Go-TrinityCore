@@ -376,7 +376,6 @@ const (
 	spellEffectDummy                   = 3  // SPELL_EFFECT_DUMMY (SharedDefines.h:814)
 	spellEffectHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
 	spellEffectParry                   = 22
-	spellEffectEnvironmentalDMG        = 7  // SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (SharedDefines.h:818)
 	spellEffectBind                    = 11 // SPELL_EFFECT_BIND (SharedDefines.h:822)
 	spellEffectBlock                   = 23 // SPELL_EFFECT_BLOCK (SharedDefines.h:834)
 	spellEffectPowerBurn               = 62
@@ -20405,7 +20404,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// the SpellEffects.cpp effect table — the handlers deliberately
 				// do nothing. Explicit no-op so the effects stop hitting the
 				// unhandled-effect debug arm.
-			case spellEffectEnvironmentalDMG: // 7: SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (EffectEnvironmentalDMG, SpellEffects.cpp:298)
+			case spellEffectEnvironmentalDamage: // 7: SPELL_EFFECT_ENVIRONMENTAL_DAMAGE (EffectEnvironmentalDMG, SpellEffects.cpp:298)
 				// C++ runs this at SPELL_EFFECT_HANDLE_HIT_TARGET per unit
 				// target: players take Player::EnvironmentalDamage (fire),
 				// unit targets only get the non-melee damage log.

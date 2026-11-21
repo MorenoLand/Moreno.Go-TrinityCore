@@ -1210,7 +1210,7 @@ func spellHasOnlyDamageEffects(spell wotlk.Spell) bool {
 		switch eff.Effect {
 		case spellEffectWeaponDamage, spellEffectWeaponDamageNoschool,
 			spellEffectNormalizedWeaponDmg, spellEffectWeaponPercentDamage,
-			spellEffectSchoolDamage, spellEffectEnvironmentalDMG,
+			spellEffectSchoolDamage, spellEffectEnvironmentalDamage,
 			spellEffectHealthLeech:
 			continue
 		default:
