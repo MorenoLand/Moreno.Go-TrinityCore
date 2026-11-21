@@ -37650,10 +37650,11 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	// is never applied — the dynobj UpdateTargetMap leg (SpellAuras.cpp:696,
 	// addUnit=false) and the direct-cast leg (Unit::_RemoveNoStackAurasDueToAura,
 	// Unit.cpp:3648, aura->Remove()). Evaluated on the first surviving aura
-	// effect, the one whose amount this record carries; the purge half stays
-	// out (dynobj applications never purge, like applyAuraToTarget, and the
-	// direct-cast purge legs are a separate gap). A suppressed apply leaves
-	// no phantom presence entry or fresh slot behind.
+	// effect, the one whose amount this record carries; the strictly-higher
+	// purges ride the no-stack purge below for direct casts (a persistent-area
+	// application never purges, Aura::UpdateTargetMap, SpellAuras.cpp:643-767).
+	// A suppressed apply leaves no phantom presence entry or fresh slot behind.
+	var exclusivePurge []rankPurgeTarget
 	if s.server != nil && s.server.Data != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
 			for index, effect := range sp.Effects {
@@ -37663,7 +37664,8 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				if persistentAreaAura && primaryIndex >= 0 && index != primaryIndex {
 					continue
 				}
-				if s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras).suppressed {
+				verdict := s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras)
+				if verdict.suppressed {
 					delete(s.auras, spellID)
 					if freshSlot {
 						delete(s.auraSlots, spellID)
@@ -37671,6 +37673,7 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 					s.castMu.Unlock()
 					return
 				}
+				exclusivePurge = verdict.purge
 				break
 			}
 		}
@@ -37718,7 +37721,38 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 			scPurge = s.server.registerSingleCastAura(sp, aura)
 		}
 	}
+	// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640): the fresh
+	// aura purges auras of other spells it can't stack with — the
+	// rank-chain term (Aura::CanStackWith, SpellAuras.cpp:1994-2004),
+	// the spell-group exclusive terms (SpellAuras.cpp:1924-1932),
+	// the spell-specific exclusivity gates (SpellAuras.cpp:1914-1921),
+	// and the EXCLUSIVE_HIGHEST comparisons (Unit.cpp:13991) — plus
+	// the _AddAura single-target dance (Unit.cpp:3397-3420) for
+	// single-target auras. The purge keys on the new aura's caster —
+	// the casterGUID param — because the totem, boss direct-cast and
+	// self-cast callers create the aura with a foreign caster. The
+	// item term takes 0: no caller of this funnel carries a cast item
+	// (the boss_ai.go server-path twin passes 0 the same way).
+	// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) issues no purge:
+	// a persistent-area application only skips when it cannot stack
+	// and never strips the target's other auras — the applyAuraToTarget
+	// twin of this block carries the same !persistentAreaAura gate.
+	var purgeIDs []rankPurgeTarget
+	if !persistentAreaAura && s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found {
+			purgeIDs = s.server.rankChainNoStackPurge(sp, casterGUID, 0, s.activeAuras)
+			purgeIDs = append(purgeIDs, s.server.spellGroupNoStackPurge(sp, casterGUID, s.activeAuras)...)
+			purgeIDs = append(purgeIDs, s.server.spellSpecificNoStackPurge(sp, casterGUID, s.activeAuras)...)
+			purgeIDs = append(purgeIDs, s.server.singleTargetNoStackPurge(sp, casterGUID, s.activeAuras)...)
+			purgeIDs = append(purgeIDs, exclusivePurge...)
+		}
+	}
 	s.castMu.Unlock()
+	// No-stack purge on apply (Unit::_RemoveNoStackAurasDueToAura,
+	// Unit.cpp:3666): AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
+	for _, purgeID := range purgeIDs {
+		s.removeAura(purgeID.spellID)
+	}
 	// AuraScript::DoEffectCalcAmount (AuraEffect::CalculateAmount,
 	// SpellAuraEffects.cpp:425-539) runs per effect while the aura is
 	// created, before the OnApply handlers and the default effect arms.
