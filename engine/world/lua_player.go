@@ -2041,7 +2041,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		if s.player == nil || durationMs <= 0 {
 			return nil, nil
 		}
-		s.replaceSpellCooldownEntry(spellCooldown{Spell: spell, End: time.Now().Unix() + durationMs/1000})
+		s.replaceSpellCooldownEntry(spellCooldown{Spell: spell, End: time.Now().UnixMilli() + durationMs})
 		return nil, nil
 	}
 	// GetUnitCriticalChanceAgainst is Unit::GetUnitCriticalChanceAgainst

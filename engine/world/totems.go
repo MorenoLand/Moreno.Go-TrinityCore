@@ -2629,7 +2629,7 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 		// startCooldown=false — no real cooldown restarts on either spell.
 		if s.server != nil && s.server.Data != nil {
 			if creating, found, err := s.server.Data.Spell(creatingSpellID); err == nil && found && creating.Category != 0 {
-				if holderID, ok := s.playerCategoryCooldownHolder(creating.Category, time.Now().Unix()); ok && holderID != creatingSpellID {
+				if holderID, ok := s.playerCategoryCooldownHolder(creating.Category, time.Now().UnixMilli()); ok && holderID != creatingSpellID {
 					_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, holderID), true)
 				}
 			}

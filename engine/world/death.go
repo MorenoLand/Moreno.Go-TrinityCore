@@ -2705,9 +2705,9 @@ func (s *session) spellHasCooldown(spellID uint32) bool {
 	if s.player == nil {
 		return false
 	}
-	nowUnix := time.Now().Unix()
+	nowMs := time.Now().UnixMilli()
 	for _, cd := range s.player.Cooldowns {
-		if cd.Spell == spellID && cd.End > nowUnix {
+		if cd.Spell == spellID && cd.End > nowMs {
 			return true
 		}
 	}
@@ -2720,7 +2720,7 @@ func (s *session) spellHasCooldown(spellID uint32) bool {
 	if category == 0 {
 		return false
 	}
-	return s.playerCategoryCooldownBlocked(category, nowUnix)
+	return s.playerCategoryCooldownBlocked(category, nowMs)
 }
 
 // inventoryItemCount mirrors Player::GetItemCount (Player.cpp): the total

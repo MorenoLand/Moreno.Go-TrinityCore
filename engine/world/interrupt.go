@@ -657,19 +657,19 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 	}
 
 	cooldowns := make(map[uint32]uint32)
-	nowUnix := time.Now().Unix()
-	cooldownEnd := nowUnix + int64((durationMs+999)/1000)
+	nowMs := time.Now().UnixMilli()
+	cooldownEnd := nowMs + int64(durationMs)
 	// Sweep first: an expired same-category entry already killed the
 	// shared category entry in C++'s per-tick Update (EraseCooldown), so
 	// the GetRemainingCooldown category-arm reads below must not read
 	// through it (sweepExpiredSpellCooldowns, spells.go).
-	s.sweepExpiredSpellCooldowns(nowUnix)
+	s.sweepExpiredSpellCooldowns(nowMs)
 
 	// SpellHistory::LockSpellSchool (SpellHistory.cpp:520-525) writes one
 	// millisecond-exact end per set school bit, not one entry keyed by the
 	// whole mask: a narrower re-lock narrows only its own bits, and the
-	// per-spell cooldown entries above stay second-granular (the
-	// player.Cooldowns model) while the lockout map itself is exact.
+	// per-spell cooldown entries above are millisecond-exact too (the
+	// player.Cooldowns model stores Unix milliseconds), like the lockout map.
 	lockoutEndMs := time.Now().UnixMilli() + int64(durationMs)
 	s.castMu.Lock()
 	if s.schoolLockouts == nil {
@@ -711,8 +711,8 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 				for i := range s.player.Cooldowns {
 					if s.player.Cooldowns[i].Spell == ls.ID {
 						entryIdx = i
-						if s.player.Cooldowns[i].End > nowUnix {
-							remainingMs = (s.player.Cooldowns[i].End - nowUnix) * 1000
+						if s.player.Cooldowns[i].End > nowMs {
+							remainingMs = s.player.Cooldowns[i].End - nowMs
 						}
 						break
 					}
@@ -732,8 +732,8 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 							catFound = true
 						}
 					}
-					if catFound && lastCatEnd > nowUnix {
-						remainingMs = (lastCatEnd - nowUnix) * 1000
+					if catFound && lastCatEnd > nowMs {
+						remainingMs = lastCatEnd - nowMs
 					}
 				}
 				if remainingMs >= int64(durationMs) {

@@ -15,7 +15,7 @@ func (s *session) savePlayerCooldowns(ctx context.Context, tx *sql.Tx, state *pl
 	for _, cooldown := range state.Cooldowns {
 		latest[cooldown.Spell] = cooldown
 	}
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	cooldowns := make([]spellCooldown, 0, len(latest))
 	for _, cooldown := range latest {
 		// SpellHistory::SaveToDB (SpellHistory.cpp:130) skips onHold
@@ -33,7 +33,7 @@ func (s *session) savePlayerCooldowns(ctx context.Context, tx *sql.Tx, state *pl
 		return err
 	}
 	for _, cooldown := range cooldowns {
-		if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_CHAR_SPELL_COOLDOWN", state.GUID, cooldown.Spell, cooldown.Item, cooldown.End, cooldown.Category, cooldown.CategoryEnd); err != nil {
+		if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_CHAR_SPELL_COOLDOWN", state.GUID, cooldown.Spell, cooldown.Item, cooldown.End/1000, cooldown.Category, cooldown.CategoryEnd/1000); err != nil {
 			return err
 		}
 	}

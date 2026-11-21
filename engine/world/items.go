@@ -2604,7 +2604,7 @@ func (s *session) applyEquipCooldown(ctx context.Context, itemGUID int64, itemEn
 	if !ok {
 		return
 	}
-	nowUnix := time.Now().Unix()
+	nowMs := time.Now().UnixMilli()
 	for i := 0; i < maxItemProtoSpells && i < len(slots); i++ {
 		if slots[i].ID <= 0 || slots[i].Trigger != uint32(itemSpellTriggerOnUse) {
 			continue
@@ -2612,17 +2612,17 @@ func (s *session) applyEquipCooldown(ctx context.Context, itemGUID int64, itemEn
 		spellID := uint32(slots[i].ID)
 		var remaining int64
 		for _, cd := range s.player.Cooldowns {
-			if cd.Spell == spellID && cd.End > nowUnix {
-				if r := cd.End - nowUnix; r > remaining {
+			if cd.Spell == spellID && cd.End > nowMs {
+				if r := cd.End - nowMs; r > remaining {
 					remaining = r
 				}
 			}
 		}
 		// Don't replace longer cooldowns by equip cooldown (Player.cpp:23146).
-		if remaining > 30 {
+		if remaining > 30*1000 {
 			continue
 		}
-		s.replaceSpellCooldownEntry(spellCooldown{Spell: spellID, Item: itemEntry, End: nowUnix + 30})
+		s.replaceSpellCooldownEntry(spellCooldown{Spell: spellID, Item: itemEntry, End: nowMs + 30*1000})
 		buf := protocol.NewBuffer(8 + 4)
 		buf.WriteU64(uint64(itemGUID))
 		buf.WriteU32(spellID)
@@ -4575,15 +4575,15 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// (spellCooldownDurationsForItem). Runs after
 		// the Eluna hooks, matching C++ SpellHandler.cpp order (OnItemUse
 		// at SpellHandler.cpp:176 precedes the cast and its CheckCast).
-		nowUnix := time.Now().Unix()
+		nowMs := time.Now().UnixMilli()
 		for _, cd := range s.player.Cooldowns {
-			if cd.Spell == spellID && cd.End > nowUnix {
+			if cd.Spell == spellID && cd.End > nowMs {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell on cooldown")
 				return true
 			}
 		}
-		if _, _, categoryID := s.server.spellCooldownDurationsForItem(ctx, spell, uint32(itemEntry)); categoryID != 0 && s.playerCategoryCooldownBlocked(categoryID, nowUnix) {
+		if _, _, categoryID := s.server.spellCooldownDurationsForItem(ctx, spell, uint32(itemEntry)); categoryID != 0 && s.playerCategoryCooldownBlocked(categoryID, nowMs) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
 			return true

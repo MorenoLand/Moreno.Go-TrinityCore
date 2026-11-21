@@ -2759,7 +2759,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
 		return true
 	}
-	nowUnix := time.Now().Unix()
+	nowMs := time.Now().UnixMilli()
 	if s.isSchoolLocked(spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "school lockout active")
@@ -2835,14 +2835,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// client CMSG_USE_ITEM casts, never triggered ones. C++ relative order:
 	// second arm inside the cooldown block, ahead of the IsReady loop below.
 	for _, cd := range s.player.Cooldowns {
-		if cd.Spell == spellID && cd.End > nowUnix {
+		if cd.Spell == spellID && cd.End > nowMs {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "on cooldown")
 			return true
 		}
 	}
 	if categoryID := spell.Category; categoryID != 0 {
-		if s.playerCategoryCooldownBlocked(categoryID, nowUnix) {
+		if s.playerCategoryCooldownBlocked(categoryID, nowMs) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
 			return true
@@ -26584,9 +26584,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			rejectTriggeredCast("triggered spell school locked out")
 			return
 		}
-		nowUnix := time.Now().Unix()
+		nowMs := time.Now().UnixMilli()
 		for _, cd := range s.player.Cooldowns {
-			if cd.Spell == spellID && cd.End > nowUnix {
+			if cd.Spell == spellID && cd.End > nowMs {
 				rejectTriggeredCast("triggered spell on cooldown")
 				return
 			}
@@ -49978,7 +49978,7 @@ func (s *session) savePlayerSpellCooldowns(ctx context.Context, tx *sql.Tx, stat
 		spellIDs = append(spellIDs, spellID)
 	}
 	sort.Slice(spellIDs, func(i, j int) bool { return spellIDs[i] < spellIDs[j] })
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	for _, spellID := range spellIDs {
 		cooldown := bySpell[spellID]
 		// SpellHistory::SaveToDB (SpellHistory.cpp:130) skips OnHold
@@ -49990,7 +49990,7 @@ func (s *session) savePlayerSpellCooldowns(ctx context.Context, tx *sql.Tx, stat
 		if cooldown.End <= now {
 			continue
 		}
-		if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_CHAR_SPELL_COOLDOWN", state.GUID, cooldown.Spell, cooldown.Item, cooldown.End, cooldown.Category, cooldown.CategoryEnd); err != nil {
+		if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_CHAR_SPELL_COOLDOWN", state.GUID, cooldown.Spell, cooldown.Item, cooldown.End/1000, cooldown.Category, cooldown.CategoryEnd/1000); err != nil {
 			return err
 		}
 	}
@@ -50068,14 +50068,14 @@ func buildCooldownEvent(casterGUID uint64, spellID uint32) []byte {
 // rows that expired after the last write, and a write sweep drops rows
 // that expired before the new entry, so a stale row can never kill a
 // holder added after it expired.
-func (s *session) sweepExpiredSpellCooldowns(nowUnix int64) {
+func (s *session) sweepExpiredSpellCooldowns(nowMs int64) {
 	if s == nil || s.player == nil {
 		return
 	}
 	kept := s.player.Cooldowns[:0]
 	erasedCategories := make(map[uint32]struct{})
 	for _, cd := range s.player.Cooldowns {
-		if cd.End <= nowUnix {
+		if cd.End <= nowMs {
 			if cd.Category != 0 {
 				erasedCategories[cd.Category] = struct{}{}
 			}
@@ -50104,17 +50104,17 @@ func (s *session) sweepExpiredSpellCooldowns(nowUnix int64) {
 // interrupt.go:702 already reads the last matching row). The sweep above
 // runs first, so a same-category entry expiring after the holder was set
 // already killed the shared entry in C++'s per-tick Update.
-func (s *session) playerCategoryCooldownBlocked(categoryID uint32, nowUnix int64) bool {
+func (s *session) playerCategoryCooldownBlocked(categoryID uint32, nowMs int64) bool {
 	if s == nil || s.player == nil || categoryID == 0 {
 		return false
 	}
-	s.sweepExpiredSpellCooldowns(nowUnix)
+	s.sweepExpiredSpellCooldowns(nowMs)
 	for i := len(s.player.Cooldowns) - 1; i >= 0; i-- {
 		cd := s.player.Cooldowns[i]
 		if cd.Category != categoryID {
 			continue
 		}
-		return cd.CategoryEnd > nowUnix && cd.End > nowUnix
+		return cd.CategoryEnd > nowMs && cd.End > nowMs
 	}
 	return false
 }
@@ -50123,17 +50123,17 @@ func (s *session) playerCategoryCooldownBlocked(categoryID uint32, nowUnix int64
 // cooldown — the last row AddCooldown'd for the category, when its block is
 // live — for the SendCooldownEvent category arm (SpellHistory.cpp:364-391),
 // which fires the holder's own event and restarts its real cooldown first.
-func (s *session) playerCategoryCooldownHolder(categoryID uint32, nowUnix int64) (uint32, bool) {
+func (s *session) playerCategoryCooldownHolder(categoryID uint32, nowMs int64) (uint32, bool) {
 	if s == nil || s.player == nil || categoryID == 0 {
 		return 0, false
 	}
-	s.sweepExpiredSpellCooldowns(nowUnix)
+	s.sweepExpiredSpellCooldowns(nowMs)
 	for i := len(s.player.Cooldowns) - 1; i >= 0; i-- {
 		cd := s.player.Cooldowns[i]
 		if cd.Category != categoryID {
 			continue
 		}
-		if cd.CategoryEnd > nowUnix && cd.End > nowUnix {
+		if cd.CategoryEnd > nowMs && cd.End > nowMs {
 			return cd.Spell, true
 		}
 		return 0, false
@@ -50161,8 +50161,8 @@ func (s *session) startSpellCooldownOnHold(ctx context.Context, spell wotlk.Spel
 		return
 	}
 	now := time.Now()
-	nowUnix := now.Unix()
-	infEnd := now.Add(infinityCooldownDuration).Unix()
+	nowMs := now.UnixMilli()
+	infEnd := now.Add(infinityCooldownDuration).UnixMilli()
 	// StartCooldown onHold arm: catrecTime = categoryCooldown > 0 ? inf :
 	// curTime; recTime = cooldown > 0 ? inf : catrecTime. No entry when
 	// both are non-positive (recTime == curTime skips AddCooldown). The
@@ -50182,7 +50182,7 @@ func (s *session) startSpellCooldownOnHold(ctx context.Context, spell wotlk.Spel
 	if entry.Item != 0 && s.server != nil {
 		cooldownMs, categoryCooldownMs, categoryID = s.server.spellCooldownDurationsForItem(ctx, spell, entry.Item)
 	}
-	categoryEnd := nowUnix
+	categoryEnd := nowMs
 	if categoryCooldownMs > 0 {
 		categoryEnd = infEnd
 	}
@@ -50190,7 +50190,7 @@ func (s *session) startSpellCooldownOnHold(ctx context.Context, spell wotlk.Spel
 	if cooldownMs > 0 {
 		end = infEnd
 	}
-	if end == nowUnix {
+	if end == nowMs {
 		return
 	}
 	entry.Category = categoryID
@@ -50217,7 +50217,7 @@ func (s *session) sendSpellCooldownEvent(spell wotlk.Spell) {
 	}
 	now := time.Now()
 	if spell.Category != 0 {
-		if holderID, ok := s.playerCategoryCooldownHolder(spell.Category, now.Unix()); ok && holderID != spell.ID {
+		if holderID, ok := s.playerCategoryCooldownHolder(spell.Category, now.UnixMilli()); ok && holderID != spell.ID {
 			_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, holderID), true)
 			if s.server != nil && s.server.Data != nil {
 				if holder, found, err := s.server.Data.Spell(holderID); err == nil && found {
@@ -50277,17 +50277,17 @@ func (s *session) startRealSpellCooldown(spell wotlk.Spell, cooldownMs, category
 	if cooldownMs == 0 && categoryCooldownMs == 0 {
 		return
 	}
-	nowUnix := now.Unix()
-	cooldownEnd := nowUnix
+	nowMs := now.UnixMilli()
+	cooldownEnd := nowMs
 	if categoryCooldownMs > 0 {
-		cooldownEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+		cooldownEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).UnixMilli()
 	}
 	if cooldownMs > 0 {
-		cooldownEnd = now.Add(time.Duration(cooldownMs) * time.Millisecond).Unix()
+		cooldownEnd = now.Add(time.Duration(cooldownMs) * time.Millisecond).UnixMilli()
 	}
-	moddedCategoryEnd := nowUnix
+	moddedCategoryEnd := nowMs
 	if categoryCooldownMs > 0 {
-		moddedCategoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+		moddedCategoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).UnixMilli()
 	}
 	s.replaceSpellCooldownEntry(spellCooldown{Spell: spell.ID, Item: itemID, Category: categoryID, End: cooldownEnd, CategoryEnd: moddedCategoryEnd})
 	// SpellHistory::StartCooldown (SpellHistory.cpp:344-360) sends
@@ -50394,7 +50394,7 @@ func (s *Server) spellCooldownDurationsForItem(ctx context.Context, spell wotlk.
 // one, so the cast gates, ModifyCooldown and ResetCooldown always see
 // one live entry per spell.
 func (s *session) replaceSpellCooldownEntry(entry spellCooldown) {
-	s.sweepExpiredSpellCooldowns(time.Now().Unix())
+	s.sweepExpiredSpellCooldowns(time.Now().UnixMilli())
 	kept := s.player.Cooldowns[:0]
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell != entry.Spell {
@@ -50448,16 +50448,16 @@ func (s *session) startPotionCooldownEntry(spell wotlk.Spell, itemID uint32, coo
 		return
 	}
 	now := time.Now()
-	cooldownEnd := now.Unix()
+	cooldownEnd := now.UnixMilli()
 	if categoryCooldownMs > 0 {
-		cooldownEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+		cooldownEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).UnixMilli()
 	}
 	if cooldownMs > 0 {
-		cooldownEnd = now.Add(time.Duration(cooldownMs) * time.Millisecond).Unix()
+		cooldownEnd = now.Add(time.Duration(cooldownMs) * time.Millisecond).UnixMilli()
 	}
-	categoryEnd := now.Unix()
+	categoryEnd := now.UnixMilli()
 	if categoryCooldownMs > 0 {
-		categoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).Unix()
+		categoryEnd = now.Add(time.Duration(categoryCooldownMs) * time.Millisecond).UnixMilli()
 	}
 	s.replaceSpellCooldownEntry(spellCooldown{Spell: spell.ID, Item: itemID, Category: categoryID, End: cooldownEnd, CategoryEnd: categoryEnd})
 	if needsCooldownPacket {
@@ -50477,7 +50477,7 @@ func (s *session) sendPotionCooldownEvent(ctx context.Context, spell wotlk.Spell
 	now := time.Now()
 	cooldownMs, categoryCooldownMs, categoryID := s.server.spellCooldownDurationsForItem(ctx, spell, itemID)
 	if categoryID != 0 {
-		if holderID, ok := s.playerCategoryCooldownHolder(categoryID, now.Unix()); ok && holderID != spell.ID {
+		if holderID, ok := s.playerCategoryCooldownHolder(categoryID, now.UnixMilli()); ok && holderID != spell.ID {
 			_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, holderID), true)
 			if holder, found, err := s.server.Data.Spell(holderID); err == nil && found {
 				hcd, hcat, hcatID := s.server.spellCooldownDurationsForItem(ctx, holder, itemID)
@@ -50565,8 +50565,8 @@ func (s *session) resetCastCooldownCheat(spellID uint32) {
 // carries the spell id, the caster GUID and the signed delta
 // (SpellHistory.cpp:421-429). The sole C++ caller is the shaman Feedback
 // script (spell_shaman.cpp:1447, SpellScript queue); the mechanism is
-// bridged here so the script layer can call it. Go stores ends at
-// second granularity (the tree-wide spellCooldown convention); the shift
+// bridged here so the script layer can call it. Go stores ends as Unix
+// milliseconds (the tree-wide spellCooldown convention); the shift
 // and the future check run on that granularity.
 func (s *session) modifyPlayerSpellCooldown(spellID uint32, cooldownModMs int32) {
 	if s == nil || s.player == nil || cooldownModMs == 0 {
@@ -50583,8 +50583,8 @@ func (s *session) modifyPlayerSpellCooldown(spellID uint32, cooldownModMs int32)
 			continue
 		}
 		found = true
-		if shifted := time.Unix(cd.End, 0).Add(time.Duration(cooldownModMs) * time.Millisecond); shifted.After(now) {
-			cd.End = shifted.Unix()
+		if shifted := time.UnixMilli(cd.End).Add(time.Duration(cooldownModMs) * time.Millisecond); shifted.After(now) {
+			cd.End = shifted.UnixMilli()
 			kept = append(kept, cd)
 			continue
 		}
@@ -50639,7 +50639,7 @@ func (s *session) guardianSpiritGlyphCooldown() {
 	}
 	s.resetPlayerCooldown(47788, true)
 	now := time.Now()
-	s.replaceSpellCooldownEntry(spellCooldown{Spell: 47788, End: now.Add(time.Duration(glyphAmount) * time.Second).Unix(), CategoryEnd: now.Unix()})
+	s.replaceSpellCooldownEntry(spellCooldown{Spell: 47788, End: now.Add(time.Duration(glyphAmount) * time.Second).UnixMilli(), CategoryEnd: now.UnixMilli()})
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, 47788, uint32(glyphAmount)*1000), true)
 }
 
@@ -53585,14 +53585,14 @@ func (s *session) handleEffectCastButtons(ctx context.Context, eff wotlk.SpellEf
 			knownSpells[learned.ID] = struct{}{}
 		}
 	}
-	nowUnix := time.Now().Unix()
+	nowMs := time.Now().UnixMilli()
 	hasCooldown := func(spellID uint32, category uint32) bool {
 		for _, cd := range s.player.Cooldowns {
-			if cd.Spell == spellID && cd.End > nowUnix {
+			if cd.Spell == spellID && cd.End > nowMs {
 				return true
 			}
 		}
-		return s.playerCategoryCooldownBlocked(category, nowUnix)
+		return s.playerCategoryCooldownBlocked(category, nowMs)
 	}
 	for ; nButtons > 0; nButtons, buttonID = nButtons-1, buttonID+1 {
 		if buttonID < 0 || buttonID >= len(s.player.Actions) {
@@ -59147,7 +59147,7 @@ func (s *session) handleEffectStuck(ctx context.Context) {
 		s.repopAtGraveyard(ctx)
 		return
 	}
-	nowUnix := time.Now().Unix()
+	nowMs := time.Now().UnixMilli()
 	hasHearthstone := false
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		var itemGUID int64
@@ -59156,7 +59156,7 @@ func (s *session) handleEffectStuck(ctx context.Context) {
 			WHERE ci.guid = ? AND ii.itemEntry = ? LIMIT 1`, s.playerGUID, 6948).Scan(&itemGUID); err == nil && itemGUID != 0 {
 			onCooldown := false
 			for _, cd := range s.player.Cooldowns {
-				if cd.Spell == 8690 && cd.End > nowUnix {
+				if cd.Spell == 8690 && cd.End > nowMs {
 					onCooldown = true
 					break
 				}

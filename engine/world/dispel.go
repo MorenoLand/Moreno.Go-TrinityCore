@@ -1497,20 +1497,20 @@ func (s *session) raptureDispelProc(ctx context.Context, targetGUID uint64, remo
 	}
 	// Cooldown gate: the caster is a player here, so the C++ TYPEID_PLAYER
 	// arm always applies.
-	nowUnix := time.Now().Unix()
+	nowMs := time.Now().UnixMilli()
 	remaining := int64(-1)
 	for _, cd := range casterSess.player.Cooldowns {
-		if cd.Spell == rapture.SpellID && cd.End > nowUnix {
-			remaining = cd.End - nowUnix
+		if cd.Spell == rapture.SpellID && cd.End > nowMs {
+			remaining = cd.End - nowMs
 			break
 		}
 	}
 	if remaining >= 0 {
-		if remaining <= 11 {
+		if remaining <= 11*1000 {
 			return
 		}
 	} else {
-		casterSess.replaceSpellCooldownEntry(spellCooldown{Spell: rapture.SpellID, End: nowUnix + 12})
+		casterSess.replaceSpellCooldownEntry(spellCooldown{Spell: rapture.SpellID, End: nowMs + 12*1000})
 	}
 	// Effect on caster: 47755 with BP0 = CalculatePct(max mana, multiplier).
 	multiplier := float64(rapture.Amounts[0])

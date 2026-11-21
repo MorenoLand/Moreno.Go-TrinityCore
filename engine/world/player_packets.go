@@ -31,9 +31,15 @@ func boolToInt(value bool) int64 {
 }
 
 type spellCooldown struct {
-	Spell       uint32
-	Item        uint32
-	Category    uint32
+	Spell    uint32
+	Item     uint32
+	Category uint32
+	// End/CategoryEnd are Unix milliseconds (SpellHistory.h:52-55:
+	// CooldownEnd/CategoryEnd are Clock::time_points; WritePacket
+	// serializes them as millisecond durations, SpellHistory.cpp:243).
+	// The DB stays second-granular (to_time_t on save, from_time_t
+	// on load), so loadSpellCooldowns multiplies by 1000 and both
+	// save paths divide by 1000.
 	End         int64
 	CategoryEnd int64
 	// OnHold mirrors SpellHistory::CooldownEntry::OnHold
@@ -426,7 +432,7 @@ func (s *session) loadSpellCooldowns(ctx context.Context, guid uint64) ([]spellC
 				continue
 			}
 		}
-		result = append(result, spellCooldown{Spell: uint32(spell), Item: uint32(item), Category: uint32(category), End: end, CategoryEnd: categoryEnd})
+		result = append(result, spellCooldown{Spell: uint32(spell), Item: uint32(item), Category: uint32(category), End: end * 1000, CategoryEnd: categoryEnd * 1000})
 	}
 	return result, rows.Err()
 }
@@ -449,7 +455,7 @@ func buildInitialSpells(state playerState) []byte {
 			packet.WriteU16(0)
 		}
 	}
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	cooldowns := append([]spellCooldown(nil), state.Cooldowns...)
 	sort.Slice(cooldowns, func(i, j int) bool { return cooldowns[i].Spell < cooldowns[j].Spell })
 	packet.WriteU16(uint16(len(cooldowns)))
@@ -457,7 +463,7 @@ func buildInitialSpells(state playerState) []byte {
 		packet.WriteU32(cooldown.Spell)
 		packet.WriteU16(uint16(cooldown.Item))
 		packet.WriteU16(uint16(cooldown.Category))
-		if cooldown.End >= now+15*24*60*60 {
+		if cooldown.End >= now+15*24*60*60*1000 {
 			packet.WriteU32(1)
 			packet.WriteU32(0x80000000)
 			continue
@@ -551,7 +557,7 @@ func remainingMilliseconds(end, now int64) uint32 {
 	if end <= now {
 		return 0
 	}
-	remaining := (end - now) * 1000
+	remaining := end - now
 	if remaining > int64(^uint32(0)) {
 		return ^uint32(0)
 	}

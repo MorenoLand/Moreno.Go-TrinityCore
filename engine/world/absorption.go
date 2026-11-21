@@ -619,7 +619,7 @@ func (s *session) ardentDefenderAbsorbHit(aura *activeAura, remainingDamage uint
 		}
 		healBP := uint32(uint64(maxHealth) * uint64(int64(math.Round(float64(healPct)*defenseFactor))) / 100)
 		s.castSpellDirectWithBasePoint(context.Background(), 66235, s.playerGUID, healBP)
-		s.replaceSpellCooldownEntry(spellCooldown{Spell: 66235, End: time.Now().Unix() + 120})
+		s.replaceSpellCooldownEntry(spellCooldown{Spell: 66235, End: time.Now().UnixMilli() + 120*1000})
 		return damage, false, true
 	}
 	if remainingHealth < int64(allowedHealth) {

@@ -1238,12 +1238,12 @@ func (s *session) clearPlayerCooldowns() {
 // category arm — else the last same-category entry's CategoryEnd. The
 // C++ _categoryCooldowns map holds one pointer per category, the entry
 // last AddCooldown'd for it, so the last matching Go entry decides,
-// matching the interrupt.go lockout arm. Ends are Unix seconds.
+// matching the interrupt.go lockout arm. Ends are Unix milliseconds.
 func (s *session) playerCooldownRemainingMs(spellID uint32, category uint32) uint32 {
 	if s == nil || s.player == nil {
 		return 0
 	}
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	// Sweep first: an expired same-category entry already killed the
 	// shared category entry in C++'s per-tick Update (EraseCooldown),
 	// so the last-row CategoryEnd below must not read through it.
@@ -1251,7 +1251,7 @@ func (s *session) playerCooldownRemainingMs(spellID uint32, category uint32) uin
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell == spellID {
 			if cd.End > now {
-				return clampCooldownMs((cd.End - now) * 1000)
+				return clampCooldownMs(cd.End - now)
 			}
 			return 0
 		}
@@ -1268,7 +1268,7 @@ func (s *session) playerCooldownRemainingMs(spellID uint32, category uint32) uin
 		}
 	}
 	if found && lastCatEnd > now {
-		return clampCooldownMs((lastCatEnd - now) * 1000)
+		return clampCooldownMs(lastCatEnd - now)
 	}
 	return 0
 }
