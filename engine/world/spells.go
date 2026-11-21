@@ -21531,18 +21531,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// finishChannel; the m_triggeredByAuraSpell gate (3961) is vacuous
 	// (finishSpellCast serves the client cast path only).
 	if !isChanneledSpell(spell) {
+		s.resetPlayerAttackTimersOnSpellFinish(spell, castTimeMs)
 		s.updatePotionCooldown(ctx, spell)
 		s.stopAttackOnSpellFinish(spell)
 	}
 
-	// Spell::finish(true) parity (Spell.cpp:3886-3985): two legs have no Go
-	// bridge and are intentionally absent here.
-	//   - IsAutoActionResetSpell -> resetAttackTimer(BASE/OFF/RANGED): the
-	//     leg is ported on the creature paths
-	//     (resetCreatureAttackTimersOnSpellFinish, called from the inline
-	//     AI cast arm and castCreatureSpellInternalWithBasePoints); this
-	//     path serves player sessions only, and Go players have no swing
-	//     timer model, so there is nothing to reset here.
+	// Spell::finish(true) parity (Spell.cpp:3886-3985): the
+	// IsAutoActionResetSpell -> resetAttackTimer(BASE/OFF/RANGED) leg
+	// (Spell.cpp:3937-3956) is ported above in the non-channeled branch
+	// (resetPlayerAttackTimersOnSpellFinish); the creature twin lives in
+	// resetCreatureAttackTimersOnSpellFinish. The channel-end application
+	// of the same leg (C++ finish runs at natural channel end) is not
+	// ported here — the creature twin skips it as well, for want of a
+	// creature channel-end event; Go's finishChannel is the player-side
+	// equivalent and remains the open follow-up.
 	// The remaining finish legs have no Go bridge: UpdateInterruptMask
 	// (IsChanneled) and the UNIT_STATE_CASTING clear have no model (Go
 	// tracks cast/channel state in castMu, not unit states or interrupt
@@ -21788,6 +21790,80 @@ func (s *session) stopAttackOnSpellFinish(spell wotlk.Spell) {
 	s.cancelNextSwingSpell()
 	_ = s.sendAttackStop(victim, false)
 	s.debug("attack stopped by spell", "account", s.accountName, "spell", spell.ID)
+}
+
+// playerHasIgnoreMeleeResetForSpell is the GetAuraEffectsByType
+// (SPELL_AURA_IGNORE_MELEE_RESET) + IsAffectedOnSpell leg of
+// Spell::finish (Spell.cpp:3940-3947) on the player path: true when the
+// player carries a live aura granting a 272 effect whose spell-family
+// affect mask covers the spell being cast (AuraEffect::IsAffectedOnSpell,
+// SpellAuraEffects.cpp:848). Mirrors creatureHasIgnoreMeleeResetForSpell;
+// the aura scan follows the playerAuraModifier pattern (loadedAuras
+// under castMu, granting spell re-read from the DBC).
+func (s *session) playerHasIgnoreMeleeResetForSpell(spell wotlk.Spell) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraIgnoreMeleeReset || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resetPlayerAttackTimersOnSpellFinish is the Spell::finish
+// IsAutoActionResetSpell leg (Spell.cpp:3937-3956) on the player path:
+// a finished non-triggered cast whose spell carries
+// SPELL_INTERRUPT_FLAG_INTERRUPT resets the caster's auto-attack timers
+// to a full interval — resetAttackTimer (Unit.cpp:578-580) sets
+// m_attackTimer to GetAttackTime * m_modAttackSpeedPct, which the Go
+// timestamp model (lastSwing / lastOffhandSwing / lastRangedSwing
+// compared against the live attack interval in server.go) expresses as
+// stamping now. The gates run in C++ order: IsAutoActionResetSpell
+// (Spell.cpp:7526-7535) — triggered casts never reset (structural here:
+// finishSpellCast serves the client cast path only), spells without the
+// INTERRUPT flag never reset, and an instant cast of a
+// SPELL_ATTR6_NOT_RESET_SWING_IF_INSTANT spell never resets — then the
+// SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS exemption and the
+// SPELL_AURA_IGNORE_MELEE_RESET aura exemption (Spell.cpp:3940-3950).
+// The offhand stamp rides haveOffhandWeapon; the ranged stamp is
+// unconditional in C++ (resetAttackTimer(RANGED_ATTACK) has no weapon
+// gate). Mirrors resetCreatureAttackTimersOnSpellFinish.
+func (s *session) resetPlayerAttackTimersOnSpellFinish(spell wotlk.Spell, castTimeMs int32) {
+	if s == nil {
+		return
+	}
+	if spell.InterruptFlags&spellInterruptFlagInterrupt == 0 {
+		return
+	}
+	if castTimeMs == 0 && spell.AttributesEx6&spellAttr6NotResetSwingIfInstant != 0 {
+		return
+	}
+	if spell.AttributesEx1&spellAttr2NotResetAutoActions != 0 {
+		return
+	}
+	if s.playerHasIgnoreMeleeResetForSpell(spell) {
+		return
+	}
+	now := time.Now()
+	s.lastSwing = now
+	if s.haveOffhandWeapon() {
+		s.lastOffhandSwing = now
+	}
+	s.lastRangedSwing = now
 }
 
 // spellExtraAttackVictim resolves the original unit target of a finished
@@ -31319,8 +31395,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	//     unsummon need creature casters (every Go cast runs on a player
 	//     session); IsAutoActionResetSpell is always false for triggered
 	//     casts (Spell.cpp:7529) — the creature paths skip the reset on
-	//     the same gate, and Go players have no swing timer model
-	//     regardless; the potion flush is vacuous here — every Go
+	//     the same gate, and the player path skips it on the same gate
+	//     (resetPlayerAttackTimersOnSpellFinish is never reached from a
+	//     triggered cast); the potion flush is vacuous here — every Go
 	//     triggered cast carries TRIGGERED_FULL_MASK, so
 	//     IsIgnoringCooldowns() (Spell.cpp:7506-7509) makes
 	//     UpdatePotionCooldown(Spell*) return without sending or
@@ -49564,6 +49641,12 @@ func (s *session) savePlayerSpellCooldowns(ctx context.Context, tx *sql.Tx, stat
 	now := time.Now().Unix()
 	for _, spellID := range spellIDs {
 		cooldown := bySpell[spellID]
+		// SpellHistory::SaveToDB (SpellHistory.cpp:130) skips OnHold
+		// (infinity) entries: they are rebuilt from the live
+		// aura/minion/gameobject on login, never restored from the DB.
+		if cooldown.OnHold {
+			continue
+		}
 		if cooldown.End <= now {
 			continue
 		}
@@ -51377,13 +51460,20 @@ func spellAllowsDeadTarget(spell wotlk.Spell) bool {
 		spell.Targets&(targetFlagCorpseEnemy|targetFlagUnitDead|targetFlagCorpseAlly) != 0
 }
 
-// sendChannelUpdate mirrors Spell::SendChannelUpdate: packed caster GUID plus
-// remaining channel milliseconds; zero clears the client channel bar.
+// sendChannelUpdate mirrors Spell::SendChannelUpdate (Spell.cpp:4641-4659):
+// packed caster GUID plus remaining channel milliseconds; zero clears the
+// client channel bar. C++ ends unitCaster->SendMessageToSet(&data, true),
+// so the packet goes to the caster and the visible set — the self write
+// plus the broadcastToVisibleSetFromSession fan-out (which excludes the
+// source), the startChannel pattern.
 func (s *session) sendChannelUpdate(remainingMs uint32) {
 	packet := protocol.NewBuffer(12)
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU32(remainingMs)
 	_ = s.write(uint16(protocol.OpcodeMSG_CHANNEL_UPDATE), packet.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeMSG_CHANNEL_UPDATE), packet.Bytes())
+	}
 	if remainingMs == 0 {
 		s.sendPlayerUpdate()
 	}
@@ -51554,9 +51644,10 @@ func (s *session) finishChannel() {
 	// unsummon needs the charm model Go does not have; ReleaseSpellFocus
 	// and the statue unsummon need creature casters (every Go cast runs
 	// on a player session). IsAutoActionResetSpell is ported on the
-	// creature paths (resetCreatureAttackTimersOnSpellFinish); this path
-	// serves player sessions only, and Go players have no swing timer
-	// model, so there is nothing to reset here.
+	// non-channeled finish path (resetPlayerAttackTimersOnSpellFinish)
+	// and the creature paths (resetCreatureAttackTimersOnSpellFinish);
+	// its channel-end application (C++ finish runs at natural channel
+	// end) is the open follow-up here, as on the creature twin.
 	// context.Background: finishChannel runs from timer callbacks with no
 	// request context; the lookup is cached after the first fill.
 	s.updatePotionCooldown(context.Background(), spell)
