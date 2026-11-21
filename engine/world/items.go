@@ -4878,144 +4878,26 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to dispel")
 			return true
 		}
-		// Spell::CheckCast per-effect switch (Spell.cpp:5567+) on the
-		// m_CastItem path: item casts run the full CheckCast via prepare
-		// (Spell.cpp:3096-3099), so every per-effect arm fires here too —
-		// none of them ran on the item path before this strip. They ride
-		// the same session bridges as the client path, in C++ case order:
-		// learn -> learn-pet -> glyph -> feed-pet -> power-burn/drain ->
-		// charge -> skinning -> open-lock -> resurrect-pet -> summon ->
-		// create-tamed-pet -> summon-pet -> summon-player -> raf-friend ->
-		// leap -> steal -> leap-back/jump -> talent-spec-select. C++
-		// relative order: right after the dispel pre-check (5513-5560), at
-		// the tail of CheckCast.
-		if failure := s.checkLearnSpellCast(ctx, spell, target); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "learn spell pet validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkGlyphCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "duplicate glyph", "failure", failure)
-			return true
-		}
-		for _, effect := range spell.Effects {
-			if effect.Effect != 101 /* SPELL_EFFECT_FEED_PET (SharedDefines.h:912) */ {
-				continue
-			}
-			if _, failure := s.checkPetFood(ctx, target.ItemGUID); failure != 0 {
+		// CheckCast per-effect loops (Spell.cpp:5565-6147): C++ reports the
+		// first failure in effect-index order — the Effect switch first, then
+		// the ApplyAuraName switch — so both loops run in effect-index order
+		// here, not the fixed type order the twins used to run in (a spell
+		// with eff0 charge and eff1 learn failing both now reports the charge
+		// failure, as C++ does). The mana-leech arm takes castItem (its
+		// power-type leg is skipped for item casts, Spell.cpp:6142-6143).
+		for i := range spell.Effects {
+			if failure, reason := s.checkCastEffectAt(ctx, spell, i, target, spellID, target.UnitGUID, checkCastPerEffectOptions{castItem: true}); failure != 0 {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "pet food validation", "failure", failure)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", reason, "failure", failure)
 				return true
 			}
 		}
-		if failure := s.checkPowerBurnDrainCast(spell, target); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "power burn/drain target power-type mismatch", "failure", failure)
-			return true
-		}
-		if failure := s.checkChargeCast(ctx, spell, target); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "charge validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkSkinningCast(spell, target); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "skinning validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkOpenLockCast(spell, target); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "open-lock validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkResurrectPetCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "resurrect-pet validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkSummonCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkCreateTamedPetCast(spell, target); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "create-tamed-pet validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkSummonPetCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-pet validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkSummonPlayerCast(ctx, spell, spellID); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-player validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkSummonRafFriendCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-raf-friend validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkLeapCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap/teleport-before-bg-start validation", "failure", failure)
-			return true
-		}
-		if failReason := s.checkStealPreCast(spell, target.UnitGUID); failReason != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failReason), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to steal")
-			return true
-		}
-		if failure := s.checkLeapBackCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap-back/jump while rooted", "failure", failure)
-			return true
-		}
-		if failure := s.checkTalentSpecSelectCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "talent-spec-select in active bg", "failure", failure)
-			return true
-		}
-		// CheckCast ApplyAuraName switch + tail (Spell.cpp:6033-6209): the
-		// aura loop runs for item casts too (prepare runs CheckCast for
-		// CastItemUseSpell, Spell.cpp:3096), in the book path's order —
-		// possess-pet, charm, mounted, ranged-attack-power-attacker-bonus,
-		// fly, periodic-mana-leech (castItem skips its power-type leg,
-		// Spell.cpp:6142-6143), aura-bounced, trade-slot (castItem takes
-		// the ITEM_ENCHANT_TRADE_WINDOW arm first, Spell.cpp:6167-6171),
-		// combo points. The helpers are shared with handleCastSpell.
-		if failure := s.checkPossessPetCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "possess-pet validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkCharmCast(spell, target); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "charm/possess validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkMountedCast(ctx, spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "mounted validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkRangedAttackPowerAttackerBonusCast(spell, target); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "ranged-attack-power-attacker-bonus validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkFlyCast(spell); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "fly validation", "failure", failure)
-			return true
-		}
-		if failure := s.checkPeriodicManaLeechCast(spell, target, true); failure != 0 {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
-			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "periodic-mana-leech validation", "failure", failure)
-			return true
+		for i := range spell.Effects {
+			if failure, reason := s.checkCastAuraAt(ctx, spell, i, target, checkCastPerEffectOptions{castItem: true}); failure != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", reason, "failure", failure)
+				return true
+			}
 		}
 		if failure := s.checkAuraBouncedCast(spell, target); failure != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, failure), true)

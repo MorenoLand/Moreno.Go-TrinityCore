@@ -434,6 +434,7 @@ const (
 	spellEffectJumpDest                = 42  // SPELL_EFFECT_JUMP_DEST (SharedDefines.h:853)
 	spellEffectLeapBack                = 138 // SPELL_EFFECT_LEAP_BACK (SharedDefines.h:949)
 	spellEffectTalentSpecSelect        = 162 // SPELL_EFFECT_TALENT_SPEC_SELECT (SharedDefines.h:973)
+	spellEffectStealBeneficialBuff     = 126 // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (SharedDefines.h:937)
 	spellEffectScriptEffect            = 77  // SPELL_EFFECT_SCRIPT_EFFECT (SharedDefines.h:888)
 	spellEffectPullTowards             = 124 // SPELL_EFFECT_PULL_TOWARDS (SharedDefines.h:935)
 	spellEffectPullTowardsDest         = 145 // SPELL_EFFECT_PULL_TOWARDS_DEST (SharedDefines.h:956)
@@ -4042,262 +4043,27 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to dispel")
 		return true
 	}
-	// Learn-spell pet gates (Spell::CheckCast per-effect block,
-	// Spell.cpp:5570-5618): LEARN_SPELL on TargetA == TARGET_UNIT_PET and
-	// LEARN_PET_SPELL require the caster's pet and reject when the learn
-	// spell's own SpellLevel exceeds the pet's level.
-	if failure := s.checkLearnSpellCast(ctx, spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "learn spell pet validation", "failure", failure)
-		return true
-	}
-	// Apply-glyph duplicate gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5618-5627): socketing a glyph already active in the current
-	// talent spec fails with SPELL_FAILED_UNIQUE_GLYPH.
-	if failure := s.checkGlyphCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "duplicate glyph", "failure", failure)
-		return true
-	}
-	for _, effect := range spell.Effects {
-		if effect.Effect != 101 {
-			continue
-		}
-		if _, failure := s.checkPetFood(ctx, target.ItemGUID); failure != 0 {
+	// CheckCast per-effect loops (Spell.cpp:5565-6147): C++ reports the
+	// first failure in effect-index order — the Effect switch first, then
+	// the ApplyAuraName switch — so both loops run in effect-index order
+	// here, not the fixed type order the twins used to run in (a spell with
+	// eff0 charge and eff1 learn failing both now reports the charge
+	// failure, as C++ does). The dispel pre-check above stays ahead of both
+	// loops (Spell.cpp:5520-5565), and the aura-bounced recheck + trade-slot
+	// block below stay after them (Spell.cpp:6155-6181).
+	for i := range spell.Effects {
+		if failure, reason := s.checkCastEffectAt(ctx, spell, i, target, spellID, wireUnitGUID, checkCastPerEffectOptions{}); failure != 0 {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "pet food validation", "failure", failure)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", reason, "failure", failure)
 			return true
 		}
 	}
-	// Power burn/drain target gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5652-5660): a burn/drain effect fails with
-	// SPELL_FAILED_BAD_TARGETS when the unit target (not the caster) uses a
-	// power type other than the effect's MiscValue. C++ relative order places
-	// this right after the apply-glyph leg; the feed-pet leg runs earlier in
-	// Go — order only matters on simultaneous failures, documented.
-	if failure := s.checkPowerBurnDrainCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "power burn/drain target power-type mismatch", "failure", failure)
-		return true
-	}
-	// Charge gate (Spell::CheckCast per-effect block, Spell.cpp:5662-5706):
-	// a SPELL_EFFECT_CHARGE effect fails with SPELL_FAILED_ROOTED when the
-	// caster is rooted, SPELL_FAILED_DONT_REPORT when the spell needs an
-	// explicit unit target but carries none, or SPELL_FAILED_LINE_OF_SIGHT
-	// when that target is not in line of sight (the PathGenerator NOPATH
-	// arms stay unbridged — no navmesh). C++ relative order places this
-	// right after the burn/drain leg.
-	if failure := s.checkChargeCast(ctx, spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "charge validation", "failure", failure)
-		return true
-	}
-	// Skinning gate (Spell::CheckCast per-effect block, Spell.cpp:5707-5724):
-	// a SPELL_EFFECT_SKINNING effect fails with SPELL_FAILED_BAD_TARGETS when
-	// the target is not a creature, SPELL_FAILED_TARGET_UNSKINNABLE when the
-	// corpse lacks the skinnable flag, SPELL_FAILED_TARGET_NOT_LOOTED when a
-	// non-critter corpse was not looted, and SPELL_FAILED_LOW_CASTLEVEL when
-	// the caster's loot skill is too low for the creature's level. C++
-	// relative order places this right after the charge leg.
-	if failure := s.checkSkinningCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "skinning validation", "failure", failure)
-		return true
-	}
-	// Open-lock gate (Spell::CheckCast per-effect block, Spell.cpp:5725-5791):
-	// a SPELL_EFFECT_OPEN_LOCK effect with a gameobject or gameobject-item
-	// implicit target fails with SPELL_FAILED_BAD_TARGETS when the target is
-	// missing or not openable, SPELL_FAILED_LOW_CASTLEVEL when the caster's
-	// lock skill is too low, SPELL_FAILED_TRY_AGAIN on the
-	// orange-lockpick fail chance and on the battleground object arm, and
-	// SPELL_FAILED_BAD_TARGETS when CanOpenLock finds no key. C++ relative
-	// order places this right after the skinning leg.
-	if failure := s.checkOpenLockCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "open-lock validation", "failure", failure)
-		return true
-	}
-	// Resurrect-pet gate (Spell::CheckCast per-effect block, Spell.cpp:5792-5801):
-	// a SPELL_EFFECT_RESURRECT_PET effect fails with
-	// SPELL_FAILED_ALREADY_HAVE_SUMMON when the caster's guardian pet is
-	// alive. C++ relative order places this right after the open-lock leg.
-	if failure := s.checkResurrectPetCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "resurrect-pet validation", "failure", failure)
-		return true
-	}
-	// Generic-summon gate (Spell::CheckCast per-effect block, Spell.cpp:5802-5817):
-	// a SPELL_EFFECT_SUMMON effect whose SummonProperties Control is
-	// SUMMON_CATEGORY_PET fails with SPELL_FAILED_ALREADY_HAVE_SUMMON when
-	// the caster has a pet and the spell lacks SPELL_ATTR1_DISMISS_PET; the
-	// charm (puppet) arms have no Go bridge. C++ relative order places this
-	// right after the resurrect-pet leg.
-	if failure := s.checkSummonCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon validation", "failure", failure)
-		return true
-	}
-	// Create-tamed-pet gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5828-5836): a SPELL_EFFECT_CREATE_TAMED_PET effect fails
-	// with SPELL_FAILED_BAD_TARGETS when the unit target is not a player,
-	// and with SPELL_FAILED_ALREADY_HAVE_SUMMON when the targeted player
-	// already has a pet and the spell lacks SPELL_ATTR1_DISMISS_PET.
-	// C++ relative order places this right after the generic-summon leg.
-	if failure := s.checkCreateTamedPetCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "create-tamed-pet validation", "failure", failure)
-		return true
-	}
-	// Summon-pet gate (Spell::CheckCast per-effect block, Spell.cpp:5837-5873):
-	// a SPELL_EFFECT_SUMMON_PET effect fails with SPELL_FAILED_DONT_REPORT
-	// when the caster's stable holds a dead or untameable hunter pet for the
-	// effect's MiscValue entry, or no pet at all when MiscValue is 0; the
-	// pet self-stun (32752) arm has no Go bridge, and the charm arm rides
-	// checkSummonPetCast. C++ relative order places this right after the
-	// create-tamed-pet leg.
-	if failure := s.checkSummonPetCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-pet validation", "failure", failure)
-		return true
-	}
-	// Summon-player gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5892-5928): a SPELL_EFFECT_SUMMON_PLAYER effect (ritual of
-	// summoning style) fails with SPELL_FAILED_BAD_TARGETS when the caster's
-	// selected target is not another player in the same group (except spell
-	// 48955), and the dungeon leg applies when the caster stands in a
-	// dungeon. C++ relative order places this right after the summon-pet leg.
-	if failure := s.checkSummonPlayerCast(ctx, spell, spellID); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-player validation", "failure", failure)
-		return true
-	}
-	// Recruit-a-friend summon gate (Spell::CheckCast per-effect block,
-	// Spell.cpp:5929-5943): a SPELL_EFFECT_SUMMON_RAF_FRIEND effect fails
-	// with SPELL_FAILED_BAD_TARGETS unless the selected player is
-	// recruiter-linked to the caster in either direction. C++ relative
-	// order places this right after the summon-player leg.
-	if failure := s.checkSummonRafFriendCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "summon-raf-friend validation", "failure", failure)
-		return true
-	}
-	// Leap / teleport-units-face-caster gate (Spell::CheckCast per-effect
-	// block, Spell.cpp:5945-5954): a SPELL_EFFECT_LEAP or
-	// SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER effect fails with
-	// SPELL_FAILED_TRY_AGAIN when the caster is in a battleground whose
-	// status is not STATUS_IN_PROGRESS ("Do not allow to cast it before
-	// BG starts"). C++ relative order places this right after the
-	// recruit-a-friend leg.
-	if failure := s.checkLeapCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap/teleport-before-bg-start validation", "failure", failure)
-		return true
-	}
-
-	// Spellsteal check: SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126) fails at cast
-	// time when the target carries no stealable aura (Spell::CheckCast,
-	// Spell.cpp:5957-5984). Like the dispel arm above, this keys on
-	// m_targets.GetUnitTarget() — the wire unit target only. The s.selection
-	// fallback has no C++ analog at CheckCast time, so a missing wire unit
-	// target fails with SPELL_FAILED_BAD_TARGETS (Spell.cpp:5959), never
-	// scanning the selected unit's auras.
-	if failReason := s.checkStealPreCast(spell, wireUnitGUID); failReason != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to steal")
-		return true
-	}
-
-	// Leap-back / jump gate: SPELL_EFFECT_LEAP_BACK (138),
-	// SPELL_EFFECT_JUMP (41) and SPELL_EFFECT_JUMP_DEST (42) fail with
-	// SPELL_FAILED_ROOTED when the caster is rooted (Spell::CheckCast,
-	// Spell.cpp:5986-6006). C++ relative order places these right after the
-	// steal leg.
-	if failure := s.checkLeapBackCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "leap-back/jump while rooted", "failure", failure)
-		return true
-	}
-
-	// Talent spec select gate: SPELL_EFFECT_TALENT_SPEC_SELECT (162) fails
-	// with SPELL_FAILED_NOT_IN_BATTLEGROUND when the battleground has
-	// already started (Spell::CheckCast, Spell.cpp:6007-6013). C++ relative
-	// order places it right after the jump legs.
-	if failure := s.checkTalentSpecSelectCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "talent spec change after bg started", "failure", failure)
-		return true
-	}
-	// Dispel check: if spell has only SPELL_EFFECT_DISPEL effects (and not area-targeting), verify target has dispellable auras
-
-	// Possess-pet / charm gates (Spell::CheckCast ApplyAuraName switch,
-	// Spell.cpp:6033-6087): SPELL_AURA_MOD_POSSESS_PET fails with
-	// SPELL_FAILED_NO_PET when the caster has no pet, and the
-	// SPELL_AURA_MOD_POSSESS / SPELL_AURA_MOD_CHARM / SPELL_AURA_AOE_CHARM
-	// legs fail with SPELL_FAILED_ALREADY_HAVE_SUMMON when the caster has
-	// a pet (non-AoE only) plus the wire unit target gates (vehicle,
-	// mounted, charmed, player-controlled, high-level). C++ relative order
-	// places the ApplyAuraName switch right after the per-effect switch.
-	if failure := s.checkPossessPetCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "possess-pet validation", "failure", failure)
-		return true
-	}
-	if failure := s.checkCharmCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "charm/possess validation", "failure", failure)
-		return true
-	}
-
-	// Mounted-aura gate (Spell::CheckCast ApplyAuraName switch,
-	// Spell.cpp:6088-6114): SPELL_AURA_MOUNTED fails with
-	// SPELL_FAILED_ONLY_ABOVEWATER for a flying mount started in water, with
-	// SPELL_FAILED_NO_MOUNTS_ALLOWED in a dungeon that disallows mounts, and
-	// with SPELL_FAILED_DONT_REPORT while shapeshifted into a
-	// disallowed-mount form. C++ relative order places the MOUNTED leg after
-	// the charm legs in the ApplyAuraName switch.
-	if failure := s.checkMountedCast(ctx, spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "mounted validation", "failure", failure)
-		return true
-	}
-
-	// Ranged-attack-power-attacker-bonus gate (Spell::CheckCast ApplyAuraName
-	// switch, Spell.cpp:6112-6121): an aura-127 effect fails with
-	// SPELL_FAILED_BAD_IMPLICIT_TARGETS when the wire target carries no unit
-	// GUID, and with SPELL_FAILED_TARGET_FRIENDLY when the unit target is
-	// friendly to the caster. C++ relative order places this leg immediately
-	// after the SPELL_AURA_MOUNTED leg in the ApplyAuraName switch.
-	if failure := s.checkRangedAttackPowerAttackerBonusCast(spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "ranged-attack-power-attacker-bonus validation", "failure", failure)
-		return true
-	}
-
-	// Flying-mount gate (Spell::CheckCast ApplyAuraName switch,
-	// Spell.cpp:6122-6135): an aura-201/aura-207 effect fails with
-	// SPELL_FAILED_NOT_HERE in a no-fly zone, or while the zone's
-	// battlefield (Wintergrasp) is active. Dead and ghost casters always
-	// pass — the C++ comment ("allow always ghost flight spells") is the
-	// IsAlive() arm. C++ relative order places this leg immediately after
-	// the RANGED_ATTACK_POWER_ATTACKER_BONUS leg in the ApplyAuraName
-	// switch.
-	if failure := s.checkFlyCast(spell); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "fly validation", "failure", failure)
-		return true
-	}
-
-	// Periodic mana-leech gate (Spell::CheckCast ApplyAuraName switch,
-	// Spell.cpp:6136-6147): an aura-64 (SPELL_AURA_PERIODIC_MANA_LEECH)
-	// non-area effect fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS when
-	// the wire target carries no unit, and with
-	// SPELL_FAILED_BAD_TARGETS when the unit target does not use mana.
-	// C++ relative order places this leg immediately after the
-	// SPELL_AURA_FLY leg in the ApplyAuraName switch.
-	if failure := s.checkPeriodicManaLeechCast(spell, target, false); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "periodic-mana-leech validation", "failure", failure)
-		return true
+	for i := range spell.Effects {
+		if failure, reason := s.checkCastAuraAt(ctx, spell, i, target, checkCastPerEffectOptions{}); failure != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", reason, "failure", failure)
+			return true
+		}
 	}
 
 	// Aura-bounced gate (Spell::CheckCast per-effect loop tail,
@@ -5243,6 +5009,148 @@ func (s *session) validateSpellGORange(ctx context.Context, spell wotlk.Spell, t
 // to be the caster's own pet when a unit target is present. The
 // caster-must-be-player terms are vacuous here — client casts always come from
 // a player session. Returns the SPELL_FAILED_* result code, 0 on success.
+// checkCastPerEffectOptions tunes the CheckCast per-effect loops for the
+// calling path. The client and item paths run the full loops; the triggered
+// funnel runs only the per-effect switch remainder (Spell.cpp:5662-6013)
+// with the charge arm reduced to its explicit-target + LOS legs
+// (TRIGGERED_IGNORE_CASTER_AURAS exempts the root leg, Spell.cpp:5675-5676),
+// and item casts skip the mana-leech power-type leg (Spell.cpp:6142-6143).
+type checkCastPerEffectOptions struct {
+	triggeredCharge    bool
+	skipLearnGlyphFeed bool
+	castItem           bool
+}
+
+// checkCastEffectAt runs the CheckCast per-effect (Effect) switch arm
+// (Spell.cpp:5565-6013) for the single effect at index, returning the
+// SPELL_FAILED_* code and the arm's debug label, or (0, "") when the effect
+// carries no bridged arm. C++ reports the first failure in effect-index
+// order, so the call sites loop over the effects in index order instead of
+// running the twins in fixed type order — a spell whose eff0 charge and
+// eff1 learn both fail reports the charge failure, not the learn failure.
+//
+// Each twin is called with the spell narrowed to that one effect: the twins
+// scan all effects for their type, so a whole-spell call at slot i could
+// report a later slot's failure first. Two arms take the whole spell
+// instead: charge (spellNeedsExplicitUnitTarget is spell-level,
+// Spell.cpp:5678) and mounted (HasAura(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED)
+// is spell-level, Spell.cpp:6095) — neither arm's result depends on which
+// matching effect dispatched it, so whole-spell calls cannot leak a later
+// slot's failure forward.
+func (s *session) checkCastEffectAt(ctx context.Context, spell wotlk.Spell, index int, target protocol.SpellTargetData, spellID uint32, wireUnitGUID uint64, opts checkCastPerEffectOptions) (uint8, string) {
+	eff := spell.Effects[index]
+	single := spell
+	single.Effects = [3]wotlk.SpellEffect{spell.Effects[index]}
+	switch eff.Effect {
+	case spellEffectLearnSpell, spellEffectLearnPetSpell:
+		if opts.skipLearnGlyphFeed {
+			return 0, ""
+		}
+		return s.checkLearnSpellCast(ctx, single, target), "learn spell pet validation"
+	case spellEffectApplyGlyph:
+		if opts.skipLearnGlyphFeed {
+			return 0, ""
+		}
+		return s.checkGlyphCast(single), "duplicate glyph"
+	case spellEffectFeedPet:
+		if opts.skipLearnGlyphFeed {
+			return 0, ""
+		}
+		if _, failure := s.checkPetFood(ctx, target.ItemGUID); failure != 0 {
+			return failure, "pet food validation"
+		}
+		return 0, ""
+	case spellEffectPowerBurn, spellEffectPowerDrain:
+		return s.checkPowerBurnDrainCast(single, target), "power burn/drain target power-type mismatch"
+	case spellEffectCharge:
+		if opts.triggeredCharge {
+			return s.checkTriggeredChargeCast(ctx, spell, wireUnitGUID), "charge validation"
+		}
+		return s.checkChargeCast(ctx, spell, target), "charge validation"
+	case spellEffectSkinning:
+		return s.checkSkinningCast(single, target), "skinning validation"
+	case spellEffectOpenLock:
+		return s.checkOpenLockCast(single, target), "open-lock validation"
+	case spellEffectResurrectPet:
+		return s.checkResurrectPetCast(single), "resurrect-pet validation"
+	case spellEffectSummon:
+		return s.checkSummonCast(single), "summon validation"
+	case spellEffectCreateTamedPet:
+		return s.checkCreateTamedPetCast(single, target), "create-tamed-pet validation"
+	case spellEffectSummonPet:
+		return s.checkSummonPetCast(single), "summon-pet validation"
+	case spellEffectSummonPlayer:
+		return s.checkSummonPlayerCast(ctx, single, spellID), "summon-player validation"
+	case spellEffectSummonRafFriend:
+		return s.checkSummonRafFriendCast(single), "summon-raf-friend validation"
+	case spellEffectLeap, spellEffectTeleportUnitsFaceCaster:
+		return s.checkLeapCast(single), "leap/teleport-before-bg-start validation"
+	case spellEffectStealBeneficialBuff:
+		return s.checkStealPreCast(single, wireUnitGUID), "nothing to steal"
+	case spellEffectLeapBack, spellEffectJump, spellEffectJumpDest:
+		return s.checkLeapBackCast(single), "leap-back/jump while rooted"
+	case spellEffectTalentSpecSelect:
+		return s.checkTalentSpecSelectCast(single), "talent spec change after bg started"
+	default:
+		return 0, ""
+	}
+}
+
+// checkCastAuraAt runs the CheckCast ApplyAuraName switch arm
+// (Spell.cpp:6033-6147) for the single effect at index, returning the
+// SPELL_FAILED_* code and the arm's debug label, or (0, "") when the effect
+// carries no bridged arm. Like checkCastEffectAt, the call sites loop over
+// the effects in index order — C++ runs the whole aura switch after the
+// whole effect switch, and within it in effect-index order — and each twin
+// is called with the spell narrowed to that one effect, except mounted,
+// whose HasAura(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED) arm is
+// spell-level (see checkCastEffectAt).
+func (s *session) checkCastAuraAt(ctx context.Context, spell wotlk.Spell, index int, target protocol.SpellTargetData, opts checkCastPerEffectOptions) (uint8, string) {
+	eff := spell.Effects[index]
+	single := spell
+	single.Effects = [3]wotlk.SpellEffect{spell.Effects[index]}
+	switch eff.Aura {
+	case spellAuraModPossessPet:
+		return s.checkPossessPetCast(single), "possess-pet validation"
+	case spellAuraModPossess, spellAuraCharm, spellAuraAoeCharm:
+		return s.checkCharmCast(single, target), "charm/possess validation"
+	case spellAuraMounted:
+		return s.checkMountedCast(ctx, spell), "mounted validation"
+	case spellAuraRangedAttackPowerAttackerBonus:
+		return s.checkRangedAttackPowerAttackerBonusCast(single, target), "ranged-attack-power-attacker-bonus validation"
+	case spellAuraFly, spellAuraModIncreaseMountedFlightSpeed:
+		return s.checkFlyCast(single), "fly validation"
+	case spellAuraPeriodicManaLeech:
+		return s.checkPeriodicManaLeechCast(single, target, opts.castItem), "periodic-mana-leech validation"
+	default:
+		return 0, ""
+	}
+}
+
+// checkTriggeredChargeCast runs only the explicit-target + full-LOS legs of
+// the SPELL_EFFECT_CHARGE arm (Spell.cpp:5678-5702) for a triggered cast:
+// the root leg opens on !TRIGGERED_IGNORE_CASTER_AURAS (Spell.cpp:5675-5676)
+// and the full triggered mask carries that flag, so a triggered charge is
+// never rooted-failed. The PathGenerator NOPATH arms stay unbridged (no
+// navmesh), as on the client twin.
+func (s *session) checkTriggeredChargeCast(ctx context.Context, spell wotlk.Spell, targetGUID uint64) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	if !spellNeedsExplicitUnitTarget(spell) {
+		return 0
+	}
+	if targetGUID == 0 || uint16(targetGUID>>48) == 0xF110 {
+		return spellFailedDontReport
+	}
+	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok && s.server != nil {
+		if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+			return spellFailedLineOfSight
+		}
+	}
+	return 0
+}
+
 func (s *session) checkLearnSpellCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return 0
@@ -26752,156 +26660,33 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// for a triggered cast. Its other terms (dispel-only effects, no
 	// area/melee-combat-start leg, the sanctuary hostile leg, the
 	// GetDispellableAuraList emptiness test) are moot behind that guard.
-	// CheckCast per-effect power burn/drain arm (Spell.cpp:5652-5660):
-	// a burn/drain effect rejects when the explicit unit target (not the
-	// caster) uses a power type other than the effect's MiscValue. The
-	// client-path twin checkPowerBurnDrainCast already bridges it, so
-	// the funnel reuses it on the raw wire target — the C++ arm judges
-	// GetUnitTarget at prepare time, ahead of SelectSpellTargets, and a
-	// GO wire target carries no unit target (Spell.cpp:248), so it skips
-	// the gate like the CheckTarget gate above.
-	if targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 {
-		if failure := s.checkPowerBurnDrainCast(spell, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}); failure != 0 {
-			rejectTriggeredCast("triggered power burn/drain target power-type mismatch")
-			return
-		}
-	}
-	// CheckCast per-effect switch remainder (Spell.cpp:5662-6013): the
-	// client-path twins already bridge these arms, so the funnel reuses
-	// them on the raw wire target in C++ loop order, ahead of
-	// SelectSpellTargets; every failure rewrites to DONT_REPORT via
-	// rejectTriggeredCast. The wire target carries the unit wire mask,
-	// or the gameobject flag for a GO wire (open-lock's GO leg needs
-	// it; the unit-target twins fail closed on a GO wire exactly as
-	// C++ does when GetUnitTarget yields null). Charge is the one
-	// exception: its root leg opens on !TRIGGERED_IGNORE_CASTER_AURAS
-	// (Spell.cpp:5675-5676) and the full mask carries that flag, so a
-	// triggered charge cast is never rooted-failed — reusing
-	// checkChargeCast whole would over-reject. The funnel ports only
-	// its explicit-target + full-LOS legs (the PathGenerator NOPATH
-	// arms stay unbridged, no navmesh, same as the client twin; the
-	// Warbringer script-override aura strip is a SpellScript side
-	// effect with no bridge). Summon-pet's strict pet self-stun
-	// (32752) leg stays out (no pet-cast bridge; the charm leg is
-	// bridged on the client twin checkSummonPetCast, which the funnel
-	// does not run — triggered casts skip CheckCast); summon-player/RAF
-	// key on the caster's selection, not the wire target, exactly as
-	// C++ GetTarget does; open-lock's item-target leg reads no item
-	// here (the funnel carries no item target, and castItemGUID is the
-	// cast item, not GetItemTarget).
+	// CheckCast per-effect loops (Spell.cpp:5565-6147): C++ reports the
+	// first failure in effect-index order — the Effect switch first, then
+	// the ApplyAuraName switch — so both loops run in effect-index order
+	// here, not the fixed type order the twins used to run in. The funnel
+	// runs only the per-effect switch remainder (Spell.cpp:5662-6013):
+	// learn/glyph/feed-pet never fire for triggered casts here, and the
+	// charge arm is reduced to its explicit-target + LOS legs
+	// (TRIGGERED_IGNORE_CASTER_AURAS exempts the root leg). The mana-leech
+	// arm takes castItem (its power-type leg is skipped for item casts,
+	// Spell.cpp:6142-6143) — the old split (full check for non-item casts,
+	// no-unit-target-only for item casts) is exactly what
+	// checkPeriodicManaLeechCast(spell, target, castItem) does.
 	funnelWireTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
 	if targetGUID != 0 && uint16(targetGUID>>48) == 0xF110 {
 		funnelWireTarget = protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: targetGUID}
 	}
-	hasChargeEffect := false
-	for _, eff := range spell.Effects {
-		if eff.Effect == spellEffectCharge {
-			hasChargeEffect = true
-			break
-		}
-	}
-	if hasChargeEffect && spellNeedsExplicitUnitTarget(spell) {
-		if targetGUID == 0 || uint16(targetGUID>>48) == 0xF110 {
-			rejectTriggeredCast("triggered charge spell without explicit unit target")
+	for i := range spell.Effects {
+		if failure, reason := s.checkCastEffectAt(ctx, spell, i, funnelWireTarget, spellID, targetGUID, checkCastPerEffectOptions{triggeredCharge: true, skipLearnGlyphFeed: true, castItem: castItemGUID != 0}); failure != 0 {
+			rejectTriggeredCast("triggered " + reason)
 			return
 		}
-		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok && s.server != nil {
-			if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
-				rejectTriggeredCast("triggered charge spell target not in line of sight")
-				return
-			}
-		}
 	}
-	if failure := s.checkSkinningCast(spell, funnelWireTarget); failure != 0 {
-		rejectTriggeredCast("triggered skinning target invalid")
-		return
-	}
-	if failure := s.checkOpenLockCast(spell, funnelWireTarget); failure != 0 {
-		rejectTriggeredCast("triggered open-lock target invalid")
-		return
-	}
-	if failure := s.checkResurrectPetCast(spell); failure != 0 {
-		rejectTriggeredCast("triggered resurrect-pet with live pet")
-		return
-	}
-	if failure := s.checkSummonCast(spell); failure != 0 {
-		rejectTriggeredCast("triggered summon with existing pet")
-		return
-	}
-	if failure := s.checkCreateTamedPetCast(spell, funnelWireTarget); failure != 0 {
-		rejectTriggeredCast("triggered create-tamed-pet target invalid")
-		return
-	}
-	if failure := s.checkSummonPetCast(spell); failure != 0 {
-		rejectTriggeredCast("triggered summon-pet stable validation failed")
-		return
-	}
-	if failure := s.checkSummonPlayerCast(ctx, spell, spellID); failure != 0 {
-		rejectTriggeredCast("triggered summon-player target invalid")
-		return
-	}
-	if failure := s.checkSummonRafFriendCast(spell); failure != 0 {
-		rejectTriggeredCast("triggered summon-raf-friend target invalid")
-		return
-	}
-	if failure := s.checkLeapCast(spell); failure != 0 {
-		rejectTriggeredCast("triggered leap before battleground start")
-		return
-	}
-	if failure := s.checkStealPreCast(spell, targetGUID); failure != 0 {
-		rejectTriggeredCast("triggered steal with nothing to steal")
-		return
-	}
-	if failure := s.checkLeapBackCast(spell); failure != 0 {
-		rejectTriggeredCast("triggered leap-back/jump while rooted")
-		return
-	}
-	if failure := s.checkTalentSpecSelectCast(spell); failure != 0 {
-		rejectTriggeredCast("triggered talent spec change after battleground start")
-		return
-	}
-	// CheckCast ApplyAuraName switch (Spell.cpp:6033-6147) plus the
-	// per-effect loop's aura-bounced tail (Spell.cpp:6155-6162): the
-	// client-path twins already bridge these arms, so the funnel reuses
-	// them on the raw wire target in C++ switch order, ahead of
-	// SelectSpellTargets; every failure rewrites to DONT_REPORT via
-	// rejectTriggeredCast. The twins' stay-outs are shared with the
-	// client path (charm vehicle leg with no vehicle-kit model, the
-	// caster-charmed arm with no player charm state, the mounted twin's
-	// transform-spell carve-out). One funnel-only split: the
-	// periodic-mana-leech arm breaks on m_CastItem (Spell.cpp:6144),
-	// and item casts on this path carry a cast item (castItemGUID),
-	// so an item-cast leech skips only the power-type gate — the
-	// no-unit-target leg still fires — while non-item casts reuse
-	// the twin whole.
-	if failure := s.checkPossessPetCast(spell); failure != 0 {
-		rejectTriggeredCast("triggered possess-pet spell without pet")
-		return
-	}
-	if failure := s.checkCharmCast(spell, funnelWireTarget); failure != 0 {
-		rejectTriggeredCast("triggered charm/possess spell invalid")
-		return
-	}
-	if failure := s.checkMountedCast(ctx, spell); failure != 0 {
-		rejectTriggeredCast("triggered mount spell invalid")
-		return
-	}
-	if failure := s.checkRangedAttackPowerAttackerBonusCast(spell, funnelWireTarget); failure != 0 {
-		rejectTriggeredCast("triggered ranged-AP-bonus spell invalid")
-		return
-	}
-	if failure := s.checkFlyCast(spell); failure != 0 {
-		rejectTriggeredCast("triggered fly spell in no-fly area")
-		return
-	}
-	if castItemGUID == 0 {
-		if failure := s.checkPeriodicManaLeechCast(spell, funnelWireTarget, false); failure != 0 {
-			rejectTriggeredCast("triggered periodic mana leech spell invalid")
+	for i := range spell.Effects {
+		if failure, reason := s.checkCastAuraAt(ctx, spell, i, funnelWireTarget, checkCastPerEffectOptions{triggeredCharge: true, skipLearnGlyphFeed: true, castItem: castItemGUID != 0}); failure != 0 {
+			rejectTriggeredCast("triggered " + reason)
 			return
 		}
-	} else if funnelWireTarget.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || funnelWireTarget.UnitGUID == 0 {
-		rejectTriggeredCast("triggered periodic mana leech spell without unit target")
-		return
 	}
 	if failure := s.checkAuraBouncedCast(spell, funnelWireTarget); failure != 0 {
 		rejectTriggeredCast("triggered aura spell bounced by stronger aura")
