@@ -898,6 +898,7 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		s.server.motionMapLocked(s.player.Map, s.player.InstanceID)[totemGUID] = &creatureMotion{
 			GUID:       totemGUID,
 			Entry:      def.Entry,
+			IsTotem:    true,
 			Map:        s.player.Map,
 			InstanceID: s.player.InstanceID,
 			X:          totemX,
@@ -1106,6 +1107,7 @@ func (s *session) summonSessionNoSlotTotem(ctx context.Context, spell wotlk.Spel
 	s.server.motionMapLocked(s.player.Map, s.player.InstanceID)[totemGUID] = &creatureMotion{
 		GUID:        totemGUID,
 		Entry:       entry,
+		IsTotem:     true,
 		Map:         s.player.Map,
 		InstanceID:  s.player.InstanceID,
 		HomeX:       totemX,

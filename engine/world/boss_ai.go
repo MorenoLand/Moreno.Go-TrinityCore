@@ -5390,6 +5390,16 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 				summoned.IsMinion = minion
 				s.motionMu.Unlock()
 			}
+			// Map::SummonCreature (Object.cpp:1897-1947) mints Totem
+			// objects for both SUMMON_TYPE_TOTEM and SUMMON_TYPE_LIGHTWELL,
+			// so both titles carry UNIT_MASK_TOTEM (Totem.cpp:34) and
+			// neither can hold a threat list; the GUID registry below stays
+			// totem-title-only (the lightwell charge mechanic has no model).
+			if props.Title == summonTitleTotem || props.Title == summonTitleLightwell {
+				s.motionMu.Lock()
+				summoned.IsTotem = true
+				s.motionMu.Unlock()
+			}
 			log := protocol.NewBuffer(32)
 			log.WritePackedGUID(m.GUID)
 			log.WriteU32(spell.ID)
