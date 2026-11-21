@@ -10039,7 +10039,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 		// (UnitAura::AddStaticApplication, SpellAuras.cpp): the
 		// area-aura effects reach hit targets through the
 		// registerCreatureAreaAura fan-out below, never this loop.
-		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level), 0, nil, false, true)
+		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level), 0, nil, false, true, 0)
 		s.recordCreatureChannelHitTarget(m, spell, guid)
 	}
 	for _, guid := range hitTargets {
@@ -10082,7 +10082,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			}
 			continue
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false, nil)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false, nil, 0)
 	}
 	if hasAreaAura {
 		// Caster-owned area-aura fan-out (area_auras.go): runs after
@@ -10211,7 +10211,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 			continue
 		}
 		sharedDelayMs := uint32(object.NextAuraTick.Sub(now) / time.Millisecond)
-		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), primary.PeriodMs, &sharedDelayMs, true, false)
+		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), primary.PeriodMs, &sharedDelayMs, true, false, 0)
 	}
 	type creatureTarget struct {
 		guid    uint64
@@ -10249,7 +10249,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		if d := object.NextAuraTick.Sub(now); d > 0 {
 			sharedDelayMs = uint32(d / time.Millisecond)
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true, &sharedDelayMs)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true, &sharedDelayMs, 0)
 	}
 }
 
@@ -10273,7 +10273,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 // schedule, not a private period later. Nil keeps the default
 // periodicTickInitialDelay; the merge re-arm never takes it, like the
 // session twin.
-func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool, periodicInitialDelay *uint32) {
+func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool, periodicInitialDelay *uint32, allowedMask uint8) {
 	if s == nil || m == nil || targetGUID == 0 {
 		return
 	}
@@ -10316,7 +10316,7 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 	primaryIdx := -1
 	if persistentAreaAura {
 		for i := range spell.Effects {
-			if spell.Effects[i].Aura != 0 && spell.Effects[i].AuraPeriod > 0 && !prevent.defaultPrevented(i) {
+			if spell.Effects[i].Aura != 0 && spell.Effects[i].AuraPeriod > 0 && !prevent.defaultPrevented(i) && (allowedMask == 0 || allowedMask&(1<<uint(i)) != 0) {
 				primaryIdx = i
 				break
 			}
@@ -10343,6 +10343,14 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			continue
 		}
 		if prevent.defaultPrevented(i) {
+			continue
+		}
+		// FillTargetMap registrations carry a per-effect bitmask
+		// (UnitAura::FillTargetMap, SpellAuras.cpp:2760-2761): a
+		// recipient selected by an area effect takes only that
+		// effect's bit, never the eff-6 bits of a mixed spell —
+		// 0 means no restriction.
+		if allowedMask != 0 && allowedMask&(1<<uint(i)) == 0 {
 			continue
 		}
 		if creatureImmuneToSpellEffect(s, targetKey, spell, i, stats, s.isTotemGUID(targetGUID), nil, true, s.creatureFriendlyToTarget(m, targetGUID)) {

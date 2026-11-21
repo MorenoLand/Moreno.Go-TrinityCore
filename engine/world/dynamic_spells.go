@@ -624,12 +624,12 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 			// (Unit::AddAura, Unit.cpp:12291-12297), so a target immune
 			// to only one of the dynobj's effects keeps the rest — the
 			// Aura::UpdateTargetMap mask-strip arm (SpellAuras.cpp:687-695).
-			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs, true, false)
+			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level), object.AuraPeriodMs, &sharedDelayMs, true, false, 0)
 		} else {
 			if s.dynobjCreatureTargetImmune(ctx, spell, guid, object.Map, object.InstanceID, s.creatureFriendlyToTarget(caster, guid)) {
 				continue
 			}
-			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil, true, &sharedDelayMs)
+			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil, true, &sharedDelayMs, 0)
 		}
 		object.AuraHolders[guid] = struct{}{}
 	}

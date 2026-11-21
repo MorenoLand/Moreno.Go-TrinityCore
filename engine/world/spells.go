@@ -36992,7 +36992,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.player != nil {
 		casterLevel = s.player.Level
 	}
-	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel, 0, nil, false, false)
+	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel, 0, nil, false, false, 0)
 }
 
 // refreshCommandAura mirrors the Unit::_TryStackingOrRefreshingExistingAura
@@ -37183,7 +37183,7 @@ func (s *Server) calcAuraMaxCharges(spell wotlk.Spell, mapID, instanceID uint32,
 // record, wire caster/level, and level-scaled amounts use the caster's GUID
 // and level. The totem's level is its owner's (Totem.cpp:103), passed
 // explicitly because the aura may land on a party member of another level.
-func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8, periodMs uint32, periodicInitialDelay *uint32, persistentAreaAura bool, eff6Only bool) {
+func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8, periodMs uint32, periodicInitialDelay *uint32, persistentAreaAura bool, eff6Only bool, allowedMask uint8) {
 	// Unit::AddAura (Unit.cpp:12282-12295) runs the whole-spell gate
 	// (IsImmunedToSpell) and the per-effect strip
 	// (IsImmunedToSpellEffect) before the aura is created; the dynobj
@@ -37261,7 +37261,7 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	if persistentAreaAura && s.server != nil && s.server.Data != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
 			for index, effect := range sp.Effects {
-				if effect.Effect != 0 && effect.Aura != 0 && effect.AuraPeriod > 0 && immuneMask&(1<<uint(index)) == 0 {
+				if effect.Effect != 0 && effect.Aura != 0 && effect.AuraPeriod > 0 && immuneMask&(1<<uint(index)) == 0 && (allowedMask == 0 || allowedMask&(1<<uint(index)) != 0) {
 					primaryIndex = index
 					break
 				}
@@ -37414,6 +37414,15 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				if eff6Only && effect.Effect != spellEffectApplyAura {
 					continue
 				}
+				// FillTargetMap registrations carry a per-effect
+				// bitmask (UnitAura::FillTargetMap,
+				// SpellAuras.cpp:2760-2761): a recipient selected
+				// by an area effect takes only that effect's bit,
+				// never the eff-6 bits of a mixed spell — 0 means
+				// no restriction.
+				if allowedMask != 0 && allowedMask&(1<<uint(index)) == 0 {
+					continue
+				}
 				// The record keeps the first effect's type, but its mask
 				// must cover every aura effect the self-cast applies, or
 				// per-effect folds (immunity misc, HasAuraType) miss the
@@ -37492,18 +37501,26 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				// The override keeps only surviving effects: a stripped
 				// mount effect never re-enters the mask.
 				mountMask := mask &^ immuneMask
-				effectMask, auraType, miscValue = mountMask, spellAuraMounted, mountMisc
-				amounts, baseAmounts = mountAmounts, mountBaseAmounts
-				recalculateMask = 0
-				for index, effect := range sp.Effects {
-					if mountMask&(1<<uint(index)) == 0 {
-						continue
-					}
-					if auraEffectCanBeRecalculated(effect.Aura) {
-						recalculateMask |= 1 << uint(index)
-					}
-					if effect.Aura == spellAuraMounted {
-						effectAmount = uint32(effect.CalcValueForLevel(sp, auraCasterLevel))
+				if allowedMask != 0 {
+					// A FillTargetMap mask never carries the mount
+					// effect; an emptied mask skips the override
+					// instead of minting a mounted record with no bits.
+					mountMask &= allowedMask
+				}
+				if mountMask != 0 {
+					effectMask, auraType, miscValue = mountMask, spellAuraMounted, mountMisc
+					amounts, baseAmounts = mountAmounts, mountBaseAmounts
+					recalculateMask = 0
+					for index, effect := range sp.Effects {
+						if mountMask&(1<<uint(index)) == 0 {
+							continue
+						}
+						if auraEffectCanBeRecalculated(effect.Aura) {
+							recalculateMask |= 1 << uint(index)
+						}
+						if effect.Aura == spellAuraMounted {
+							effectAmount = uint32(effect.CalcValueForLevel(sp, auraCasterLevel))
+						}
 					}
 				}
 			}
@@ -37860,8 +37877,8 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
 			period := periodMs
 			if period == 0 {
-				for _, effect := range sp.Effects {
-					if effect.Effect != 0 && effect.Aura != 0 {
+				for index, effect := range sp.Effects {
+					if effect.Effect != 0 && effect.Aura != 0 && (allowedMask == 0 || allowedMask&(1<<uint(index)) != 0) {
 						period = effect.AuraPeriod
 						break
 					}
@@ -38364,7 +38381,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 				fadeMs = uint32(dur)
 			}
 		}
-		s.applyAuraFromCaster(32612, fadeMs, s.playerGUID, s.player.Level, 0, nil, false, false)
+		s.applyAuraFromCaster(32612, fadeMs, s.playerGUID, s.player.Level, 0, nil, false, false, 0)
 		// Unit::CombatStop(true) twin: interrupt the cast, stop the swing,
 		// clear the in-combat flag. The victim-side attacker clearing and
 		// the pet stop have no Go model (documented delta).

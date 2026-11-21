@@ -36,12 +36,14 @@ import (
 // legs, petAreaAllyWantedMaskForEffect) and 119/143 through the
 // radius-gated owner leg.
 //
-// KNOWN DELTA (single-record model, shared with the player path and the
-// dynobj path): the fan-out applies the whole spell record, so on a mixed
-// spell (31673: eff0/eff1 effect-6 + eff2 area) area recipients also carry
-// the effect-6 bits — C++ FillTargetMap registers only the area effects'
-// bits for them (SpellAuras.cpp:2760-2761). Per-effect masks would need a
-// new param through both apply funnels; a separate unit.
+// Per-effect masks (UnitAura::FillTargetMap, SpellAuras.cpp:2760-2761):
+// the fill returns one bitmask per target — the area effects that
+// selected it — and the apply funnels take only those bits, so on a
+// mixed spell (31673: eff0/eff1 effect-6 + eff2 area) area recipients
+// carry only the area bit. The caster keeps its hit-path eff-6 bits
+// through the union mask on the player apply leg; the creature funnel
+// merges per effect. The dynobj path still selects targets once per
+// spell (DynObjAura::FillTargetMap selects per effect — a separate unit).
 type areaAuraSelection uint8
 
 const (
@@ -175,7 +177,10 @@ func (s *Server) areaAuraInPartyWith(caster *creatureMotion, targetGUID uint64) 
 
 // areaAuraFillTargets runs UnitAura::FillTargetMap (SpellAuras.cpp:2649-
 // 2762) for one pass: the union over the aura's area effects of the
-// radius selection around the caster. PARTY/RAID/FRIEND/ENEMY scan the
+// radius selection around the caster. Each target carries the bitmask of
+// the area effects that selected it (targets[unit] |= 1 << effIndex,
+// SpellAuras.cpp:2760-2761) — a recipient never takes the eff-6 bits of
+// a mixed spell. PARTY/RAID/FRIEND/ENEMY scan the
 // live sessions and creature motions on the caster's map/instance; PET
 // is the caster itself plus its owner in radius; OWNER is the owner in
 // radius. The C++ WorldObjectSpellAreaTargetCheck gates (Spell.cpp:8337-
@@ -185,8 +190,8 @@ func (s *Server) areaAuraInPartyWith(caster *creatureMotion, targetGUID uint64) 
 // dynobj pass's passive/CAN_TARGET_DEAD leg. No phase gate: the dynobj
 // pass is phase-blind too. No in-flight skip: only DynObjAura::UpdateTargetMap
 // (SpellAuras.cpp:700-701) excludes flying targets, not UnitAura.
-func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, caster *creatureMotion) map[uint64]struct{} {
-	targets := make(map[uint64]struct{})
+func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, caster *creatureMotion) map[uint64]uint8 {
+	targets := make(map[uint64]uint8)
 	if s == nil || state == nil || caster == nil {
 		return targets
 	}
@@ -222,7 +227,7 @@ func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, 
 			// SpellAuras.cpp:2703-2707: the owner itself is pushed
 			// unconditionally (it sits at distance 0 from itself),
 			// then falls through to the OWNER arm for the charmer/owner.
-			targets[caster.GUID] = struct{}{}
+			targets[caster.GUID] |= 1 << uint(ae.index)
 			fallthrough
 		case areaAuraOwner:
 			// SpellAuras.cpp:2707-2713: the charmer/owner within radius.
@@ -232,12 +237,12 @@ func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, 
 			}
 			if vs := s.findSessionByGUID(ownerGUID); vs != nil && vs.player != nil {
 				if vs.player.Map == state.mapID && vs.player.InstanceID == state.instanceID && inRadius(vs.player.X, vs.player.Y, vs.player.Z, ae.radius) && (deadOK || vs.player.Health != 0) {
-					targets[ownerGUID] = struct{}{}
+					targets[ownerGUID] |= 1 << uint(ae.index)
 				}
 				continue
 			}
 			if tm := s.findCreatureMotion(state.mapID, state.instanceID, ownerGUID); tm != nil && inRadius(tm.X, tm.Y, tm.Z, ae.radius) && (deadOK || tm.Health != 0) {
-				targets[ownerGUID] = struct{}{}
+				targets[ownerGUID] |= 1 << uint(ae.index)
 			}
 		case areaAuraParty, areaAuraRaid:
 			for _, vs := range players {
@@ -247,7 +252,7 @@ func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, 
 				if !s.creatureFriendlyToTarget(caster, vs.playerGUID) || !s.areaAuraInPartyWith(caster, vs.playerGUID) {
 					continue
 				}
-				targets[vs.playerGUID] = struct{}{}
+				targets[vs.playerGUID] |= 1 << uint(ae.index)
 			}
 			for _, tm := range creatures {
 				if (!deadOK && tm.health == 0) || !inRadius(tm.x, tm.y, tm.z, ae.radius) || s.isTotemGUID(tm.guid) {
@@ -256,7 +261,7 @@ func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, 
 				if !s.creatureFriendlyToTarget(caster, tm.guid) || !s.areaAuraInPartyWith(caster, tm.guid) {
 					continue
 				}
-				targets[tm.guid] = struct{}{}
+				targets[tm.guid] |= 1 << uint(ae.index)
 			}
 		case areaAuraFriend:
 			for _, vs := range players {
@@ -266,7 +271,7 @@ func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, 
 				if !s.creatureFriendlyToTarget(caster, vs.playerGUID) {
 					continue
 				}
-				targets[vs.playerGUID] = struct{}{}
+				targets[vs.playerGUID] |= 1 << uint(ae.index)
 			}
 			for _, tm := range creatures {
 				if (!deadOK && tm.health == 0) || !inRadius(tm.x, tm.y, tm.z, ae.radius) || s.isTotemGUID(tm.guid) {
@@ -275,7 +280,7 @@ func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, 
 				if !s.creatureFriendlyToTarget(caster, tm.guid) {
 					continue
 				}
-				targets[tm.guid] = struct{}{}
+				targets[tm.guid] |= 1 << uint(ae.index)
 			}
 		case areaAuraEnemy:
 			for _, vs := range players {
@@ -285,7 +290,7 @@ func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, 
 				if s.creatureFriendlyToTarget(caster, vs.playerGUID) {
 					continue
 				}
-				targets[vs.playerGUID] = struct{}{}
+				targets[vs.playerGUID] |= 1 << uint(ae.index)
 			}
 			for _, tm := range creatures {
 				if (!deadOK && tm.health == 0) || !inRadius(tm.x, tm.y, tm.z, ae.radius) {
@@ -294,7 +299,7 @@ func (s *Server) areaAuraFillTargets(ctx context.Context, state *areaAuraState, 
 				if s.creatureFriendlyToTarget(caster, tm.guid) || s.isTotemGUID(tm.guid) {
 					continue
 				}
-				targets[tm.guid] = struct{}{}
+				targets[tm.guid] |= 1 << uint(ae.index)
 			}
 		}
 	}
@@ -341,8 +346,8 @@ func (s *Server) playerAreaAuraInPartyWith(caster *session, targetGUID uint64) b
 // nil unless charmed). Totems are excluded from every selection
 // (WorldObjectSpellTargetCheck, Spell.cpp:8337-8374), unlike the creature twin,
 // which excludes them for ENEMY only.
-func (s *Server) areaAuraFillTargetsForPlayer(ctx context.Context, state *areaAuraState, caster *session) map[uint64]struct{} {
-	targets := make(map[uint64]struct{})
+func (s *Server) areaAuraFillTargetsForPlayer(ctx context.Context, state *areaAuraState, caster *session) map[uint64]uint8 {
+	targets := make(map[uint64]uint8)
 	if s == nil || state == nil || caster == nil || caster.player == nil {
 		return targets
 	}
@@ -379,7 +384,7 @@ func (s *Server) areaAuraFillTargetsForPlayer(ctx context.Context, state *areaAu
 			// unconditionally, then falls through to the OWNER arm — a
 			// player caster has no charmer/owner, so the fallthrough
 			// selects nothing and PET is the caster alone.
-			targets[caster.playerGUID] = struct{}{}
+			targets[caster.playerGUID] |= 1 << uint(ae.index)
 		case areaAuraOwner:
 			// SpellAuras.cpp:2707-2713: the charmer/owner within radius —
 			// a player caster has none in the Go model.
@@ -391,7 +396,7 @@ func (s *Server) areaAuraFillTargetsForPlayer(ctx context.Context, state *areaAu
 				if !s.playerFriendlyToTarget(caster, vs.playerGUID) || !s.playerAreaAuraInPartyWith(caster, vs.playerGUID) {
 					continue
 				}
-				targets[vs.playerGUID] = struct{}{}
+				targets[vs.playerGUID] |= 1 << uint(ae.index)
 			}
 			for _, tm := range creatures {
 				if (!deadOK && tm.health == 0) || !inRadius(tm.x, tm.y, tm.z, ae.radius) || s.isTotemGUID(tm.guid) {
@@ -400,7 +405,7 @@ func (s *Server) areaAuraFillTargetsForPlayer(ctx context.Context, state *areaAu
 				if !s.playerFriendlyToTarget(caster, tm.guid) || !s.playerAreaAuraInPartyWith(caster, tm.guid) {
 					continue
 				}
-				targets[tm.guid] = struct{}{}
+				targets[tm.guid] |= 1 << uint(ae.index)
 			}
 		case areaAuraFriend:
 			for _, vs := range players {
@@ -410,7 +415,7 @@ func (s *Server) areaAuraFillTargetsForPlayer(ctx context.Context, state *areaAu
 				if !s.playerFriendlyToTarget(caster, vs.playerGUID) {
 					continue
 				}
-				targets[vs.playerGUID] = struct{}{}
+				targets[vs.playerGUID] |= 1 << uint(ae.index)
 			}
 			for _, tm := range creatures {
 				if (!deadOK && tm.health == 0) || !inRadius(tm.x, tm.y, tm.z, ae.radius) || s.isTotemGUID(tm.guid) {
@@ -419,7 +424,7 @@ func (s *Server) areaAuraFillTargetsForPlayer(ctx context.Context, state *areaAu
 				if !s.playerFriendlyToTarget(caster, tm.guid) {
 					continue
 				}
-				targets[tm.guid] = struct{}{}
+				targets[tm.guid] |= 1 << uint(ae.index)
 			}
 		case areaAuraEnemy:
 			for _, vs := range players {
@@ -429,7 +434,7 @@ func (s *Server) areaAuraFillTargetsForPlayer(ctx context.Context, state *areaAu
 				if s.playerFriendlyToTarget(caster, vs.playerGUID) {
 					continue
 				}
-				targets[vs.playerGUID] = struct{}{}
+				targets[vs.playerGUID] |= 1 << uint(ae.index)
 			}
 			for _, tm := range creatures {
 				if (!deadOK && tm.health == 0) || !inRadius(tm.x, tm.y, tm.z, ae.radius) || s.isTotemGUID(tm.guid) {
@@ -438,7 +443,7 @@ func (s *Server) areaAuraFillTargetsForPlayer(ctx context.Context, state *areaAu
 				if s.playerFriendlyToTarget(caster, tm.guid) {
 					continue
 				}
-				targets[tm.guid] = struct{}{}
+				targets[tm.guid] |= 1 << uint(ae.index)
 			}
 		}
 	}
@@ -463,6 +468,38 @@ func (s *Server) areaAuraPresent(state *areaAuraState, guid uint64) bool {
 	aura := s.activeCreatureAuras[key][state.key.spellID]
 	s.auraMu.Unlock()
 	return aura != nil && !aura.Stopped && aura.CasterGUID == state.key.casterGUID && aura.PersistentAreaAura
+}
+
+// areaAuraHolderEffectMask returns the effect bits a holder already
+// carries of this spell from this caster — the static-application half
+// of the holder's aura. UnitAura::FillTargetMap registers the area bits
+// onto the same aura object DoSpellEffectHit created, so the record's
+// mask is the union; applyAuraFromCaster replaces the record instead of
+// merging, so the fan-out apply must carry the union mask or the caster
+// of a mixed spell would lose its hit-path eff-6 bits. The creature
+// funnel merges per effect and needs no union here. 0 when the holder
+// carries no live record from this caster.
+func (s *Server) areaAuraHolderEffectMask(state *areaAuraState, holderGUID uint64) uint8 {
+	if s == nil || state == nil || holderGUID == 0 {
+		return 0
+	}
+	if ts := s.findSessionByGUID(holderGUID); ts != nil && ts.player != nil {
+		ts.castMu.Lock()
+		aura := ts.activeAuras[state.key.spellID]
+		ts.castMu.Unlock()
+		if aura != nil && !aura.Stopped && aura.CasterGUID == state.key.casterGUID {
+			return aura.EffectMask
+		}
+		return 0
+	}
+	key := creatureAuraKey{Map: state.mapID, InstanceID: state.instanceID, GUID: holderGUID}
+	s.auraMu.Lock()
+	aura := s.activeCreatureAuras[key][state.key.spellID]
+	s.auraMu.Unlock()
+	if aura != nil && !aura.Stopped && aura.CasterGUID == state.key.casterGUID {
+		return aura.EffectMask
+	}
+	return 0
 }
 
 // expireAreaAuraHolder removes a caster-owned area aura from a holder
@@ -492,7 +529,7 @@ func (s *Server) expireAreaAuraHolder(state *areaAuraState, holderGUID uint64) {
 // gate). The periodic timer rides the record's primary effect, as in
 // the dynobj cast-time fill; there is no shared dynobj schedule to
 // align to, so no initial-delay override.
-func (s *Server) applyAreaAuraToHolder(ctx context.Context, state *areaAuraState, caster *creatureMotion, holderGUID uint64) bool {
+func (s *Server) applyAreaAuraToHolder(ctx context.Context, state *areaAuraState, caster *creatureMotion, holderGUID uint64, mask uint8) bool {
 	if s == nil || state == nil || caster == nil || holderGUID == 0 {
 		return false
 	}
@@ -500,7 +537,11 @@ func (s *Server) applyAreaAuraToHolder(ctx context.Context, state *areaAuraState
 		return false
 	}
 	if vs := s.findSessionByGUID(holderGUID); vs != nil && vs.player != nil {
-		vs.applyAuraFromCaster(state.key.spellID, state.durationMs, state.key.casterGUID, uint8(caster.Level), 0, nil, true, false)
+		// The fan-out mask is the area bits only; the union with the
+		// holder's existing same-caster bits keeps a mixed spell's
+		// hit-path eff-6 application on the same record (the
+		// applyAuraFromCaster funnel replaces, never merges).
+		vs.applyAuraFromCaster(state.key.spellID, state.durationMs, state.key.casterGUID, uint8(caster.Level), 0, nil, true, false, mask|s.areaAuraHolderEffectMask(state, holderGUID))
 	} else {
 		// DynObjAura::UpdateTargetMap (SpellAuras.cpp:687-695) never
 		// registers a whole-spell immune target; the per-effect half
@@ -511,7 +552,7 @@ func (s *Server) applyAreaAuraToHolder(ctx context.Context, state *areaAuraState
 		if s.dynobjCreatureTargetImmune(ctx, state.spell, holderGUID, state.mapID, state.instanceID, s.creatureFriendlyToTarget(caster, holderGUID)) {
 			return false
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, caster, state.spell, state.durationMs, holderGUID, nil, true, nil)
+		s.serverApplyAuraToCreatureTarget(ctx, caster, state.spell, state.durationMs, holderGUID, nil, true, nil, mask)
 	}
 	return s.areaAuraPresent(state, holderGUID)
 }
@@ -523,7 +564,7 @@ func (s *Server) applyAreaAuraToHolder(ctx context.Context, state *areaAuraState
 // per-effect applyAuraToTarget funnel (persistent-area flavor, shared
 // castMerged) after the whole-spell immunity pre-check, with the friendly
 // verdict from the player caster.
-func (s *Server) applyPlayerAreaAuraToHolder(ctx context.Context, state *areaAuraState, caster *session, holderGUID uint64) bool {
+func (s *Server) applyPlayerAreaAuraToHolder(ctx context.Context, state *areaAuraState, caster *session, holderGUID uint64, mask uint8) bool {
 	if s == nil || state == nil || caster == nil || caster.player == nil || holderGUID == 0 {
 		return false
 	}
@@ -531,7 +572,9 @@ func (s *Server) applyPlayerAreaAuraToHolder(ctx context.Context, state *areaAur
 		return false
 	}
 	if vs := s.findSessionByGUID(holderGUID); vs != nil && vs.player != nil {
-		vs.applyAuraFromCaster(state.key.spellID, state.durationMs, state.key.casterGUID, caster.player.Level, 0, nil, true, false)
+		// Union mask, the applyAreaAuraToHolder twin: the caster of
+		// a mixed spell keeps its hit-path eff-6 bits.
+		vs.applyAuraFromCaster(state.key.spellID, state.durationMs, state.key.casterGUID, caster.player.Level, 0, nil, true, false, mask|s.areaAuraHolderEffectMask(state, holderGUID))
 	} else {
 		if s.dynobjCreatureTargetImmune(ctx, state.spell, holderGUID, state.mapID, state.instanceID, s.playerFriendlyToTarget(caster, holderGUID)) {
 			return false
@@ -543,6 +586,13 @@ func (s *Server) applyPlayerAreaAuraToHolder(ctx context.Context, state *areaAur
 		castMerged := make(map[uint64]struct{})
 		for i, eff := range state.spell.Effects {
 			if eff.Aura == 0 {
+				continue
+			}
+			// FillTargetMap per-effect mask: only the area effects
+			// that selected this holder apply (the per-effect loop
+			// merges into the record, so a hit-path eff-6 bit the
+			// holder already carries survives untouched).
+			if mask&(1<<uint(i)) == 0 {
 				continue
 			}
 			caster.applyAuraToTarget(ctx, holderGUID, state.spell, eff, i, state.durationMs, eff.AuraPeriod, uint32(eff.BasePoints), schoolMask, castMerged, false, state.key.casterGUID, true, 0, false, nil)
@@ -607,8 +657,8 @@ func (s *session) registerPlayerAreaAura(ctx context.Context, spell wotlk.Spell,
 	}
 	s.server.areaAuras[state.key] = state
 	s.server.objectsMu.Unlock()
-	for guid := range s.server.areaAuraFillTargetsForPlayer(ctx, state, s) {
-		if s.server.applyPlayerAreaAuraToHolder(ctx, state, s, guid) {
+	for guid, mask := range s.server.areaAuraFillTargetsForPlayer(ctx, state, s) {
+		if s.server.applyPlayerAreaAuraToHolder(ctx, state, s, guid, mask) {
 			state.holders[guid] = struct{}{}
 		}
 	}
@@ -682,8 +732,8 @@ func (s *Server) registerCreatureAreaAura(ctx context.Context, m *creatureMotion
 	// TryRefreshStackOrCreate refreshes the aura duration), so carried
 	// holders are re-applied here, not just adopted — unlike the 500ms
 	// pass, which must not refresh durations every pass.
-	for guid := range s.areaAuraFillTargets(ctx, state, m) {
-		if s.applyAreaAuraToHolder(ctx, state, m, guid) {
+	for guid, mask := range s.areaAuraFillTargets(ctx, state, m) {
+		if s.applyAreaAuraToHolder(ctx, state, m, guid, mask) {
 			state.holders[guid] = struct{}{}
 		}
 	}
@@ -737,7 +787,7 @@ func (s *Server) updateAreaAuras(ctx context.Context, now time.Time) {
 			s.objectsMu.Unlock()
 			continue
 		}
-		var inRadius map[uint64]struct{}
+		var inRadius map[uint64]uint8
 		if caster != nil {
 			inRadius = s.areaAuraFillTargets(ctx, state, caster)
 		} else {
@@ -754,7 +804,7 @@ func (s *Server) updateAreaAuras(ctx context.Context, now time.Time) {
 				delete(state.holders, holderGUID)
 			}
 		}
-		for guid := range inRadius {
+		for guid, mask := range inRadius {
 			if _, ok := state.holders[guid]; ok {
 				continue
 			}
@@ -767,9 +817,9 @@ func (s *Server) updateAreaAuras(ctx context.Context, now time.Time) {
 			}
 			applied := false
 			if caster != nil {
-				applied = s.applyAreaAuraToHolder(ctx, state, caster, guid)
+				applied = s.applyAreaAuraToHolder(ctx, state, caster, guid, mask)
 			} else {
-				applied = s.applyPlayerAreaAuraToHolder(ctx, state, casterSess, guid)
+				applied = s.applyPlayerAreaAuraToHolder(ctx, state, casterSess, guid, mask)
 			}
 			if applied {
 				state.holders[guid] = struct{}{}
