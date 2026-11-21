@@ -4406,7 +4406,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if cx, cy, cz, has, found := creatureFirstDestAreaCenter(spell, destSnapshots, petSeedX, petSeedY, petSeedZ, petSeeded, isFriendlyAreaTargetType, friendlyAreaDestCentered); found {
 		petAllyAreaDestX, petAllyAreaDestY, petAllyAreaDestZ, petAllyAreaHasDest = cx, cy, cz, has
 	}
-	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) || isEntryAreaSpell(spell) || hasRefCenteredAreaEffect(spell) {
+	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) || hasAreaAuraAllyEffect(spell) || isEntryAreaSpell(spell) || hasRefCenteredAreaEffect(spell) {
 		if victimPos := s.petAreaVictimPos(ctx, motion, targetGUID); victimPos != nil {
 			if isAreaEnemySpell(spell) {
 				areaHits, areaCreatureHits = s.server.creatureAIAreaEnemyTargets(ctx, motion, spell, victimPos, petEnemyAreaDestX, petEnemyAreaDestY, petEnemyAreaDestZ, petEnemyAreaHasDest)
@@ -6840,7 +6840,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				instaTargets = append(instaTargets, chainHitsForEffect(i)...)
 				s.server.creatureEffectInstaKill(effCtx, motion, spell.ID, instaTargets, reflected, evaded, immuneSet, petMissVerdicts)
 			}
-			if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraEnemy {
+			if effect.Effect == spellEffectApplyAura || effect.Effect == spellEffectApplyAreaAuraParty || effect.Effect == spellEffectApplyAreaAuraRaid || effect.Effect == spellEffectApplyAreaAuraPet || effect.Effect == spellEffectApplyAreaAuraFriend || effect.Effect == spellEffectApplyAreaAuraEnemy || effect.Effect == spellEffectApplyAreaAuraOwner {
 				// Spell::PreprocessSpellHit scaleAura leg (Spell.cpp:2780-2795):
 				// a target whose aura scales takes the aura from the
 				// rank-appropriate row — duration entry, basepoints and effect
@@ -6973,27 +6973,27 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 					}
 				}
-				if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
-					applyAllyAura := func(origGUID uint64) {
-						if !auraTargetKept(origGUID) {
-							return
-						}
-						aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, origGUID)
-						aDurationMs := petAuraDuration(s.server, aSpell, motion)
-						aVictimGUID := resolveReflectTarget(origGUID)
-						if aVictimGUID == 0 || immuneSet[origGUID] || missedTarget(origGUID) {
-							return
-						}
-						var aVictim combatTarget
-						if ct, ok := s.getCombatTarget(effCtx, aVictimGUID); ok {
-							aVictim = ct
-						}
-						aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
-						aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged) {
-							s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
-						}
+				applyAllyAura := func(origGUID uint64) {
+					if !auraTargetKept(origGUID) {
+						return
 					}
+					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, origGUID)
+					aDurationMs := petAuraDuration(s.server, aSpell, motion)
+					aVictimGUID := resolveReflectTarget(origGUID)
+					if aVictimGUID == 0 || immuneSet[origGUID] || missedTarget(origGUID) {
+						return
+					}
+					var aVictim combatTarget
+					if ct, ok := s.getCombatTarget(effCtx, aVictimGUID); ok {
+						aVictim = ct
+					}
+					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
+					aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
+					if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged) {
+						s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
+					}
+				}
+				if wanted := petAreaAllyWantedMaskForEffect(effect); wanted != 0 {
 					for _, areaHit := range areaAllyHits {
 						if areaAllyChecks[areaHit.GUID]&wanted != 0 {
 							applyAllyAura(areaHit.GUID)
@@ -7002,6 +7002,46 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					for _, areaCreatureGUID := range areaAllyCreatureHits {
 						if areaAllyChecks[areaCreatureGUID]&wanted != 0 {
 							applyAllyAura(areaCreatureGUID)
+						}
+					}
+				}
+				// SPELL_EFFECT_APPLY_AREA_AURA_PET (119) / OWNER (143):
+				// UnitAura::FillTargetMap (SpellAuras.cpp:2705-2715)
+				// pushes the aura owner itself for PET, then falls through
+				// to the OWNER arm — the owner's charmer/owner when within
+				// the effect's CalcRadius. The caster leg above already
+				// covers the pet (tgtA=1 resolves to it in
+				// petCasterObjectTargets); this leg adds the charmer/owner,
+				// which no implicit-target sweep ever selects. Radius is
+				// CalcRadius with no max-range fallback
+				// (SpellInfo.cpp:551-574); the pet-path ally legs keep
+				// their own fallback convention.
+				if effect.Effect == spellEffectApplyAreaAuraPet || effect.Effect == spellEffectApplyAreaAuraOwner {
+					ownerGUID := motion.CharmerGUID
+					if ownerGUID == 0 {
+						ownerGUID = motion.OwnerGUID
+					}
+					if ownerGUID != 0 && ownerGUID != motion.GUID && ownerGUID != targetGUID && ownerGUID != petObjectWireLeg(effect) {
+						ownerRadius := float32(0)
+						if s.server.Data != nil {
+							if value, ok, err := s.server.Data.SpellRadius(effect.RadiusIndex, uint32(motion.Level)); err == nil && ok {
+								if modOwner := s.server.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID); modOwner != nil {
+									value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
+								}
+								ownerRadius = applyCastRadiusMod(spell, value)
+							}
+						}
+						var ownerX, ownerY, ownerZ float32
+						ownerFound := false
+						if ownerSess := s.server.findSessionByGUID(ownerGUID); ownerSess != nil && ownerSess.player != nil && ownerSess.player.Map == motion.Map && ownerSess.player.InstanceID == motion.InstanceID {
+							ownerX, ownerY, ownerZ = ownerSess.player.X, ownerSess.player.Y, ownerSess.player.Z
+							ownerFound = true
+						} else if ownerMotion := s.server.findCreatureMotion(motion.Map, motion.InstanceID, ownerGUID); ownerMotion != nil {
+							ownerX, ownerY, ownerZ = ownerMotion.X, ownerMotion.Y, ownerMotion.Z
+							ownerFound = true
+						}
+						if ownerFound && distance3D(motion.X, motion.Y, motion.Z, ownerX, ownerY, ownerZ) <= float64(ownerRadius) {
+							applyAllyAura(ownerGUID)
 						}
 					}
 				}

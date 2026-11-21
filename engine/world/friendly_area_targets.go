@@ -117,6 +117,24 @@ func hasFriendlyAreaEffect(spell wotlk.Spell) bool {
 	return false
 }
 
+// hasAreaAuraAllyEffect reports whether any active effect of the spell is an
+// area-aura RAID (65) or FRIEND (128) effect: those carry tgtA=1
+// TARGET_UNIT_CASTER, so no friendly-area implicit target ever folds a leg
+// for them — UnitAura::FillTargetMap (SpellAuras.cpp:2696-2701) selects them
+// by TARGET_CHECK_RAID / TARGET_CHECK_ALLY around the caster instead. The
+// pet path folds them as effect-id legs in creatureAIAreaAllyLegGroups.
+func hasAreaAuraAllyEffect(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.Effect == spellEffectApplyAreaAuraRaid || eff.Effect == spellEffectApplyAreaAuraFriend {
+			return true
+		}
+	}
+	return false
+}
+
 // friendlyAreaCheck maps an implicit target value to its TARGET_CHECK_*
 // selection type (SpellImplicitTargetInfo::_data, SpellInfo.cpp:218).
 func friendlyAreaCheck(targetType uint32) uint8 {

@@ -880,6 +880,23 @@ func petAreaAllyWantedMask(targetA, targetB uint32) uint8 {
 	return wanted
 }
 
+// petAreaAllyWantedMaskForEffect is the area-aura-aware twin of
+// petAreaAllyWantedMask: a RAID (65) effect wants the raid bit and a FRIEND
+// (128) effect the ally bit, since their tgtA=1 yields a zero mask from the
+// implicit targets; every other effect falls back to the implicit-target
+// mapping.
+func petAreaAllyWantedMaskForEffect(eff wotlk.SpellEffect) uint8 {
+	switch eff.Effect {
+	case spellEffectApplyAreaAuraRaid:
+		return petAreaAllyCheckRaid
+	case spellEffectApplyAreaAuraFriend:
+		return petAreaAllyCheckAlly
+	default:
+		return petAreaAllyWantedMask(eff.ImplicitTargetA, eff.ImplicitTargetB)
+	}
+}
+
+
 // creatureAIAreaAllyLegGroups is the per-leg-family geometry computation
 // for the pet-caster area-ally sweeps, mirroring creatureAIAreaLegGroups
 // with the friendly-area target types: radius from the friendly-area effects
@@ -951,6 +968,25 @@ func (s *Server) creatureAIAreaAllyLegGroups(motion *creatureMotion, spell wotlk
 				}
 				srcChecks[friendlyAreaCheck(targetType)] = struct{}{}
 			}
+		}
+		// Area-aura RAID (65) / FRIEND (128) effects carry tgtA=1
+		// TARGET_UNIT_CASTER, so no implicit-target leg ever folds for
+		// them — UnitAura::FillTargetMap (SpellAuras.cpp:2696-2701)
+		// selects them by TARGET_CHECK_RAID / TARGET_CHECK_ALLY around
+		// the caster instead. Fold them as effect-id SRC legs (caster
+		// center, this effect's radius) so the ally sweep runs for pure
+		// 65/128 spells.
+		switch eff.Effect {
+		case spellEffectApplyAreaAuraRaid:
+			if legRadius > srcRadius {
+				srcRadius = legRadius
+			}
+			srcChecks[friendlyCheckRaid] = struct{}{}
+		case spellEffectApplyAreaAuraFriend:
+			if legRadius > srcRadius {
+				srcRadius = legRadius
+			}
+			srcChecks[friendlyCheckAlly] = struct{}{}
 		}
 	}
 	destCX, destCY, destCZ := motion.X, motion.Y, motion.Z
@@ -1085,7 +1121,7 @@ func (s *Server) creatureAffectingPlayerSession(m *creatureMotion) *session {
 // Returns the extra player hits plus each hit's check bits; the merged
 // player+creature MaxTargets cap lives in creatureAIAreaAllyTargets.
 func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, owner *session, destX, destY, destZ float32, hasDest bool) ([]*playerPos, map[uint64]uint8) {
-	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) {
+	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) && !hasAreaAuraAllyEffect(spell) {
 		return nil, nil
 	}
 	groups := s.creatureAIAreaAllyLegGroups(motion, spell, destX, destY, destZ, hasDest)
@@ -1184,7 +1220,7 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 // spawns are wild by definition (no owner tracking) and take the same
 // gate from their template type_flags.
 func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, owner *session, destX, destY, destZ float32, hasDest bool) ([]uint64, map[uint64]uint8) {
-	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) {
+	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) && !hasAreaAuraAllyEffect(spell) {
 		return nil, nil
 	}
 	if spellSearchPlayersOnly(spell) {
