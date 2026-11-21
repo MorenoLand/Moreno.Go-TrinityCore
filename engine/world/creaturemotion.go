@@ -3488,6 +3488,7 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 		motion.CharmOldReact = motion.PetReact
 	}
 	motion.CharmerGUID = charmerGUID
+	firstCharm := !motion.Charmed
 	motion.Charmed = true
 	if possess {
 		motion.Possessed = true
@@ -3512,6 +3513,24 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	motion.InCombat = false
 	motion.TargetGUID = 0
 	motion.Moving = false
+	// Unit::SetCharmedBy (Unit.cpp:11798-11799) CastStops before
+	// CombatStop: a live generic/channel cast dies at charm time, so
+	// the deferred twin fire and the channel tick must not complete a
+	// pre-charm cast. interruptCreatureNonMeleeCasts is the CastStop
+	// twin (generic pending + live channel, interrupt.go:382); the
+	// no-arm branch clears the bare CastingUntil gate + pending token,
+	// the CombatStop precedent (lua_creature_events.go:3771-3777).
+	// First-charm only: C++ refuses an already-charmed unit before
+	// CastStop (Unit.cpp:11792-11796), so a same-charmer re-apply
+	// interrupts nothing.
+	var interrupted []interruptedCreatureCast
+	if firstCharm {
+		interrupted = s.interruptCreatureNonMeleeCasts(motion)
+		if len(interrupted) == 0 {
+			motion.CastingUntil = time.Time{}
+			s.cancelPendingCreatureCast(motion)
+		}
+	}
 	if motion.ThreatMgr != nil {
 		motion.ThreatMgr.ClearThreat()
 	}
@@ -3520,6 +3539,12 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	mapID, rawGUID := motion.Map, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
+	// Spell::cancel packets for the CastStop arms go out after the
+	// lock drops, ahead of the CombatStop leg below (C++ order:
+	// CastStop, then CombatStop, then InitCharmCreateSpells).
+	for _, arm := range interrupted {
+		s.sendCreatureInterruptPackets(motion, arm)
+	}
 	// Unit::SetCharmedBy -> CombatStop (Unit.cpp:11799) pairs the
 	// charmed unit's own ClearAllThreat above with RemoveMeFromThreatLists
 	// (ThreatManager.cpp:690-697): the charmed creature also drops as a
@@ -3611,9 +3636,17 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.CharmOwnerGUID = 0
 	motion.CharmFactionKnown = false
 	motion.CharmUnitFlagsKnown = false
-	// Unit::RemoveCharmedBy ends charm with CombatStop() (Unit.cpp:11940+):
+	// Unit::RemoveCharmedBy ends charm with CombatStop() (Unit.cpp:11946-11947):
 	// the unit leaves combat before the restored AI's OnCharmed runs.
 	// Threat is kept — C++ CombatStop does not clear the threat table.
+	// CastStop runs first (Unit.cpp:11946), the same twin as the charm
+	// leg: a possess-bar cast in flight at uncharm time dies instead
+	// of completing under the restored AI.
+	interrupted := s.interruptCreatureNonMeleeCasts(motion)
+	if len(interrupted) == 0 {
+		motion.CastingUntil = time.Time{}
+		s.cancelPendingCreatureCast(motion)
+	}
 	motion.TargetGUID = 0
 	motion.InCombat = false
 	motion.Moving = false
@@ -3626,6 +3659,9 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	// drives combat from TargetGUID/InCombat without a hostility gate).
 	restoredOwner := motion.OwnerGUID
 	s.motionMu.Unlock()
+	for _, arm := range interrupted {
+		s.sendCreatureInterruptPackets(motion, arm)
+	}
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
 	// Unit::RemoveCharmedBy CHARM_TYPE_POSSESS (Unit.cpp:11979-11986):
 	// the player charmer regains self-control (SetClientControl(charmer,

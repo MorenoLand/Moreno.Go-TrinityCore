@@ -2296,12 +2296,18 @@ func (s *session) luaPlayer() *scripting.Object {
 	// true, true) — the victim may be a player/creature object
 	// or a raw GUID, a nil/unknown victim no-ops, and fewer
 	// than 2 args no-op, mirroring the session-creature arm.
+	// A player can never hold threat refs: ThreatManager::
+	// CanHaveThreatList (ThreatManager.cpp:156-160) returns false
+	// for non-creatures ("only creatures can have threat list"),
+	// so AddThreat takes the !CanHaveThreatList leg
+	// (ThreatManager.cpp:328-339) — no refs, only CombatManager::
+	// SetInCombatWith(target). The old code lazily created a
+	// NewThreatManager(nil) whose motionCanHaveThreatList(nil)
+	// historical default is true, so it recorded phantom refs
+	// C++ never creates while the combat-state leg was missing.
 	// The Eluna spell argument's NO_THREAT / NO_INITIAL_AGGRO
-	// gates are not carried, same as the handler twin. Unlike
-	// the creature arms there is no victim-switch sync: a
-	// player's threat list drives no victim selection (players
-	// have no AI victim leg), so the add only grows the list.
-	methods["AddThreat"] = func(_ context.Context, args []any) ([]any, error) {
+	// gates are not carried, same as the handler twin.
+	methods["AddThreat"] = func(ctx context.Context, args []any) ([]any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
@@ -2309,17 +2315,16 @@ func (s *session) luaPlayer() *scripting.Object {
 		if victimGUID == 0 {
 			return nil, nil
 		}
-		amount, err := luaFloat32Arg(args, 1)
-		if err != nil {
+		// Parsed for arg validation (a non-numeric amount errors,
+		// as before); the amount itself is discarded — a player
+		// owner never records threat (see header).
+		if _, err := luaFloat32Arg(args, 1); err != nil {
 			return nil, err
 		}
 		if s == nil || s.player == nil {
 			return nil, nil
 		}
-		if state.ThreatMgr == nil {
-			state.ThreatMgr = NewThreatManager(nil)
-		}
-		state.ThreatMgr.AddThreat(victimGUID, amount, false)
+		markPlayerInCombat(ctx, s, victimGUID)
 		return nil, nil
 	}
 	// IsUnderWater is LuaUnit::IsUnderWater (LuaFunctions.cpp:352) via

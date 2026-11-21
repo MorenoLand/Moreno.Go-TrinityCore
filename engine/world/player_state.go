@@ -214,10 +214,11 @@ type playerState struct {
 	// and ghost legs.
 	WaterWalking bool
 	// ThreatMgr is the player's Unit::m_threatManager (Unit.h:1827):
-	// every Unit carries one, including players. Lazily created by
-	// player AddThreat; no player system reads victim selection
-	// from it (players have no AI victim leg), so it is a
-	// write-only list for Lua callers, like C++'s for players.
+	// every Unit carries one, including players — but a player can
+	// never hold refs in it (ThreatManager::CanHaveThreatList,
+	// ThreatManager.cpp:156-160, "only creatures can have threat
+	// list"), so player AddThreat takes the combat-state-only leg
+	// and never populates this field. Kept for shape parity.
 	ThreatMgr *ThreatManager
 	Name      string
 	Race      uint8
