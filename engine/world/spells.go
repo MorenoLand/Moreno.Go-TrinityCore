@@ -28820,6 +28820,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		hitDamage.currentTarget = miss.TargetGUID
 		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, nil)
 	}
+	// Mixed-spell direct-hit rule (UnitAura::AddStaticApplication,
+	// SpellAuras.cpp:2729-2740): a direct-hit application carries
+	// eff-6 bits only — the area-aura effects (35/65/119/128/129/143)
+	// are EffectUnused at hit time and reach a target only through
+	// UnitAura::FillTargetMap. The creature hit loops already strip
+	// them (boss_ai.go creatureEffectApplyAura, eff6Only); this flag
+	// is the player-cast hit path's twin, consumed by the APPLY_AURA
+	// arm below. A pure area-aura spell is not mixed: the player path
+	// has no FillTargetMap fan-out (area_auras.go), so the hit loop
+	// stays its delivery and the arm still fires.
+	mixedAreaSpell := spellHasEffect(spell, spellEffectApplyAura) && spellHasAreaAuraEffect(spell)
 	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 && eff.Aura == 0 {
 			continue
@@ -30311,7 +30322,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if schoolMask == 0 {
 					schoolMask = 1
 				}
-				s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID, triggeredByAura, nil)
+				// Mixed-spell gate (AddStaticApplication rule above): on a
+				// mixed spell the area-aura effect never direct-applies to
+				// a hit target — its bits arrive only via FillTargetMap,
+				// which the player path does not model yet (a player-side
+				// fan-out is the follow-up unit that restores them). The
+				// only mixed spell in the seed, 31673, carries the area bit
+				// as an aura-4 dummy with period 0, so the skip is
+				// unobservable there; the fix is C++-principle.
+				if _, isAreaAura := areaAuraSelectionForEffect(eff.Effect); !isAreaAura || !mixedAreaSpell {
+					s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID, triggeredByAura, nil)
+				}
 			} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 				// Spell::EffectHeal (SpellEffects.cpp:1393-1418): addhealth =
 				// damage (the HandleEffects CalculateDamage value, same twin
