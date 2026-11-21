@@ -1,6 +1,7 @@
 package world
 
 import (
+	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -35,9 +36,9 @@ func (s *session) saveDuelCooldownState() {
 // ResetCooldown(spellId, true) analog via clearPlayerCooldown). The
 // player's pet gets ResetAllCooldowns (duel_reset.cpp:119-120).
 // Fidelity notes: SpellInfo is sSpellMgr->AssertSpellInfo in C++; a
-// missing DBC row is skipped here (the terrain.go convention). The
-// CooldownStorage OnHold term has no Go model (spellCooldown carries no
-// OnHold), so that predicate term is always true here.
+// missing DBC row is skipped here (the terrain.go convention). OnHold
+// entries are skipped explicitly below (the predicate term; their +30-day
+// End already excludes them via the remaining check).
 func (s *session) resetDuelSpellCooldowns(onStart bool) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || !s.server.Config.ResetDuelCooldowns {
 		return
@@ -51,6 +52,9 @@ func (s *session) resetDuelSpellCooldowns(onStart bool) {
 	for _, cd := range cooldowns {
 		spell, found, err := data.Spell(cd.Spell)
 		if err != nil || !found {
+			continue
+		}
+		if cd.OnHold {
 			continue
 		}
 		remainingMs := (cd.End - now) * 1000
@@ -94,11 +98,19 @@ func (s *session) resetDuelSpellCooldowns(onStart bool) {
 // restoreDuelCooldownState mirrors
 // SpellHistory::RestoreCooldownStateAfterDuel (SpellHistory.cpp:688-729).
 // Duel-made long cooldowns (RecoveryTime or CategoryRecoveryTime over 10
-// minutes) are carried into the saved set; every pre-duel entry then wins
-// over what the duel left behind; the client gets the restored durations
-// in one SMSG_SPELL_COOLDOWN (BuildCooldownPacket,
-// SPELL_COOLDOWN_FLAG_INCLUDE_EVENT_COOLDOWNS = 0x2). Category cooldowns
-// are not preserved (SpellHistory.cpp:690).
+// minutes, raw DBC values) are carried into the saved set, overwriting
+// the pre-duel entry for that spell; every other saved entry then wins
+// over what the duel left behind, except the onHold gate
+// (SpellHistory.cpp:705-708): a saved entry is restored only when
+// neither it nor the live entry is onHold — a live onHold entry stays,
+// and a saved onHold entry restores nothing. Live entries with no saved
+// counterpart stay (the merge only overwrites); ResetSpellCooldowns(false)
+// already cleared the short live ones before this runs. The final list
+// is spell-id ordered (C++ _spellCooldowns is a std::map) so the
+// last-row category holder reads deterministically. Category cooldowns
+// are not preserved (SpellHistory.cpp:690). The client gets the restored
+// durations in one SMSG_SPELL_COOLDOWN (BuildCooldownPacket,
+// SPELL_COOLDOWN_FLAG_INCLUDE_EVENT_COOLDOWNS = 0x2).
 func (s *session) restoreDuelCooldownState() {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || !s.server.Config.ResetDuelCooldowns {
 		return
@@ -106,43 +118,63 @@ func (s *session) restoreDuelCooldownState() {
 	data := s.server.Data
 	now := time.Now().Unix()
 	const tenMinutesMs = int64(10 * 60 * 1000)
-	restored := make(map[uint32]spellCooldown)
 	s.playerStateMu.Lock()
+	saved := make(map[uint32]spellCooldown, len(s.duelCooldownsBefore))
 	for _, cd := range s.duelCooldownsBefore {
-		restored[cd.Spell] = cd
+		saved[cd.Spell] = cd
 	}
+	live := make(map[uint32]spellCooldown, len(s.player.Cooldowns))
 	for _, cd := range s.player.Cooldowns {
-		if _, ok := restored[cd.Spell]; ok {
-			continue
-		}
-		spell, found, err := data.Spell(cd.Spell)
+		live[cd.Spell] = cd
+	}
+	// Carry: a long duel-made cooldown overwrites the saved entry for
+	// its spell (SpellHistory.cpp:694-702), so it survives the merge.
+	for spell, cd := range live {
+		spellInfo, found, err := data.Spell(spell)
 		if err != nil || !found {
 			continue
 		}
-		if int64(spell.RecoveryTime) > tenMinutesMs || int64(spell.CategoryRecoveryTime) > tenMinutesMs {
-			restored[cd.Spell] = cd
+		if int64(spellInfo.RecoveryTime) > tenMinutesMs || int64(spellInfo.CategoryRecoveryTime) > tenMinutesMs {
+			saved[spell] = cd
 		}
+	}
+	// Merge: live entries stay unless a saved entry overwrites them; the
+	// onHold gate (SpellHistory.cpp:705-708) keeps a live onHold entry
+	// and restores nothing for a saved onHold entry.
+	restored := live
+	for spell, cd := range saved {
+		if cd.OnHold {
+			continue
+		}
+		if liveCd, ok := live[spell]; ok && liveCd.OnHold {
+			continue
+		}
+		restored[spell] = cd
 	}
 	cooldowns := make([]spellCooldown, 0, len(restored))
-	packetCooldowns := make(map[uint32]uint32, len(restored))
 	for _, cd := range restored {
 		cooldowns = append(cooldowns, cd)
+	}
+	sort.Slice(cooldowns, func(i, j int) bool { return cooldowns[i].Spell < cooldowns[j].Spell })
+	s.player.Cooldowns = cooldowns
+	packetCooldowns := make([]spellCooldown, 0, len(cooldowns))
+	for _, cd := range cooldowns {
 		remainingMs := (cd.End - now) * 1000
 		// SpellHistory.cpp:716-720: the client restore skips expired,
-		// over-10-minute and onHold cooldowns (onHold has no Go model).
-		if remainingMs > 0 && remainingMs <= tenMinutesMs {
-			packetCooldowns[cd.Spell] = uint32(remainingMs)
+		// over-10-minute and onHold cooldowns.
+		if cd.OnHold || remainingMs <= 0 || remainingMs > tenMinutesMs {
+			continue
 		}
+		packetCooldowns = append(packetCooldowns, cd)
 	}
-	s.player.Cooldowns = cooldowns
 	s.playerStateMu.Unlock()
 	if len(packetCooldowns) > 0 {
 		buf := protocol.NewBuffer(8 + 1 + len(packetCooldowns)*(4+4))
 		buf.WriteU64(s.playerGUID)
 		buf.WriteU8(0x2) // SPELL_COOLDOWN_FLAG_INCLUDE_EVENT_COOLDOWNS (SpellHistory.h:41)
-		for spellID, durationMs := range packetCooldowns {
-			buf.WriteU32(spellID)
-			buf.WriteU32(durationMs)
+		for _, cd := range packetCooldowns {
+			buf.WriteU32(cd.Spell)
+			buf.WriteU32(uint32((cd.End - now) * 1000))
 		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buf.Bytes(), true)
 	}
