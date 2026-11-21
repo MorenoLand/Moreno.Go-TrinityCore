@@ -191,6 +191,19 @@ type creatureMotion struct {
 	// instead of a timer expiry. The step tick skips combat/wander while
 	// it is set, like a running FleeingUntil.
 	Fleeing bool
+	// FleeTargetGUID is the FleeingMovementGenerator::_fleeTargetGUID
+	// (FleeingMovementGenerator.h, MotionMaster.cpp:618-633): the unit
+	// the creature flees from. Re-resolved to its live position on every
+	// re-path (GetPoint, FleeingMovementGenerator.cpp:191-228); 0 when
+	// the flee was launched from a bare position, in which case re-paths
+	// take GetPoint's target-gone random arm.
+	FleeTargetGUID uint64
+	// FleeNextAt is the FleeingMovementGenerator::_timer
+	// (FleeingMovementGenerator.cpp:180, 250): the next re-path fire
+	// time — traveltime + urand(800, 1500) after each launched leg,
+	// 200ms after a failed LOS check, now on a NOT_MOVE launch refusal
+	// (retry on the next tick). Zero when no flee leg is armed.
+	FleeNextAt time.Time
 	// ScriptMoveType is the MovementGeneratorType (MovementDefines.h)
 	// stamped by a script Move* launch: POINT 8, RANDOM 1, HOME 6,
 	// CONFUSED 4, FOLLOW 14, EFFECT 16. GetMovementType reads it only while the spline is in
@@ -1000,8 +1013,8 @@ const (
 //   - hostile: the default path, fully covered by the aggro scan.
 //   - critter: maps to passive via creatureType 8, matching C++
 //     IsCritter()->REACT_PASSIVE; CritterAI::JustEngagedWith's flee
-//     (PassiveAI.cpp:76-79, UNIT_STATE_FLEEING) is unmodeled — Go has no
-//     fleeing state, so critters stand instead of fleeing.
+//     (PassiveAI.cpp:76-79, UNIT_STATE_FLEEING) runs through
+//     triggerCritterFlee (7s timed leg with continuous repathing).
 //   - GM: bridged on all player-initiated paths — the aggro scan skips GM
 //     players, player spells reject GM/invisible targets at completion
 //     (explicitTargetGMBlocked), and melee swings / pet attack commands /
@@ -1195,6 +1208,8 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 		motion.ScriptRooted = false
 		motion.Fleeing = false
 		motion.FleeingUntil = time.Time{}
+		motion.FleeTargetGUID = 0
+		motion.FleeNextAt = time.Time{}
 		motion.NPCFlagsKnown = false
 		motion.FactionKnown = false
 		motion.UnitFlagsKnown = false
@@ -3948,23 +3963,20 @@ func (s *Server) charmerResolvesInInstance(mapID, instanceID uint32, guid uint64
 // CheckRequiredBosses / instance boss-state model, consistent with the per-boss
 // "BossAI bookkeeping has no bridges" notes. OTHER: this function is the single
 // funnel for all unreasoned calls — covered; the CritterAI flee-done site
-// (PassiveAI.cpp:85) can never fire — Go has no UNIT_STATE_FLEEING model
-// (critter fleeing is unmodeled; item 6's critter bullet stays open).
+// (PassiveAI.cpp:85) fires through the step tick's FleeingUntil expiry
+// arm, which walks a critter home with Evading set.
 // triggerCritterFlee bridges CritterAI::JustEngagedWith (PassiveAI.cpp:76-79):
 // a critter (creature_template.type 8, non-guardian) attacked by a player
 // flees — SetControlled(true, UNIT_STATE_FLEEING) -> SetFeared(true) ->
 // MoveFleeing(caster, CONFIG_CREATURE_FAMILY_FLEE_DELAY = 7000ms, Unit.cpp:11712).
-// Go has no fleeing movement generator: the bridge launches a single
-// straight-line run spline away from the attacker and arms FleeingUntil;
-// the step tick skips combat/wander while it runs and evades home on expiry
-// (CritterAI::OnMovementGeneratorFinalized, PassiveAI.cpp:81-86). The 24yd
-// leg approximates the generator's first repath at melee range
-// (frand(0.4,1.3) * (MIN_QUIET_DISTANCE 28 - casterDistance),
-// FleeingMovementGenerator.cpp:204-208); the continuous repathing, the
-// UNIT_FLAG_FLEEING cosmetic, and spell-damage engages (Go never engages
+// The launch is one FleeingMovementGenerator leg (fleePoint's quiet-band
+// pick, FleeingMovementGenerator.cpp:191-228) and the step tick re-paths
+// it on FleeNextAt until FleeingUntil expires, then evades home
+// (CritterAI::OnMovementGeneratorFinalized, PassiveAI.cpp:81-86). The
+// UNIT_FLAG_FLEEING cosmetic and spell-damage engages (Go never engages
 // creatures on damage) are documented deltas. Re-attacks while fleeing are
 // no-ops, matching the HasUnitState(FLEEING) return in JustEngagedWith.
-func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, attackerX, attackerY float32) {
+func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, attackerX, attackerY float32, attackerGUID uint64) {
 	if s == nil || target.GUID == 0 {
 		return
 	}
@@ -3975,40 +3987,133 @@ func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, at
 		s.motionMu.Unlock()
 		return
 	}
-	dx := float64(motion.X - attackerX)
-	dy := float64(motion.Y - attackerY)
-	dist := math.Hypot(dx, dy)
-	if dist < 0.2 {
-		dx, dy, dist = 1, 0, 1
+	motion.FleeingUntil = now.Add(7 * time.Second)
+	motion.FleeTargetGUID = attackerGUID
+	s.motionMu.Unlock()
+	s.launchCreatureFleeLeg(motion, attackerX, attackerY, true, now)
+}
+
+// fleePoint implements FleeingMovementGenerator::GetPoint
+// (FleeingMovementGenerator.cpp:191-228): the flee destination picked
+// from the owner's distance to the flee target. Inside the quiet band
+// (28-43yd) the creature wanders a random bearing; closer than 28yd it
+// runs away from the target, farther than 43yd it angles back toward
+// the band. A gone target (targetKnown false, or within 0.2yd) takes a
+// random bearing at the close-band distance. The returned angle is
+// orientation-relative, like every MovePositionToFirstCollision caller:
+// WorldObject::MovePositionToFirstCollision adds the owner's orientation
+// (Object.cpp:3386-3391), so the pick is rotated by it here. Go has no
+// collision model, so the destination is straight-line (no first-
+// collision clamp) and no PathGenerator 30yd leg (FleeingMovementGenerator
+// .cpp:174-182) — the LOS gate in launchCreatureFleeLeg is the only
+// terrain check.
+func fleePoint(ownerX, ownerY, ownerOrientation, targetX, targetY float32, targetKnown bool) (float32, float32) {
+	const minQuietDistance = 28.0
+	const maxQuietDistance = 43.0
+	casterDistance := 0.0
+	casterAngle := rand.Float64() * 2 * math.Pi
+	if targetKnown {
+		casterDistance = math.Hypot(float64(targetX-ownerX), float64(targetY-ownerY))
+		if casterDistance > 0.2 {
+			casterAngle = math.Atan2(float64(ownerY-targetY), float64(ownerX-targetX))
+		}
 	}
-	const fleeDist = 24.0
-	destX := motion.X + float32(dx/dist*fleeDist)
-	destY := motion.Y + float32(dy/dist*fleeDist)
+	var distance, angle float64
+	switch {
+	case casterDistance < minQuietDistance:
+		distance = (0.4 + rand.Float64()*0.9) * (minQuietDistance - casterDistance)
+		angle = casterAngle + (rand.Float64()-0.5)*math.Pi/4
+	case casterDistance > maxQuietDistance:
+		distance = (0.4 + rand.Float64()*0.6) * (maxQuietDistance - minQuietDistance)
+		angle = -casterAngle + (rand.Float64()-0.5)*math.Pi/2
+	default:
+		distance = (0.6 + rand.Float64()*0.6) * (maxQuietDistance - minQuietDistance)
+		angle = rand.Float64() * 2 * math.Pi
+	}
+	angle += float64(ownerOrientation)
+	return ownerX + float32(distance*math.Cos(angle)), ownerY + float32(distance*math.Sin(angle))
+}
+
+// launchCreatureFleeLeg launches one FleeingMovementGenerator leg
+// (FleeingMovementGenerator::SetTargetLocation, FleeingMovementGenerator
+// .cpp:150-189): the GetPoint destination is checked for LOS (fail:
+// 200ms retry, :168-172), then the run spline launches and the timer
+// resets to traveltime + urand(800, 1500) (:185-186). A NOT_MOVE /
+// casting-prevented owner launches nothing and stamps now, so the tick
+// retries on its next step (SetTargetLocation's early return, :155-162,
+// leaves the timer passed). A sub-0.001 speed fails MoveSplineInit
+// validation with no spline and no packet (MoveSpline.cpp:210), so the
+// timer resets to urand(800, 1500) on a 0 traveltime (:185-186).
+func (s *Server) launchCreatureFleeLeg(motion *creatureMotion, targetX, targetY float32, targetKnown bool, now time.Time) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	// NOT_MOVE aura leg (Unit.h:256 root|stun) — auraMu, never taken
+	// under motionMu.
+	if s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) {
+		s.motionMu.Lock()
+		motion.FleeNextAt = now
+		s.motionMu.Unlock()
+		return false
+	}
+	s.motionMu.Lock()
+	if motion.Health == 0 || motion.ScriptRooted || motion.ScriptStunned || now.Before(motion.CastingUntil) {
+		motion.FleeNextAt = now
+		s.motionMu.Unlock()
+		return false
+	}
+	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+	mapID := motion.Map
+	destX, destY := fleePoint(fromX, fromY, motion.Orientation, targetX, targetY, targetKnown)
 	speed := creatureSplineVelocity(motion, false)
 	if speed < 0.001 {
-		// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
-		// velocity below 0.001 fails validation — no spline is launched and no
-		// SMSG_MONSTER_MOVE is sent. The flee generator stays active for the
-		// flee duration anyway (FleeingMovementGenerator::DoUpdate resets its
-		// retry timer even on a 0-traveltime launch, FleeingMovementGenerator.cpp:180),
-		// so the critter stands still "fleeing" until FleeingUntil, then the
-		// expiry arm funnels it into evade — instead of fleeing at base run speed.
-		motion.FleeingUntil = now.Add(7 * time.Second)
+		motion.FleeNextAt = now.Add(time.Duration(800+rand.Intn(701)) * time.Millisecond)
 		s.motionMu.Unlock()
-		return
+		return false
 	}
-	duration := splineDurationMs(fleeDist, speed)
-	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
+	if !s.hasLineOfSight(mapID, fromX, fromY, fromZ, destX, destY, fromZ) {
+		motion.FleeNextAt = now.Add(200 * time.Millisecond)
+		s.motionMu.Unlock()
+		return false
+	}
+	dist := math.Hypot(float64(destX-fromX), float64(destY-fromY))
+	duration := splineDurationMs(dist, speed)
+	instanceID, rawGUID := motion.InstanceID, motion.GUID
 	phase := motion.PhaseMask
 	transportGUID := motion.TransportGUID
-	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 	motion.X, motion.Y = destX, destY
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.MoveVelocity = speed
-	motion.FleeingUntil = now.Add(7 * time.Second)
+	motion.FleeNextAt = motion.MoveEnds.Add(time.Duration(800+rand.Intn(701)) * time.Millisecond)
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false, phase, transportGUID)
+	return true
+}
+
+// repathCreatureFleeIfDue runs FleeingMovementGenerator::DoUpdate's
+// re-path arm (:93-102): once the flee spline has landed (Moving cleared
+// by the landing gate) and the timer passed, SetTargetLocation picks a
+// fresh GetPoint leg. The flee target re-resolves live from
+// FleeTargetGUID each time; a gone target takes GetPoint's random arm.
+func (s *Server) repathCreatureFleeIfDue(motion *creatureMotion, now time.Time) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	if motion.Moving || motion.Health == 0 || now.Before(motion.FleeNextAt) {
+		s.motionMu.Unlock()
+		return
+	}
+	targetGUID := motion.FleeTargetGUID
+	mapID, instanceID := motion.Map, motion.InstanceID
+	s.motionMu.Unlock()
+	var targetX, targetY float32
+	targetKnown := false
+	if targetGUID != 0 {
+		targetX, targetY, _, targetKnown = s.unitPositionByGUID(mapID, instanceID, targetGUID)
+	}
+	s.launchCreatureFleeLeg(motion, targetX, targetY, targetKnown, now)
 }
 
 // startCreatureFlee is the MotionMaster::MoveFleeing (MotionMaster.cpp:618-633)
@@ -4017,11 +4122,10 @@ func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, at
 // no-op on failure). A duration of 0 arms the untimed
 // FleeingMovementGenerator leg (MotionMaster.cpp:628-629); a positive
 // duration arms the TimedFleeingMovementGenerator leg (:626-627). The
-// launch reuses triggerCritterFlee's 24yd straight-line spline (the C++
-// generator repaths continuously; the single spline is the documented
-// critter-flee delta) and arms the step tick's combat/wander skip. Dead
-// creatures never flee: C++ generators never run on a corpse.
-func (s *Server) startCreatureFlee(motion *creatureMotion, casterX, casterY float32, durationMs uint32) {
+// launch is one fleePoint leg and the step tick re-paths it on
+// FleeNextAt while the flee runs. Dead creatures never flee: C++
+// generators never run on a corpse.
+func (s *Server) startCreatureFlee(motion *creatureMotion, casterX, casterY float32, targetGUID uint64, durationMs uint32) {
 	if s == nil || motion == nil {
 		return
 	}
@@ -4031,15 +4135,6 @@ func (s *Server) startCreatureFlee(motion *creatureMotion, casterX, casterY floa
 		s.motionMu.Unlock()
 		return
 	}
-	dx := float64(motion.X - casterX)
-	dy := float64(motion.Y - casterY)
-	dist := math.Hypot(dx, dy)
-	if dist < 0.2 {
-		dx, dy, dist = 1, 0, 1
-	}
-	const fleeDist = 24.0
-	destX := motion.X + float32(dx/dist*fleeDist)
-	destY := motion.Y + float32(dy/dist*fleeDist)
 	if durationMs == 0 {
 		motion.Fleeing = true
 		motion.FleeingUntil = time.Time{}
@@ -4047,25 +4142,9 @@ func (s *Server) startCreatureFlee(motion *creatureMotion, casterX, casterY floa
 		motion.Fleeing = false
 		motion.FleeingUntil = now.Add(time.Duration(durationMs) * time.Millisecond)
 	}
-	speed := creatureSplineVelocity(motion, false)
-	if speed < 0.001 {
-		// MoveSplineInit::Launch validation failure (MoveSpline.cpp:210):
-		// no spline, no packet — the flee state still arms, so the creature
-		// stands still fleeing like the critter-flee slow-speed leg.
-		s.motionMu.Unlock()
-		return
-	}
-	duration := splineDurationMs(fleeDist, speed)
-	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
-	phase := motion.PhaseMask
-	transportGUID := motion.TransportGUID
-	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
-	motion.X, motion.Y = destX, destY
-	motion.Moving = true
-	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
-	motion.MoveVelocity = speed
+	motion.FleeTargetGUID = targetGUID
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false, phase, transportGUID)
+	s.launchCreatureFleeLeg(motion, casterX, casterY, true, now)
 }
 
 // creatureFearAuraCaster returns the caster of a live SPELL_AURA_MOD_FEAR
@@ -4091,17 +4170,17 @@ func (s *Server) creatureFearAuraCaster(motion *creatureMotion) (uint64, bool) {
 }
 
 // unitPositionByGUID resolves a creature motion or a live player session to
-// its X/Y, accepting either GUID shape a motion target can carry (creature
+// its X/Y/Z, accepting either GUID shape a motion target can carry (creature
 // world GUIDs, session playerGUIDs, loaded player GUIDs).
-func (s *Server) unitPositionByGUID(mapID, instanceID uint32, guid uint64) (float32, float32, bool) {
+func (s *Server) unitPositionByGUID(mapID, instanceID uint32, guid uint64) (float32, float32, float32, bool) {
 	if s == nil || guid == 0 {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	if motion := s.findCreatureMotion(mapID, instanceID, guid); motion != nil {
 		s.motionMu.Lock()
-		x, y := motion.X, motion.Y
+		x, y, z := motion.X, motion.Y, motion.Z
 		s.motionMu.Unlock()
-		return x, y, true
+		return x, y, z, true
 	}
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
@@ -4110,10 +4189,10 @@ func (s *Server) unitPositionByGUID(mapID, instanceID uint32, guid uint64) (floa
 			continue
 		}
 		if sess.playerGUID == guid || sess.player.GUID == guid {
-			return sess.player.X, sess.player.Y, true
+			return sess.player.X, sess.player.Y, sess.player.Z, true
 		}
 	}
-	return 0, 0, false
+	return 0, 0, 0, false
 }
 
 // setCreatureFeared is the Unit::SetControlled(apply, UNIT_STATE_FLEEING)
@@ -4145,11 +4224,13 @@ func (s *Server) setCreatureFeared(motion *creatureMotion, apply bool) {
 			return
 		}
 		var casterX, casterY float32
+		var targetGUID uint64
 		var ok bool
 		var durationMs uint32 = 7000
 		if casterGUID, hasFear := s.creatureFearAuraCaster(motion); hasFear {
 			durationMs = 0
-			casterX, casterY, ok = s.unitPositionByGUID(motion.Map, motion.InstanceID, casterGUID)
+			targetGUID = casterGUID
+			casterX, casterY, _, ok = s.unitPositionByGUID(motion.Map, motion.InstanceID, casterGUID)
 		} else {
 			s.motionMu.Lock()
 			victim := motion.TargetGUID
@@ -4160,13 +4241,14 @@ func (s *Server) setCreatureFeared(motion *creatureMotion, apply bool) {
 			if victim == 0 {
 				return
 			}
-			casterX, casterY, ok = s.unitPositionByGUID(motion.Map, motion.InstanceID, victim)
+			targetGUID = victim
+			casterX, casterY, _, ok = s.unitPositionByGUID(motion.Map, motion.InstanceID, victim)
 		}
 		if !ok {
 			return
 		}
 		s.clearCreatureVisualTarget(motion)
-		s.startCreatureFlee(motion, casterX, casterY, durationMs)
+		s.startCreatureFlee(motion, casterX, casterY, targetGUID, durationMs)
 		return
 	}
 	if s.creatureHasAuraType(creatureAuraKeyForMotion(motion), spellAuraModFear) {
@@ -4185,6 +4267,8 @@ func (s *Server) setCreatureFeared(motion *creatureMotion, apply bool) {
 	}
 	motion.Fleeing = false
 	motion.FleeingUntil = time.Time{}
+	motion.FleeTargetGUID = 0
+	motion.FleeNextAt = time.Time{}
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 	s.motionMu.Unlock()
 	if victim != 0 {
@@ -4761,7 +4845,7 @@ func (s *Server) creatureFleeToGetAssistance(ctx context.Context, caller *creatu
 	}
 	s.motionMu.Unlock()
 	if !found {
-		s.startCreatureFlee(live, victimX, victimY, 0)
+		s.startCreatureFlee(live, victimX, victimY, victimGUID, 0)
 		return
 	}
 	s.startCreatureSeekAssistance(ctx, live, allyX, allyY, allyZ)
@@ -6751,14 +6835,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// tail exactly). Killed mid-flee is handled by the Health==0 gate above.
 	// The untimed flee leg never expires on its own: while Fleeing is set
 	// the tick skips combat/wander until SetFeared(false) clears it.
+	// A landed leg re-paths on FleeNextAt (FleeingMovementGenerator
+	// ::DoUpdate, FleeingMovementGenerator.cpp:93-102) instead of
+	// standing still; the NOT_MOVE / casting-prevented stop is the
+	// launch gate inside launchCreatureFleeLeg (the mid-leg StopMoving
+	// has no Go twin — atomic splines finish first, the same delta as
+	// the waypoint/confused launch gates).
 	if motion.Fleeing {
+		s.repathCreatureFleeIfDue(motion, now)
 		return
 	}
 	if !motion.FleeingUntil.IsZero() {
 		if now.Before(motion.FleeingUntil) {
+			s.repathCreatureFleeIfDue(motion, now)
 			return
 		}
 		motion.FleeingUntil = time.Time{}
+		motion.FleeTargetGUID = 0
+		motion.FleeNextAt = time.Time{}
 		// A timed flee on a non-critter expires into the normal tick below
 		// (combat/wander resume); only critters take the evade-home arm.
 		homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))

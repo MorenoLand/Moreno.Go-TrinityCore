@@ -390,7 +390,8 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			durationMs = d
 		}
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
-			s.server.startCreatureFlee(motion, tx, ty, durationMs)
+			targetGUID, _ := objectUint64Field(target, "GUID")
+			s.server.startCreatureFlee(motion, tx, ty, targetGUID, durationMs)
 		}
 		return nil, nil
 	}

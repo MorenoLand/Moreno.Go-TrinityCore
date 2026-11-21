@@ -910,7 +910,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// (5650-5760) never engages the victim for player attackers — the
 	// critter used to bolt before the first swing could land.)
 	if s.server != nil && s.player != nil {
-		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y)
+		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y, s.player.GUID)
 	}
 	// Unit::AttackerStateUpdate (Unit.cpp:2141-2142): AtTargetAttacked then
 	// RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_MELEE_ATTACK) fires
@@ -1842,7 +1842,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// engagement fires CritterAI::JustEngagedWith -> flee
 	// (PassiveAI.cpp:76-79), bridged in triggerCritterFlee.
 	if s.server != nil && s.player != nil {
-		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y)
+		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y, s.player.GUID)
 	}
 	// Unit::AttackerStateUpdate (Unit.cpp:2141-2144): the MELEE_ATTACK strip
 	// fires ahead of the ranged early-out, so shots break these auras too.

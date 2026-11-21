@@ -91,10 +91,11 @@ func (s *session) playerScriptMoveTypeNow() (uint32, bool) {
 	return s.playerScriptMoveType, true
 }
 
-// playerFleeDestination mirrors startCreatureFlee's 24yd straight-line
-// flight away from the enemy (the C++ FleeingMovementGenerator repaths
-// continuously; the single spline is the same documented delta as the
-// creature leg). A coincident enemy flees due east.
+// playerFleeDestination mirrors the first FleeingMovementGenerator leg
+// away from the enemy (a single 24yd straight-line flight; the C++
+// generator repaths continuously, which the creature leg now ports —
+// the player leg stays a single destination because player movement
+// is client-driven). A coincident enemy flees due east.
 func playerFleeDestination(fromX, fromY, fromZ, enemyX, enemyY float32) (float32, float32, float32) {
 	dx := float64(fromX - enemyX)
 	dy := float64(fromY - enemyY)

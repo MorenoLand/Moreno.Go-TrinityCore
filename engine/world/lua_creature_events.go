@@ -5974,7 +5974,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 			durationMs = d
 		}
-		s.startCreatureFlee(motion, tx, ty, durationMs)
+		targetGUID, _ := objectUint64Field(target, "GUID")
+		s.startCreatureFlee(motion, tx, ty, targetGUID, durationMs)
 		return nil, nil
 	}
 	// SetFeared is UnitMethods::SetFeared (UnitMethods.h:1964-1973) for
