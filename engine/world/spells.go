@@ -34992,11 +34992,11 @@ func (s *session) interruptDelayedCasts() {
 		if entry.timer != nil {
 			entry.timer.Stop()
 		}
-		// A pet missile's timer stops like any other, but the client
-		// never saw a cast start for it (no SMSG_SPELL_START on the
-		// pet path, and its registry key is minted server-side), so no
-		// SMSG_SPELL_FAILURE / SMSG_CAST_FAILED goes out for it — the
-		// failure packets name a castID the client never issued.
+		// A pet missile's timer stops like any other, but the cast
+		// already completed (GO sent) and its registry key is minted
+		// server-side, so no SMSG_SPELL_FAILURE / SMSG_CAST_FAILED
+		// goes out for it — the failure packets name a castID the
+		// client never issued.
 		if entry.pet {
 			continue
 		}

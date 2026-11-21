@@ -149,6 +149,29 @@ func (s *session) checkPetSpellPower(motion *creatureMotion, spell wotlk.Spell, 
 	return true
 }
 
+// petSpellPowerAffordable is the silent twin of checkPetSpellPower for the
+// autocast pre-filter: the CheckPower arm of Spell::CheckPetCast
+// (Spell.cpp:6238-6243) as CanAutoCast runs it (Spell.cpp:6506), with no
+// failure packet. C++ filters an unaffordable spell out of
+// targetSpellStore before the random pick; without this the pick is wasted
+// on a spell whose takePetSpellPower leg reports SMSG_PET_CAST_FAILED to
+// the owner, a packet C++ never sends for autocast. Same cost function,
+// same lock order (power state under motionMu, cost outside it — the aura
+// sums read under auraMu, which the tree never nests inside motionMu).
+func (s *session) petSpellPowerAffordable(motion *creatureMotion, spell wotlk.Spell) bool {
+	if s == nil || s.server == nil || motion == nil {
+		return false
+	}
+	s.server.motionMu.Lock()
+	current, maximum, _, valid, _ := petSpellPowerState(motion, spell.PowerType)
+	s.server.motionMu.Unlock()
+	if !valid {
+		return false
+	}
+	cost := s.petSpellPowerCost(motion, spell, current, maximum)
+	return petCanPayFullCost(spell, current, cost)
+}
+
 func (s *session) takePetSpellPower(motion *creatureMotion, spell wotlk.Spell, castCount uint8, ignoreCost bool) (uint32, bool, bool) {
 	if s == nil || s.server == nil || motion == nil {
 		return 0, false, false
@@ -1485,10 +1508,11 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	}
 	// PetAI::UpdateAI autocast (PetAI.cpp:96-196): the leg runs every tick —
 	// not gated on melee range (ranged pet spells fire while chasing; the
-	// per-spell range check lives in petCanAutoCastTarget) and with no fixed
-	// throttle (gated on the pet GCD + per-spell cooldown inside
-	// executePetAutocast, PetAI.cpp:124-131). Suppressed by the
-	// breakable-CC arm above, like the swing.
+	// per-spell range check is the CanAutoCast pre-filter inside
+	// executePetAutocast) and with no fixed throttle (gated on the pet
+	// GCD + per-spell cooldown inside executePetAutocast,
+	// PetAI.cpp:124-131). Suppressed by the breakable-CC arm above,
+	// like the swing.
 	if !ccHoldAttacks && len(motion.AutocastSpells) > 0 {
 		s.executePetAutocast(ctx, motion, targetGUID, now)
 	}
@@ -2246,10 +2270,15 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 // logic"). Go's executePetAutocast fired the spell unconditionally, so pets
 // re-cast buffs onto already-buffed allies (and re-applied exclusive
 // debuffs) every tick. The CheckPetCast / SelectSpellTargets containment
-// tail of CanAutoCast (Spell.cpp:6506-6523) has no Go counterpart on the pet
-// path — Go gates power through takePetSpellPower and targets the combat
-// target directly — so it stays unbridged, as does PetAI's enemy-then-ally
-// target selection (PetAI.cpp:144-190).
+// tail of CanAutoCast (Spell.cpp:6506-6523) rides executePetAutocast's
+// pre-filter: the power arm (petSpellPowerAffordable), the strict-range
+// arm (checkCreatureSpellRange, the backstop's twin), and the self-cast
+// containment arm (isSelfCastOnly → pet-self candidate only). The
+// mid-cast and dead-owner arms need no pre-filter — the backstop fizzles
+// them silently with no consumption, so the tick outcome matches C++'s
+// whole-block skip. PetAI's enemy-then-ally target selection
+// (PetAI.cpp:144-190) stays unbridged: the owner is the single ally
+// candidate.
 func (s *Server) petCanAutoCastTarget(ctx context.Context, owner *session, caster *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
 	if s == nil || s.Data == nil || caster == nil || targetGUID == 0 {
 		return true
@@ -2352,7 +2381,9 @@ func (s *Server) petCanAutoCastTarget(ctx context.Context, owner *session, caste
 // enemies only (PetAI.cpp:158-160) and take the victim leg.
 // Offensive spells take the victim leg (PetAI.cpp:183-190): the caller
 // guarantees a live victim in combat, and CanBeUsedInCombat gates. The
-// Spell::CanAutoCast aura-stack precheck rides petCanAutoCastTarget.
+// Spell::CanAutoCast aura-stack precheck rides petCanAutoCastTarget, and
+// the containment tail rides the pre-filter in the loop below (power,
+// strict range, self-cast).
 func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion, targetGUID uint64, now time.Time) {
 	if s == nil || motion == nil || len(motion.AutocastSpells) == 0 || s.Data == nil {
 		return
@@ -2361,6 +2392,11 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 	if owner == nil {
 		return
 	}
+	// WorldObject::GetSpellModOwner (Object.cpp:2246-2261): the range
+	// pre-filter below runs the backstop's CheckRange twin, which folds
+	// the owner's SPELLMOD_RANGE — resolved the same way the backstop
+	// does, so a possessed wild caster takes no mod owner.
+	modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
 	type petAutocastCandidate struct {
 		spell  wotlk.Spell
 		target uint64
@@ -2381,10 +2417,38 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 		if !s.petSpellCooldownReady(motion, spell, now) {
 			continue
 		}
+		// Spell::CanAutoCast (Spell.cpp:6506) — the CheckPetCast power
+		// arm (Spell.cpp:6238-6243), filtered silently before the
+		// random pick: an unaffordable spell never enters
+		// targetSpellStore in C++.
+		if !owner.petSpellPowerAffordable(motion, spell) {
+			continue
+		}
+		// Spell::CanAutoCast containment (Spell.cpp:6509-6522): a
+		// self-cast-only spell's target list is {caster}, so no
+		// non-self target ever passes — except the pet itself, which
+		// C++ scans as an ally (PetAI::UpdateAllies inserts the pet's
+		// own GUID into _allySet, PetAI.cpp:600-622). Ground-targeted
+		// spells skip containment outright (6509-6510: the dest is
+		// placed on top of the intended target anyway); no containment
+		// arm beyond self-cast is expressible here, since Go targets
+		// the combat target / owner directly. The range arm below is
+		// the CheckPetCast → CheckCast(true) strict-range leg
+		// (Spell.cpp:6254, 6529-6578): the backstop's twin, reused so
+		// the pre-filter verdict can never differ from the cast-time
+		// one, and an out-of-range spell leaves the pool for an
+		// in-range one instead of wasting the pick.
+		selfCast := isSelfCastOnly(spell)
 		usableInCombat := spell.Attributes&spellAttr0CantUsedInCombat == 0
 		if spell.AttributesCu&spellAttr0CuNegativeMask == 0 {
 			// Positive spell (PetAI.cpp:132-181).
 			if usableInCombat && !motion.InCombat && motion.PetCommand != PetCommandAttack {
+				continue
+			}
+			if selfCast {
+				if s.petCanAutoCastTarget(ctx, owner, motion, spell, motion.GUID) {
+					candidates = append(candidates, petAutocastCandidate{spell: spell, target: motion.GUID})
+				}
 				continue
 			}
 			jumpToEnemy := false
@@ -2395,16 +2459,19 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 				}
 			}
 			if jumpToEnemy {
-				if targetGUID != 0 && usableInCombat && s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) {
+				if targetGUID != 0 && usableInCombat && s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) &&
+					s.checkCreatureSpellRange(motion, spell, targetGUID, modOwner) {
 					candidates = append(candidates, petAutocastCandidate{spell: spell, target: targetGUID})
 				}
 				continue
 			}
-			if ownerGUID := motion.OwnerGUID; ownerGUID != 0 && s.petCanAutoCastTarget(ctx, owner, motion, spell, ownerGUID) {
+			if ownerGUID := motion.OwnerGUID; ownerGUID != 0 && s.petCanAutoCastTarget(ctx, owner, motion, spell, ownerGUID) &&
+				s.checkCreatureSpellRange(motion, spell, ownerGUID, modOwner) {
 				candidates = append(candidates, petAutocastCandidate{spell: spell, target: ownerGUID})
 			}
-		} else if targetGUID != 0 && motion.InCombat && usableInCombat &&
-			s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) {
+		} else if !selfCast && targetGUID != 0 && motion.InCombat && usableInCombat &&
+			s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) &&
+			s.checkCreatureSpellRange(motion, spell, targetGUID, modOwner) {
 			candidates = append(candidates, petAutocastCandidate{spell: spell, target: targetGUID})
 		}
 	}

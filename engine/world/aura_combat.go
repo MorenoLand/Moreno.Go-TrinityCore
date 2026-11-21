@@ -25,11 +25,15 @@ package world
 // points (not rating) to GetExpertise / UpdateExpertise
 // (StatSystem.cpp:880).
 //
-// Deltas: the C++ weapon-fit predicates on 52
-// (CheckAttackFitToAuraRequirement, Player.cpp:7901) and 240
-// (IsItemFitToSpellRequirements, StatSystem.cpp:880-884) have no Go model
-// — the flat folds sum unconditionally. The CONFIG_STATS_LIMITS_ENABLE
-// caps are not modeled (tree-wide convention).
+// The C++ weapon-fit predicates on 52 (CheckAttackFitToAuraRequirement,
+// Player.cpp:7901) and 240 (IsItemFitToSpellRequirements,
+// StatSystem.cpp:880-884) ride playerAuraModifierWeaponFit
+// (aura_damage.go): the 240 fold in getExpertise / calculatePlayerStats,
+// the 52 fold in calculatePlayerStats (per attack type) and the melee
+// crit-chance path (spell_stats.go). The pet-bonus calc (pets.go) sums
+// both ungated, matching C++ spell_pet.cpp, which reads the owner's
+// GetTotalAuraModifier directly. The CONFIG_STATS_LIMITS_ENABLE caps
+// are not modeled (tree-wide convention).
 
 const (
 	spellAuraModDodgePercent = 49  // SPELL_AURA_MOD_DODGE_PERCENT (SpellAuraDefines.h:129)

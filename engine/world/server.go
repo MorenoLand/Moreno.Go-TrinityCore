@@ -910,10 +910,12 @@ type session struct {
 type delayedCastEntry struct {
 	timer   *time.Timer
 	spellID uint32
-	// pet marks a server-driven pet missile: the client never saw a cast
-	// start for it (no SMSG_SPELL_START on the pet path), so the cancel
-	// arms stop the timer but send no CAST_FAILED for it — the registry
-	// key for a pet entry is minted, not client-issued.
+	// pet marks a server-driven pet missile: the cast already completed
+	// (GO sent), and its registry key is minted server-side rather than
+	// client-issued, so the cancel arms stop the timer but send no
+	// CAST_FAILED for it. Instant pet casts send no START; cast-time
+	// pet casts do (L8 deferral) — the missile entry is post-GO either
+	// way, so the no-failure-packet rule stands.
 	pet bool
 }
 

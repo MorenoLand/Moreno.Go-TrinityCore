@@ -2789,16 +2789,16 @@ func (s *session) calculatePlayerCritFields(ctx context.Context, state *playerSt
 	if meleeBaseOK && meleeRatioOK {
 		base := (meleeBase + float32(state.Stats[1])*meleeRatio) * 100
 		// Player::UpdateWeaponDependentCritAuras (Player.cpp:7901-7905):
-		// the SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) flat arm, folded
-		// without the CheckAttackFitToAuraRequirement weapon-fit gate (no
-		// weapon-requirement model), plus the non-item
+		// the SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) flat arm, gated
+		// per attack type by CheckAttackFitToAuraRequirement
+		// (playerAuraModifierWeaponFit — the aura's spell must fit the
+		// weapon for that attack), plus the non-item
 		// SPELL_AURA_MOD_CRIT_PCT (290) arm, feed every weapon crit
 		// chance. The 290 fold already feeds spell crit above.
-		weaponCritAura := s.playerAuraModifier(spellAuraModWeaponCritPercent) +
-			s.playerAuraModifier(spellAuraModCritPct)
-		state.MeleeCrit = base + ratingBonus(8) + weaponCritAura
-		state.RangedCrit = base + ratingBonus(9) + weaponCritAura
-		state.OffhandCrit = state.MeleeCrit
+		critPctAura := s.playerAuraModifier(spellAuraModCritPct)
+		state.MeleeCrit = base + ratingBonus(8) + s.playerAuraModifierWeaponFit(ctx, spellAuraModWeaponCritPercent, protocol.BaseAttack) + critPctAura
+		state.RangedCrit = base + ratingBonus(9) + s.playerAuraModifierWeaponFit(ctx, spellAuraModWeaponCritPercent, protocol.RangedAttack) + critPctAura
+		state.OffhandCrit = base + ratingBonus(8) + s.playerAuraModifierWeaponFit(ctx, spellAuraModWeaponCritPercent, protocol.OffAttack) + critPctAura
 	}
 	// Mirrors TrinityCore Player::UpdateSpellCritChance (StatSystem.cpp:819):
 	// school 0 (SPELL_SCHOOL_NORMAL) is zeroed; other schools sum the
