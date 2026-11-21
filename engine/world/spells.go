@@ -36906,7 +36906,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.player != nil {
 		casterLevel = s.player.Level
 	}
-	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel, 0, nil, false)
+	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel, 0, nil, false, false)
 }
 
 // refreshCommandAura mirrors the Unit::_TryStackingOrRefreshingExistingAura
@@ -37097,7 +37097,7 @@ func (s *Server) calcAuraMaxCharges(spell wotlk.Spell, mapID, instanceID uint32,
 // record, wire caster/level, and level-scaled amounts use the caster's GUID
 // and level. The totem's level is its owner's (Totem.cpp:103), passed
 // explicitly because the aura may land on a party member of another level.
-func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8, periodMs uint32, periodicInitialDelay *uint32, persistentAreaAura bool) {
+func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterGUID uint64, casterLevel uint8, periodMs uint32, periodicInitialDelay *uint32, persistentAreaAura bool, eff6Only bool) {
 	// Unit::AddAura (Unit.cpp:12282-12295) runs the whole-spell gate
 	// (IsImmunedToSpell) and the per-effect strip
 	// (IsImmunedToSpellEffect) before the aura is created; the dynobj
@@ -37317,6 +37317,15 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				// surviving effect, as the aura is created with the
 				// stripped mask.
 				if immuneMask&(1<<uint(index)) != 0 {
+					continue
+				}
+				// Direct-hit static applications carry eff-6 bits only
+				// (UnitAura::AddStaticApplication, SpellAuras.cpp):
+				// area-aura effects reach targets through FillTargetMap,
+				// never the hit path — so a direct-hit apply strips
+				// non-eff-6 effects from the mask, and the record's
+				// type/amounts derive from the first surviving eff-6 effect.
+				if eff6Only && effect.Effect != spellEffectApplyAura {
 					continue
 				}
 				// The record keeps the first effect's type, but its mask
@@ -38269,7 +38278,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 				fadeMs = uint32(dur)
 			}
 		}
-		s.applyAuraFromCaster(32612, fadeMs, s.playerGUID, s.player.Level, 0, nil, false)
+		s.applyAuraFromCaster(32612, fadeMs, s.playerGUID, s.player.Level, 0, nil, false, false)
 		// Unit::CombatStop(true) twin: interrupt the cast, stop the swing,
 		// clear the in-combat flag. The victim-side attacker clearing and
 		// the pet stop have no Go model (documented delta).

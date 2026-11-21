@@ -10035,7 +10035,11 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 			continue
 		}
-		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level), 0, nil, false)
+		// Direct-hit static applications carry eff-6 bits only
+		// (UnitAura::AddStaticApplication, SpellAuras.cpp): the
+		// area-aura effects reach hit targets through the
+		// registerCreatureAreaAura fan-out below, never this loop.
+		vs.applyAuraFromCaster(spell.ID, durationMs, m.GUID, uint8(m.Level), 0, nil, false, true)
 		s.recordCreatureChannelHitTarget(m, spell, guid)
 	}
 	for _, guid := range hitTargets {
@@ -10058,6 +10062,13 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			for i := range spell.Effects {
 				eff := spell.Effects[i]
 				if eff.Aura == 0 {
+					continue
+				}
+				// Direct-hit static applications carry eff-6 bits only
+				// (UnitAura::AddStaticApplication, SpellAuras.cpp); the
+				// area-aura effects reach the target through the
+				// registerCreatureAreaAura fan-out below.
+				if eff.Effect != spellEffectApplyAura {
 					continue
 				}
 				if prevent.defaultPrevented(i) {
@@ -10200,7 +10211,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 			continue
 		}
 		sharedDelayMs := uint32(object.NextAuraTick.Sub(now) / time.Millisecond)
-		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), primary.PeriodMs, &sharedDelayMs, true)
+		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), primary.PeriodMs, &sharedDelayMs, true, false)
 	}
 	type creatureTarget struct {
 		guid    uint64
@@ -10322,6 +10333,13 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 	for _, i := range orderedEffects {
 		eff := spell.Effects[i]
 		if eff.Aura == 0 {
+			continue
+		}
+		// Direct-hit static applications carry eff-6 bits only
+		// (UnitAura::AddStaticApplication, SpellAuras.cpp); a
+		// persistent-area application keeps every effect, since
+		// the area pass is the FillTargetMap leg, not a hit.
+		if !persistentAreaAura && eff.Effect != spellEffectApplyAura {
 			continue
 		}
 		if prevent.defaultPrevented(i) {

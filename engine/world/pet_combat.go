@@ -6872,7 +6872,14 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// gates are a condition, not a continue: each area target is
 				// its own TargetInfo (Spell.cpp:2405) and still takes the
 				// area legs below.
-				if victimGUID := resolveReflectTarget(targetGUID); victimGUID != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) && auraTargetKept(targetGUID) {
+				// SPELL_EFFECT_APPLY_AREA_AURA_OWNER (143) never lands on
+				// the aura owner itself (UnitAura::FillTargetMap OWNER arm,
+				// SpellAuras.cpp:2705-2715, selects the charmer/owner only;
+				// static applications strip non-eff-6 bits): a self-targeted
+				// 58818 must not self-apply to the pet — the owner leg below
+				// covers the charmer/owner. The resolved victim is the gate:
+				// an explicitly owner-targeted 143 still applies.
+				if victimGUID := resolveReflectTarget(targetGUID); victimGUID != 0 && !immuneSet[targetGUID] && !missedTarget(targetGUID) && auraTargetKept(targetGUID) && !(effect.Effect == spellEffectApplyAreaAuraOwner && victimGUID == motion.GUID) {
 					var victim combatTarget
 					if ct, ok := s.getCombatTarget(effCtx, victimGUID); ok {
 						victim = ct

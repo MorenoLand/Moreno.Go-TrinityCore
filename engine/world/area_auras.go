@@ -352,7 +352,7 @@ func (s *Server) applyAreaAuraToHolder(ctx context.Context, state *creatureAreaA
 		return false
 	}
 	if vs := s.findSessionByGUID(holderGUID); vs != nil && vs.player != nil {
-		vs.applyAuraFromCaster(state.key.spellID, state.durationMs, state.key.casterGUID, uint8(caster.Level), 0, nil, true)
+		vs.applyAuraFromCaster(state.key.spellID, state.durationMs, state.key.casterGUID, uint8(caster.Level), 0, nil, true, false)
 	} else {
 		// DynObjAura::UpdateTargetMap (SpellAuras.cpp:687-695) never
 		// registers a whole-spell immune target; the per-effect half
