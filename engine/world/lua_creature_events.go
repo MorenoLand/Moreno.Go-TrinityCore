@@ -5156,6 +5156,17 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			updates[unitVirtualItemSlotID+i] = slot
 		}
 		if len(updates) > 0 {
+			// The live virtual-item slots feed creatureSpellAmmoData
+			// (boss_ai.go): a scripted override replaces the DB row
+			// for later casts, like C++ SetUInt32Value on the live
+			// Unit fields.
+			for i, slot := range slots {
+				if slot == 0xFFFFFFFF {
+					continue
+				}
+				motion.VirtualItems[i] = slot
+			}
+			motion.VirtualItemsKnown = true
 			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, updates)
 		}
 		return nil, nil
@@ -8377,6 +8388,22 @@ func (s *Server) seatCreatureEntry(ctx context.Context, motion *creatureMotion, 
 	if item3.Valid && item3.Int64 > 0 {
 		fields[unitVirtualItemSlotID+2] = uint32(item3.Int64)
 	}
+	// The re-seated entry's default equipment replaces the motion's
+	// cached virtual items (C++ InitEntry LoadEquipment,
+	// Creature.cpp:494-496) so later casts read the new entry's ammo
+	// data (creatureSpellAmmoData, boss_ai.go).
+	virtualItems := [3]uint32{}
+	if item1.Valid && item1.Int64 > 0 {
+		virtualItems[0] = uint32(item1.Int64)
+	}
+	if item2.Valid && item2.Int64 > 0 {
+		virtualItems[1] = uint32(item2.Int64)
+	}
+	if item3.Valid && item3.Int64 > 0 {
+		virtualItems[2] = uint32(item3.Int64)
+	}
+	motion.VirtualItems = virtualItems
+	motion.VirtualItemsKnown = true
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, fields)
 	return true
 }

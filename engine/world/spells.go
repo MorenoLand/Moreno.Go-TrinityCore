@@ -49930,25 +49930,37 @@ func (s *session) startSpellCooldownOnHold(ctx context.Context, spell wotlk.Spel
 	infEnd := now.Add(infinityCooldownDuration).Unix()
 	// StartCooldown onHold arm: catrecTime = categoryCooldown > 0 ? inf :
 	// curTime; recTime = cooldown > 0 ? inf : catrecTime. No entry when
-	// both are non-positive (recTime == curTime skips AddCooldown).
-	categoryEnd := nowUnix
-	if spell.CategoryRecoveryTime > 0 {
-		categoryEnd = infEnd
-	}
-	end := categoryEnd
-	if spell.RecoveryTime > 0 {
-		end = infEnd
-	}
-	if end == nowUnix {
-		return
-	}
-	entry := spellCooldown{Spell: spell.ID, Category: spell.Category, End: end, CategoryEnd: categoryEnd, OnHold: true}
+	// both are non-positive (recTime == curTime skips AddCooldown). The
+	// durations resolve through GetCooldownDurations
+	// (SpellHistory.cpp:283-289, :641-670): an item-cast spell takes the
+	// item template's spellcooldown_N / spellcategorycooldown_N slots
+	// for its spell id, DBC values only when both item cooldowns are
+	// negative — the same resolver the main cast path uses.
+	entry := spellCooldown{Spell: spell.ID, Category: spell.Category, OnHold: true}
 	if castItemGUID != 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		var itemEntry uint32
 		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", castItemGUID).Scan(&itemEntry); err == nil {
 			entry.Item = itemEntry
 		}
 	}
+	cooldownMs, categoryCooldownMs, categoryID := int32(spell.RecoveryTime), int32(spell.CategoryRecoveryTime), spell.Category
+	if entry.Item != 0 && s.server != nil {
+		cooldownMs, categoryCooldownMs, categoryID = s.server.spellCooldownDurationsForItem(ctx, spell, entry.Item)
+	}
+	categoryEnd := nowUnix
+	if categoryCooldownMs > 0 {
+		categoryEnd = infEnd
+	}
+	end := categoryEnd
+	if cooldownMs > 0 {
+		end = infEnd
+	}
+	if end == nowUnix {
+		return
+	}
+	entry.Category = categoryID
+	entry.End = end
+	entry.CategoryEnd = categoryEnd
 	s.replaceSpellCooldownEntry(entry)
 }
 
@@ -49957,7 +49969,13 @@ func (s *session) startSpellCooldownOnHold(ctx context.Context, spell wotlk.Spel
 // spell, the category-holder arm (a different spell holding this
 // category's cooldown fires its own event and starts its real cooldown
 // first), then the real finite cooldown starts server-side via
-// startRealSpellCooldown.
+// startRealSpellCooldown. The item id stays 0 here: every Go caller
+// maps to a C++ call site that passes the default itemId 0 (aura
+// release SpellAuras.cpp:613, minion release Unit.cpp:5251/6139,
+// totem cast-buttons, hearthstone 8690) — the potion path, the one
+// caller that passes a real item id (Player.cpp:22229/22237), rides
+// the item-aware startPotionCooldownEntry instead. The item-proto
+// durations arm of L9 lives in startSpellCooldownOnHold above.
 func (s *session) sendSpellCooldownEvent(spell wotlk.Spell) {
 	if s == nil || s.player == nil {
 		return

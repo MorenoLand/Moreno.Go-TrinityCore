@@ -1492,7 +1492,52 @@ func (s *session) sendVehiclePetSpells(vehicleGUID uint64, spells []uint32) {
 	}
 
 	buf.WriteU8(0) // extra spells count
-	buf.WriteU8(0) // cooldowns count
+	// Player.cpp:21222 writes vehicle->GetSpellHistory()->WritePacket<Pet>
+	// here: the live cooldown count + per-entry (spell, category,
+	// cooldown, category cooldown) in SpellHistory.cpp:203-237's shape
+	// — the same tail the pet twin (sendPetSpells, pets.go) writes from
+	// the motion's cooldown maps. The vehicle base is a creature motion,
+	// so its history lives in SpellCooldowns / SpellCooldownCategories /
+	// SpellCooldownCategoryEnds, pruned first like every creature
+	// cooldown read. No live motion (or no player position) reads as
+	// zero cooldowns, the old hardcoded shape.
+	type vehicleCooldown struct {
+		spell, category  uint32
+		end, categoryEnd time.Time
+	}
+	cooldowns := make([]vehicleCooldown, 0)
+	if s.player != nil && s.server != nil {
+		now := time.Now()
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, vehicleGUID); motion != nil {
+			s.server.pruneCreatureSpellCooldowns(motion, now)
+			for spellID, end := range motion.SpellCooldowns {
+				categoryID := motion.SpellCooldownCategories[spellID]
+				cooldowns = append(cooldowns, vehicleCooldown{spell: spellID, category: categoryID, end: end, categoryEnd: motion.SpellCooldownCategoryEnds[spellID]})
+			}
+		}
+		s.server.motionMu.Unlock()
+		sort.Slice(cooldowns, func(i, j int) bool { return cooldowns[i].spell < cooldowns[j].spell })
+		buf.WriteU8(uint8(len(cooldowns)))
+		for _, cooldown := range cooldowns {
+			buf.WriteU32(cooldown.spell)
+			buf.WriteU16(uint16(cooldown.category))
+			cooldownMs := petCooldownMilliseconds(cooldown.end, now)
+			categoryMs := petCooldownMilliseconds(cooldown.categoryEnd, now)
+			if cooldownMs == 0 {
+				buf.WriteU32(0)
+				buf.WriteU32(0)
+			} else if categoryMs > 0 {
+				buf.WriteU32(0)
+				buf.WriteU32(categoryMs)
+			} else {
+				buf.WriteU32(cooldownMs)
+				buf.WriteU32(0)
+			}
+		}
+	} else {
+		buf.WriteU8(0) // cooldowns count
+	}
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 }

@@ -487,6 +487,18 @@ type creatureMotion struct {
 	SpellCategoryCooldowns    map[uint32]time.Time
 	SpellCooldownCategories   map[uint32]uint32
 	SpellCooldownCategoryEnds map[uint32]time.Time
+	// VirtualItems mirrors the UNIT_VIRTUAL_ITEM_SLOT_ID live values
+	// (Object.cpp) feeding Spell::UpdateSpellCastDataAmmo's TYPEID_UNIT
+	// branch (Spell.cpp:4437-4484): the three equipment slots from the
+	// creature_equip_template row for this creature's equipment_id,
+	// lazily loaded by creatureVirtualItems (boss_ai.go) and overwritten
+	// by scripted SetEquipmentSlots. VirtualItemsKnown marks the load
+	// done so a creature with no equipment row is not re-queried per
+	// cast. Written plainly like the other cast-path motion stamps
+	// (CastingUntil, PendingCastSpellID) — motionMu is not held on the
+	// tick/cast path.
+	VirtualItems      [3]uint32
+	VirtualItemsKnown bool
 	// GCDCooldowns mirrors SpellHistory::_globalCooldowns
 	// (SpellHistory.cpp:585-600): the pet/charmed global cooldown keyed by
 	// StartRecoveryCategory. Spell::TriggerGlobalCooldown (Spell.cpp:8232)
@@ -8068,7 +8080,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if !firingPendingInline {
 						if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); castMs > 0 {
 							if inlineStartKnown {
-								s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStart(motion.GUID, motion.GUID, castID, castSpellID, creatureStartCastFlags(inlineSpell), castMs, inlineStartTarget))
+								s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castID, castSpellID, creatureStartCastFlags(inlineSpell), castMs, inlineStartTarget, nil, s.creatureSpellAmmoData(ctx, motion)))
 							}
 							s.cancelPendingCreatureCast(motion)
 							motion.PendingInlineSpellID = spellID
@@ -9453,9 +9465,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// cast-time casts already sent START at the deferral point and
 			// reach GO only on the firing run, whose snapshot is suppressed.
 			if inlineStartKnown {
-				s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStart(motion.GUID, motion.GUID, castID, spellID, creatureStartCastFlags(inlineSpell), 0, inlineStartTarget))
+				s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castID, spellID, creatureStartCastFlags(inlineSpell), 0, inlineStartTarget, nil, s.creatureSpellAmmoData(ctx, motion)))
 			}
-			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, packetHits, missStatus, goTarget)
+			// Spell::SendSpellGo (Spell.cpp:4294-4296): CAST_FLAG_AMMO for
+			// REQ_AMMO / CU_NEEDS_AMMO_DATA, the block from
+			// creatureSpellAmmoData. The inline arm carries no PENDING /
+			// NO_GCD legs (unlike the boss_ai.go funnel), so only AMMO
+			// is added to the base GO flag.
+			inlineGoFlags := spellCastFlagGo
+			if inlineSpell.Attributes&spellAttr0ReqAmmo != 0 || inlineSpell.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
+				inlineGoFlags |= protocol.SpellCastFlagAmmo
+			}
+			goPkt := protocol.BuildSpellGoWithPower(motion.GUID, motion.GUID, castID, spellID, inlineGoFlags, castTimeStamp, packetHits, missStatus, goTarget, nil, protocol.SpellGoTrailerExtras{Ammo: s.creatureSpellAmmoData(ctx, motion)})
 			if target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 			}

@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"math"
 	"math/rand"
 	"time"
@@ -544,17 +545,110 @@ func (s *Server) castCreatureSpellTriggered(ctx context.Context, m *creatureMoti
 
 // creatureStartCastFlags mirrors Spell::SendSpellStart (Spell.cpp:4220-4252)
 // for a creature caster: base CAST_FLAG_UNKNOWN_2, plus CAST_FLAG_NO_GCD
-// for rune spells (RuneCostID + POWER_RUNE, no caster gate on that arm).
+// for rune spells (RuneCostID + POWER_RUNE, no caster gate on that arm),
+// plus CAST_FLAG_AMMO for SPELL_ATTR0_REQ_AMMO /
+// SPELL_ATTR0_CU_NEEDS_AMMO_DATA (Spell.cpp:4237-4239) — the ammo block
+// itself rides creatureSpellAmmoData below.
 // CAST_FLAG_PENDING is vacuous (non-triggered only), CAST_FLAG_POWER_LEFT_SELF
-// needs a player or pet caster (twin GO precedent: off), CAST_FLAG_AMMO needs
-// the virtual-item model (unbridged, twin GO precedent), CAST_FLAG_IMMUNITY
+// needs a player or pet caster (twin GO precedent: off), CAST_FLAG_IMMUNITY
 // needs the caster immunity masks (no m_spellImmune model).
 func creatureStartCastFlags(spell wotlk.Spell) uint32 {
 	flags := spellCastFlagStart
 	if spell.RuneCostID != 0 && spell.PowerType == powerRune {
 		flags |= protocol.SpellCastFlagNoGCD
 	}
+	if spell.Attributes&spellAttr0ReqAmmo != 0 || spell.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
+		flags |= protocol.SpellCastFlagAmmo
+	}
 	return flags
+}
+
+// creatureVirtualItems mirrors the UNIT_VIRTUAL_ITEM_SLOT_ID live values
+// (Creature::GetUInt32Value, Object.cpp) feeding
+// Spell::UpdateSpellCastDataAmmo's TYPEID_UNIT branch (Spell.cpp:4437-4484):
+// the three equipment slots from the creature_equip_template row for this
+// creature's equipment_id — the creature + creature_equip_template JOIN,
+// the same resolution buildCreatureUpdate uses — falling back to the
+// entry's default row (equipment_id from creature_template, else ID 1)
+// for temp summons and pets with no creature row (C++ InitEntry
+// LoadEquipment, Creature.cpp:494-496). The result is cached on the
+// motion; scripted SetEquipmentSlots writes win over the DB row once
+// stored. A creature with no equipment row caches zeros.
+func (s *Server) creatureVirtualItems(ctx context.Context, m *creatureMotion) [3]uint32 {
+	if m == nil {
+		return [3]uint32{}
+	}
+	if m.VirtualItemsKnown {
+		return m.VirtualItems
+	}
+	var items [3]uint32
+	if s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+		dbGUID := uint32(m.GUID & 0x00FFFFFF)
+		var i1, i2, i3 int64
+		err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(eq.ItemID1, 0), COALESCE(eq.ItemID2, 0), COALESCE(eq.ItemID3, 0) FROM creature c LEFT JOIN creature_equip_template eq ON eq.CreatureID = c.id AND eq.ID = COALESCE(NULLIF(c.equipment_id, 0), 1) WHERE c.guid = ?`, dbGUID).Scan(&i1, &i2, &i3)
+		if err != nil {
+			var e1, e2, e3 sql.NullInt64
+			_ = s.WorldStore.DB.QueryRowContext(ctx, `SELECT ItemID1, ItemID2, ItemID3 FROM creature_equip_template WHERE CreatureID = ? AND ID = COALESCE((SELECT NULLIF(equipment_id, 0) FROM creature_template WHERE entry = ?), 1)`, m.Entry, m.Entry).Scan(&e1, &e2, &e3)
+			i1, i2, i3 = e1.Int64, e2.Int64, e3.Int64
+		}
+		items = [3]uint32{uint32(i1), uint32(i2), uint32(i3)}
+	}
+	m.VirtualItems = items
+	m.VirtualItemsKnown = true
+	return items
+}
+
+// creatureSpellAmmoData mirrors Spell::UpdateSpellCastDataAmmo's
+// TYPEID_UNIT branch (Spell.cpp:4437-4484) for a creature caster: the
+// virtual-item slots are scanned in order (BASE_ATTACK..MAX_ATTACK);
+// a weapon-class item resolves by subclass — thrown carries its own
+// display id, bow/crossbow send display 5996, gun sends 5998, both with
+// INVTYPE_AMMO — and the scan stops at the first ranged resolution,
+// while a non-ranged weapon only banks its display id as the fallback
+// (used when no slot resolves). Non-weapon items resolve nothing.
+// The item template comes from item_template, the same source the
+// player arm (spellGoAmmoData) reads — C++ reads Item.dbc, whose rows
+// Go carries in world.db. Always returns a block: C++ writes the
+// 8-byte Ammo block whenever CAST_FLAG_AMMO is set, zero-filled when
+// no slot resolves.
+func (s *Server) creatureSpellAmmoData(ctx context.Context, m *creatureMotion) *protocol.SpellGoAmmo {
+	ammo := &protocol.SpellGoAmmo{}
+	if s == nil || m == nil {
+		return ammo
+	}
+	var nonRangedDisplayID, nonRangedInventoryType uint32
+	for _, itemID := range s.creatureVirtualItems(ctx, m) {
+		if itemID == 0 {
+			continue
+		}
+		info, ok := s.getItemTemplateClassInfo(ctx, itemID)
+		if !ok || info.Class != itemClassWeapon {
+			continue
+		}
+		switch info.SubClass {
+		case itemSubclassWeaponThrown:
+			ammo.DisplayID = info.DisplayInfoID
+			ammo.InventoryType = info.InvType
+		case itemSubclassWeaponBow, itemSubclassWeaponCrossbow:
+			ammo.DisplayID = 5996 // normal arrow (Spell.cpp:4458)
+			ammo.InventoryType = invTypeAmmo
+		case itemSubclassWeaponGun:
+			ammo.DisplayID = 5998 // normal bullet (Spell.cpp:4462)
+			ammo.InventoryType = invTypeAmmo
+		default:
+			nonRangedDisplayID = info.DisplayInfoID
+			nonRangedInventoryType = info.InvType
+			continue
+		}
+		if ammo.DisplayID != 0 {
+			return ammo
+		}
+	}
+	if ammo.DisplayID == 0 && ammo.InventoryType == 0 {
+		ammo.DisplayID = nonRangedDisplayID
+		ammo.InventoryType = nonRangedInventoryType
+	}
+	return ammo
 }
 
 // creatureStartTarget mirrors the InitExplicit half of a creature
@@ -2287,7 +2381,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		if !triggered && !deferredFire {
 			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); castMs > 0 {
 				if startTargetKnown {
-					s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStart(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo), castMs, startTarget))
+					s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStartWithPower(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo), castMs, startTarget, nil, s.creatureSpellAmmoData(ctx, m)))
 				}
 				m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 				s.cancelPendingCreatureCast(m)
@@ -3219,9 +3313,10 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// casters: base UNKNOWN_9 (spellCastFlagGo); PENDING for triggered
 		// non-auto-repeat casts (4292, same predicate as the player
 		// triggered path); NO_GCD when the spell has no start recovery
-		// time (4325, no caster gate). POWER_LEFT_SELF stays off — the
-		// 4297 arm needs a player or pet caster. AMMO (4294) needs the
-		// UNIT_VIRTUAL_ITEM_SLOT_ID model — no bridge. RUNE_LIST via
+		// time (4325, no caster gate); AMMO for REQ_AMMO /
+		// CU_NEEDS_AMMO_DATA (4294-4296, the block rides
+		// creatureSpellAmmoData below). POWER_LEFT_SELF stays off — the
+		// 4297 arm needs a player or pet caster. RUNE_LIST via
 		// ACTIVATE_RUNE fills player-side only (C++ @todo notes a
 		// creature crash there) — no bridge. ADJUST_MISSILE needs the
 		// target elevation/delay-moment model — no bridge.
@@ -3230,6 +3325,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		}
 		if spellInfo.StartRecoveryTime == 0 {
 			castFlags |= protocol.SpellCastFlagNoGCD
+		}
+		if spellInfo.Attributes&spellAttr0ReqAmmo != 0 || spellInfo.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
+			castFlags |= protocol.SpellCastFlagAmmo
 		}
 		// Spell::IsNeedSendToClient (Spell.cpp:7543-7547): a triggered
 		// cast with no visual, not channeled, and no speed sends nothing.
@@ -3329,9 +3427,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			s.cancelPendingCreatureCast(m)
 		}
 		if startTargetKnown {
-			s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStart(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo), 0, startTarget))
+			s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStartWithPower(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo), 0, startTarget, nil, s.creatureSpellAmmoData(ctx, m)))
 		}
-		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, goTarget)
+		goPkt := protocol.BuildSpellGoWithPower(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, goTarget, nil, protocol.SpellGoTrailerExtras{Ammo: s.creatureSpellAmmoData(ctx, m)})
 
 		if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)

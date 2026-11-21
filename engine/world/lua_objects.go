@@ -3391,6 +3391,19 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			updates[unitVirtualItemSlotID+i] = slot
 		}
 		if len(updates) > 0 {
+			// The live virtual-item slots feed creatureSpellAmmoData
+			// (boss_ai.go): a scripted override replaces the DB row
+			// for later casts, like C++ SetUInt32Value on the live
+			// Unit fields.
+			if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+				for i, slot := range slots {
+					if slot == 0xFFFFFFFF {
+						continue
+					}
+					motion.VirtualItems[i] = slot
+				}
+				motion.VirtualItemsKnown = true
+			}
 			s.server.broadcastCreatureValuesUpdateInInstance(state.Map, state.InstanceID, state.GUID, updates)
 		}
 		return nil, nil
