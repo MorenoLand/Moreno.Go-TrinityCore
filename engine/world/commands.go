@@ -55,6 +55,7 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldLevel:                    uint32(s.player.Level),
 		unitFieldFaction:                  s.effectiveFactionTemplate(s.player.Race),
 		unitFieldFlags:                    s.player.UnitFlags,
+		unitFieldDynamicFlags:             s.player.DynamicFlags,
 		unitFieldBytes1:                   uint32(s.player.StandState) | uint32(s.player.StandFlags)<<16,
 		unitFieldPlayerFlags:              s.player.PlayerFlags,
 		unitFieldPlayerFieldBytes:         playerFieldBytesValue(*s.player),
