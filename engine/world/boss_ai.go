@@ -2720,7 +2720,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			for _, guid := range hitTargets {
 				seenCorpse[guid] = struct{}{}
 			}
-			for _, corpseGUID := range s.creatureCorpseAreaTargets(ctx, m, spellInfo) {
+			for _, corpseGUID := range s.creatureCorpseAreaTargets(ctx, m, spellInfo, spellID) {
 				if corpseGUID == 0 {
 					continue
 				}

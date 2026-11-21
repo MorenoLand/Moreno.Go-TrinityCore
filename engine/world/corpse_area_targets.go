@@ -53,9 +53,13 @@ func isCorpseAreaSpell(spell wotlk.Spell) bool {
 // owner is dead by definition, so a spell that does not allow dead
 // targets selects nothing. LOS rides the CheckEffectTarget default arm
 // (Spell.cpp:7479-7481, losPosition == center), like the entry/friendly
-// area paths. Per-effect ImplicitTargetConditions on a 93 leg have no Go
-// evaluator (no corpse-condition twin) and are not applied — no 93 spell
-// in the seed carries any. The MaxTargets cap mirrors the area path
+// area paths. Per-effect ImplicitTargetConditions ride each leg: the
+// selecting effect's rows load via loadImplicitTargetConditions (the
+// entry-area precedent), the searcher mask (ConditionMgr.cpp:679-695)
+// drops legs whose rows name no TYPEID_CORPSE, and each candidate must
+// meet its leg's rows as a corpse (implicitCorpseConditionsMet —
+// ConditionMgr.cpp:358-380, corpse Entry is 0, Value3 ignored).
+// The MaxTargets cap mirrors the area path
 // (Spell.cpp:1293: MOD_MAX_AFFECTED_TARGETS aura modifier +
 // RandomResize). An empty area list adds no targets and never fails the
 // cast — area selection has no BAD_IMPLICIT_TARGETS gate (unlike 38).
@@ -63,10 +67,11 @@ func isCorpseAreaSpell(spell wotlk.Spell) bool {
 // (Spell.cpp:2281); Go's flat hitTargets list is the standing
 // mixed-effect approximation, so a sibling effect's fan-out also sees
 // these corpses — the same class as the area+single mixes elsewhere.
-// AddCorpseTarget TimeDelay (Spell.cpp:2300-2310, Speed > 0) is not
-// folded into spellDelayMomentMs — vacuous for Speed-0 resurrects,
-// the L1 explicit-corpse residual.
-func (s *session) spellCorpseAreaTargets(ctx context.Context, spell wotlk.Spell) []uint64 {
+// AddCorpseTarget TimeDelay (Spell.cpp:2300-2310, Speed > 0) folds into
+// the per-target delay via spellTargetTimeDelayMs (corpse arm), so the
+// delay moment and the delayed-wave split measure the real corpse
+// distance instead of the 20-yard default.
+func (s *session) spellCorpseAreaTargets(ctx context.Context, spell wotlk.Spell, spellID uint32) []uint64 {
 	if s == nil || s.player == nil || s.server == nil || !isCorpseAreaSpell(spell) || s.server.Data == nil {
 		return nil
 	}
@@ -74,11 +79,12 @@ func (s *session) spellCorpseAreaTargets(ctx context.Context, spell wotlk.Spell)
 		return nil
 	}
 	type corpseAreaLeg struct {
-		radius float64
+		radius   float64
+		condRows []conditionRow
 	}
 	legs := make([]corpseAreaLeg, 0)
 	maxRadius := float64(0)
-	for _, eff := range spell.Effects {
+	for i, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
@@ -108,7 +114,13 @@ func (s *session) spellCorpseAreaTargets(ctx context.Context, spell wotlk.Spell)
 		if r <= 0 {
 			continue
 		}
-		legs = append(legs, corpseAreaLeg{radius: r})
+		leg := corpseAreaLeg{radius: r, condRows: s.loadImplicitTargetConditions(ctx, spellID, 1<<uint(i))}
+		// Spell::GetSearcherTypeMask (Spell.cpp:1836): a leg whose
+		// condition rows admit no corpse TypeID searches no corpses.
+		if !implicitTargetCorpseMask(leg.condRows) {
+			continue
+		}
+		legs = append(legs, leg)
 		if r > maxRadius {
 			maxRadius = r
 		}
@@ -139,6 +151,12 @@ func (s *session) spellCorpseAreaTargets(ctx context.Context, spell wotlk.Spell)
 			// area selection passes losPosition == center, so every
 			// candidate needs line of sight from the leg's center.
 			if !s.implicitAreaTargetLOSPasses(spell, corpse.X, corpse.Y, corpse.Z, s.player.X, s.player.Y, s.player.Z) {
+				continue
+			}
+			// WorldObjectSpellTargetCheck tail (Spell.cpp:8368-8370):
+			// the selecting effect's ImplicitTargetConditions, evaluated
+			// against the corpse itself.
+			if !implicitCorpseConditionsMet(leg.condRows) {
 				continue
 			}
 			matched = true

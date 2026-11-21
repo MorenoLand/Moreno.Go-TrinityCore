@@ -12,6 +12,7 @@ const (
 	conditionObjectEntryGUID = 31 // CONDITION_OBJECT_ENTRY_GUID (ConditionMgr.h:69)
 	typeIDUnit               = 3  // TYPEID_UNIT
 	typeIDPlayer             = 4  // TYPEID_PLAYER
+	typeIDCorpse             = 7  // TYPEID_CORPSE (Object.h:188, IsCorpse)
 )
 
 // isEntryNearbySpell reports spells carrying TARGET_UNIT_NEARBY_ENTRY (38)
@@ -102,6 +103,73 @@ func implicitEntryConditionsMet(rows []conditionRow, isPlayer bool, entry, spawn
 		met := true
 		for _, row := range group {
 			ok := implicitEntryGUIDMet(row, isPlayer, entry, spawnLow)
+			if row.Negative {
+				ok = !ok
+			}
+			if !ok {
+				met = false
+				break
+			}
+		}
+		if met {
+			return true
+		}
+	}
+	return false
+}
+
+// implicitTargetCorpseMask mirrors ConditionMgr::GetSearcherTypeMaskForConditionList
+// (ConditionMgr.cpp:679-695) for the corpse leg: an OBJECT_ENTRY_GUID row
+// admits corpses into the scan only when it names TYPEID_CORPSE, so a leg
+// whose rows name only other TypeIDs searches no corpses at all
+// (GetSearcherTypeMask, Spell.cpp:1836 ANDs the list mask in). With no
+// entry rows every corpse is scanned. CONDITION_TYPE_MASK rows are not
+// modeled, the same convention as implicitTargetEntryMask.
+func implicitTargetCorpseMask(rows []conditionRow) bool {
+	narrowed := false
+	for _, row := range rows {
+		if row.ConditionType != conditionObjectEntryGUID {
+			continue
+		}
+		narrowed = true
+		if row.Value1 == typeIDCorpse {
+			return true
+		}
+	}
+	return !narrowed
+}
+
+// implicitCorpseConditionsMet evaluates the implicit-target condition rows
+// against a corpse candidate, the corpse twin of implicitEntryConditionsMet:
+// WorldObjectSpellTargetCheck (Spell.cpp:8368-8370) evaluates the effect's
+// ImplicitTargetConditions with the corpse itself as ConditionTarget 0, and
+// Condition::Meets for CONDITION_OBJECT_ENTRY_GUID (ConditionMgr.cpp:358-380)
+// compares the corpse's TypeId and Entry — a corpse carries no entry
+// (OBJECT_FIELD_ENTRY is 0), and ConditionValue3 is ignored for non-unit /
+// non-gameobject targets (the default arm). The loader-side validation
+// (ConditionMgr.cpp:1425-1432) requires Value1 == TYPEID_CORPSE whenever
+// the effect's implicit-target mask includes corpses, so a row naming
+// another TypeID can never pass here. ElseGroup grouping matches the
+// entry twin; other condition types have no candidate-side Go evaluation
+// and are skipped.
+func implicitCorpseConditionsMet(rows []conditionRow) bool {
+	if len(rows) == 0 {
+		return true
+	}
+	groups := make(map[int64][]conditionRow)
+	for _, row := range rows {
+		if row.ConditionType != conditionObjectEntryGUID {
+			continue
+		}
+		groups[row.ElseGroup] = append(groups[row.ElseGroup], row)
+	}
+	if len(groups) == 0 {
+		return true
+	}
+	for _, group := range groups {
+		met := true
+		for _, row := range group {
+			ok := row.Value1 == typeIDCorpse && row.Value2 == 0
 			if row.Negative {
 				ok = !ok
 			}

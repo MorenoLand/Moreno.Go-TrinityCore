@@ -11891,7 +11891,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// TARGET_CORPSE_SRC_AREA_ENEMY (93) — every corpse in the area
 		// whose owner is online becomes a target; an empty area never
 		// fails the cast.
-		hitTargets = s.spellCorpseAreaTargets(ctx, spell)
+		hitTargets = s.spellCorpseAreaTargets(ctx, spell, spellID)
 		corpseAreaBranchRan = true
 	} else if goNearbyEntrySpell {
 		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
@@ -12018,7 +12018,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// roll (the rollAreaTargetReflect keep below), no AoE-cap/threat
 	// share, and unit damage/heal arms skip them (guards below).
 	if isCorpseAreaSpell(spell) && !corpseAreaBranchRan {
-		for _, guid := range s.spellCorpseAreaTargets(ctx, spell) {
+		for _, guid := range s.spellCorpseAreaTargets(ctx, spell, spellID) {
 			seenCorpse := false
 			for _, listed := range hitTargets {
 				if listed == guid {
@@ -21827,7 +21827,11 @@ func (s *session) spellDelayMomentMs(ctx context.Context, spell wotlk.Spell, tar
 // TimeDelay (Spell.cpp:2156-2169): floor(dist / Speed * 1000) with the
 // 5-yard floor; a target that is the caster itself gets delay 0
 // (m_caster == target skips the travel computation). Unresolvable targets
-// default to 20 yards.
+// default to 20 yards. A corpse target resolves through the corpse
+// registry (Spell::AddCorpseTarget, Spell.cpp:2300-2310: the same
+// floor(dist / Speed * 1000) with the 5-yard floor, measured from the
+// caster to the corpse) instead of the 20-yard default, so the delay
+// moment and the delayed-wave split carry the corpse's real distance.
 func (s *session) spellTargetTimeDelayMs(ctx context.Context, spell wotlk.Spell, targetGUID uint64) int {
 	if targetGUID == s.playerGUID {
 		return 0
@@ -21842,6 +21846,18 @@ func (s *session) spellTargetTimeDelayMs(ctx context.Context, spell wotlk.Spell,
 			dist = computedDist
 		} else {
 			dist = 5.0
+		}
+	} else if s.player != nil {
+		if corpse, ok := s.server.lookupCorpse(ctx, targetGUID, s.player.Map, s.player.InstanceID); ok {
+			dx := corpse.X - s.player.X
+			dy := corpse.Y - s.player.Y
+			dz := corpse.Z - s.player.Z
+			computedDist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+			if computedDist > 5.0 {
+				dist = computedDist
+			} else {
+				dist = 5.0
+			}
 		}
 	}
 	return int(math.Floor(float64(dist) / float64(spell.Speed) * 1000.0))
@@ -27922,7 +27938,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			hitTargets = s.spellEntryAreaTargetsWithCenters(ctx, spell, spellID, spellTarget, funnelEntryAreaCenters)
 			selectionTargets = hitTargets
 		case isCorpseAreaSpell(spell):
-			hitTargets = s.spellCorpseAreaTargets(ctx, spell)
+			hitTargets = s.spellCorpseAreaTargets(ctx, spell, spellID)
 			selectionTargets = hitTargets
 		case isFriendlyConeSpell(spell):
 			friendlyConeBranchRan = true

@@ -4218,14 +4218,17 @@ func (s *Server) armInlineReflectProcDelayed(motion *creatureMotion, reflector *
 // test + owner-online + bones-excluded corpse terms (SpellInfo.cpp:
 // 1697-1715, Spell.cpp:8316/8341: the ENEMY check is skipped for
 // corpses), center LOS, MaxTargets cap. Per-effect ImplicitTarget-
-// Conditions on a 93 leg have no Go evaluator (no corpse-condition
-// twin) and are not applied, like the session twin. The MaxTargets
+// Conditions ride each leg (the session twin's arms): the selecting
+// effect's rows load via loadImplicitTargetConditionRows, the searcher
+// mask (ConditionMgr.cpp:679-695) drops legs whose rows name no
+// TYPEID_CORPSE, and each candidate must meet its leg's rows as a
+// corpse (implicitCorpseConditionsMet). The MaxTargets
 // cap takes no MOD_MAX_AFFECTED_TARGETS fold — the motion has no aura
 // model, the creature entry-area precedent. An empty area list adds no
 // targets and never fails the cast. Each match carries only its
 // selecting effect's AddCorpseTarget bit (Spell.cpp:2281); Go's flat
 // hitTargets list is the standing mixed-effect approximation.
-func (s *Server) creatureCorpseAreaTargets(ctx context.Context, m *creatureMotion, spell wotlk.Spell) []uint64 {
+func (s *Server) creatureCorpseAreaTargets(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32) []uint64 {
 	if s == nil || m == nil || !isCorpseAreaSpell(spell) {
 		return nil
 	}
@@ -4244,7 +4247,11 @@ func (s *Server) creatureCorpseAreaTargets(ctx context.Context, m *creatureMotio
 			}
 		}
 	}
-	legs := make([]float32, 0)
+	type creatureCorpseAreaLeg struct {
+		radius   float32
+		condRows []conditionRow
+	}
+	legs := make([]creatureCorpseAreaLeg, 0)
 	maxRadius := float32(0)
 	for i, eff := range spell.Effects {
 		if eff.Effect == 0 {
@@ -4275,7 +4282,13 @@ func (s *Server) creatureCorpseAreaTargets(ctx context.Context, m *creatureMotio
 		if radius <= 0 {
 			continue
 		}
-		legs = append(legs, radius)
+		leg := creatureCorpseAreaLeg{radius: radius, condRows: s.loadImplicitTargetConditionRows(ctx, spellID, 1<<uint(i))}
+		// Spell::GetSearcherTypeMask (Spell.cpp:1836): a leg whose
+		// condition rows admit no corpse TypeID searches no corpses.
+		if !implicitTargetCorpseMask(leg.condRows) {
+			continue
+		}
+		legs = append(legs, leg)
 		if radius > maxRadius {
 			maxRadius = radius
 		}
@@ -4294,7 +4307,8 @@ func (s *Server) creatureCorpseAreaTargets(ctx context.Context, m *creatureMotio
 			continue
 		}
 		matched := false
-		for _, radius := range legs {
+		for _, leg := range legs {
+			radius := leg.radius
 			// WorldObjectSpellAreaTargetCheck (Spell.cpp:8420): the
 			// cylinder test — 2D distance within radius and |dz|
 			// within radius — centered on the caster (SRC).
@@ -4307,6 +4321,12 @@ func (s *Server) creatureCorpseAreaTargets(ctx context.Context, m *creatureMotio
 			// candidate needs line of sight from the leg's center.
 			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
 				!s.hasLineOfSightSpellCheck(m.Map, m.X, m.Y, m.Z, corpse.X, corpse.Y, corpse.Z) {
+				continue
+			}
+			// WorldObjectSpellTargetCheck tail (Spell.cpp:8368-8370):
+			// the selecting effect's ImplicitTargetConditions, evaluated
+			// against the corpse itself.
+			if !implicitCorpseConditionsMet(leg.condRows) {
 				continue
 			}
 			matched = true
