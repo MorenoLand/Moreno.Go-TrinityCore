@@ -41,19 +41,15 @@
 -- -> InterruptNonMeleeSpells(false) + DoCast self 37550
 -- non-triggered (C++ DoCast default), phase=60000,
 -- submerged=true (boss_lurker_below.cpp:240). Spout 45s ->
--- Talk(EMOTE_SPOUT), re-arm 45000, whirl=20000 (whirl directly
--- after spout, C++-exact), rot=20000, return (C++-exact — the
--- MoveRotate 20s + react-passive arms have no
--- movement/react bridges; the 20s rotating spout machine —
--- the per-tick HasInArc + SPOUT_DIST(100 yd) + IsInWater
--- player pick and the triggered 37433 per-player casts, the
--- SPOUT_ANIM 42835 upkeep, the C++ melee suppression during
--- the 20s rotation (UpdateAI returns before DoMeleeAttackIfReady;
--- engine melee has no gate bridge, unmodeled), and the
--- MovementInform react-
--- aggressive flip — has no arc/movement/react/water bridges,
--- so the RotTimer arm only does C++-exact timer bookkeeping
--- and the spout delivers no damage in this model, header).
+-- Talk(EMOTE_SPOUT), SetReactState(REACT_PASSIVE) + MoveRotate(0,
+-- 20000, random direction), re-arm 45000, whirl=20000 (whirl directly
+-- after spout, C++-exact), rot=20000, return (C++-exact). The 20s
+-- rotating spout machine is PORTED 2026-11-21 (MoveRotate bridge +
+-- Go rotate leg): the per-tick HasInArc + SPOUT_DIST(100 yd) +
+-- IsInWater player pick and the triggered 37433 per-player casts,
+-- the SPOUT_ANIM 42835 upkeep, the melee suppression (the passive
+-- gate, creaturemotion.go:6533) and the MovementInform
+-- react-aggressive flip all ride the pump + the ev28 handler.
 -- Whirl 18s (20s right after a spout) -> DoCast self 37660,
 -- re-arm 18000 (C++-exact). CheckTimer 15s then 2s -> inRange =
 -- any map player in melee range (the C++ map player-list
@@ -125,13 +121,12 @@
 -- OnGossipHello (the 25% fishing roll, the 54587 cast, the DATA_STRANGE_POOL
 -- transitions) unmodeled (needs its own GO file, outside this
 -- unit's named file set); the 9x submerged ambusher/guardian
--- summons PORTED 2026-10-24 (first-submerged-tick block); no movement bridge —
--- the spout MoveRotate 20s machine, the rot-arc spout picks
--- and the SPOUT_ANIM upkeep unmodeled; no LOS/arc/water-on-
--- creature/react/flag/display/evade bridges — the
--- arc+distance+water spout target pick, the react passive/
--- aggressive flips, the visibility/flag/immune reset arms and
--- the evade/zone-combat arms unmodeled (the submerge/emerge
+-- summons PORTED 2026-10-24 (first-submerged-tick block); the spout
+-- MoveRotate 20s machine, the rot-arc spout picks, the SPOUT_ANIM
+-- upkeep and the react passive/aggressive flips are PORTED 2026-11-21
+-- (MoveRotate bridge + Go rotate leg + ev28 handler); no LOS/water-on-
+-- creature/flag/display/evade bridges — the visibility/flag/immune
+-- reset arms and the evade/zone-combat arms unmodeled (the submerge/emerge
 -- InterruptNonMeleeSpells legs are PORTED in the pump); the shoot-bow 1100 BP0 arg has no bridge (cast
 -- without it); SPELL_KNOCKBACK 19813 defined but unused in
 -- C++ — documented only; NPC_COILFANG_GUARDIAN (21873) has no
@@ -339,9 +334,12 @@ local function lurkerTick(creature, guid)
         -- header).
         if st.spout <= 1000 then
             creature:Talk(EMOTE_SPOUT)
+            creature:SetReactState(0) -- REACT_PASSIVE (boss_lurker_below.cpp:250)
+            creature:MoveRotate(0, 20000, math.random(0, 1)) -- boss_lurker_below.cpp:252, random direction
             st.spout = 45000
             st.whirl = 20000
             st.rot = 20000
+            st.spoutAnim = 1000
             return
         else
             st.spout = st.spout - 1000
@@ -372,11 +370,34 @@ local function lurkerTick(creature, guid)
             st.check = st.check - 1000
         end
 
-        -- RotTimer: the 20s rotating spout machine has no
-        -- arc/movement/water bridges — timer bookkeeping only
-        -- (header); the spout arm returns above, so during the
-        -- rotation only these timers count down.
+        -- RotTimer: the 20s rotating spout machine
+        -- (boss_lurker_below.cpp:285-305): each 1s pump tick knocks
+        -- back alive players in the swept arc (diff/20000*2*pi =
+        -- pi/10 per tick — the HasInArc arm rides the IsInBack
+        -- twin: HasInArc(a, t) = !IsInBack(t, 2*pi-a),
+        -- Object.cpp:1417-1420; Position.cpp:120-137 confirms arc
+        -- is the total angle), within SPOUT_DIST 100 yd (the maiden
+        -- GetDistance - reach - 1.5 twin) and not in water; the
+        -- SPOUT_ANIM 42835 upkeep re-casts every 1s; the countdown
+        -- ends the machine and the MovementInform handler flips
+        -- react back to aggressive. The C++ melee suppression rides
+        -- the REACT_PASSIVE gate (creaturemotion.go:6533).
         if st.rot > 0 then
+            local arc = math.pi / 10
+            for _, p in ipairs(playersInInstanceRaw(creature)) do
+                if not p:IsDead()
+                        and not creature:IsInBack(p, 2 * math.pi - arc)
+                        and creature:GetDistance(p) - creature:GetCombatReach() - 1.5 < 100
+                        and not p:IsInWater() then
+                    creature:CastSpell(p, SPELL_SPOUT, true)
+                end
+            end
+            if st.spoutAnim <= 1000 then
+                creature:CastSpell(creature, SPELL_SPOUT_ANIM, true)
+                st.spoutAnim = 1000
+            else
+                st.spoutAnim = st.spoutAnim - 1000
+            end
             if st.rot <= 1000 then
                 st.rot = 0
             else
@@ -559,6 +580,18 @@ RegisterCreatureEvent(ENTRY_LURKER, 2, lurkerLeaveCombat)
 RegisterCreatureEvent(ENTRY_LURKER, 4, lurkerDied)
 RegisterCreatureEvent(ENTRY_LURKER, 23, lurkerReset)
 RegisterCreatureEvent(ENTRY_LURKER, 27, lurkerMoveInLOS)
+
+-- C++ MovementInform (boss_lurker_below.cpp:186-191):
+-- ROTATE_MOTION_TYPE (15) restores REACT_AGGRESSIVE when the 20s
+-- spout rotation ends (the Go rotate leg fires it — MoveRotate
+-- bridge, creaturemotion.go stepCreatureRotate).
+local function lurkerMovementInform(event, creature, moveType, id)
+    if moveType == 15 then
+        creature:SetReactState(2)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_LURKER, 28, lurkerMovementInform)
 
 -- npc_coilfang_ambusher (21865) — see header.
 

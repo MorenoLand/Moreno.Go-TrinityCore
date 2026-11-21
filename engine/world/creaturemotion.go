@@ -658,7 +658,17 @@ type creatureMotion struct {
 	// (Spell::EffectDistract, SpellEffects.cpp:2547): the creature turned to
 	// face the distraction and pauses wandering until this time. Zero when
 	// not distracted.
-	DistractedUntil         time.Time
+	DistractedUntil time.Time
+	// RotateUntil / RotateID / RotateMaxMs / RotateLeft / RotateLast are the
+	// RotateMovementGenerator state (IdleMovementGenerator.cpp:65-149):
+	// MoveRotate(id, time, direction) turns in place at 2*pi/time rad per
+	// ms, then finalizes as MovementInform(ROTATE_MOTION_TYPE=15, id).
+	// Zero RotateUntil when not rotating.
+	RotateUntil             time.Time
+	RotateID                uint32
+	RotateMaxMs             uint32
+	RotateLeft              bool
+	RotateLast              time.Time
 	FormationLeadGUID       uint64    // leader world GUID once LeaderStartedMoving pulls this member into formation (CreatureGroups.cpp:280)
 	FormationDist           float32   // formation slot distance (creature_formations.dist)
 	FormationAngle          float32   // formation slot angle (FollowAngle + pi; LeaderStartedMoving inverts the DB angle)
@@ -4297,6 +4307,7 @@ const (
 	movementGeneratorDistract     = 10
 	movementGeneratorTimedFleeing = 13
 	movementGeneratorFollow       = 14
+	movementGeneratorRotate       = 15
 	movementGeneratorEffect       = 16
 	movementGeneratorSplineChain  = 17
 	movementGeneratorFormation    = 18
@@ -4755,6 +4766,8 @@ func (s *Server) creatureMovementType(motion *creatureMotion) uint32 {
 		return movementGeneratorFormation
 	case !motion.DistractedUntil.IsZero() && now.Before(motion.DistractedUntil):
 		return movementGeneratorDistract
+	case !motion.RotateUntil.IsZero() && now.Before(motion.RotateUntil):
+		return movementGeneratorRotate
 	case motion.MoveType == 2 && len(motion.Points) > 0:
 		return movementGeneratorWaypoint
 	case motion.MoveType == 1:
@@ -5029,6 +5042,10 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.ScriptFollowTargetGUID = 0
 	motion.ScriptFollowDist = 0
 	motion.ScriptFollowAngle = 0
+	// MotionMaster::Clear drops the default-slot generators too: a
+	// rotating creature evades home without rotating (no MovementInform —
+	// the evade Reset arm re-arms the fight from scratch).
+	motion.RotateUntil = time.Time{}
 	// Unit::AttackStop (Unit.cpp:5783): combat stop resets the assistance
 	// flag, and the pending AssistDelayEvent dies with the engagement.
 	// A Lua Reset arm that set the no-call latch survives: C++ AI Reset
@@ -5553,6 +5570,55 @@ func (s *Server) triggerCreatureAlert(ctx context.Context, motion *creatureMotio
 	// client-side turn, matching the Distract effect bridge.
 	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.X, motion.Y, motion.Z, 1000, false, angle, true, motion.PhaseMask, motion.TransportGUID)
 	_ = ctx
+}
+
+// stepCreatureRotate runs the RotateMovementGenerator tick
+// (IdleMovementGenerator.cpp:97-132): while the rotation runs the creature
+// turns in place at 2*pi/maxDuration rad per ms — left adds, right
+// subtracts, wrapping to [0, 2*pi) — and no other movement runs; on expiry
+// it finalizes as AI()->MovementInform(ROTATE_MOTION_TYPE, id)
+// (IdleMovementGenerator.cpp:139-145), Eluna
+// CREATURE_EVENT_ON_MOVEMENT_INFORM (28). The per-tick delta is the wall
+// time since the last tick (the 100ms world tick), clamped to 1s so a
+// stalled sweep cannot spin the creature a full turn at once. Returns
+// true while rotating or on the finalizing tick.
+func (s *Server) stepCreatureRotate(ctx context.Context, motion *creatureMotion, now time.Time) bool {
+	if motion.RotateUntil.IsZero() {
+		return false
+	}
+	if !now.Before(motion.RotateUntil) {
+		id := motion.RotateID
+		motion.RotateUntil = time.Time{}
+		motion.RotateID = 0
+		motion.RotateMaxMs = 0
+		motion.RotateLast = time.Time{}
+		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorRotate), id)
+		return true
+	}
+	diffMs := now.Sub(motion.RotateLast).Milliseconds()
+	if diffMs < 0 {
+		diffMs = 0
+	}
+	if diffMs > 1000 {
+		diffMs = 1000
+	}
+	motion.RotateLast = now
+	if diffMs > 0 && motion.RotateMaxMs > 0 {
+		step := float32(float64(diffMs) * 2 * math.Pi / float64(motion.RotateMaxMs))
+		angle := motion.Orientation
+		if motion.RotateLeft {
+			angle += step
+		} else {
+			angle -= step
+		}
+		motion.Orientation = normalizeScriptAngle(angle)
+		// RotateMovementGenerator::Update launches an in-place MoveTo +
+		// SetFacing spline every tick; Go reuses the facing arm of the
+		// monster move packet for the client-side turn, matching the
+		// Distract leg (triggerCreatureAlert).
+		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.X, motion.Y, motion.Z, 100, false, motion.Orientation, true, motion.PhaseMask, motion.TransportGUID)
+	}
+	return true
 }
 
 // waypointNodeArrival ports WaypointMovementGenerator::OnArrived
@@ -6502,6 +6568,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.InCombat = false
 		motion.TargetGUID = 0
 		motion.Moving = false
+		// A dead creature never finalizes its rotation: the
+		// movementInform=false Finalize on death (MotionMaster::Clear).
+		motion.RotateUntil = time.Time{}
 		motion.ScriptChaseTargetGUID = 0
 		motion.ScriptChaseDist = 0
 		motion.ScriptChaseAngle = 0
@@ -6880,6 +6949,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.WaitUntil = motion.MoveEnds
 			return
 		}
+	}
+
+	// RotateMovementGenerator::Update (IdleMovementGenerator.cpp:97-132):
+	// a rotating creature turns in place and runs no other movement
+	// until the rotation finalizes (stepCreatureRotate fires the
+	// MovementInform arm on expiry).
+	if s.stepCreatureRotate(ctx, motion, now) {
+		return
 	}
 
 	// Creature::CallAssistance's delayed arm (AssistDelayEvent, Creature.h:523-536,

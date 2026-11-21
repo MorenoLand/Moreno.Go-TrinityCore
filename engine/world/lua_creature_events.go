@@ -5285,6 +5285,43 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.startCreatureWaypoint(ctx, motion)
 		return nil, nil
 	}
+	// MoveRotate is MotionMaster::MoveRotate (MotionMaster.cpp:1031-1039):
+	// installs the RotateMovementGenerator (IdleMovementGenerator.cpp:65-149)
+	// — the creature turns in place for `time` ms at 2*pi/time rad per ms,
+	// direction 0 left / 1 right (MovementDefines.h:72-73), then finalizes
+	// as MovementInform(ROTATE_MOTION_TYPE=15, id). The engine leg is
+	// stepCreatureRotate (creaturemotion.go): Initialize's StopMoving twin
+	// is the Moving=false stamp here, and the passive react flip the
+	// caller sets (lurker spout) suppresses melee via the step's passive
+	// gate. Only live call site is the Lurker Below spout
+	// (boss_lurker_below.cpp:252).
+	methods["MoveRotate"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		timeMs, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		direction, err := luaUint32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		if timeMs == 0 {
+			return nil, nil
+		}
+		now := time.Now()
+		s.motionMu.Lock()
+		motion.RotateID = id
+		motion.RotateMaxMs = timeMs
+		motion.RotateLeft = direction == 0
+		motion.RotateUntil = now.Add(time.Duration(timeMs) * time.Millisecond)
+		motion.RotateLast = now
+		motion.Moving = false
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// SetReactState is CreatureMethods::SetReactState: Creature::SetReactState
 	// (UnitDefines.h: REACT_PASSIVE=0, REACT_DEFENSIVE=1, REACT_AGGRESSIVE=2 —
 	// matches creatureReact* in creaturemotion.go). The engine honors it in
