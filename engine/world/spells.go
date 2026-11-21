@@ -30399,7 +30399,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// duration folded to zero skips the apply too (the
 				// CalcMaxDuration corner above — the aura is expired in
 				// C++, not permanent).
-				if _, isAreaAura := areaAuraSelectionForEffect(eff.Effect); !isAreaAura && !durationFoldedToZero {
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4
+				// handler's veto suppresses the aura application,
+				// mirroring the finishSpellCast tail and the creature
+				// twin at boss_ai.go:10007.
+				if _, isAreaAura := areaAuraSelectionForEffect(eff.Effect); !isAreaAura && !durationFoldedToZero && !prevent.defaultPrevented(effectIndex) {
 					s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID, triggeredByAura, nil)
 				}
 			} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
@@ -30561,7 +30566,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						firesPerTarget = spellNeedsToBeTriggeredByCaster(triggered, spell)
 					}
 				}
-				if firesPerTarget {
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4
+				// handler's veto suppresses the per-target trigger leg,
+				// mirroring the finishSpellCast twin and the creature
+				// twin at boss_ai.go:3367. (The once-per-cast LAUNCH
+				// arm already ran ahead of ev4.)
+				if firesPerTarget && !prevent.defaultPrevented(effectIndex) {
 					s.triggerSpellEffectTarget(ctx, spellID, spell, eff, effectTarget)
 				}
 			} else if eff.Effect == spellEffectTriggerMissile || eff.Effect == spellEffectTriggerMissileWithValue {
@@ -30672,7 +30683,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// HIT_TARGET per unit target; the client arm's helper over
 				// the single miss-filtered target (player-session forced
 				// casters only, same as the client arm).
-				s.handleEffectForceCast(ctx, spell, spellID, eff, []uint64{effectTarget})
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4
+				// handler's veto suppresses the force-cast leg,
+				// mirroring the finishSpellCast twin and the creature
+				// twin at boss_ai.go:4064.
+				if !prevent.defaultPrevented(effectIndex) {
+					s.handleEffectForceCast(ctx, spell, spellID, eff, []uint64{effectTarget})
+				}
 			} else if eff.Effect == spellEffectKillCredit {
 				// Spell::EffectKillCreditPersonal (SpellEffects.cpp:5253)
 				// runs at HIT_TARGET per player unit target.
@@ -30834,7 +30852,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// over the single miss-filtered target (only the
 				// generic-family arms with a Go bridge fire, same as the
 				// client arm).
-				s.handleEffectScriptEffect(ctx, spellID, spell, eff, effectTarget)
+				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
+				// skips the default handler for this effect: an ev4
+				// handler's veto suppresses the script-effect leg,
+				// mirroring the finishSpellCast twin and the creature
+				// twin at boss_ai.go:4231.
+				if !prevent.defaultPrevented(effectIndex) {
+					s.handleEffectScriptEffect(ctx, spellID, spell, eff, effectTarget)
+				}
 			} else if eff.Effect == spellEffectEnvironmentalDamage {
 				// Spell::EffectEnvironmentalDMG (SpellEffects.cpp:306)
 				// runs at HIT_TARGET per unit target: the client arm's
