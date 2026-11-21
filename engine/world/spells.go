@@ -32365,9 +32365,10 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 		return
 	}
 	// ThreatManager::CanHaveThreatList (ThreatManager.cpp:156-178): pets cannot
-	// hold a threat list (same PetID/OwnerGUID convention as kill.go:219).
-	// Totems, triggers and player-summoned minions/guardians carry no identity
-	// markers on creatureMotion, so those arms stay unbridged.
+	// hold a threat list. Totems and triggers carry no identity markers on
+	// creatureMotion, so those arms stay unbridged; the player-summoned
+	// minion/guardian arm is enforced by the manager gate below
+	// (IsGuardian + CreatedByGUID in motionCanHaveThreatList).
 	if motion.PetID != 0 && motion.OwnerGUID != 0 {
 		s.server.motionMu.Unlock()
 		return
