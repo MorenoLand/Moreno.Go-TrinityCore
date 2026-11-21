@@ -7302,6 +7302,41 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.FleeingUntil = time.Time{}
 		motion.FleeTargetGUID = 0
 		motion.FleeNextAt = time.Time{}
+		// TimedFleeingMovementGenerator::Finalize
+		// (FleeingMovementGenerator.cpp:253-269): the timed flee ends
+		// with StopMoving + a re-engage handshake — AttackStop() then
+		// AI()->AttackStart(victim) — when the creature is alive with a
+		// victim. StopMoving cancels the flee spline: without it the
+		// chase-arrival swing gate (motion.Moving &&
+		// now.Before(motion.MoveEnds)) would hold the first swing until
+		// the abandoned spline finalizes, while C++ re-engages
+		// immediately. AttackStop sends only when attacking
+		// (Unit::AttackStop, Unit.cpp:5763-5765, returns false when
+		// !m_attacking) — the Go twin is InCombat with a live target; a
+		// dead victim cannot be m_attacking (death clears attackers), so
+		// the victim-alive gate matches GetVictim(). The untimed leg's
+		// DoFinalize (:123-135) only re-sets the target, which Go never
+		// cleared, so no twin there; the apply side sends no ATTACK_STOP
+		// (DoInitialize sets only UNIT_FLAG_FLEEING), so the pair is the
+		// expiry flicker C++ clients see. The critter evade-home arm
+		// below still runs after the handshake, as in C++ (Finalize runs
+		// before CritterAI::OnMovementGeneratorFinalized evades).
+		motion.Moving = false
+		motion.MoveEnds = time.Time{}
+		if motion.Health > 0 && motion.InCombat && motion.TargetGUID != 0 {
+			victimAlive := false
+			if vs := s.findSessionByGUID(motion.TargetGUID); vs != nil && vs.player != nil {
+				victimAlive = vs.player.Health > 0
+			} else if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.TargetGUID); vm != nil {
+				victimAlive = vm.Health > 0
+			}
+			if victimAlive {
+				stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+				startPkt := buildAttackStart(motion.GUID, motion.TargetGUID)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+			}
+		}
 		// A timed flee on a non-critter expires into the normal tick below
 		// (combat/wander resume); only critters take the evade-home arm.
 		homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
