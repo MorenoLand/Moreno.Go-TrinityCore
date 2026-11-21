@@ -592,17 +592,21 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 			s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_FALL_LAND, movementFalling)
 		}
 	}
-	// ThreatManager::RemoveMeFromThreatLists on the dead player
-	// (ThreatManager.cpp:690-697, reached on player death through
-	// Unit::setDeathState → CombatStop, Unit.cpp:8901-8907): a dead
-	// player must stop being a victim in every creature/pet threat
-	// table on the map/instance, exactly like a dead creature.
-	// Placed first, matching the C++ order where setDeathState (and
-	// its CombatStop) runs inside Unit::Kill ahead of all post-kill
-	// processing. Skipped while the spirit form holds: the player is
-	// still alive, so the threat leg runs at the deferred death.
+	// Unit::setDeathState(JUST_DIED) (Unit.cpp:8901-8921) runs
+	// CombatStop (Unit.cpp:5809-5826: AttackStop, RemoveAllAttackers,
+	// SendAttackSwingCancelAttack, EndAllPvECombat/SuppressPvPCombat)
+	// with the ThreatManager::RemoveMeFromThreatLists leg
+	// (ThreatManager.cpp:690-697): a dead player stops being a victim
+	// in every creature/pet threat table and drops its own attack
+	// target, so melee cannot auto-resume on resurrect and the
+	// InCombat flag clears. stopPlayerCombat is the victim-side
+	// CombatStop twin. Placed first, matching the C++ order where
+	// setDeathState (and its CombatStop) runs inside Unit::Kill ahead
+	// of all post-kill processing. Skipped while the spirit form
+	// holds: the player is still alive, so the CombatStop leg runs at
+	// the deferred death.
 	if !spiritOfRedemption && s.server != nil {
-		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
+		s.stopPlayerCombat(ctx)
 		// Unit::setDeathState(JUST_DIED) (Unit.cpp:8956) fires
 		// zoneScript->OnUnitDeath(this) inside setDeathState, after
 		// the CombatStop leg above — the instance-script player-death
@@ -939,7 +943,12 @@ func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
 	}
 	s.player.Health = 0
 	if s.server != nil {
-		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
+		// Deferred Unit::setDeathState(JUST_DIED) CombatStop twin
+		// (Unit.cpp:8901-8921 → CombatStop, Unit.cpp:5809-5826): the
+		// spirit form kept the player alive, so the attack-stop and
+		// InCombat clear land at the deferred death, like the
+		// threat-list removal the twin carries.
+		s.stopPlayerCombat(ctx)
 		// Deferred Unit::setDeathState(JUST_DIED) (Unit.cpp:8956):
 		// the instance-script player-death fire, landing at the
 		// deferred death — the same point killPlayer fires it for
@@ -1110,8 +1119,8 @@ func corpseFlags(player *playerState, battlegroundLootable bool) uint32 {
 	}
 	// Player::CreateCorpse (Player.cpp:4845-4846): battleground corpses carry
 	// CORPSE_FLAG_LOOTABLE (0x20) so the insignia can be removed. The
-	// !InArena() sub-arm has no bridge — Go has no arena system — and the
-	// insignia loot itself is documented unbridged at loot.go:601.
+	// !InArena() sub-arm rides battlegroundTypeForMap at the bgLootable
+	// site; the insignia loot itself is documented unbridged at loot.go:601.
 	if battlegroundLootable {
 		flags |= corpseFlagLootable
 	}
@@ -1247,6 +1256,30 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	preResurrect.WritePackedGUID(s.playerGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_PRE_RESURRECT), preResurrect.Bytes(), true)
 
+	// Player::BuildPlayerRepop (Player.cpp:4644-4649): the player cannot
+	// have a corpse already on the current map — after the repop auras
+	// (20584/8326, cast before the check in C++; re-applied here, a
+	// no-op refresh for an already-released ghost), an existing corpse
+	// logs and returns with no new corpse, no health=1, no
+	// water-walk/unroot and no reclaim-delay packet. Reached on a
+	// second repop without reclaim (hearth resurrect while already a
+	// ghost, MiscHandler.cpp:1505-1519). The login path is excluded: a
+	// CORPSE-state login carries its row by design (repopOnLogin +
+	// loadedCorpseRow) and C++ reaches BuildPlayerRepop with no corpse
+	// object loaded yet, so the check cannot fire there. BG deaths
+	// carry no DB row (save-skip), so the in-memory BG corpse is
+	// invisible to this check — that half needs the bones registry.
+	if !(s.player.repopOnLogin && s.player.loadedCorpseRow) {
+		if corpse, ok := s.loadCorpse(ctx); ok && corpse.MapID == s.player.Map {
+			if s.player.Race == 4 {
+				s.applyAura(20584)
+			}
+			s.applyAura(8326)
+			s.debug("buildPlayerRepop: player already has a corpse on this map", "account", s.accountName, "guid", s.playerGUID)
+			return
+		}
+	}
+
 	displayID := uint32(0)
 	if s.server.Data != nil {
 		if race, found, err := s.server.Data.Race(uint32(s.player.Race)); err == nil && found {
@@ -1269,7 +1302,15 @@ func (s *session) buildPlayerRepop(ctx context.Context, loggingOut bool) {
 	// the session BG instance id. The visible corpse object always carries
 	// these flags; the DB row only exists outside battlegrounds (the
 	// BG/arena save-skip at Player.cpp:4867-4868, gated in buildPlayerRepop).
+	// Player::CreateCorpse (Player.cpp:4838-4842): the LOOTABLE flag is a
+	// battleground arm that excludes arenas (InBattleground() &&
+	// !InArena()); battlegroundTypeForMap derives the arena property
+	// from the BG map (arena maps 559/562/572/617/618), the same
+	// template read the reclaim arena gate uses below.
 	bgLootable := s.bgData.InstanceID != 0
+	if _, _, isArena, ok := battlegroundTypeForMap(s.player.Map); ok && isArena {
+		bgLootable = false
+	}
 	// Player::CreateCorpse (Player.cpp:4812) opens with SpawnCorpseBones():
 	// a second death converts the existing corpse to bones
 	// (Map::ConvertCorpseToBones deletes the old row outside the BG/arena
@@ -2040,7 +2081,12 @@ func (s *Server) expireOldCorpses(ctx context.Context) int {
 		return 0
 	}
 	cutoff := time.Now().Unix() - int64(corpseResurrectableExpiry/time.Second)
-	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT guid, mapId, instanceId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags FROM corpse WHERE corpseType <> ? AND time < ?", corpseTypeBones, cutoff)
+	// Corpse::IsExpired (Corpse.cpp:202-206) is also true when no
+	// character-cache entry exists for the owner, and Map::RemoveOldCorpses
+	// (Map.cpp:4678-4690) converts such corpses to bones at the next
+	// sweep — the deleted-character arm is disjunctive with the 72h
+	// cutoff (an AND would leave orphans visible up to 3 days).
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT guid, mapId, instanceId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, guildId, flags, dynFlags FROM corpse WHERE corpseType <> ? AND (time < ? OR NOT EXISTS (SELECT 1 FROM characters WHERE guid = corpse.guid))", corpseTypeBones, cutoff)
 	if err != nil {
 		return 0
 	}
@@ -2162,6 +2208,11 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 	// resurrect (Player.cpp:4688); repop is not the only path here — a
 	// resurrect request lands at the corpse, which can sit under the map.
 	s.player.PlayerFlags &^= playerFlagOutOfBounds
+	// Player::ResurrectPlayer (Player.cpp:4694-4697): a recruiter or
+	// recruited player carries UNIT_DYNFLAG_REFER_A_FRIEND.
+	if s.isRecruiter || s.recruiterID != 0 {
+		s.player.DynamicFlags |= unitDynFlagReferAFriend
+	}
 	// Player::ResurrectPlayer restores health/powers (Player.cpp:4701-4707)
 	// before the visibility update and the Eluna hook — a Lua OnResurrect
 	// handler observes the restored values, not zero.
@@ -2184,12 +2235,16 @@ func (s *session) resurrectPlayerWithBones(ctx context.Context, restorePercent f
 	if applySickness {
 		s.applyResurrectionSickness()
 	}
+	// Player::ResurrectPlayer (Player.cpp:4682-4753) does no corpse
+	// handling at all — removal rides only an explicit SpawnCorpseBones
+	// call by the caller (ResurrectUsingRequestDataImpl :24236, the
+	// spirit-healer SendSpiritResurrect, the BG/arena/WG wave and
+	// reclaim legs), so the no-bones path leaves the corpse object
+	// alone: the hearth resurrect (HandleHearthAndResurrect,
+	// MiscHandler.cpp:1505-1523) resurrects without boning, and the
+	// corpse stays visible at the death location.
 	if toBones {
 		s.convertCorpseToBones(ctx, false)
-	} else if corpse, ok := s.loadCorpseObject(ctx); ok {
-		s.despawnCorpseObject(corpse.MapID, corpse.InstanceID, corpse.X, corpse.Y, corpse.Z)
-	} else {
-		s.despawnCorpseObject(s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z)
 	}
 	s.persistResurrectionState(ctx)
 	s.sendPlayerUpdate()

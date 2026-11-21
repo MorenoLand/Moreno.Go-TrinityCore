@@ -790,7 +790,7 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	casterOwner := s.creatureAffectingPlayerSession(motion)
 	s.sessionsMu.RLock()
 	for targetSession := range s.sessions {
-		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 {
+		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.isDeadOrGhost() {
 			continue
 		}
 		// WorldObject::IsValidAttackTarget (Object.cpp:2946): a GM

@@ -58,6 +58,13 @@ const unitDynFlagTappedByPlayer uint32 = 0x00000008
 // the feign-death corpse flag (AuraEffect::HandleFeignDeath).
 const unitDynFlagDead uint32 = 0x00000020
 
+// unitDynFlagReferAFriend mirrors UNIT_DYNFLAG_REFER_A_FRIEND
+// (SharedDefines.h:3134): set on resurrect (Player.cpp:4694-4697) when
+// the session is a recruiter or has a recruiter id. The login leg
+// (Player.cpp:18090) is not yet wired — a recruiter logging in alive
+// gains the flag on the next resurrect, not at login.
+const unitDynFlagReferAFriend uint32 = 0x00000040
+
 // unitDynFlagTrackUnit mirrors UNIT_DYNFLAG_TRACK_UNIT (SharedDefines.h:3129):
 // set by AuraEffect::HandleAuraModStalked (SpellAuraEffects.cpp) on a unit
 // carrying a live 68-effect aura (Hunter's Mark etc.).

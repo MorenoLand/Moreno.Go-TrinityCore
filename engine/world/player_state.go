@@ -254,6 +254,7 @@ type playerState struct {
 	XP                     uint32
 	Money                  uint32
 	PlayerFlags            uint32
+	DynamicFlags           uint32
 	GuildID                uint32
 	GuildRank              uint8
 	Map                    uint32
@@ -3941,6 +3942,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	}
 	values[unitFieldNPCEmoteState] = state.EmoteState
 	values[unitFieldPlayerFlags] = state.PlayerFlags
+	values[unitFieldDynamicFlags] = state.DynamicFlags
 	values[unitFieldTarget] = uint32(state.Selection)
 	values[unitFieldTarget+1] = uint32(state.Selection >> 32)
 	values[unitFieldCreatedBy] = uint32(state.CreatedByGUID)

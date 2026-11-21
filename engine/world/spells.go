@@ -1647,7 +1647,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 		// NON_ATTACKABLE_2 (0x10000) in player.UnitFlags (spells.go apply leg);
 		// TAXI_FLIGHT rides the TaxiPath gate above, and Go never sets the
 		// other two on players.
-		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.TaxiPath != "" || targetSession.player.UnitFlags&unitFlagNonAttackable2 != 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || s.playerReactionAlly(targetSession) || sessionIsGameMaster(targetSession) {
+		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.isDeadOrGhost() || targetSession.player.TaxiPath != "" || targetSession.player.UnitFlags&unitFlagNonAttackable2 != 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || s.playerReactionAlly(targetSession) || sessionIsGameMaster(targetSession) {
 			continue
 		}
 		// Per-leg geometry: cylinder + arc + LOS of any leg family.
