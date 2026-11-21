@@ -10064,7 +10064,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			}
 			continue
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false, nil)
 	}
 }
 
@@ -10220,7 +10220,11 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		if s.dynobjCreatureTargetImmune(ctx, spell, tm.guid, m.Map, m.InstanceID, s.creatureFriendlyToTarget(m, tm.guid)) {
 			continue
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true)
+		sharedDelayMs := uint32(0)
+		if d := object.NextAuraTick.Sub(now); d > 0 {
+			sharedDelayMs = uint32(d / time.Millisecond)
+		}
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true, &sharedDelayMs)
 	}
 }
 
@@ -10238,7 +10242,13 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 // whose carrier session resolves the tick on the aura's own map.
 // The remaining stay-outs are the linked-aura apply arms, and the
 // charm, vehicle, dummy, feign-death and phase effect tails.
-func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool) {
+// periodicInitialDelay is the dynobj shared-schedule override for the
+// fresh-apply tick arm (the applyAuraToTarget creature-branch twin,
+// spells.go:43183): a dynobj joiner's first tick fires on the dynobj's
+// schedule, not a private period later. Nil keeps the default
+// periodicTickInitialDelay; the merge re-arm never takes it, like the
+// session twin.
+func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool, periodicInitialDelay *uint32) {
 	if s == nil || m == nil || targetGUID == 0 {
 		return
 	}
@@ -10303,7 +10313,7 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		if prevent.defaultPrevented(i) {
 			continue
 		}
-		if creatureImmuneToSpellEffect(s, targetKey, spell, i, stats, s.isTotemGUID(targetGUID), nil, s.creatureFriendlyToTarget(m, targetGUID)) {
+		if creatureImmuneToSpellEffect(s, targetKey, spell, i, stats, s.isTotemGUID(targetGUID), nil, true, s.creatureFriendlyToTarget(m, targetGUID)) {
 			continue
 		}
 		bp := s.scaledEffectValue(spell, eff, casterLevel(m), creatureIsPlayerControlled(m), eff.CalcValueForLevel(spell, casterLevel(m)))
@@ -10582,12 +10592,18 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		// record ticks through the Server scheduler on a carrier
 		// session (no player session exists to schedule through).
 		// Dynobj applications go primary-first above, so the record's
-		// PeriodMs is the ticking effect's amplitude here. A dynobj
-		// joiner's first tick is not aligned to the dynobj's shared
-		// schedule (the player pass carries sharedDelayMs; the server
-		// path has no delay parameter yet).
+		// PeriodMs is the ticking effect's amplitude here. A provided
+		// shared delay always wins, even for START_PERIODIC_AT_APPLY
+		// spells: a dynobj joiner ticks on the effect's shared
+		// schedule (AuraEffect::Update, SpellAuras.cpp:815-843); the
+		// attribute's immediate first tick fires only at aura
+		// creation (ResetPeriodic, SpellAuraEffects.cpp:553-563).
 		if aura.PeriodMs > 0 {
-			s.scheduleCreaturePeriodicTickInitial(aura, aura.PeriodMs, periodicTickInitialDelay(spell, aura.PeriodMs))
+			initialDelay := periodicTickInitialDelay(spell, aura.PeriodMs)
+			if periodicInitialDelay != nil {
+				initialDelay = *periodicInitialDelay
+			}
+			s.scheduleCreaturePeriodicTickInitial(aura, aura.PeriodMs, initialDelay)
 		}
 		// spell_rog_killing_spree_AuraScript::HandleApply
 		// (spell_rogue.cpp:414-417): the EFFECT_0 PERIODIC_DUMMY

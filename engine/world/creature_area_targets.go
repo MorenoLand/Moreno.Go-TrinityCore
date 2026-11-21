@@ -2777,7 +2777,7 @@ func (s *Server) serverCreatureReflectReturnStatus(ctx context.Context, motion *
 	}
 	key := creatureAuraKeyForMotion(motion)
 	stats := s.loadCreatureStats(ctx, motion.Entry)
-	if creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(motion.GUID), nil, motion.Faction, func(uint32) bool { return true }) {
+	if creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(motion.GUID), nil, true, motion.Faction, func(uint32) bool { return true }) {
 		return protocol.SpellMissImmune
 	}
 	if spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s, key, spell, spell.SchoolMask) {
@@ -2865,7 +2865,7 @@ func (s *Server) serverCreatureSpellImmuneVerdict(ctx context.Context, m *creatu
 	}
 	key := creatureAuraKeyForMotion(tm)
 	stats := s.loadCreatureStats(ctx, tm.Entry)
-	if creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(targetGUID), nil, tm.Faction, func(uint32) bool { return s.creatureFriendlyToTarget(m, targetGUID) }) {
+	if creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(targetGUID), nil, true, tm.Faction, func(uint32) bool { return s.creatureFriendlyToTarget(m, targetGUID) }) {
 		return true
 	}
 	return spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s, key, spell, spell.SchoolMask)
@@ -3336,10 +3336,10 @@ func (s *Server) applyCreatureIgnoreCombatResultAuras(casterKey creatureAuraKey,
 // strip, Spell.cpp:2108-2112; UpdateSpellCastDataTargets, Spell.cpp:4491-4492
 // — the session path's spellTargetFullyEffectImmune /
 // creatureTargetFullyEffectImmune arms, re-based on the creature caster).
-// The nil-caster delta is shared with the session arms' convention: the
-// 267 aura-apply-school arm treats a hostile creature caster's positive
-// effects as non-immune, where C++ (live caster, Unit.cpp:7987) immunizes
-// them; every other arm is caster-independent.
+// The caster is the live creature motion m, so the per-effect 267 arm
+// reads casterLive true: a hostile creature caster's positive effects on
+// a 267-carrying target immunize, as in C++ (Unit.cpp:7987); every other
+// arm is caster-independent.
 func (s *Server) serverCreatureFullyEffectImmuneVerdict(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
 	if s == nil || m == nil || targetGUID == 0 {
 		return false
@@ -3370,7 +3370,7 @@ func (s *Server) serverCreatureFullyEffectImmuneVerdict(ctx context.Context, m *
 			continue
 		}
 		anyEffect = true
-		if !creatureImmuneToSpellEffect(s, key, spell, i, stats, s.isTotemGUID(targetGUID), nil, friendly) {
+		if !creatureImmuneToSpellEffect(s, key, spell, i, stats, s.isTotemGUID(targetGUID), nil, true, friendly) {
 			return false
 		}
 	}

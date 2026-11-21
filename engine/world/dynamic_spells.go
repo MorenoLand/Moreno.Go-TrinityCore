@@ -280,6 +280,10 @@ const dynobjTargetMapInterval = 500 * time.Millisecond
 // the dynobj 500ms pass never runs. The friendly verdict is the caller's:
 // the player-path tick's targets come from the enemy sweep unless the
 // spell is friendly, and the creature-path tick already filtered on it.
+// The dynobj caster is live at both pass sites (a resolved player session
+// in updateDynamicSpellAuras, a live motion in
+// updateCreatureDynobjTargetMap), so the whole-spell gate passes
+// casterLive true for the per-effect 267 arm (Unit.cpp:7987).
 func (s *Server) dynobjCreatureTargetImmune(ctx context.Context, spell wotlk.Spell, targetGUID uint64, mapID, instanceID uint32, friendly bool) bool {
 	if s == nil {
 		return false
@@ -290,7 +294,7 @@ func (s *Server) dynobjCreatureTargetImmune(ctx context.Context, spell wotlk.Spe
 	}
 	stats := s.loadCreatureStats(ctx, tm.Entry)
 	key := creatureAuraKeyForMotion(tm)
-	return creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(targetGUID), nil, tm.Faction, func(uint32) bool { return friendly })
+	return creatureImmuneToSpell(s, key, spell, stats, s.isTotemGUID(targetGUID), nil, true, tm.Faction, func(uint32) bool { return friendly })
 }
 
 // dynobjUpkeepTick mirrors the m_timeCla arm of Aura::Update
@@ -621,7 +625,7 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 			if s.dynobjCreatureTargetImmune(ctx, spell, guid, object.Map, object.InstanceID, s.creatureFriendlyToTarget(caster, guid)) {
 				continue
 			}
-			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil, true)
+			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil, true, &sharedDelayMs)
 		}
 		object.AuraHolders[guid] = struct{}{}
 	}

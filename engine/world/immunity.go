@@ -1846,7 +1846,7 @@ func (s *session) creatureTargetImmuneToSpellEffect(ctx context.Context, targetG
 	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 		targetFaction = tgt.Faction
 	}
-	return creatureImmuneToSpellEffect(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, effIndex, stats, s.server.isTotemGUID(targetGUID), caster, s.creatureFriendlyToCaster(caster, targetFaction))
+	return creatureImmuneToSpellEffect(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, effIndex, stats, s.server.isTotemGUID(targetGUID), caster, caster != nil, s.creatureFriendlyToCaster(caster, targetFaction))
 }
 
 // scriptSpellImmuneRows snapshots the creature's script-written
@@ -2363,8 +2363,12 @@ func creatureLiveDispelImmune(srv *Server, key creatureAuraKey, dispelType uint3
 // the 267 arm scans the target's live creature auras via
 // creatureImmuneAuraApplySchoolMask (GetAuraEffectsByType, Unit.cpp:7984),
 // and friendly is the target's IsFriendlyTo(caster) verdict, precomputed
-// by the caller.
-func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.Spell, effIndex int, stats creatureStats, isTotem bool, caster *session, friendly bool) bool {
+// by the caller. casterLive is the liveness signal the nil-session sites
+// need: a creature caster has no session, so its call sites pass nil for
+// caster with casterLive true (the player-side friendlyOverride twin);
+// a nil caster with casterLive false keeps the C++ null-caster reading,
+// where only non-positive effects immunize.
+func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.Spell, effIndex int, stats creatureStats, isTotem bool, caster *session, casterLive bool, friendly bool) bool {
 	if effIndex < 0 || effIndex >= len(spell.Effects) {
 		return false
 	}
@@ -2458,10 +2462,12 @@ func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.S
 		// (Unit.cpp:7981-7989): immune to the application of harmful
 		// magical effects whose school overlaps a live 267 row's misc
 		// mask — harmful means the caster exists and is not friendly to
-		// the target, or the effect is not positive.
+		// the target, or the effect is not positive. casterLive is the
+		// live-caster signal: C++ always passes a Unit here (AddAura
+		// passes `this`), while Go creature casters carry no session.
 		if spell.AttributesEx1&spellAttr2UnaffectedByAuraSchoolImmune == 0 {
 			if mask := srv.creatureImmuneAuraApplySchoolMask(key); mask&spell.SchoolMask != 0 &&
-				((caster != nil && !friendly) || !spell.IsPositiveEffect(effIndex)) {
+				((casterLive && !friendly) || !spell.IsPositiveEffect(effIndex)) {
 				return true
 			}
 		}
@@ -2477,7 +2483,7 @@ func creatureImmuneToSpellEffect(srv *Server, key creatureAuraKey, spell wotlk.S
 // rows written at aura apply (SpellAuras.cpp:1337-1342); IMMUNITY_DISPEL
 // has no template writer, so the script arm stays vacuous without a live
 // 41 aura — the live fold below covers that case.
-func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, stats creatureStats, isTotem bool, caster *session, targetFaction uint32, friendlyToCaster func(uint32) bool) bool {
+func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, stats creatureStats, isTotem bool, caster *session, casterLive bool, targetFaction uint32, friendlyToCaster func(uint32) bool) bool {
 	// Unit::IsImmunedToSpell checks IMMUNITY_ID before the
 	// UNAFFECTED_BY_INVULNERABILITY gate (Unit.cpp:7858-7862): a
 	// single-spell immunity blocks even a piercing spell, while the
@@ -2505,6 +2511,8 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 	// for a nil caster, so this is behavior-identical there, and it lets a
 	// return-trip caller pass an always-friendly verdict for a caster that is
 	// the target itself (Unit.cpp:7909 IsFriendlyTo(caster) with caster == self).
+	// casterLive rides through to the per-effect 267 arm: a nil-session
+	// creature caster is still a live C++ Unit (Unit.cpp:7987).
 	friendly := friendlyToCaster != nil && friendlyToCaster(targetFaction)
 	anyEffect := false
 	immunedToAllEffects := true
@@ -2513,7 +2521,7 @@ func creatureImmuneToSpell(srv *Server, key creatureAuraKey, spell wotlk.Spell, 
 			continue
 		}
 		anyEffect = true
-		if !creatureImmuneToSpellEffect(srv, key, spell, i, stats, isTotem, caster, friendly) {
+		if !creatureImmuneToSpellEffect(srv, key, spell, i, stats, isTotem, caster, casterLive, friendly) {
 			immunedToAllEffects = false
 			break
 		}
@@ -2667,7 +2675,7 @@ func (s *session) creatureTargetImmuneToSpell(ctx context.Context, targetGUID ui
 	friendlyToCaster := func(faction uint32) bool {
 		return s.creatureFriendlyToCaster(caster, faction)
 	}
-	return creatureImmuneToSpell(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, stats, isTotem, caster, targetFaction, friendlyToCaster)
+	return creatureImmuneToSpell(s.server, creatureAuraKeyForPlayer(*s.player, targetGUID), spell, stats, isTotem, caster, caster != nil, targetFaction, friendlyToCaster)
 }
 
 // creatureTargetFullyEffectImmune is the creature-target IMMUNE2 gate:
@@ -2686,7 +2694,7 @@ func (s *session) creatureTargetFullyEffectImmune(ctx context.Context, targetGUI
 			continue
 		}
 		anyEffect = true
-		if !creatureImmuneToSpellEffect(s.server, key, spell, i, stats, isTotem, caster, friendly) {
+		if !creatureImmuneToSpellEffect(s.server, key, spell, i, stats, isTotem, caster, caster != nil, friendly) {
 			return false
 		}
 	}

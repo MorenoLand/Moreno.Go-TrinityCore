@@ -37305,6 +37305,27 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 			}
 		}
 	}
+	// DynObjAura primary-first (dynamic_spells.go: dynobjPrimaryEffect),
+	// the serverApplyAuraToCreatureTarget twin: the record's single
+	// AuraType/amount follow the first periodic effect, not the
+	// lowest-index aura effect — a leading dummy (27085 eff0 aura 4,
+	// period 0) would otherwise own the record and the trailing trigger
+	// (eff1 aura 23, period 1000) would never tick, while the armed
+	// timer still fires into the void (no case-4 arm in the tick
+	// executor) and the 500ms pass skips the holder as already
+	// present. Gated on persistent-area-aura applications; direct
+	// casts keep index order. -1 keeps the first-effect behavior.
+	primaryIndex := -1
+	if persistentAreaAura && s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found {
+			for index, effect := range sp.Effects {
+				if effect.Effect != 0 && effect.Aura != 0 && effect.AuraPeriod > 0 && immuneMask&(1<<uint(index)) == 0 {
+					primaryIndex = index
+					break
+				}
+			}
+		}
+	}
 	if s.auras == nil {
 		s.auras = make(map[uint32]struct{})
 	}
@@ -37496,7 +37517,7 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 						recalculateMask |= 1 << uint(index)
 					}
 				}
-				if effect.Effect == 0 || (index > 0 && auraType != 0 && effect.Aura != spellAuraMounted && !(auraType == 4 && effect.Aura == 4)) {
+				if effect.Effect == 0 || (persistentAreaAura && primaryIndex >= 0 && index != primaryIndex) || (index > 0 && auraType != 0 && effect.Aura != spellAuraMounted && !(auraType == 4 && effect.Aura == 4)) {
 					continue
 				}
 				auraType = effect.Aura
@@ -37580,6 +37601,9 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
 			for index, effect := range sp.Effects {
 				if effectMask&(1<<uint(index)) == 0 || effect.Aura == 0 {
+					continue
+				}
+				if persistentAreaAura && primaryIndex >= 0 && index != primaryIndex {
 					continue
 				}
 				if s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras).suppressed {
