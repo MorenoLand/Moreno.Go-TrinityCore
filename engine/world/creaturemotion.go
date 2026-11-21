@@ -122,6 +122,7 @@ type creatureMotion struct {
 	ScriptFlightRateKnown bool
 	ScriptHidden          bool    // m_serverSideVisibility SERVERSIDE_VISIBILITY_GM arm script override: Lua CreatureMethods::SetVisible (Unit::SetVisible twin, Unit.cpp:8656); true = visible to GM seers only (SEC_GAMEMASTER), false = normal visibility (SEC_PLAYER); honored by the nearby-creature update filter, so script hide/unhide arms port with real effect
 	FarVisible            bool    // m_isFarVisible script override: Lua CreatureMethods::SetFarVisible (WorldObject::SetFarVisible twin, Object.cpp:1049-1055); true = visible out to MAX_VISIBILITY_DISTANCE (Object.cpp:1521, GetVisibilityRange arm) instead of the map default; honored by the nearby-creature update filter, so script far-visible arms port with real effect
+	VisibilityDistType    uint8   // creature_addon / creature_template_addon visibilityDistanceType (Creature.cpp:2675-2676, Object.cpp:1063): the DB visibility override, 0 = Normal (no override); the GetVisibilityRange arm (Object.cpp:1534-1542) reads it ahead of FarVisible, so the spell-focus search and any motion-anchored range check use it; re-affirmed from the DB row on every motion sweep, like Faction (no Lua bridge mutates it)
 	ScriptScale           float32 // OBJECT_FIELD_SCALE_X script override: Lua CreatureMethods::SetScale (Creature::SetObjectScale twin, Creature.cpp:3199), replaces the template base in the scale twin while known
 	ScriptScaleKnown      bool
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect
@@ -5000,7 +5001,21 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	queryHead := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.orientation, c.MovementType, c.wander_distance,
 		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
 		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.dynamicflags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000), COALESCE(NULLIF(t.RangeAttackTime, 0), 2000),
-		c.curhealth, c.phaseMask
+		c.curhealth, c.phaseMask, COALESCE(ca.visibilityDistanceType, cta.visibilityDistanceType, 0)
+		FROM creature AS c
+		JOIN creature_template AS t ON t.entry = c.id
+		LEFT JOIN creature_addon AS ca ON ca.guid = c.guid
+		LEFT JOIN creature_template_addon AS cta ON cta.entry = c.id
+		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
+		AND (`
+	// fallbackHead is the buildNearbyCreatureUpdates fallback-query twin: on
+	// a minimal DB without the addon tables the join query fails, so the
+	// sweep retries without the joins and reads the override as 0
+	// (Normal) via the literal, keeping the same scan list.
+	fallbackHead := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.orientation, c.MovementType, c.wander_distance,
+		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
+		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.dynamicflags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000), COALESCE(NULLIF(t.RangeAttackTime, 0), 2000),
+		c.curhealth, c.phaseMask, 0
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
@@ -5020,12 +5035,15 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 		queryArgs = append(queryArgs, p.SeesHidden, p.IsDead)
 		rows, err := s.WorldStore.DB.QueryContext(ctx, query, queryArgs...)
 		if err != nil {
-			continue
+			rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackHead+motionPhaseClause+queryTail, queryArgs...)
+			if err != nil {
+				continue
+			}
 		}
 		for rows.Next() {
-			var guid, entry, moveType, faction, level, unitFlags, dynamicFlags, flagsExtra, attackTime, rangeAttackTime, curHealth, phaseMask int64
+			var guid, entry, moveType, faction, level, unitFlags, dynamicFlags, flagsExtra, attackTime, rangeAttackTime, curHealth, phaseMask, visDistType int64
 			var x, y, z, orientation, wander, walkSpeed, runSpeed float64
-			if err := rows.Scan(&guid, &entry, &x, &y, &z, &orientation, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &dynamicFlags, &flagsExtra, &attackTime, &rangeAttackTime, &curHealth, &phaseMask); err != nil {
+			if err := rows.Scan(&guid, &entry, &x, &y, &z, &orientation, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &dynamicFlags, &flagsExtra, &attackTime, &rangeAttackTime, &curHealth, &phaseMask, &visDistType); err != nil {
 				continue
 			}
 			spawnKey := creatureMotionSpawnKey{MapID: p.Map, InstanceID: p.InstanceID, GUID: uint32(guid)}
@@ -5065,6 +5083,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 					motion.DynamicFlags = uint32(dynamicFlags)
 				}
 				motion.FlagsExtra = uint32(flagsExtra)
+				motion.VisibilityDistType = uint8(visDistType)
 				if !motion.PhaseMaskKnown {
 					motion.PhaseMask = uint32(phaseMask)
 				}

@@ -145,6 +145,13 @@ type Server struct {
 	// Server.spellBonusData, for the damage-done coefficient leg.
 	spellBonusOnce sync.Once
 	spellBonus     map[uint32]spellBonusEntry
+	// visOverrideMu/visOverrideMax cache the widest DB visibility-distance
+	// override per map (see maxVisibilityDistanceOverrideForMap in
+	// creatures.go): addon rows are static for the life of the process, so
+	// the MAX query runs once per map and the nearby-creature sweep reuses
+	// it instead of widening its box blindly on every pass.
+	visOverrideMu  sync.Mutex
+	visOverrideMax map[uint32]float64
 	queuedSessions []*session
 	// disconnectTimes mirrors World's m_disconnects (World.cpp:3114): account id
 	// -> unix time of last non-queued session removal, consulted by the

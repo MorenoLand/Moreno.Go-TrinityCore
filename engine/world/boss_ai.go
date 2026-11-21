@@ -265,13 +265,30 @@ func (s *Server) respawnEvadedCreature(ctx context.Context, rec evadeDespawn) {
 	var moveType, model, npcFlags int64
 	var faction, dynFlags, phaseMask uint32
 	var wander, walkSpeed, runSpeed, x, y, z, orientation, scale, mana float64
+	var visDistType int64
 	err := s.WorldStore.DB.QueryRowContext(ctx,
 		`SELECT c.MovementType, c.wander_distance, COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
 			c.position_x, c.position_y, c.position_z, c.orientation,
 			COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), NULLIF(t.modelid2, 0), NULLIF(t.modelid3, 0), NULLIF(t.modelid4, 0), 1),
-			t.npcflag, t.scale, c.curmana, COALESCE(t.faction, 0), COALESCE(t.dynamicflags, 0), c.phaseMask
-			FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ?`,
-		rec.DBGuid).Scan(&moveType, &wander, &walkSpeed, &runSpeed, &x, &y, &z, &orientation, &model, &npcFlags, &scale, &mana, &faction, &dynFlags, &phaseMask)
+			t.npcflag, t.scale, c.curmana, COALESCE(t.faction, 0), COALESCE(t.dynamicflags, 0), c.phaseMask,
+			COALESCE(ca.visibilityDistanceType, cta.visibilityDistanceType, 0)
+			FROM creature AS c JOIN creature_template AS t ON t.entry = c.id
+			LEFT JOIN creature_addon AS ca ON ca.guid = c.guid
+			LEFT JOIN creature_template_addon AS cta ON cta.entry = c.id WHERE c.guid = ?`,
+		rec.DBGuid).Scan(&moveType, &wander, &walkSpeed, &runSpeed, &x, &y, &z, &orientation, &model, &npcFlags, &scale, &mana, &faction, &dynFlags, &phaseMask, &visDistType)
+	if err != nil {
+		// Minimal-DB fallback (buildNearbyCreatureUpdates twin): without the
+		// addon tables the join query fails, so retry join-less and read
+		// the override as 0 (Normal) via the literal, same scan list.
+		err = s.WorldStore.DB.QueryRowContext(ctx,
+			`SELECT c.MovementType, c.wander_distance, COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
+				c.position_x, c.position_y, c.position_z, c.orientation,
+				COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), NULLIF(t.modelid2, 0), NULLIF(t.modelid3, 0), NULLIF(t.modelid4, 0), 1),
+				t.npcflag, t.scale, c.curmana, COALESCE(t.faction, 0), COALESCE(t.dynamicflags, 0), c.phaseMask,
+				0
+				FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ?`,
+			rec.DBGuid).Scan(&moveType, &wander, &walkSpeed, &runSpeed, &x, &y, &z, &orientation, &model, &npcFlags, &scale, &mana, &faction, &dynFlags, &phaseMask, &visDistType)
+	}
 	if err != nil {
 		return
 	}
@@ -281,12 +298,14 @@ func (s *Server) respawnEvadedCreature(ctx context.Context, rec evadeDespawn) {
 	if motion == nil {
 		return
 	}
+	motion.VisibilityDistType = uint8(visDistType)
 	motion.Health = motion.MaxHealth
 	// Re-create the object client-side: build the spawn block from the DB
 	// row overlaid with the live motion state.
 	spawn := creatureSpawn{GUID: rec.DBGuid, Entry: rec.Entry, Map: rec.Map,
 		X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation),
-		Model: uint32(model), NPCFlags: uint32(npcFlags), Scale: float32(scale), Mana: uint32(mana)}
+		Model: uint32(model), NPCFlags: uint32(npcFlags), Scale: float32(scale), Mana: uint32(mana),
+		VisibilityDistanceType: uint8(visDistType)}
 	stats := s.loadCreatureStats(ctx, rec.Entry)
 	spawn.MaxHealth, spawn.Health = stats.MaxHealth, stats.MaxHealth
 	spawn.Faction, spawn.DynamicFlags = faction, dynFlags

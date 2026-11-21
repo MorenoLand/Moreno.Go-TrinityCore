@@ -145,6 +145,16 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	if s.anyFarVisibleCreature(state.Map, state.InstanceID) {
 		boxDist = maxVisibilityDistance
 	}
+	// The DB override widens the box too: a Large (200) / Gigantic (400) /
+	// Infinite (533.3333) row beyond the map range never reaches the
+	// per-row GetVisibilityRange check otherwise (Tiny/Small sit inside the
+	// map range, so only the three wide overrides need the widening).
+	// The per-map max is cached (addon rows are static for the process);
+	// the box takes the widest of the map range, the far-visible MAX, and
+	// the widest DB override on the map.
+	if maxOverride := s.maxVisibilityDistanceOverrideForMap(ctx, state.Map); maxOverride > boxDist {
+		boxDist = maxOverride
+	}
 	isGM := state.ExtraFlags&playerExtraGMOn != 0 || state.PlayerFlags&playerFlagGM != 0
 	// seesHidden is the SERVERSIDE_VISIBILITY_GM detect arm of
 	// WorldObject::CanSeeOrDetect (Object.cpp:1622-1630), distinct from the
@@ -438,6 +448,46 @@ func (s *Server) anyFarVisibleCreature(mapID, instanceID uint32) bool {
 		}
 	}
 	return false
+}
+
+// maxVisibilityDistanceOverrideForMap returns the widest creature_addon /
+// creature_template_addon visibilityDistanceType override among creature
+// rows on the map, mapped through the VisibilityDistances table
+// (ObjectDefines.h:28-37, Object.cpp:58-66; Creature.cpp:2675-2676), or 0
+// when no row carries one. The guid addon wins over the template addon
+// per row, matching the per-row COALESCE in buildNearbyCreatureUpdates
+// (Creature::GetCreatureAddon precedence, Creature.cpp:2611-2621).
+// Cached per map: addon rows are static for the life of the process (no
+// runtime mutation path), and the sweep runs on every player move. A
+// query failure (missing addon tables on a minimal DB) caches 0, matching
+// the fallback sweep's no-override per-row behavior.
+func (s *Server) maxVisibilityDistanceOverrideForMap(ctx context.Context, mapID uint32) float64 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0
+	}
+	s.visOverrideMu.Lock()
+	defer s.visOverrideMu.Unlock()
+	if s.visOverrideMax == nil {
+		s.visOverrideMax = make(map[uint32]float64)
+	}
+	if max, ok := s.visOverrideMax[mapID]; ok {
+		return max
+	}
+	var maxType int64
+	err := s.WorldStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(COALESCE(ca.visibilityDistanceType, cta.visibilityDistanceType, 0)), 0)
+		FROM creature AS c
+		LEFT JOIN creature_addon AS ca ON ca.guid = c.guid
+		LEFT JOIN creature_template_addon AS cta ON cta.entry = c.id
+		WHERE c.map = ?`, mapID).Scan(&maxType)
+	max := 0.0
+	if err == nil {
+		if override, ok := visibilityDistanceOverride(uint8(maxType)); ok {
+			max = override
+		}
+	}
+	s.visOverrideMax[mapID] = max
+	return max
 }
 
 func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSpawn) {

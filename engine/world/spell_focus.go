@@ -121,13 +121,18 @@ func (s *Server) motionSpellFocusObject(ctx context.Context, m *creatureMotion, 
 		return 0, 0, 0, 0, false
 	}
 	// WorldObject::GetVisibilityRange (Object.cpp:1534-1542) for a creature
-	// caster: a far-visible creature (m_isFarVisible, motion.FarVisible)
+	// caster: the DB visibility-distance override
+	// (creature_addon / creature_template_addon, Creature.cpp:2675-2676)
+	// wins, then a far-visible creature (m_isFarVisible, motion.FarVisible)
 	// searches out to MAX_VISIBILITY_DISTANCE (SIZE_OF_GRIDS, 533.3333),
 	// otherwise the map range via visibilityRangeForMap
-	// (Map.cpp:311/3823/4326). No visibility-distance-override model
-	// exists in Go, so that arm is not mirrored here.
+	// (Map.cpp:311/3823/4326). The override rides the motion record
+	// (motion.VisibilityDistType, threaded from the spawn row by the
+	// motion sweep and the evade-respawn path).
 	var visibility float64
-	if m.FarVisible {
+	if override, ok := visibilityDistanceOverride(m.VisibilityDistType); ok {
+		visibility = override
+	} else if m.FarVisible {
 		visibility = terrainGridSize
 	} else {
 		visibility = s.visibilityRangeForMap(m.Map)
