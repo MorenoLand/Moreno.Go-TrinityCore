@@ -239,6 +239,15 @@ func dynobjTargetMasks(effects []dynobjAuraEffect, enemy, friendly, def map[uint
 		}
 	}
 	for _, ae := range effects {
+		if ae.Index < 0 {
+			// The synthetic fallback row (Index -1, built when no
+			// effect carries an Aura) is not a DBC effect index:
+			// C++ FillTargetMap only sets bits for real effIndex
+			// 0..MAX-1 with HasEffect (SpellAuras.cpp:2763-2785), so
+			// it selects nothing — today its bit computes to 0 and
+			// seeds zero-mask holder entries in the passes.
+			continue
+		}
 		bit := uint8(1 << uint(ae.Index))
 		switch dynobjEffectCheckType(ae.Effect) {
 		case dynobjCheckEnemy:

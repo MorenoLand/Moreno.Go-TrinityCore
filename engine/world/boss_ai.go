@@ -10097,13 +10097,13 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 // (SpellEffects.cpp:1738-1760) for a creature caster: the last 27 effect
 // spawns a dynamic spell object at the cast's resolved destination (the
 // caster position when the spell carries no dest-family target), with the
-// DBC duration and radius at the caster's level. The session helper's
-// SPELLMOD_DURATION fold has no creature twin (no spellmod owner session),
-// so the raw DBC duration stands. The aura is applied here to the units in
+// DBC duration folded by SPELLMOD_DURATION through the caster's spell-mod
+// owner (the pet/totem owner's session, nil for wild casters) and the radius
+// at the caster's level. The aura is applied here to the units in
 // radius at cast time — players through applyAuraFromCaster, creatures
-// through the Server twin — gated on the spell-level friendly/enemy split
-// (isFriendlyAreaSpell) like the session dynobj pass's enemy/friendly
-// branch. Cast-time applies carry the PersistentAreaAura flag, so the 500ms
+// through the Server twin — each aura effect selecting its own targets
+// by check type (DynObjAura::FillTargetMap, SpellAuras.cpp:2763-2785),
+// the mask riding allowedMask into the apply. Cast-time applies carry the PersistentAreaAura flag, so the 500ms
 // creature pass (updateCreatureDynobjTargetMap) adopts them into
 // AuraHolders instead of re-applying, and the despawn strip removes them;
 // newcomers after the cast gain the aura from that pass. The object itself
@@ -10162,26 +10162,114 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 	}
 	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(s.nextDynamicSpellLowGUID()), CasterGUID: m.GUID, SpellID: uint64(spell.ID), Map: m.Map, InstanceID: m.InstanceID, X: cx, Y: cy, Z: cz, Orientation: m.Orientation, Radius: radius, CastTime: uint32(now.UnixMilli()), SpellData: spell, AuraEffect: primary.Effect, AuraEffectIndex: primary.Index, AuraDurationMs: uint32(durationMs), AuraPeriodMs: primary.PeriodMs, AuraAmount: primary.Amount, AuraSchoolMask: schoolMask, AuraEffects: effects, NextAuraTick: primary.NextTick, NextTargetMapPass: now, NextUpkeepTick: now.Add(auraUpkeepIntervalMs * time.Millisecond)}
 	s.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
-	friendly := isFriendlyAreaSpell(spell)
+	// DynObjAura::FillTargetMap (SpellAuras.cpp:2763-2785) selects per
+	// effect, so the cast-time fill keeps one candidate set per check
+	// class and lets dynobjTargetMasks split them — the old single
+	// friendly verdict (isFriendlyAreaSpell, whole-spell) applied every
+	// effect to every target in one set, so a DEFAULT-check effect
+	// (27085/42939 eff1 trigger, 31266 eff1, 47346 eff1 — tgtA 1/0)
+	// never reached friendlies in a hostile patch, and a friendly
+	// effect of a harmful spell never reached allies. The set-building
+	// gates mirror the 500ms pass (updateCreatureDynobjTargetMap):
+	// in-radius, in-flight and dead gates here; the CheckAreaTarget
+	// and immunity gates run in the apply loops below.
 	inRadius := func(x, y, z float32) bool {
 		return distance3D(x, y, z, cx, cy, cz) <= float64(radius)
 	}
+	enemySet := make(map[uint64]struct{})
+	friendlySet := make(map[uint64]struct{})
+	defaultSet := make(map[uint64]struct{})
+	playerTargets := make(map[uint64]*session)
 	s.sessionsMu.RLock()
-	var playerTargets []*session
+	var players []*session
 	for sess := range s.sessions {
 		if sess != nil && sess.player != nil && sess.player.Map == m.Map && sess.player.InstanceID == m.InstanceID {
-			playerTargets = append(playerTargets, sess)
+			players = append(players, sess)
 		}
 	}
 	s.sessionsMu.RUnlock()
-	for _, vs := range playerTargets {
+	for _, vs := range players {
 		if vs.player == nil || vs.inFlight || !inRadius(vs.player.X, vs.player.Y, vs.player.Z) {
 			continue
 		}
-		if friendly != s.creatureFriendlyToTarget(m, vs.playerGUID) {
+		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 			continue
 		}
-		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
+		defaultSet[vs.playerGUID] = struct{}{}
+		if s.creatureFriendlyToTarget(m, vs.playerGUID) {
+			friendlySet[vs.playerGUID] = struct{}{}
+		} else {
+			enemySet[vs.playerGUID] = struct{}{}
+		}
+		playerTargets[vs.playerGUID] = vs
+	}
+	type creatureTarget struct {
+		guid    uint64
+		x, y, z float32
+	}
+	s.motionMu.Lock()
+	var creatureTargets []creatureTarget
+	for _, tm := range s.motionMapLocked(m.Map, m.InstanceID) {
+		if tm != nil {
+			creatureTargets = append(creatureTargets, creatureTarget{guid: tm.GUID, x: tm.X, y: tm.Y, z: tm.Z})
+		}
+	}
+	s.motionMu.Unlock()
+	for _, tm := range creatureTargets {
+		if !inRadius(tm.x, tm.y, tm.z) {
+			continue
+		}
+		defaultSet[tm.guid] = struct{}{}
+		if s.creatureFriendlyToTarget(m, tm.guid) {
+			friendlySet[tm.guid] = struct{}{}
+		} else {
+			enemySet[tm.guid] = struct{}{}
+		}
+	}
+	// PARTY/RAID membership resolves through the caster's owner
+	// (Unit::IsInPartyWith, Unit.cpp:12126): a wild caster has no group,
+	// so only itself passes; a pet/charmed caster's owner's group decides.
+	ownerGUID := m.OwnerGUID
+	if ownerGUID == 0 {
+		ownerGUID = m.CharmOwnerGUID
+	}
+	var partyMembers, raidMembers map[uint64]struct{}
+	var inGroup bool
+	if ownerSess := s.findSessionByGUID(ownerGUID); ownerSess != nil {
+		_, partyMembers, raidMembers, inGroup = ownerSess.friendlyGroupSnapshot()
+	}
+	memberOf := func(guid uint64, members map[uint64]struct{}) bool {
+		if _, ok := members[guid]; ok {
+			return true
+		}
+		if cm := s.findCreatureMotion(m.Map, m.InstanceID, guid); cm != nil {
+			owner := cm.OwnerGUID
+			if owner == 0 {
+				owner = cm.CharmOwnerGUID
+			}
+			_, ok := members[owner]
+			return ok
+		}
+		return false
+	}
+	inParty := func(guid uint64) bool {
+		if guid == m.GUID {
+			return true
+		}
+		return inGroup && memberOf(guid, partyMembers)
+	}
+	inRaid := func(guid uint64) bool {
+		if guid == m.GUID {
+			return true
+		}
+		return inGroup && memberOf(guid, raidMembers)
+	}
+	masks := dynobjTargetMasks(effects, enemySet, friendlySet, defaultSet, inParty, inRaid)
+	for _, vs := range players {
+		mask, ok := masks[vs.playerGUID]
+		if !ok || mask == 0 {
+			// No effect selects this target (FillTargetMap only
+			// registers units an effect's check type picks).
 			continue
 		}
 		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) runs the
@@ -10211,25 +10299,13 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 			continue
 		}
 		sharedDelayMs := uint32(object.NextAuraTick.Sub(now) / time.Millisecond)
-		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), primary.PeriodMs, &sharedDelayMs, true, false, 0)
+		// The FillTargetMap mask rides allowedMask, so a recipient
+		// selected by one effect takes only that effect's bit.
+		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level), primary.PeriodMs, &sharedDelayMs, true, false, mask)
 	}
-	type creatureTarget struct {
-		guid    uint64
-		x, y, z float32
-	}
-	s.motionMu.Lock()
-	var creatureTargets []creatureTarget
-	for _, tm := range s.motionMapLocked(m.Map, m.InstanceID) {
-		if tm != nil {
-			creatureTargets = append(creatureTargets, creatureTarget{guid: tm.GUID, x: tm.X, y: tm.Y, z: tm.Z})
-		}
-	}
-	s.motionMu.Unlock()
 	for _, tm := range creatureTargets {
-		if !inRadius(tm.x, tm.y, tm.z) {
-			continue
-		}
-		if friendly != s.creatureFriendlyToTarget(m, tm.guid) {
+		mask, ok := masks[tm.guid]
+		if !ok || mask == 0 {
 			continue
 		}
 		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) runs the
@@ -10249,7 +10325,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		if d := object.NextAuraTick.Sub(now); d > 0 {
 			sharedDelayMs = uint32(d / time.Millisecond)
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true, &sharedDelayMs, 0)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true, &sharedDelayMs, mask)
 	}
 }
 

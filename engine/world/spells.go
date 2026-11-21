@@ -28516,12 +28516,22 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// the caster's SPELLMOD_DURATION mods before the aura is created in
 	// DoSpellEffectHit — both the direct-hit applies below and the
 	// registerPlayerAreaAura fan-out take this value. Same arm as
-	// auraEffectParams (including its modded<=0 -> 0 corner).
+	// auraEffectParams. A fold that zeroes a positive DBC duration expires
+	// the aura immediately in C++ (the Aura ctor stores the folded value
+	// and Unit::_UpdateSpells removes it as IsExpired, Unit.cpp:2989), so
+	// the aura arms below are skipped — applying with duration 0 would
+	// leave a permanent aura behind, since the apply paths arm no expiry
+	// timer for a 0 duration. The creature twin (boss_ai.go) returns early
+	// on the same corner. The flag tracks only the fold corner: a DBC
+	// duration that starts at 0 keeps the pre-existing apply, a separate
+	// question this unit does not touch.
+	durationFoldedToZero := false
 	if durationMs > 0 {
 		if modded := s.applySpellMod(spell, spellModDuration, int32(durationMs)); modded > 0 {
 			durationMs = uint32(modded)
 		} else {
 			durationMs = 0
+			durationFoldedToZero = true
 		}
 	}
 
@@ -30385,8 +30395,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// registerPlayerAreaAura hook after the effect loop runs.
 				// The only mixed spell in the seed, 31673, carries the
 				// area bit as an aura-4 dummy with period 0, so the skip
-				// is unobservable there; the fix is C++-principle.
-				if _, isAreaAura := areaAuraSelectionForEffect(eff.Effect); !isAreaAura {
+				// is unobservable there; the fix is C++-principle. A
+				// duration folded to zero skips the apply too (the
+				// CalcMaxDuration corner above — the aura is expired in
+				// C++, not permanent).
+				if _, isAreaAura := areaAuraSelectionForEffect(eff.Effect); !isAreaAura && !durationFoldedToZero {
 					s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID, triggeredByAura, nil)
 				}
 			} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
@@ -30996,13 +31009,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerDrain), powerDrainLog)
 		}
 	}
-	if spellHasAreaAuraEffect(spell) {
+	if spellHasAreaAuraEffect(spell) && !durationFoldedToZero {
 		// Caster-owned area-aura fan-out (area_auras.go): the hit loop
 		// above never direct-applies area effects (AddStaticApplication
 		// strips them), so a spell carrying any area-aura effect registers
 		// here — the cast-time fill adopts the caster (35/65/119/128) and
 		// the in-radius recipients, and the 500ms pass re-selects after.
 		// The creature twin (boss_ai.go) registers at the same point.
+		// A duration folded to zero registers nothing (the
+		// CalcMaxDuration corner above — the aura is expired in C++).
 		s.registerPlayerAreaAura(ctx, spell, durationMs)
 	}
 
@@ -31098,7 +31113,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 	}
 
-	if !hasExplicitEffects {
+	if !hasExplicitEffects && !durationFoldedToZero {
+		// A duration folded to zero applies no synthetic aura either
+		// (the CalcMaxDuration corner above — expired in C++, not
+		// permanent).
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
 		s.applyAuraToTarget(ctx, targetGUID, spell, eff, -1, durationMs, 0, 0, 1, nil, false, auraCasterGUID, false, castItemGUID, triggeredByAura, nil)
 	}
