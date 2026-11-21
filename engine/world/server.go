@@ -709,6 +709,13 @@ type session struct {
 	lastSwing        time.Time
 	lastOffhandSwing time.Time
 	lastRangedSwing  time.Time
+	// mainSwingState / offhandSwingState / rangedSwingState remember
+	// the last swing interval per timer so a haste change mid-swing
+	// rescales the remaining time (Unit::ApplyAttackTimePercentMod,
+	// Unit.cpp:10847-10864; swingTimerState in melee_stats.go).
+	mainSwingState    swingTimerState
+	offhandSwingState swingTimerState
+	rangedSwingState  swingTimerState
 
 	// duel_reset.cpp pre-duel snapshots: SaveHealthBeforeDuel /
 	// SaveManaBeforeDuel / SpellHistory::SaveCooldownStateBeforeDuel.
@@ -1851,6 +1858,14 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 			if sess.player.OffhandAttackTime > 0 {
 				offSpeed = sess.getHastedMeleeSpeed(time.Duration(sess.player.OffhandAttackTime)*time.Millisecond, true)
 			}
+			// Unit::ApplyAttackTimePercentMod (Unit.cpp:10847-10864):
+			// a haste change mid-swing preserves the remaining-time
+			// fraction instead of re-measuring the whole new interval
+			// from lastSwing — rescale before the ready checks below,
+			// whether or not the swing is cast-suppressed (the C++
+			// timer keeps decrementing through UNIT_STATE_CASTING).
+			sess.mainSwingState.rescaleSwingTimers([]*time.Time{&sess.lastSwing}, time.Duration(sess.player.AttackTime)*time.Millisecond, mainSpeed, now)
+			sess.offhandSwingState.rescaleSwingTimers([]*time.Time{&sess.lastOffhandSwing}, time.Duration(sess.player.OffhandAttackTime)*time.Millisecond, offSpeed, now)
 
 			pReach := float32(1.5)
 			if sess.player.CombatReach > 0 {
@@ -1959,6 +1974,12 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 						if sess.player.RangedAttackTime > 0 {
 							rangedSpeed = sess.getHastedRangedSpeed(time.Duration(sess.player.RangedAttackTime) * time.Millisecond)
 						}
+						// Unit::ApplyAttackTimePercentMod
+						// (Unit.cpp:10847-10864), RANGED_ATTACK arm:
+						// a haste change mid-shot preserves the
+						// remaining-time fraction (same rescale as the
+						// melee arms above).
+						sess.rangedSwingState.rescaleSwingTimers([]*time.Time{&sess.lastRangedSwing}, time.Duration(sess.player.RangedAttackTime)*time.Millisecond, rangedSpeed, now)
 						if now.Sub(sess.lastRangedSwing) >= rangedSpeed {
 							sess.executeRangedAttack(ctx, rTarget, sess.autoRepeatSpell, 0)
 						}

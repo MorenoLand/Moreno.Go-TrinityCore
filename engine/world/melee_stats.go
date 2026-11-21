@@ -262,7 +262,58 @@ func (s *session) getHastedRangedSpeed(baseSpeed time.Duration) time.Duration {
 	return time.Duration(math.Round(hasted))
 }
 
-// getExpertise returns the total expertise skill points for an attack type.
+// swingTimerState remembers the swing interval the combat tick last saw
+// so a haste change mid-swing can rescale the remaining time the way
+// Unit::ApplyAttackTimePercentMod does (Unit.cpp:10847-10864). base is
+// the pristine attack time the interval was computed from; interval is
+// the effective (hasted) interval the swing gate used.
+type swingTimerState struct {
+	base     time.Duration
+	interval time.Duration
+}
+
+// rescaleSwingTimerOnHasteChange is the timestamp-model twin of
+// Unit::ApplyAttackTimePercentMod (Unit.cpp:10847-10864): C++ preserves
+// the remaining-time fraction (m_attackTimer / current hasted interval)
+// across the modifier change, so a haste gain does not swing
+// immediately and a slow does not over-delay. Go recomputes the hasted
+// interval from the last-swing stamp each tick, so without this the
+// remaining time shifts by the full interval delta instead. oldInterval
+// and newInterval are the effective intervals before/after the change;
+// last is shifted so the elapsed fraction of the old interval becomes
+// the same elapsed fraction of the new one. A timer already past its
+// old interval stays ready (remaining 0, C++ timer 0).
+func rescaleSwingTimerOnHasteChange(last *time.Time, oldInterval, newInterval time.Duration, now time.Time) {
+	if last == nil || last.IsZero() || oldInterval <= 0 || newInterval <= 0 || oldInterval == newInterval {
+		return
+	}
+	elapsed := now.Sub(*last)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if elapsed >= oldInterval {
+		*last = now.Add(-newInterval)
+		return
+	}
+	*last = now.Add(-time.Duration(float64(newInterval) * float64(elapsed) / float64(oldInterval)))
+}
+
+// rescaleSwingTimers rescales each timer in lasts against the stored
+// interval when the base is unchanged and the interval moved, then
+// records the current pair. A base change (weapon swap) skips the
+// rescale — C++ does not run ApplyAttackTimePercentMod there — and only
+// re-seats the stored pair. All timers sharing one interval (a
+// creature's main + offhand arms, same attackTime) rescale together
+// against the single stored interval.
+func (st *swingTimerState) rescaleSwingTimers(lasts []*time.Time, base, interval time.Duration, now time.Time) {
+	if st.interval != 0 && st.base == base && st.interval != interval {
+		for _, last := range lasts {
+			rescaleSwingTimerOnHasteChange(last, st.interval, interval, now)
+		}
+	}
+	st.base, st.interval = base, interval
+}
+
 // Mirrors TrinityCore Player::UpdateExpertise (StatSystem.cpp:872-897):
 // rating converted to points plus the SPELL_AURA_MOD_EXPERTISE (120) fold,
 // each aura effect gated by SpellInfo::IsItemFitToSpellRequirements on the

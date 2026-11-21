@@ -339,6 +339,12 @@ type creatureMotion struct {
 	// lands 50% of the UNHASTED base attack time after engage (Unit::Attack,
 	// Unit.cpp:5743-5744).
 	LastOffhandAttack time.Time
+	// swingState remembers the last swing interval so a haste change
+	// mid-swing rescales the remaining time
+	// (Unit::ApplyAttackTimePercentMod, Unit.cpp:10847-10864;
+	// swingTimerState in melee_stats.go). Main and offhand share one
+	// attackTime, so one state covers both timers.
+	swingState swingTimerState
 	// Boundary carries the instance LoadBossBoundaries polygons for this
 	// boss (area_boundary.go; BossAI ctor SetBoundary,
 	// ScriptedCreature.cpp:486-488). Empty for every other creature, so
@@ -10040,6 +10046,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if attackTime <= 0 {
 			attackTime = 2 * time.Second
 		}
+		// Unit::ApplyAttackTimePercentMod (Unit.cpp:10847-10864):
+		// a haste change mid-swing preserves the remaining-time
+		// fraction — rescale LastAttack/LastOffhandAttack before the
+		// ready checks (both arms share attackTime; C++ applies the
+		// same modifier to BASE and OFF_ATTACK).
+		motion.swingState.rescaleSwingTimers([]*time.Time{&motion.LastAttack, &motion.LastOffhandAttack}, time.Duration(motion.AttackTime)*time.Millisecond, attackTime, now)
 		if motion.LastAttack.IsZero() || now.Sub(motion.LastAttack) >= attackTime {
 			s.executeCreatureMeleeSwing(ctx, motion, target, now, false, false)
 		}

@@ -2040,8 +2040,8 @@ const threatUpdateIntervalMs = 1000
 // THREAT_UPDATE_INTERVAL ms of accumulated combat time it re-runs victim
 // selection (UpdateVictim -> ReselectVictim, ThreatManager.cpp:516-585).
 // The tick is the only C++ path that re-gates the whole list, so it catches
-// current-victim threat decay, taunt-aura expiry, and fixate changes that the
-// eager AddThreat gate never revisits. inMelee classifies a candidate the way
+// current-victim threat decay, taunt-aura expiry, and fixate changes that no
+// add revisits — AddThreat never reselects. inMelee classifies a candidate the way
 // _owner->IsWithinMeleeRange does per candidate; a nil predicate treats every
 // candidate as ranged (conservative: only the 130% gate can switch).
 // Returns switched=true when the current victim changed.
@@ -2217,30 +2217,33 @@ func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed bool, oldTauntState i
 	return oldThreat*weight < candThreat
 }
 
-// AddThreat adds threat for a victim and evaluates target switching.
+// AddThreat adds threat for a victim. Target switching never happens
+// here — C++ AddThreat never reselects (ThreatManager.cpp:379-410);
+// selection rides the 1s Update tick (UpdateVictim->ReselectVictim),
+// or installs immediately only when there is no current victim.
 // Reference: TrinityCore ThreatManager::AddThreat (ThreatManager.cpp:308-410) /
 // ReselectVictim (531-585) / CompareReferencesLT (593-601) / UpdateVictim (516-528).
 // The 110%/130% switch gate matches C++ exactly, including the strict-greater
 // boundary (CompareReferencesLT uses `<`, so equal threat never switches):
 // a candidate breaks the current victim at >110% only in melee range,
-// otherwise it needs >130%.
-// Documented deltas: (1) C++ AddThreat never switches - selection happens in
-// UpdateVictim->ReselectVictim on the AI tick (or when there is no current
-// victim); Go re-evaluates eagerly inside AddThreat, outcome-equivalent for
-// the adding victim but never re-evaluating non-adding candidates. (2) C++
-// walks the sorted heap, so a ranged top below 130% does not block a melee
-// candidate above 110% beneath it; Go tests only the adding victim against a
-// single threshold, so that steal is missed.
+// otherwise it needs >130% — evaluated on the Update tick, not the add.
+// No eager switch: an add only lands the amount; a 115% ranged add C++
+// would keep loses if the old victim's threat rises before the tick, and
+// the tick's reselectVictimLocked runs the full ReselectVictim, sorted
+// walk included (a ranged top below 130% does not block a melee candidate
+// above 110% beneath it).
 // Bridged: ThreatReference::AddThreat negative amounts reduce the entry
 // floored at 0 (ThreatManager.cpp:40-41); a zero add on an existing entry is a
 // no-op, but on a NEW victim it still creates the entry and runs the victim
 // leg (ThreatManager.cpp:308-410) — the EngageWithTarget 0.0f seed
 // (Unit.cpp:8429-8438) registers the acquirer with zero threat. A decrease
-// never clears the 110%/130% switch gate for the adding victim. Tick-based
-// re-selection of a decreased non-current-victim entry stays under delta (1).
-// The melee gate is per add, combat-reach-based via inMeleeThreatRange
-// (Unit::IsWithinMeleeRange -> GetMeleeRange, Unit.cpp:599-618), matching the
-// C++ per-candidate test positionally.
+// never clears the 110%/130% switch gate — the tick's reselect compares
+// GetThreat (base plus the temp modifier, floored). The melee test runs
+// on the Update tick (reselectVictimLocked's inMelee callback,
+// combat-reach-based via inMeleeThreatRange, Unit::IsWithinMeleeRange ->
+// GetMeleeRange, Unit.cpp:599-618), matching the C++ per-candidate test
+// positionally; the inMelee argument here is retained for the call sites
+// and no longer gates anything inside the add.
 // Documented deltas: the offline amount gate reads the stored flag
 // (SetOfflineSet, refreshed on the combat step tick), so an amount
 // arriving between ticks gates on state up to one tick stale — the
@@ -2266,8 +2269,9 @@ func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed bool, oldTauntState i
 // tauntStateLocked) and sorts below NONE in CompareReferencesLT;
 // ProcessAIUpdates/JustStartedThreateningMe (boss hooks ride the new-victim
 // broadcast instead). FixateTarget and the taunt-state model are bridged:
-// the eager gate above honors fixate preference and taunt precedence, and
-// the Update tick runs the full ReselectVictim every second.
+// the Update tick runs the full ReselectVictim every second, honoring
+// fixate preference and taunt precedence; AddThreat installs only on an
+// empty current victim and never switches eagerly.
 // Out of scope for this unit: the threat-redirect registry itself is
 // bridged on the session (spell_threat.go: redirectThreatRegistry,
 // consumed by splitThreatRedirects at every AddThreat site whose C++ call
@@ -2323,24 +2327,22 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		// ThreatManager::PutThreatListRef (ThreatManager.cpp:793) marks
 		// the client list dirty on every new ref.
 		tm.needClientUpdate = true
-		// With no current victim the new ref becomes the victim outright
-		// (C++ UpdateVictim); otherwise C++ runs ProcessAIUpdates (no
-		// re-selection) — Go keeps its documented eager gate as delta (1).
-		// An offline new victim never installs: C++ UpdateVictim
-		// reselects null over an unavailable ref, so the tail below runs
-		// instead and its install arm returns without installing. A
-		// suppressed new victim is available and installs like an online
-		// one (IsAvailable includes SUPPRESSED, ThreatManager.h:263).
+		// With no current victim the new ref installs through
+		// UpdateVictim (C++ :402-410 + :516-528): ReselectVictim
+		// picks the comparator-highest available ref — fixate first,
+		// then online/taunt/threat order — which need not be the
+		// adding victim when another entry outranks it. An offline
+		// new victim never installs: the reselect returns null over
+		// an unavailable ref (or another available ref). A suppressed
+		// new victim is available and installs like an online one
+		// (IsAvailable includes SUPPRESSED, ThreatManager.h:263).
+		// With a current victim C++ runs ProcessAIUpdates only (no
+		// re-selection) — the 1s Update tick reselects.
 		if tm.currentVictim == 0 {
-			if tm.isOfflineLocked(victim) {
-				// Fall through to the tail: the fixate arm may install
-				// an available fixate, and the install arm returns
-				// without installing this victim.
-			} else {
-				tm.currentVictim = victim
-				return false, victim
-			}
+			tm.currentVictim = tm.reselectVictimLocked(nil)
+			return false, tm.currentVictim
 		}
+		return false, tm.currentVictim
 	} else {
 		// ThreatReference::AddThreat: zero is a no-op on an existing entry;
 		// negatives reduce, floored at zero. A decrease never clears the
@@ -2381,64 +2383,11 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 			newThreat = 0
 		}
 		tm.entries[victim] = newThreat
-		newThreat = tm.effectiveThreatLocked(victim)
-	}
-
-	// FixateTarget (ThreatManager.cpp:494-506) + ReselectVictim:540: the
-	// fixated victim is always preferred — the eager gate never switches
-	// away from it, and any add re-affirms it. A stale fixate whose entry
-	// is gone is dropped like C++'s !IsAvailable() fall-through.
-	if tm.fixateGUID != 0 {
-		// ReselectVictim:540 prefers the fixated victim only while it
-		// IsAvailable; an offline fixate is dropped like the reselect
-		// drops it (a suppressed fixate stays preferred).
-		if _, ok := tm.entries[tm.fixateGUID]; ok && !tm.isOfflineLocked(tm.fixateGUID) {
-			switched := tm.currentVictim != tm.fixateGUID
-			tm.currentVictim = tm.fixateGUID
-			return switched, tm.fixateGUID
-		}
-		tm.fixateGUID = 0
-	}
-
-	// An offline adding victim never becomes the current victim:
-	// C++ UpdateVictim (ThreatManager.cpp:516-528) reselects null
-	// when the highest ref is unavailable, and the eager gate must
-	// not install a victim the tick's reselect would immediately drop.
-	if tm.currentVictim == 0 || tm.currentVictim == victim {
-		if tm.isOfflineLocked(victim) {
-			return false, tm.currentVictim
-		}
-		tm.currentVictim = victim
-		return false, victim
-	}
-
-	// Taunt-state precedence (CompareReferencesLT, ThreatManager.cpp:593-601
-	// — TAUNT > NONE > DETAUNT): a higher-state adding victim outranks
-	// the current victim regardless of the 110%/130% gate, and a
-	// higher-state current victim keeps aggro against lower-state adds —
-	// the aura-stickiness TauntUpdate maintains for the MOD_TAUNT /
-	// MOD_DETAUNT duration. The Update tick re-affirms this every second.
-	addTauntState := tm.tauntStateLocked(victim)
-	currTauntState := tm.tauntStateLocked(tm.currentVictim)
-	if addTauntState != currTauntState {
-		if addTauntState > currTauntState {
-			tm.currentVictim = victim
-			return true, victim
-		}
+		// ThreatManager::AddThreat (ThreatManager.cpp:379-393): an
+		// existing ref takes the amount and returns — no
+		// re-selection. Selection waits for the 1s Update tick.
 		return false, tm.currentVictim
 	}
-
-	currThreat := tm.effectiveThreatLocked(tm.currentVictim)
-	threshold := currThreat * 1.30
-	if inMelee {
-		threshold = currThreat * 1.10
-	}
-
-	if newThreat > threshold {
-		tm.currentVictim = victim
-		return true, victim
-	}
-	return false, tm.currentVictim
 }
 
 // SetThreat sets absolute threat for a victim (e.g. taunt).
@@ -2857,9 +2806,10 @@ func (s *Server) broadcastHighestThreatUpdateInInstance(mapID, instanceID uint32
 // motionMu: the visible-set broadcast reads motionMu through its seer
 // lookup, so it must run after the lock drops (the taunt/twin precedent).
 // CreatureAI::UpdateVictim (CreatureAI.cpp:240-260) AttackStarts a
-// differing SelectVictim on the non-passive leg; Go's eager AddThreat sync
-// hides the switch from the step tick, so direct-set threat sites capture
-// it here and flush after unlock. Zero creature/victim entries are skipped.
+// differing SelectVictim on the non-passive leg; a switch made outside the
+// step tick is captured here and flushed after unlock, since the tick's own
+// broadcast only covers its reselect. AddThreat never switches — its victim
+// changes ride the tick. Zero creature/victim entries are skipped.
 type pendingAttackStart struct {
 	creature, victim  uint64
 	mapID, instanceID uint32
