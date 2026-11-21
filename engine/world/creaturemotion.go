@@ -780,8 +780,9 @@ const creatureTypeFlagBossMob = 0x4
 // folds only MOD_INCREASE_SWIM_SPEED (58) into the swim rate and then
 // multiplies by the template speed_run (banked on BaseRunRate), so the
 // swim speed is BaseRunRate * 4.722222 — the aura-58 fold has no Go
-// creature model (residual). Waypoint
-// LAND/TAKEOFF set only AnimationTier (cosmetic), unmodeled.
+// creature model (residual). Waypoint LAND/TAKEOFF set only
+// AnimationTier (WaypointMovementGenerator.cpp:353-359), which rides
+// the wire via broadcastMonsterMoveFlagsInInstance.
 // The 0.66 searched-assistance multiplier (MoveSplineInit.cpp:118) is
 // applied below: it folds over the selected speed for every spline,
 // including swim, exactly like Launch's post-select arm.
@@ -5394,7 +5395,11 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			// distance above (a flying evade or cliff home would otherwise
 			// arrive early and fire JustReachedHome early).
 			duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ)), speed)
-			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
+			// HomeMovementGenerator.cpp:78: the home spline carries
+			// SetFacing(home orientation); MoveSpline.cpp:46-50 applies
+			// the final angle when the spline completes, so the packet
+			// rides HomeO as the facing leg.
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
 			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 			motion.Moving = true
 			motion.Evading = true
@@ -5403,6 +5408,11 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			motion.WaitUntil = motion.MoveEnds
 		} else {
 			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+			// HomeMovementGenerator.cpp:78 SetFacing(home orientation),
+			// applied at finalize (MoveSpline.cpp:46-50 final angle):
+			// the already-home spline finalizes immediately, so the
+			// orientation latches here with the position snap.
+			motion.Orientation = motion.HomeO
 			motion.Moving = false
 			motion.Evading = false
 			// HomeMovementGenerator<Creature>::DoFinalize (HomeMovementGenerator.cpp:151)
@@ -7227,6 +7237,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 		case movementGeneratorHome:
 			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ {
+				// HomeMovementGenerator.cpp:78 SetFacing(home orientation),
+				// applied at finalize (MoveSpline.cpp:46-50 final angle).
+				motion.Orientation = motion.HomeO
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
@@ -7300,7 +7313,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// home duration runs on the 3D distance, not the 2D threshold
 			// distance above.
 			duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ)), speed)
-			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
 			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 			motion.Moving = true
 			motion.Evading = true
@@ -10262,6 +10275,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.Evading = false
 		motion.Moving = false
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+		// HomeMovementGenerator.cpp:78 SetFacing(home orientation),
+		// applied at finalize (MoveSpline.cpp:46-50 final angle).
+		motion.Orientation = motion.HomeO
 		motion.WaitUntil = motion.MoveEnds
 		// Home-move completion: HomeMovementGenerator<Creature>::DoFinalize
 		// (HomeMovementGenerator.cpp:151) calls AI()->JustReachedHome() when
@@ -10866,6 +10882,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	var facing float32
 	var hasFacing bool
 	walk := true
+	animTier := animTierNone
 	if motion.MoveType == 2 {
 		// WaypointMovementGenerator::ComputeNextNode + StartMove
 		// (WaypointMovementGenerator.cpp:290-315, 374-378): a
@@ -10898,6 +10915,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// flag via the MoveSplineInit ctor default.
 		walk = point.MoveType == 0 || ((point.MoveType == 2 || point.MoveType == 3) && motion.Walking) // WAYPOINT_MOVE_TYPE_WALK (WaypointDefines.h:26); default RUN
 		speed = creatureSplineVelocityExplicit(motion, walk)
+		// WaypointMovementGenerator.cpp:353-359: LAND sets
+		// SetAnimation(Ground) and TAKEOFF SetAnimation(Hover); the
+		// tier rides the wire as the Animation spline flag + tier
+		// byte (buildMonsterMove). WALK/RUN set no tier.
+		if point.MoveType == 2 {
+			animTier = animTierGround
+		} else if point.MoveType == 3 {
+			animTier = animTierHover
+		}
 
 		// WaypointMovementGenerator::StartMove (WaypointMovementGenerator.cpp):
 		// "if (waypoint.orientation && waypoint.delay) init.SetFacing(waypoint.orientation)"
@@ -11005,7 +11031,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// so the heading would otherwise be lost.
 	motion.MoveHeading = float32(math.Atan2(float64(destY-motion.Y), float64(destX-motion.X)))
 	motion.MoveVelocity = speed
-	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk, facing, hasFacing, motion.PhaseMask, motion.TransportGUID)
+	s.broadcastMonsterMoveFlagsInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk, facing, hasFacing, motion.PhaseMask, motion.TransportGUID, false, animTier)
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)

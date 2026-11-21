@@ -63,6 +63,8 @@ type splineChainRun struct {
 	PointIndex     int // next point within Links[LinkIndex] to send
 	PointID        uint32
 	Walk           bool
+	Flying         bool // MoveCirclePath twin: the flying branch sets SetFly (MotionMaster.cpp:851-855); passed through to the wire by sendSplineChainLink
+	AnimTier       int  // MoveCirclePath twin: the flying branch sets SetAnimation(Hover); animTierNone otherwise
 	Cyclic         bool // MoveCirclePath twin: the run loops to point 0 at the final landing with no wait and no inform, until superseded
 	LinkLaunchedAt time.Time
 	LinkActualMs   uint32 // summed leg durations of the current link
@@ -167,7 +169,7 @@ func (s *Server) moveAlongSplineChain(ctx context.Context, motion *creatureMotio
 		return false
 	}
 	s.motionMu.Lock()
-	motion.SplineChain = &splineChainRun{Links: chain, PointID: pointID, Walk: walk}
+	motion.SplineChain = &splineChainRun{Links: chain, PointID: pointID, Walk: walk, AnimTier: animTierNone}
 	s.motionMu.Unlock()
 	return s.sendSplineChainLink(ctx, motion, time.Now())
 }
@@ -209,8 +211,9 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	dist := distance3D(motion.X, motion.Y, motion.Z, pt.X, pt.Y, pt.Z)
 	run.LinkActualMs += splineDurationMs(float64(dist), speed)
 	pointID, walk := run.PointID, run.Walk
+	flying, animTier := run.Flying, run.AnimTier
 	s.motionMu.Unlock()
-	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, false, animTierNone)
+	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, flying, animTier)
 }
 
 // moveCirclePath is MotionMaster::MoveCirclePath
@@ -246,16 +249,29 @@ func (s *Server) moveCirclePath(ctx context.Context, motion *creatureMotion, cen
 	if clockwise {
 		step = -step
 	}
-	speed := creatureSplineVelocity(motion, false)
+	// MotionMaster.cpp:851-856: the IsFlying branch sets SetFly +
+	// SetCyclic + SetAnimation(Hover); the ground branch walks
+	// (SetWalk(true)) with no flags. IsFlying is Unit.h:1644
+	// (MOVEMENTFLAG_FLYING | MOVEMENTFLAG_DISABLE_GRAVITY), whose
+	// Go twins are motion.Flying (the per-tick UpdateMovementFlags
+	// fly leg) and motion.GravityDisabled (the DisableGravity leg)
+	// — motion.CanFly is the template capability, not the flag, so
+	// a grounded CanFly creature still takes the ground branch,
+	// the way C++ clears both flags out of air. The ground branch
+	// walks: speed is the walk speed and the run carries Walk so
+	// the chain link's mode packet walks too.
+	flying := motion.Flying || motion.GravityDisabled
+	walk := !flying || motion.Walking
+	speed := creatureSplineVelocity(motion, walk)
 	// MoveSplineInit::Launch (MoveSplineInit.cpp:123) caps the velocity at
 	// 50 for a flying-flag spline — min(velocity, catmullrom||flying ? 50 :
 	// max(28, run*4)) — and MoveCirclePath sets that flag only on the
 	// flying branch (MotionMaster.cpp:851-855, SetFly). The non-flying
-	// leg caps at max(28, run*4), which the run speed never exceeds, so
+	// leg caps at max(28, run*4), which the walk speed never exceeds, so
 	// only a flying circle can bind: a script-set MOVE_RUN rate can push
 	// a flying circle's run speed past 50, where C++ clamps the spline
 	// and Go previously did not.
-	if (motion.CanFly || motion.Flying) && speed > 50 {
+	if flying && speed > 50 {
 		speed = 50
 	}
 	points := make([]splineChainPoint, 0, int(stepCount))
@@ -267,9 +283,20 @@ func (s *Server) moveCirclePath(ctx context.Context, motion *creatureMotion, cen
 		})
 		angle += step
 	}
+	// MotionMaster.cpp:851-856: the IsFlying branch sets SetFly +
+	// SetCyclic + SetAnimation(Hover); the ground branch walks
+	// (SetWalk(true)) with no flags. motion.Flying is the
+	// MOVEMENTFLAG_FLYING twin (the per-tick UpdateMovementFlags fly
+	// leg); a grounded circle carries neither flag.
+	flying, animTier := false, animTierNone
+	if motion.Flying {
+		flying, animTier = true, animTierHover
+	}
 	motion.SplineChain = &splineChainRun{
-		Links:  []splineChainLink{{Velocity: speed, Points: points}},
-		Cyclic: true,
+		Links:    []splineChainLink{{Velocity: speed, Points: points}},
+		Cyclic:   true,
+		Flying:   flying,
+		AnimTier: animTier,
 	}
 	s.motionMu.Unlock()
 	return s.sendSplineChainLink(ctx, motion, time.Now())

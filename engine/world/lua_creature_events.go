@@ -6162,7 +6162,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorEffect, id, true)
+		s.launchCreatureScriptSplineAnim(motion, x, y, z, false, movementGeneratorEffect, id, true, animTierGround)
 		return nil, nil
 	}
 	// MoveTakeoff is MotionMaster::MoveTakeoff
@@ -6190,7 +6190,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorEffect, id, true)
+		s.launchCreatureScriptSplineAnim(motion, x, y, z, false, movementGeneratorEffect, id, true, animTierHover)
 		return nil, nil
 	}
 	// MoveCirclePath is MotionMaster::MoveCirclePath
