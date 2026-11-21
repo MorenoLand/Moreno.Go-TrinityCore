@@ -143,6 +143,7 @@ const (
 	unitFlag2RegeneratePower               uint32 = 0x00000800
 	unitFlag2DisarmOffhand                 uint32 = 0x00000080 // UNIT_FLAG2_DISARM_OFFHAND (UnitDefines.h:168)
 	unitFlag2DisarmRanged                  uint32 = 0x00000400 // UNIT_FLAG2_DISARM_RANGED (UnitDefines.h:170)
+	unitFlag2DisableTurn                   uint32 = 0x00008000 // UNIT_FLAG2_DISABLE_TURN (UnitDefines.h:175)
 	unitFlag2ComprehendLang                uint32 = 0x00000008 // UNIT_FLAG2_COMPREHEND_LANG (UnitDefines.h:164)
 	unitFlag2ForceMovement                 uint32 = 0x00000040 // UNIT_FLAG2_FORCE_MOVEMENT (UnitDefines.h:167)
 	unitFlagInCombat                       uint32 = 0x00080000
@@ -423,9 +424,22 @@ type playerState struct {
 	MinDamage                       float32
 	MaxDamage                       float32
 	AttackTime                      uint32
+	// Second weapon-damage component (ItemTemplate::Damage[1]): the raw
+	// range and school mask (1 << DamageType) C++ rolls separately in
+	// CalculateMeleeDamage (Unit.cpp:1227-1260; Player.cpp:7832-7838).
+	// MinDamage/MaxDamage already sum it (UpdateDamagePhysical,
+	// StatSystem.cpp:62-92), so the swing subtracts it back out for the
+	// component-0 roll. Zero when unarmed, feral, disarmed, or the
+	// weapon carries no second row.
+	MinSecondDamage                 float32
+	MaxSecondDamage                 float32
+	SecondDamageSchool              uint32
 	MinOffhandDamage                float32
 	MaxOffhandDamage                float32
 	OffhandAttackTime               uint32
+	MinOffhandSecondDamage          float32
+	MaxOffhandSecondDamage          float32
+	OffhandSecondDamageSchool       uint32
 	MinRangedDamage                 float32
 	MaxRangedDamage                 float32
 	RangedAttackTime                uint32
@@ -2345,11 +2359,17 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	disarmedRanged := state.UnitFlags2&unitFlag2DisarmRanged != 0
 	state.MinDamage = 1.0
 	state.MaxDamage = 2.0
+	state.MinSecondDamage = 0
+	state.MaxSecondDamage = 0
+	state.SecondDamageSchool = spellSchoolMaskNormal
 	if !feralForm {
 		state.AttackTime = 2000
 	}
 	state.MinOffhandDamage = 1.0
 	state.MaxOffhandDamage = 2.0
+	state.MinOffhandSecondDamage = 0
+	state.MaxOffhandSecondDamage = 0
+	state.OffhandSecondDamageSchool = spellSchoolMaskNormal
 	if !feralForm {
 		state.OffhandAttackTime = 2000
 	}
@@ -2423,6 +2443,9 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 						state.MaxDamage += float32(item.ExtraMaxDamage[i])
 					}
 				}
+				state.MinSecondDamage = float32(item.ExtraMinDamage[0])
+				state.MaxSecondDamage = float32(item.ExtraMaxDamage[0])
+				state.SecondDamageSchool = uint32(1) << item.ExtraDamageType[0]
 				if delay > 0 {
 					state.AttackTime = uint32(delay)
 				}
@@ -2441,6 +2464,9 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 						state.MaxOffhandDamage += float32(item.ExtraMaxDamage[i])
 					}
 				}
+				state.MinOffhandSecondDamage = float32(item.ExtraMinDamage[0])
+				state.MaxOffhandSecondDamage = float32(item.ExtraMaxDamage[0])
+				state.OffhandSecondDamageSchool = uint32(1) << item.ExtraDamageType[0]
 				if delay > 0 {
 					state.OffhandAttackTime = uint32(delay)
 				}

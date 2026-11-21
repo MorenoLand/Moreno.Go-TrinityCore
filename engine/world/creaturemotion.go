@@ -131,7 +131,7 @@ type creatureMotion struct {
 	ScriptScale           float32 // OBJECT_FIELD_SCALE_X script override: Lua CreatureMethods::SetScale (Creature::SetObjectScale twin, Creature.cpp:3199), replaces the template base in the scale twin while known
 	ScriptScaleKnown      bool
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect
-	ScriptStunned         bool                // UNIT_STATE_STUNNED script override: Lua CreatureMethods::SetStunned (Unit::SetControlled twin, Unit.h:214; Unit::SetStunned, Unit.cpp:11582); honored by the same NOT_MOVE gates as ScriptRooted (chase-pause, waypoint-launch, knockback, MoveFall), so stun-control arms (volazj Reset) port with real effect; melee still fires while stunned (DoMeleeAttackIfReady gates CASTING only, UnitAI.cpp:61-63)
+	ScriptStunned         bool                // UNIT_STATE_STUNNED script override: Lua CreatureMethods::SetStunned (Unit::SetControlled twin, Unit.h:214; Unit::SetStunned, Unit.cpp:11582); honored by the same NOT_MOVE gates as ScriptRooted (chase-pause, waypoint-launch, knockback, MoveFall), so stun-control arms (volazj Reset) port with real effect; the swing also stops while stunned — AttackerStateUpdate's head gate (Unit.cpp:2133-2134) returns on UNIT_STATE_CANNOT_AUTOATTACK, which includes STUNNED (Unit.h:251/253), even though DoMeleeAttackIfReady itself gates CASTING only (UnitAI.cpp:61-63)
 	ScriptUnitState       uint32              // Unit::m_state script half for the Eluna Has/Add/ClearUnitState trio (lua_unit_state.go): bits AddUnitState wrote for states with no live leg; read by HasUnitState, never by engine gates
 	NoCombatMovement      bool                // inverted _isCombatMovementAllowed: Lua CreatureMethods::SetCombatMovement (ScriptedAI::SetCombatMovement twin, ScriptedCreature.h:233); when true the AttackStart chase leg never launches, so ranged-AI bosses (alythess, murmur, kologarn, ...) stand and cast instead of chasing the victim to melee; zero value = chase allowed (C++ default true)
 	NoMeleeAttack         bool                // boss-class custom UpdateAIs that never call DoMeleeAttackIfReady (UnitAI.cpp:61-83): Lua CreatureMethods::SetMeleeAttack; when true the engine-driven combat-tick swing below is suppressed, so muru / the twins / gothik / novos / sara / voice-of-yogg / rimefang / krosh / flame-leviathan / kalecgos-kj cast-only like C++ (julianne excluded: she swings via boss_julianneAI::UpdateAI); zero value = swing allowed (ScriptedAI/BossAI/SmartAI/CombatAI default)
@@ -5210,6 +5210,30 @@ func (s *Server) clearCreatureVisualTarget(motion *creatureMotion) {
 	}
 }
 
+// Creature::SetSpawnHealth (Creature.cpp:1819-1834) as called from
+// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:139-151):
+// health and mana return to spawn values when the evade walk reaches home,
+// ahead of JustReachedHome — never at evade start. The c.curhealth leg is
+// already folded into MaxHealth by the sweep (motion.Health/MaxHealth seed
+// from the c.curhealth row); mana restores to MaxMana, the c.curmana leg
+// having no separate Go bank. _regenerateHealthLock (motion.RegenHealthDisabled)
+// skips the restore outright. LoadCreaturesAddon, called beside it in
+// DoFinalize, has no Go bridge (creaturemotion.go:1245).
+func (s *Server) restoreCreatureSpawnHealth(motion *creatureMotion) {
+	if motion == nil || motion.RegenHealthDisabled {
+		return
+	}
+	motion.Health = motion.MaxHealth
+	motion.Mana = motion.MaxMana
+	motion.Powers[0] = motion.MaxPowers[0]
+	if s != nil {
+		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{
+			unitFieldHealth: motion.MaxHealth,
+			unitFieldPower1: motion.MaxMana,
+		})
+	}
+}
+
 func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotion, now time.Time) {
 	if motion == nil {
 		return
@@ -5339,7 +5363,12 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	for _, arm := range interrupted {
 		s.sendCreatureInterruptPackets(motion, arm)
 	}
-	motion.Health = motion.MaxHealth
+	// Creature::SetSpawnHealth runs at home ARRIVAL, not here: _EnterEvadeMode
+	// (CreatureAI.cpp:294-316) restores neither health nor mana — the restore
+	// rides HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:139-151),
+	// ahead of JustReachedHome. A creature mid-walk keeps its damaged health
+	// (and spent mana) until it reaches home; restoreCreatureSpawnHealth runs
+	// at the three finalize sites below.
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:311): the leash's
 	// last-damaged timer resets with the evade.
 	motion.LastDamaged = time.Time{}
@@ -5350,14 +5379,15 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.LastOffhandAttack = time.Time{}
 	// CreatureAI::EnterEvadeMode (CreatureAI.cpp:307-311): the tap and the
 	// damage requirement reset with the evade (SetLootRecipient(nullptr)
-	// clears UNIT_DYNFLAG_TAPPED, so it rides the health broadcast).
+	// clears UNIT_DYNFLAG_TAPPED, so it rides the values broadcast below).
 	motion.TapPlayerGUID, motion.TapGroupID = 0, 0
 	motion.PlayerDamageReq = motion.MaxHealth / 2
 	motion.DynamicFlags &^= unitDynFlagTapped
 	if s != nil {
 		s.clearCreatureAuras(creatureAuraKeyForMotion(motion))
+		// Health no longer restores here (see above) — this broadcast now
+		// carries only the tapped-flag clear.
 		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{
-			unitFieldHealth:       motion.MaxHealth,
 			unitFieldDynamicFlags: motion.DynamicFlags,
 		})
 	}
@@ -5417,6 +5447,9 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 					// so the flag set at evade start clears here, as in the
 					// already-home arm below.
 					motion.Evading = false
+					// DoFinalize restores spawn health/mana on the immediate
+					// finalize too, ahead of JustReachedHome.
+					s.restoreCreatureSpawnHealth(motion)
 					// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 					s.resetVehicleKitOnReachHome(ctx, motion)
 					s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
@@ -5457,8 +5490,10 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 				// overrides — BossAI::_JustReachedHome is me->setActive(false) and
 				// Go's native boss AIs carry no ReachedHome model — so the return is
 				// discarded as a provable no-op, matching the JustDied/SpellHit
-				// rulings. Health was already restored to max at evade start, matching
-				// DoFinalize's SetSpawnHealth ahead of the hook.
+				// rulings. The spawn-health restore runs here, ahead of the
+				// hook, exactly as DoFinalize orders SetSpawnHealth before
+				// JustReachedHome (HomeMovementGenerator.cpp:139-151).
+				s.restoreCreatureSpawnHealth(motion)
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
@@ -6216,6 +6251,28 @@ func (s *Server) stepCreatureMoveInLOSProximity(ctx context.Context, motion *cre
 // Creature::Update, not PetAI, so the summoned step bypasses the pet
 // diversion below and runs the generic legs (regen, combat pulse, threat
 // update, combat pursuit, sight-aggro scan, wander/idle, Lua OnAIUpdate).
+// creatureCannotAutoAttack mirrors the UNIT_STATE_CANNOT_AUTOATTACK half
+// of Unit::AttackerStateUpdate's head gate (Unit.cpp:2133-2134;
+// Unit.h:253: CONTROLLED | CHARGING | CASTING). CASTING bridges via
+// motion.CastingUntil; CONTROLLED (Unit.h:251: CONFUSED | STUNNED |
+// FLEEING) via the script state flags plus the 5/7/12 aura twin
+// (victimIsControlled). CHARGING has no Go model — no charge state is
+// tracked — so that leg stays open. Root is deliberately absent: root
+// is UNIT_STATE_NOT_MOVE, not CONTROLLED, and a rooted creature still
+// swings in C++.
+func (s *Server) creatureCannotAutoAttack(motion *creatureMotion, now time.Time) bool {
+	if motion == nil {
+		return false
+	}
+	if now.Before(motion.CastingUntil) {
+		return true
+	}
+	if motion.ScriptStunned || motion.Confused || motion.Fleeing || (!motion.FleeingUntil.IsZero() && now.Before(motion.FleeingUntil)) {
+		return true
+	}
+	return victimIsControlled(s, false, nil, combatTarget{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID})
+}
+
 // executeCreatureMeleeSwing runs one wild-creature base-attack swing —
 // the Unit::AttackerStateUpdate (Unit.cpp:2130) twin extracted from the
 // inline engine-driven swing in stepCreatureMotion so the finish-phase
@@ -6229,6 +6286,48 @@ func (s *Server) stepCreatureMoveInLOSProximity(ctx context.Context, motion *cre
 func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creatureMotion, target *playerPos, now time.Time, extraAttack bool, offhand bool) {
 	if s == nil || motion == nil || target == nil {
 		return
+	}
+	// Unit::AttackerStateUpdate's head gate (Unit.cpp:2133-2140): a
+	// pacified attacker, or one under UNIT_STATE_CANNOT_AUTOATTACK
+	// (Unit.h:253: CONTROLLED | CHARGING | CASTING), never swings, and
+	// a swing through a wall never fires — the LOS arm sits ahead of
+	// AtTargetAttacked, the facing turn and the outcome roll. The C++
+	// timer still resets on a blocked swing (resetAttackTimer runs
+	// after AttackerStateUpdate returns, UnitAI.cpp:72-73), so the
+	// blocked swing stamps the interval instead of retrying next
+	// tick; extra attacks touch no timer (Unit.cpp:2180-2187).
+	// The flag alone misses aura-only pacifies: the creature aura pipeline
+	// never sets UNIT_FLAG_PACIFIED on MOD_PACIFY apply (no creature-side
+	// writer — the player twin is spells.go:42830), so the live MOD_PACIFY
+	// (25) / MOD_PACIFY_SILENCE (60) aura arms carry the check, the
+	// boss_ai.go:14420 spell-cast-prevention precedent.
+	pacified := motion.UnitFlags&unitFlagPacified != 0 ||
+		len(s.creatureCasterAuraEffectsByType(motion, spellAuraModPacify)) > 0 ||
+		len(s.creatureCasterAuraEffectsByType(motion, spellAuraModPacifySilence)) > 0
+	if pacified || s.creatureCannotAutoAttack(motion, now) || !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z) {
+		if !extraAttack {
+			if offhand {
+				motion.LastOffhandAttack = now
+			} else {
+				motion.LastAttack = now
+			}
+		}
+		return
+	}
+	// Unit::AttackerStateUpdate (Unit.cpp:2147-2148): a creature turns
+	// to face its victim on every swing unless possessed or
+	// UNIT_FLAG2_DISABLE_TURN; SetFacingToObject (:13685-13694) only
+	// turns a stopped creature with a finalized spline — the tick path
+	// cleared Moving above the swing, and the extra-attack spend path
+	// checks the same finalized-spline condition here. The turn rides
+	// the live orientation into the creature update block
+	// (creatures.go:820), the waypoint-arrival precedent.
+	if motion.UnitFlags&unitFlagPossessed == 0 && motion.UnitFlags2&unitFlag2DisableTurn == 0 && (!motion.Moving || !now.Before(motion.MoveEnds)) {
+		faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
+		if faceAngle < 0 {
+			faceAngle += 2 * math.Pi
+		}
+		motion.Orientation = faceAngle
 	}
 	var damage uint32
 	if motion.MinDamage > 0 && motion.MaxDamage >= motion.MinDamage {
@@ -10403,6 +10502,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// applied at finalize (MoveSpline.cpp:46-50 final angle).
 		motion.Orientation = motion.HomeO
 		motion.WaitUntil = motion.MoveEnds
+		// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:139-151)
+		// restores spawn health/mana ahead of JustReachedHome.
+		s.restoreCreatureSpawnHealth(motion)
 		// Home-move completion: HomeMovementGenerator<Creature>::DoFinalize
 		// (HomeMovementGenerator.cpp:151) calls AI()->JustReachedHome() when
 		// the spline finalizes after evade — Eluna::JustReachedHome

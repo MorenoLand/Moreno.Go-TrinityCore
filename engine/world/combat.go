@@ -912,6 +912,27 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
 	}
+	// Unit::AttackerStateUpdate's head gate (Unit.cpp:2133-2140): a
+	// pacified attacker, or one under UNIT_STATE_CANNOT_AUTOATTACK
+	// (Unit.h:253: CONTROLLED | CHARGING | CASTING), never swings, and
+	// a swing through a wall never fires — the gate sits ahead of
+	// AtTargetAttacked, the on-next-swing slot and the redirect, as in
+	// C++. CASTING is already gated by the tick caller
+	// (updatePlayerCombat's nonMeleeCastInProgress arm, Player.cpp:1118)
+	// but the extra-attack spend path (consumeExtraAttacks) bypasses
+	// it, so the gate lives here where every swing funnels through;
+	// the caller's timer stamp stands (resetAttackTimer runs after
+	// AttackerStateUpdate returns, Player.cpp:1157), and
+	// consumeExtraAttacks restores lastSwing around the call.
+	// CONTROLLED (Unit.h:251: CONFUSED | STUNNED | FLEEING) bridges via
+	// the 5/7/12 aura twin (victimIsControlled) plus the script
+	// confused flag; CHARGING has no Go model, so that leg stays open.
+	if s.player.UnitFlags&unitFlagPacified != 0 || s.nonMeleeCastInProgress() || s.playerConfused || victimIsControlled(s.server, true, s, combatTarget{}) {
+		return
+	}
+	if s.server != nil && !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) {
+		return
+	}
 	// Unit::AttackerStateUpdate (Unit.cpp:2141): AtTargetAttacked(victim,
 	// true) fires at the top of every swing — ahead of the next-swing-spell
 	// slot, the redirect, and the outcome roll — so the victim engages even
