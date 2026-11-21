@@ -659,6 +659,11 @@ func (s *session) prohibitSpellSchool(ctx context.Context, schoolMask uint32, du
 	cooldowns := make(map[uint32]uint32)
 	nowUnix := time.Now().Unix()
 	cooldownEnd := nowUnix + int64((durationMs+999)/1000)
+	// Sweep first: an expired same-category entry already killed the
+	// shared category entry in C++'s per-tick Update (EraseCooldown), so
+	// the GetRemainingCooldown category-arm reads below must not read
+	// through it (sweepExpiredSpellCooldowns, spells.go).
+	s.sweepExpiredSpellCooldowns(nowUnix)
 
 	// SpellHistory::LockSpellSchool (SpellHistory.cpp:520-525) writes one
 	// millisecond-exact end per set school bit, not one entry keyed by the

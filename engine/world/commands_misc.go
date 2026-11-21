@@ -1244,6 +1244,10 @@ func (s *session) playerCooldownRemainingMs(spellID uint32, category uint32) uin
 		return 0
 	}
 	now := time.Now().Unix()
+	// Sweep first: an expired same-category entry already killed the
+	// shared category entry in C++'s per-tick Update (EraseCooldown),
+	// so the last-row CategoryEnd below must not read through it.
+	s.sweepExpiredSpellCooldowns(now)
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell == spellID {
 			if cd.End > now {

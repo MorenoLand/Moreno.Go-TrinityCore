@@ -49602,9 +49602,11 @@ func (s *session) updatePotionCooldown(ctx context.Context, spell wotlk.Spell) {
 // fired from Spell::_cast's tail (Spell.cpp:3517-3523) when the caster holds
 // CHEAT_COOLDOWN (Player.h:827): the just-cast spell's own RecoveryTime
 // cooldown entry is erased and SMSG_CLEAR_COOLDOWN (spell id then caster
-// guid, SpellHistory.cpp:432-451) goes to the caster. Like C++ only the
-// spell's own cooldown storage entry is cleared — category cooldowns are
-// untouched (ResetCooldown erases _spellCooldowns[spellId] only). The
+// guid, SpellHistory.cpp:432-451) goes to the caster. Erasing the entry
+// also erases _categoryCooldowns[CategoryId] (EraseCooldown,
+// SpellHistory.h:140-144), so remaining entries of the erased spell's
+// category lose their category arm — mirrored by zeroing their
+// CategoryEnd (the resetPlayerCooldown twin of this arm). The
 // C++ gate is modOwner->GetCommandStatus(CHEAT_COOLDOWN) with
 // m_originalCaster non-null, both vacuous here: finishSpellCast always
 // runs on the casting player session. The SetSpellModTakingSpell(this,
@@ -49616,16 +49618,25 @@ func (s *session) resetCastCooldownCheat(spellID uint32) {
 		return
 	}
 	removed := false
+	var erasedCategory uint32
 	s.playerStateMu.Lock()
 	kept := s.player.Cooldowns[:0]
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell == spellID {
 			removed = true
+			erasedCategory = cd.Category
 			continue
 		}
 		kept = append(kept, cd)
 	}
 	s.player.Cooldowns = kept
+	if removed && erasedCategory != 0 {
+		for i := range s.player.Cooldowns {
+			if s.player.Cooldowns[i].Category == erasedCategory {
+				s.player.Cooldowns[i].CategoryEnd = 0
+			}
+		}
+	}
 	s.playerStateMu.Unlock()
 	if !removed {
 		return
@@ -49653,6 +49664,7 @@ func (s *session) modifyPlayerSpellCooldown(spellID uint32, cooldownModMs int32)
 	}
 	now := time.Now()
 	found := false
+	var erasedCategory uint32
 	s.playerStateMu.Lock()
 	kept := s.player.Cooldowns[:0]
 	for _, cd := range s.player.Cooldowns {
@@ -49664,11 +49676,22 @@ func (s *session) modifyPlayerSpellCooldown(spellID uint32, cooldownModMs int32)
 		if shifted := time.Unix(cd.End, 0).Add(time.Duration(cooldownModMs) * time.Millisecond); shifted.After(now) {
 			cd.End = shifted.Unix()
 			kept = append(kept, cd)
+			continue
 		}
-		// else the entry is erased; C++ EraseCooldown also drops the
-		// category-map entry, which Go has no separate model of.
+		// Else the entry is erased; C++ EraseCooldown also drops the
+		// category-map entry (SpellHistory.h:140-144), so surviving
+		// entries of the erased spell's category lose their category
+		// arm — mirrored by zeroing their CategoryEnd below.
+		erasedCategory = cd.Category
 	}
 	s.player.Cooldowns = kept
+	if erasedCategory != 0 {
+		for i := range s.player.Cooldowns {
+			if s.player.Cooldowns[i].Category == erasedCategory {
+				s.player.Cooldowns[i].CategoryEnd = 0
+			}
+		}
+	}
 	s.playerStateMu.Unlock()
 	if !found {
 		return
