@@ -1411,6 +1411,14 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	// the pet stays in combat and its chase motion (independent of
 	// UpdateAI) continues, so pursuit movement below is unaffected.
 	ccHoldAttacks := s.petVictimHasBreakableCC(motion, targetGUID, isTargetPlayer, targetSess)
+	if ccHoldAttacks {
+		// PetAI.cpp:74-80 InterruptNonMeleeSpells half: a pending
+		// cast-time pet cast (L8 deferral) is interrupted, not just
+		// suppressed — the token move drops the fire timer and the
+		// CastingUntil clear drops the UNIT_STATE_CASTING window.
+		s.cancelPendingCreatureCast(motion)
+		motion.CastingUntil = time.Time{}
+	}
 
 	if dist > meleeRange {
 		if motion.PetCommand == PetCommandStay {
@@ -2412,11 +2420,13 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 // (PetAI.cpp:74-80): when the victim carries a breakable-by-damage
 // crowd-control aura, the pet interrupts its non-melee casts and skips the
 // rest of the tick — it must not exit combat and must not break the CC.
-// Go pets carry no in-flight cast state (pet spells resolve instantly, so
-// InterruptNonMeleeSpells is vacuous) and no channeled-spell state (the
-// CURRENT_CHANNELED_SPELL outer gate and the channeled self-exclusion are
-// vacuous), so the arm reduces to the tick-skip the caller applies. Covers
-// player and creature victims via the shared breakableCCAuraPresent scan.
+// The InterruptNonMeleeSpells half cancels the pet's pending cast-time
+// cast (CastingUntil + token, L8) at the caller; the channeled-spell
+// half (the CURRENT_CHANNELED_SPELL outer gate and the channeled
+// self-exclusion) stays unmodeled — no pet channel-interrupt bridge — so
+// the arm reduces to the tick-skip plus the cancel the caller applies.
+// Covers player and creature victims via the shared
+// breakableCCAuraPresent scan.
 func (s *Server) petVictimHasBreakableCC(motion *creatureMotion, targetGUID uint64, isTargetPlayer bool, targetSess *session) bool {
 	if s == nil || motion == nil || targetGUID == 0 {
 		return false
@@ -3929,7 +3939,41 @@ func (s *session) petDelayMomentMs(ctx context.Context, spell wotlk.Spell, motio
 	return delayMoment
 }
 
+// scheduleDeferredPetCast arms the fire timer for a deferred pet cast-time
+// cast (Spell::prepare, Spell.cpp:3174-3206: START at t0, _cast at
+// t0+casttime), the pet twin of scheduleDeferredTwinCast: the callback
+// re-looks-up the motion and drops the cast when the motion is gone or
+// dead, or the token moved (a newer cast, an interrupt, an evade, or a
+// combat stop), then re-enters the pet execute path with deferredFire so
+// the fire-time gates re-run (C++ _cast re-runs CheckCast) without
+// deferring again. The owner session is re-derived at fire time — the
+// commanding session may have logged out — and a missing owner drops
+// the cast.
+func (s *session) scheduleDeferredPetCast(motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, castMs uint32, token uint64) {
+	if s == nil || s.server == nil || motion == nil || castMs == 0 {
+		return
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	time.AfterFunc(time.Duration(castMs)*time.Millisecond, func() {
+		motion2 := s.server.findCreatureMotion(mapID, instanceID, guid)
+		if motion2 == nil || motion2.Health == 0 || motion2.PendingCastToken != token {
+			return
+		}
+		motion2.PendingCastSpellID = 0
+		motion2.CastingUntil = time.Time{}
+		owner := s.server.spellModOwnerSession(mapID, instanceID, guid)
+		if owner == nil {
+			return
+		}
+		owner.executePetSpellWithOptionsDeferred(context.Background(), motion2, spell, castCount, target, false, true)
+	})
+}
+
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
+	return s.executePetSpellWithOptionsDeferred(ctx, motion, spell, castCount, target, triggered, false)
+}
+
+func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool, deferredFire bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
 	}
@@ -4020,19 +4064,25 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// casts. Both arms are non-triggered only: TRIGGERED_IGNORE_CAST_IN_PROGRESS
 	// (0x20) rides TRIGGERED_FULL_MASK, which Go's triggered models,
 	// and triggered casts bypass CheckPetCast entirely (CastSpell ->
-	// prepare -> CheckCast). The CASTING-state arm's cast-time half is
-	// vacuous — pet casts resolve instantly and the pet path stamps no
-	// CastingUntil — but a live channeled spell holds UNIT_STATE_CASTING
+	// prepare -> CheckCast). The CASTING-state arm's cast-time half reads
+	// the CastingUntil stamp the deferral below sets (L8: Firebolt 3110
+	// is a 2s cast, Seduction 6358 1.5s — pet casts no longer resolve
+	// instantly); a live channeled spell holds UNIT_STATE_CASTING
 	// (Unit.cpp:3107), read here via creatureChannelLive; interrupt
 	// clears the stamp, expiry is by timestamp. The dead-owner arm
 	// reads the owner session (every non-triggered backstop entry runs
-	// on it); the IsGhouled() exemption has no Go model, as on the
-	// client path. A failing gate fizzles silently, the backstop
-	// convention — the gauntlet reports failures on client casts.
+	// on it); the IsGhouled() exemption rides
+	// playerHasAuraSpell(spellRaiseAlly 46619), the gauntlet's twin
+	// (Unit::IsGhouled, Unit.cpp:8896-8898). A failing gate fizzles
+	// silently, the backstop convention — the gauntlet reports failures
+	// on client casts.
 	if !triggered && s.server.creatureChannelLive(motion) {
 		return true
 	}
-	if !triggered && s.isDeadOrGhost() {
+	if !triggered && time.Now().Before(motion.CastingUntil) {
+		return true
+	}
+	if !triggered && s.isDeadOrGhost() && !s.playerHasAuraSpell(spellRaiseAlly) {
 		return true
 	}
 	if !triggered && motion.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0CastableWhileDead == 0 {
@@ -4044,7 +4094,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !s.server.creatureCheatSpellPreCast(motion, spell) {
 		return true
 	}
-	if !triggered && s.server.petGlobalCooldownActive(motion, spell, time.Now()) {
+	// Spell::CheckCast GCD arm (Spell.cpp:5227) is strict-only, and
+	// _cast re-runs CheckCast(false) — so the deferred fire skips it:
+	// the GCD this cast triggered at t0 must not block its own fire
+	// (a sub-1.5s cast-time pet spell would otherwise self-fizzle).
+	if !triggered && !deferredFire && s.server.petGlobalCooldownActive(motion, spell, time.Now()) {
 		return true
 	}
 	if !triggered {
@@ -4356,6 +4410,29 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		redirectTraj.SeedTargetGUID = preRedirectTargetGUID
 		dx, dy, dz, hasDest, destFailed, destSnapshots = s.server.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, motion, spell, targetGUID, redirectTraj)
 		if destFailed {
+			return true
+		}
+	}
+	// Spell::prepare cast-time deferral (Spell.cpp:3174-3206): a
+	// non-triggered pet cast with a cast time sends SMSG_SPELL_START at
+	// t0 and fires _cast at t0+casttime — the pet twin of the creature
+	// deferral (boss_ai.go). Triggered casts stay instant (C++
+	// TRIGGERED_CAST_DIRECTLY, Spell.cpp:3171, casts directly without
+	// a timer). The GCD triggers at t0, right after START
+	// (Spell.cpp:3194-3197); power and cooldown run at fire time
+	// (_cast), so the t0 run's only other side effect is the
+	// CastingUntil stamp — the UNIT_STATE_CASTING window CheckPetCast
+	// reads.
+	if !triggered && !deferredFire {
+		if castMs := s.server.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), spell); castMs > 0 {
+			startTarget := finalizeSessionSrcTarget(spell, spellGoPacketTarget(spell, target), target.Flags&protocol.SpellTargetFlagSourceLocation != 0, motion.X, motion.Y, motion.Z)
+			s.server.sendCreatureSpellStart(motion, targetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castCount, spell.ID, creatureStartCastFlags(spell), castMs, startTarget, nil, s.server.creatureSpellAmmoData(ctx, motion)))
+			now := time.Now()
+			motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+			s.server.triggerPetGlobalCooldown(motion, spell, now)
+			s.server.cancelPendingCreatureCast(motion)
+			motion.PendingCastSpellID = spell.ID
+			s.scheduleDeferredPetCast(motion, spell, castCount, target, castMs, motion.PendingCastToken)
 			return true
 		}
 	}
@@ -5349,13 +5426,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	missedTarget := func(guid uint64) bool {
 		return petMissVerdicts[guid] != protocol.SpellMissNone
 	}
-	// Pet casts are client-driven; server does not send SMSG_SPELL_START for pets. Go mirrors client packet and omits START, so no deferral queue needed here.
+	// Cast-time pet casts send SMSG_SPELL_START and defer on the L8
+	// queue ahead of this arm, so no deferral applies here — this is
+	// the post-GO channel stamp.
 	// Spell::handle_immediate channel-state arm (Spell.cpp:3569-3596),
 	// the pet twin of the castCreatureSpellInternal stamp: SendChannelStart
 	// precedes HandleLaunchPhase, so the stamp lands here, ahead of the
 	// launch arms below — a 76/106 spell triggered by this channel spell
-	// resolves against it. The pet path stamps no CastingUntil, so the
-	// window is the DBC duration from this cast alone; the channel
+	// resolves against it. Channeled spells carry no cast time, so the
+	// L8 deferral stamps no CastingUntil for them; the window is the
+	// DBC duration from this cast alone; the channel
 	// object is the caster when the cast has a destination, else the
 	// explicit unit target (self when none was supplied).
 	if isChanneledSpell(spell) && s.server != nil && s.server.Data != nil {
@@ -7350,10 +7430,14 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !triggered {
 		now := time.Now()
 		s.recordPetSpellCooldown(motion, spell, now)
-		// Spell::cast (Spell.cpp:3196): a non-triggered cast triggers
+		// Spell::prepare (Spell.cpp:3197): a non-triggered cast triggers
 		// the global cooldown unless TRIGGERED_IGNORE_GCD — Go's
-		// triggered models TRIGGERED_FULL_MASK, which carries it.
-		s.server.triggerPetGlobalCooldown(motion, spell, now)
+		// triggered models TRIGGERED_FULL_MASK, which carries it. A
+		// deferred fire skips this: its GCD already triggered at t0,
+		// in the prepare deferral above.
+		if !deferredFire {
+			s.server.triggerPetGlobalCooldown(motion, spell, now)
+		}
 	}
 	// Spell::_cast spell_linked_spell tail (Spell.cpp:3503-3512): type-0 rows
 	// fire at cast completion for pet casters too — the twin is shared with
