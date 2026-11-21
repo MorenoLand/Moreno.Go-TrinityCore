@@ -9963,7 +9963,8 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			break
 		}
 	}
-	if !hasAura {
+	hasAreaAura := spellHasAreaAuraEffect(spell)
+	if !hasAura && !hasAreaAura {
 		return
 	}
 	// SpellScript PreventHitDefaultEffect (SpellScript.cpp): an ev4/ev5
@@ -9974,16 +9975,6 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 	// creature-target loops below skip per effect instead. A nil
 	// prevent (the inline path, which fires no SpellScript hooks)
 	// prevents nothing.
-	allPrevented := true
-	for i, eff := range spell.Effects {
-		if eff.Effect == spellEffectApplyAura && !prevent.defaultPrevented(i) {
-			allPrevented = false
-			break
-		}
-	}
-	if allPrevented {
-		return
-	}
 	var durationMs uint32
 	if s.Data != nil && spell.DurationIndex > 0 {
 		if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, casterLevel(m)); derr == nil && ok && dur > 0 {
@@ -10010,6 +10001,22 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 				return
 			}
 		}
+	}
+	allPrevented := true
+	for i, eff := range spell.Effects {
+		if eff.Effect == spellEffectApplyAura && !prevent.defaultPrevented(i) {
+			allPrevented = false
+			break
+		}
+	}
+	if allPrevented {
+		// The effect-6 arm is fully prevented, but the area-aura
+		// effects are EffectUnused in C++ (area_auras.go), so a
+		// prevent veto on one is vacuous there — the fan-out still runs.
+		if hasAreaAura {
+			s.registerCreatureAreaAura(ctx, m, spell, durationMs)
+		}
+		return
 	}
 	for _, guid := range hitTargets {
 		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
@@ -10065,6 +10072,13 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			continue
 		}
 		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false, nil)
+	}
+	if hasAreaAura {
+		// Caster-owned area-aura fan-out (area_auras.go): runs after
+		// the effect-6 arm so the area apply's PersistentAreaAura
+		// flag wins on records the two arms share — applyAuraFromCaster
+		// replaces the record, and the server merge ORs the flag in.
+		s.registerCreatureAreaAura(ctx, m, spell, durationMs)
 	}
 }
 
@@ -10340,6 +10354,15 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		}
 		existing := s.activeCreatureAuras[targetKey][spell.ID]
 		if existing != nil && !existing.Stopped {
+			// A persistent-area application merging into a record a
+			// direct cast created must adopt the flag, or the area
+			// pass can never strip it on leave (area_auras.go):
+			// the merge path never rebuilds the record literal.
+			// One-way only — a direct re-cast never clears the flag
+			// of a record an area source maintains.
+			if persistentAreaAura {
+				existing.PersistentAreaAura = true
+			}
 			if _, ok := castMerged[targetGUID]; ok {
 				refreshLaterAuraEffectBasepoints(existing, spell, eff, amount)
 				// Later effects of the same cast only refresh amounts, so
