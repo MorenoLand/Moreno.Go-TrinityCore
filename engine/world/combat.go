@@ -15,6 +15,10 @@ import (
 
 const (
 	creatureFlagExtraNoParryHasten = 0x00000008
+	// CREATURE_FLAG_EXTRA_USE_OFFHAND_ATTACK (CreatureData.h:48):
+	// creature swings OFF_ATTACK — Creature::UpdateEntry sets
+	// CanDualWield from it (Creature.cpp:539/585).
+	creatureFlagExtraUseOffhandAttack = 0x00000800
 	// CREATURE_FLAG_EXTRA_NO_TAUNT (CreatureData.h:45): creature is immune
 	// to taunt auras and the ATTACK_ME effect — Creature::ApplySpellImmune
 	// rows at Creature.cpp:634-638.
@@ -1348,6 +1352,18 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 						rem := cSwing - elapsed
 						hasted := calcParryHastedRemaining(rem, cSpeed)
 						motion.LastAttack = now.Add(-(cSwing - hasted))
+						// Unit::HandleParry (Unit.cpp:1484-1496) cuts the
+						// victim's OFF_ATTACK timer by the same 20% of the
+						// remaining swing, so the offhand stamp moves with
+						// the mainhand one when the creature dual-wields.
+						if motion.FlagsExtra&creatureFlagExtraUseOffhandAttack != 0 && !motion.LastOffhandAttack.IsZero() {
+							offElapsed := now.Sub(motion.LastOffhandAttack)
+							if offElapsed < cSwing {
+								offRem := cSwing - offElapsed
+								offHasted := calcParryHastedRemaining(offRem, cSpeed)
+								motion.LastOffhandAttack = now.Add(-(cSwing - offHasted))
+							}
+						}
 					}
 				}
 			}

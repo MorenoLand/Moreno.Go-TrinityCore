@@ -36,10 +36,11 @@
 -- consumes no re-arm, so the arm stays due. The in-loop gate's same-tick
 -- co-expiry suppression has no timer-arm model (independent timers fire
 -- on separate callbacks) and is the only unmodeled sliver.
--- Unmodeled: CheckInRoom (home-position 2D distance > 50yd ->
--- EnterEvadeMode + Talk(SAY_EVADE=1)) — the leash needs EnterEvadeMode
--- (no bridge); creature:GetHomePosition() IS bridged (dfdd8cc0), so the
--- verdict rests on the evade leg alone; evade still re-arms through
+-- Unmodeled: none on the leash. CheckInRoom (home-position 2D
+-- distance > 50yd -> EnterEvadeMode + Talk(SAY_EVADE=1)) PORTED
+-- 2026-11-21 — the bridge is live (creature:EnterEvadeMode,
+-- lua_creature_events.go:6342); the 1s poll below is the per-tick C++
+-- check's twin (balinda precedent); evade still re-arms through
 -- OnReset(23) when the engine leashes the creature.
 -- Unmodeled: DoAction(ACTION_BUFF_YELL=-30001) -> Talk(SAY_BUFF=2) —
 -- driven by the BattlegroundAV script; no Battleground-to-Lua
@@ -52,6 +53,7 @@ local SPELL_WHIRLWIND2 = 13736
 local SPELL_MORTAL_STRIKE = 16856
 
 local SAY_AGGRO = 0
+local SAY_EVADE = 1
 
 local ENTRY_GALVANGAR = 11947
 
@@ -139,10 +141,34 @@ local function onMortalStrike(creature, guid)
     schedule(guid, "mortal_strike", {10000, 30000}, function() onMortalStrike(creature, guid) end)
 end
 
+-- C++ boss_galvangarAI::CheckInRoom (boss_galvangar.cpp:81-91): every
+-- UpdateAI tick, 2D distance from home > 50 yd -> EnterEvadeMode +
+-- Talk(SAY_EVADE), return false (skips events + melee that tick).
+-- Distance twin: GetHomePosition + GetX/Y math, minus GetCombatReach
+-- (WorldObject::GetDistance2d(x, y), Object.cpp:1193-1197), clamped
+-- >= 0 — the balinda precedent. Lua has no per-tick hook, so a 1s
+-- poll is the twin (documented delta: up to 1s late); no IsCasting
+-- defer — the leash precedes the C++ casting gate (:100). The evade
+-- fires ev2/ev23 (timers cancelled), so return without re-arming.
+local function onCheckInRoom(creature, guid)
+    local hx, hy = creature:GetHomePosition()
+    local dx = creature:GetX() - hx
+    local dy = creature:GetY() - hy
+    local dist = math.sqrt(dx * dx + dy * dy) - creature:GetCombatReach()
+    if dist < 0 then dist = 0 end
+    if dist > 50.0 then
+        creature:EnterEvadeMode()
+        creature:Talk(SAY_EVADE)
+        return
+    end
+    schedule(guid, "check_in_room", 1000, function() onCheckInRoom(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    schedule(guid, "check_in_room", 1000, function() onCheckInRoom(creature, guid) end)
     schedule(guid, "cleave", {1000, 9000}, function() onCleave(creature, guid) end)
     schedule(guid, "frightening_shout", {2000, 19000}, function() onFrighteningShout(creature, guid) end)
     schedule(guid, "whirlwind1", {1000, 13000}, function() onWhirlwind1(creature, guid) end)

@@ -332,6 +332,22 @@ type creatureMotion struct {
 	TargetGUID uint64
 	InCombat   bool
 	LastAttack time.Time
+	// LastOffhandAttack is the offhand twin of LastAttack for
+	// CREATURE_FLAG_EXTRA_USE_OFFHAND_ATTACK creatures (Creature.cpp:539/
+	// 585 SetCanDualWield; UnitAI.cpp:78-80 DoMeleeAttackIfReady fires the
+	// offhand swing on its own timer). Anchored half an interval behind
+	// the first mainhand swing (Unit::Attack, Unit.cpp:5745, delays the
+	// offhand timer by 50% of the base attack time at engage).
+	LastOffhandAttack time.Time
+	// Boundary carries the instance LoadBossBoundaries polygons for this
+	// boss (area_boundary.go; BossAI ctor SetBoundary,
+	// ScriptedCreature.cpp:486-488). Empty for every other creature, so
+	// the 2.5s room check stays inert — the C++ empty-boundary case.
+	Boundary []areaBoundary
+	// BoundaryCheckTime is Creature::m_boundaryCheckTime
+	// (Creature.cpp:830-838): the countdown to the next CheckInRoom
+	// while engaged; armed to 2.5s when a boundary is applied.
+	BoundaryCheckTime time.Duration
 	// AlreadyCallAssistance mirrors Creature::m_AlreadyCallAssistance
 	// (Creature.cpp:2404): Unit::Attack (Unit.cpp:5737) fires
 	// Creature::CallAssistance once per engagement; the flag resets on real
@@ -1800,6 +1816,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		}
 		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 		motion.InCombat = true
+		if enteredCombat {
+			applyBossBoundary(motion)
+		}
 		motion.Moving = false
 		// CombatAI::JustEngagedWith / CasterAI::JustEngagedWith pre-arm
 		// (CombatAI.cpp:76-88, 139-162): AICOND_COMBAT template spells get
@@ -4002,10 +4021,12 @@ func (s *Server) charmerResolvesInInstance(mapID, instanceID uint32, guid uint64
 // vacuous as a separate site — in Go engagement is InCombat. BOUNDARY ("the creature h
 // evade boundary"): Creature::Update (Creature.cpp:830-838) calls
 // AI()->CheckInRoom() every 2.5s while engaged → EnterEvadeMode at
-// CreatureAI.cpp:425. Go has no boundary model (no SetBoundary/IsInBounds
-// analog; the instance GetBossBoundary arm is unmodeled, matching the per-boss
-// Lua notes); the visibility-range leash at creaturemotion.go:1895 is the
-// open-world analog only (dungeons skip it per CanCreatureAttack :2585).
+// CreatureAI.cpp:425. The engine model lives in area_boundary.go
+// (AreaBoundary shapes + instance LoadBossBoundaries rows applied on
+// engage, 2.5s engaged tick in stepCreatureMotion); only the Magtheridon
+// row is ported so far, the other instances' rows are still unported.
+// The visibility-range leash at creaturemotion.go:1895 is the open-world
+// analog only (dungeons skip it per CanCreatureAttack :2585).
 // SEQUENCE_BREAK ("boss prerequisites not defeated"):
 // BossAI::_JustEngagedWith (ScriptedCreature.cpp:530-535, CheckRequiredBosses
 // fail) plus the hadronox / blood_prince_council / lady_deathwhisper /
@@ -5006,10 +5027,6 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	if motion == nil {
 		return
 	}
-	if motion.TransportGUID != 0 {
-		motion.Moving = false
-		return
-	}
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:294-298) no-ops on a
 	// creature already in evade mode (IsInEvadeMode / UNIT_STATE_EVADE):
 	// a re-entrant EnterEvadeMode — a Lua ev2 relay back to a creature
@@ -5136,6 +5153,11 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:311): the leash's
 	// last-damaged timer resets with the evade.
 	motion.LastDamaged = time.Time{}
+	// Unit::Attack (Unit.cpp:5745) re-delays the offhand swing by 50% of
+	// the base attack time on every re-engage, so the offhand stamp
+	// resets with the evade — otherwise a re-engaged dual-wielder would
+	// swing offhand immediately on a stale stamp.
+	motion.LastOffhandAttack = time.Time{}
 	// CreatureAI::EnterEvadeMode (CreatureAI.cpp:307-311): the tap and the
 	// damage requirement reset with the evade (SetLootRecipient(nullptr)
 	// clears UNIT_DYNFLAG_TAPPED, so it rides the health broadcast).
@@ -5150,7 +5172,17 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		})
 	}
 	homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
-	if homeDist > 0.5 {
+	// CreatureAI::EnterEvadeMode (CreatureAI.cpp:222-228): a creature
+	// seated on a vehicle never launches the home move ("otherwise me will
+	// be in evade mode forever") — the Reset/threat-clear arms above still
+	// run; only the home spline is skipped. A transport rider takes the
+	// same skip (its home is deck-relative). The evade flag clears here:
+	// with no home spline the tick's evade branch would otherwise finalize
+	// a zero MoveEnds and snap the creature to its (possibly stale) home.
+	if motion.TransportGUID != 0 || motion.VehicleGUID != 0 {
+		motion.Moving = false
+		motion.Evading = false
+	} else if homeDist > 0.5 {
 		speed := creatureSplineVelocity(motion, false)
 		if speed < 0.001 {
 			// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
@@ -5957,7 +5989,7 @@ func (s *Server) stepCreatureMoveInLOSProximity(ctx context.Context, motion *cre
 // guard at the tail). The caller owns victim liveness: the tick path
 // drops dead targets in its section-1 head, the spend path
 // re-resolves a live victim per swing in consumeCreatureExtraAttacks.
-func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creatureMotion, target *playerPos, now time.Time, extraAttack bool) {
+func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creatureMotion, target *playerPos, now time.Time, extraAttack bool, offhand bool) {
 	if s == nil || motion == nil || target == nil {
 		return
 	}
@@ -5987,6 +6019,15 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 			maxDmg = minDmg + 1
 		}
 		damage = uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
+	}
+	// Unit::AttackerStateUpdate with OFF_ATTACK (UnitAI.cpp:78-82) reads
+	// UNIT_FIELD_MIN/MAXOFFHANDDAMAGE, which carry the 50% TOTAL_PCT from
+	// Unit.cpp:353 (m_auraPctModifiersGroup[UNIT_MOD_DAMAGE_OFFHAND]); the
+	// player twin folds the same 0.5 into the pct leg (combat.go). The
+	// halving lands on the weapon base ahead of the flat-13 / pct-79 aura
+	// folds below, matching CalculateMeleeDamage's order (Unit.cpp:8061-8068).
+	if offhand {
+		damage = uint32(float64(damage) * 0.5)
 	}
 	// Unit::ApplyStatPctModifier (Unit.cpp:9237-9255) with
 	// UNIT_MOD_DAMAGE_MAINHAND / TOTAL_PCT: AddPct scales the
@@ -6578,7 +6619,11 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// swing stamps LastAttack here, where the timer gate it was
 	// extracted from stamped it.
 	if !extraAttack {
-		motion.LastAttack = now
+		if offhand {
+			motion.LastOffhandAttack = now
+		} else {
+			motion.LastAttack = now
+		}
 	}
 }
 
@@ -7019,6 +7064,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 
 	// 1. If currently in combat with a target:
 	if motion.InCombat && motion.TargetGUID != 0 {
+		// Creature::Update (Creature.cpp:830-838) runs AI()->CheckInRoom()
+		// every 2.5s while engaged; CheckInRoom (CreatureAI.cpp:419-427)
+		// evades out-of-room. The boundary rides the instance
+		// LoadBossBoundaries rows (area_boundary.go); no row means no check.
+		if s.stepCreatureBoundaryCheck(ctx, motion, now) {
+			return
+		}
 		var target *playerPos
 		for i := range players {
 			if players[i].GUID == motion.TargetGUID && players[i].Map == motion.Map {
@@ -9842,7 +9894,25 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			attackTime = 2 * time.Second
 		}
 		if motion.LastAttack.IsZero() || now.Sub(motion.LastAttack) >= attackTime {
-			s.executeCreatureMeleeSwing(ctx, motion, target, now, false)
+			s.executeCreatureMeleeSwing(ctx, motion, target, now, false, false)
+		}
+		// UnitAI::DoMeleeAttackIfReady (UnitAI.cpp:61-82): a creature with
+		// an offhand weapon (CanDualWield, Creature.cpp:539/585 —
+		// CREATURE_FLAG_EXTRA_USE_OFFHAND_ATTACK 0x800, CreatureData.h:48)
+		// swings OFF_ATTACK on its own timer, same BaseAttackTime
+		// (Creature.cpp:586-587 SetAttackTime(OFF_ATTACK, BaseAttackTime)).
+		// Unit::Attack (Unit.cpp:5745) delays the offhand by 50% of the base
+		// attack time on engage; Go has no engage timestamp on the motion,
+		// so the delay counts from the first in-range tick instead — the
+		// first offhand swing can land up to half an interval late after a
+		// long chase; steady-state cadence is exact.
+		if motion.FlagsExtra&creatureFlagExtraUseOffhandAttack != 0 {
+			if motion.LastOffhandAttack.IsZero() {
+				motion.LastOffhandAttack = now.Add(-attackTime / 2)
+			}
+			if now.Sub(motion.LastOffhandAttack) >= attackTime {
+				s.executeCreatureMeleeSwing(ctx, motion, target, now, false, true)
+			}
 		}
 		return
 	}

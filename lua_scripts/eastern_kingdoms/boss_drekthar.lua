@@ -41,14 +41,12 @@
 -- is a separate hook and stays ungated per C++. The in-loop gate's
 -- same-tick co-expiry suppression has no timer-arm model (independent
 -- timers fire on separate callbacks) and is the only unmodeled sliver.
--- Unmodeled: CheckInRoom (home-position 2D distance > 50yd ->
--- EnterEvadeMode + Talk(SAY_EVADE=1)) — documented-only, not for lack
--- of position reads (creature:GetHomePosition() IS bridged,
--- lua_objects.go:337, plus GetX/GetY/GetZ — the 2D check is
--- computable), but because EnterEvadeMode has no Lua bridge and
--- Talk(SAY_EVADE) fires only inside the evade flow: a Talk-only port
--- would yell without evading (fabrication). Evade still re-arms
--- through OnReset(23) when the engine leashes the creature.
+-- Unmodeled: none. CheckInRoom (home-position 2D distance > 50yd ->
+-- EnterEvadeMode + Talk(SAY_EVADE=1)) PORTED 2026-11-21 — the bridge
+-- is live (creature:EnterEvadeMode, lua_creature_events.go:6342); the
+-- 1s poll below is the per-tick C++ check's twin (balinda precedent);
+-- evade still re-arms through OnReset(23) when the engine leashes the
+-- creature.
 -- SPELL_SWEEPING_STRIKES=18765, SPELL_CLEAVE=20677,
 -- SPELL_WINDFURY=35886, SPELL_STORMPIKE=51876 are declared in the C++
 -- Spells enum (all marked "not sure") but never used by this AI.
@@ -59,6 +57,7 @@ local SPELL_KNOCKDOWN = 19128
 local SPELL_FRENZY = 8269
 
 local SAY_AGGRO = 0
+local SAY_EVADE = 1
 local SAY_RESPAWN = 2
 local SAY_RANDOM = 3
 
@@ -145,10 +144,34 @@ local function onRandomYell(creature, guid)
     schedule(guid, "random_yell", {20000, 30000}, function() onRandomYell(creature, guid) end)
 end
 
+-- C++ boss_drektharAI::CheckInRoom (boss_drekthar.cpp:80-90): every
+-- UpdateAI tick, 2D distance from home > 50 yd -> EnterEvadeMode +
+-- Talk(SAY_EVADE), return false (skips events + melee that tick).
+-- Distance twin: GetHomePosition + GetX/Y math, minus GetCombatReach
+-- (WorldObject::GetDistance2d(x, y), Object.cpp:1193-1197), clamped
+-- >= 0 — the balinda precedent. Lua has no per-tick hook, so a 1s
+-- poll is the twin (documented delta: up to 1s late); no IsCasting
+-- defer — the leash precedes the C++ casting gate (:99). The evade
+-- fires ev2/ev23 (timers cancelled), so return without re-arming.
+local function onCheckInRoom(creature, guid)
+    local hx, hy = creature:GetHomePosition()
+    local dx = creature:GetX() - hx
+    local dy = creature:GetY() - hy
+    local dist = math.sqrt(dx * dx + dy * dy) - creature:GetCombatReach()
+    if dist < 0 then dist = 0 end
+    if dist > 50.0 then
+        creature:EnterEvadeMode()
+        creature:Talk(SAY_EVADE)
+        return
+    end
+    schedule(guid, "check_in_room", 1000, function() onCheckInRoom(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    schedule(guid, "check_in_room", 1000, function() onCheckInRoom(creature, guid) end)
     schedule(guid, "whirlwind", {1000, 20000}, function() onWhirlwind(creature, guid) end)
     schedule(guid, "whirlwind2", {1000, 20000}, function() onWhirlwind2(creature, guid) end)
     schedule(guid, "knockdown", 12000, function() onKnockdown(creature, guid) end)

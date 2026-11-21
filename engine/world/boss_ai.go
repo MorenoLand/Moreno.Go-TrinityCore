@@ -33,19 +33,22 @@ import (
 // re-summons them via its SummonBlackguards arm (boss_vancleef.cpp:86-90,
 // ported through the creature:SummonCreature bridge). scheduler.CancelAll()
 // needs no bridge — the AIs are tick-driven and OnReset re-arms their
-// timers. The instance SetBossState(NOT_STARTED) arm has no boss-state
-// model; Go's analog is clearInstanceEncounter on evade
-// (creaturemotion.go:626).
+// timers. The instance SetBossState(NOT_STARTED) arm has no C++ site for
+// the 3 native AIs (SmartAI bosses, no BossAI _Reset); Go's evade analog
+// stays clearInstanceEncounter (creaturemotion.go:626).
 // _JustDied (512-518) vs OnDied — bridged: BossAI._JustDied's events.Reset()
 // is covered per-AI (flags/timers linger until the respawn OnReset re-arms
 // them; stale timers stay inert via the OnUpdate !InCombat guard the kill
 // paths set), scheduler.CancelAll() needs no bridge (tick-driven AIs),
 // and summons.DespawnAll() rides the Lua event-4 fire for Lua-tracked
 // summons (vancleef's blackguards). The instance SetBossState(DONE) arm
-// has no state model; the kill sites clear encounter-active tracking
-// (combat.go:566/879, spells.go:7446/12646) — the pet owner-gone branch
-// fires the Lua 23+4 pair itself before the native OnDied, so Lua summon
-// cleanup runs there too. Lua keeps
+// runs in rhahkZor.OnDied (instance_deadmines.cpp:228-236 OnUnitDeath,
+// BOSS_RHAHKZOR 0); taragaman/kresh have no C++ arm (placeholder /
+// old-style instance scripts with no boss-state tracking). The kill sites
+// also clear encounter-active tracking (combat.go:566/879,
+// spells.go:7446/12646) — the pet owner-gone branch fires the Lua 23+4
+// pair itself before the native OnDied, so Lua summon cleanup runs there
+// too. Lua keeps
 // Eluna parity (fireCreatureDied fires Lua event 23 On_Reset then event 4
 // On_Died) with the native hook fired right after, matching the
 // Eluna-first/native-second order used at respawn (kill.go:865).
@@ -57,7 +60,9 @@ import (
 // CheckRequiredBosses SEQUENCE_BREAK documented no-bridge; instance
 // SetBossState(IN_PROGRESS) is bridged per-boss via creature:SetBossState
 // (lua_creature_events.go, live 2026-11-05) — the shim itself does not
-// set it; Lua ports set it in OnEnterCombat. beginInstanceEncounter
+// set it; Lua ports set it in OnEnterCombat. The 3 native AIs have no C++
+// IN_PROGRESS arm (SmartAI bosses, no BossAI _JustEngagedWith), so no
+// native write. beginInstanceEncounter
 // is raid-gated (IsRaid) and a no-op for all five Go bosses (Deadmines and
 // Wailing Caverns are dungeons; only Lua-ported raid bosses use it);
 // SetCombatPulseDelay(5) is bridged (creature:SetCombatPulseDelay,
@@ -375,9 +380,13 @@ func (ai *rhahkZorAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion)
 	ai.OnReset(ctx, s, m)
 }
 
-// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) — no
-// per-AI cleanup needed (this AI tracks no summons).
+// OnDied mirrors the instance OnUnitDeath DONE write
+// (instance_deadmines.cpp:228-236: SetBossState(BOSS_RHAHKZOR, DONE);
+// deadmines.h:41, BOSS_RHAHKZOR 0). Rhahk'Zor is SmartAI in C++, so no
+// BossAI _Reset/_JustEngagedWith arm exists — DONE on death is the only
+// instance boss-state write for this boss.
 func (ai *rhahkZorAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {
+	s.setInstanceBossState(ctx, m.Map, m.InstanceID, 0, encounterStateDone, 0, false)
 }
 
 func (ai *rhahkZorAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
@@ -5206,7 +5215,7 @@ func (s *Server) consumeCreatureExtraAttacks(ctx context.Context, m *creatureMot
 		if victim == nil || victim.IsDead {
 			break
 		}
-		s.executeCreatureMeleeSwing(ctx, m, victim, time.Now(), true)
+		s.executeCreatureMeleeSwing(ctx, m, victim, time.Now(), true, false)
 		s.decrementCreatureExtraAttacks(m)
 	}
 }
@@ -16934,10 +16943,7 @@ func init() {
 	// PORTED as fire-time 500ms IsCasting defers, no re-arm consumed.
 	// The CheckInRoom home leash arm
 	// (home-position 2D distance > 50yd -> EnterEvadeMode + Talk(1))
-	// stays documented-only: EnterEvadeMode has no Lua bridge and
-	// Talk(1) fires only inside the evade flow (a Talk-only port would
-	// yell without evading — fabrication), not for lack of position
-	// reads (creature:GetHomePosition is bridged, lua_objects.go:337);
+	// is PORTED 2026-11-21 (1s poll twin of the per-tick C++ check);
 	// evade still re-arms through OnReset(23). SPELL_SWEEPING_STRIKES 18765 /
 	// SPELL_CLEAVE 20677 / SPELL_WINDFURY 35886 / SPELL_STORMPIKE 51876
 	// are declared but unused by this AI. Entry 11946 verifiable from
@@ -16954,8 +16960,9 @@ func init() {
 	// CASTING gates are PORTED as fire-time 500ms IsCasting defers,
 	// no re-arm consumed. The CheckInRoom
 	// home leash arm (home-position 2D distance > 50yd -> EnterEvadeMode
-	// + Talk(1)) and the BG-driven DoAction(ACTION_BUFF_YELL=-30001) ->
-	// Talk(2) arm have no Lua bridges — documented only; evade still
+	// + Talk(1)) is PORTED 2026-11-21 (1s poll twin of the per-tick C++
+	// check); the BG-driven DoAction(ACTION_BUFF_YELL=-30001) ->
+	// Talk(2) arm has no Lua bridge — documented only; evade still
 	// re-arms through OnReset(23). Entry 11947 verifiable from the C++
 	// sources: BattlegroundAV.h names "Captain Galvangar" at 11947 —
 	// see lua_scripts/eastern_kingdoms/boss_galvangar.lua.
@@ -16967,8 +16974,8 @@ func init() {
 	// Talk(0) — maiden convention (CreateLuaEvent timers; GetVictim
 	// for DoCastVictim; no UNIT_STATE_CASTING gate). The 5s home leash
 	// arm (home-position 2D distance > 50yd -> EnterEvadeMode +
-	// Talk(1)) has no Lua bridge — documented only; evade still re-arms
-	// through OnReset(23). YELL_SPELL=3 declared but unused. Entry 11948
+	// Talk(1)) is PORTED 2026-11-21 (5s timer, the C++ task exactly);
+	// evade still re-arms through OnReset(23). YELL_SPELL=3 declared but unused. Entry 11948
 	// verifiable from the C++ sources: BattlegroundAV.h names "Vanndar
 	// Stormpike" at 11948 — see lua_scripts/eastern_kingdoms/boss_vanndar.lua.
 	// instance_blackrock_depths (AddSC_instance_blackrock_depths; BRD

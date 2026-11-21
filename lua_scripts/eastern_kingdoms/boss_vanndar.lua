@@ -31,11 +31,12 @@
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) (maiden convention).
--- Unmodeled: the 5s home leash check (home-position 2D distance >
--- 50yd -> EnterEvadeMode + Talk(YELL_EVADE=1)) — the leash needs
--- EnterEvadeMode (no bridge); creature:GetHomePosition() IS bridged
--- (dfdd8cc0), so the verdict rests on the evade leg alone; evade still
--- re-arms through OnReset(23) when the engine leashes the creature.
+-- Unmodeled: none on the leash. The 5s home leash check (home-position
+-- 2D distance > 50yd -> EnterEvadeMode + Talk(YELL_EVADE=1)) PORTED
+-- 2026-11-21 — the bridge is live (creature:EnterEvadeMode,
+-- lua_creature_events.go:6342); the 5s timer below is the C++ 5s task
+-- exactly (balinda precedent); evade still re-arms through OnReset(23)
+-- when the engine leashes the creature.
 -- Unmodeled: YELL_SPELL=3 (declared but unused by this AI) and the
 -- commented-out YELL_RESPAWN1/YELL_RESPAWN2 (-1810010/-1810011,
 -- "Missing in database" in the C++ comments).
@@ -45,6 +46,7 @@ local SPELL_THUNDERCLAP = 15588
 local SPELL_STORMBOLT = 20685
 
 local YELL_AGGRO = 0
+local YELL_EVADE = 1
 local YELL_RANDOM = 2
 
 local ENTRY_VANNDAR = 11948
@@ -102,10 +104,32 @@ local function onRandomYell(creature, guid)
     schedule(guid, "random_yell", {20000, 30000}, function() onRandomYell(creature, guid) end)
 end
 
+-- C++ boss_vanndar TaskScheduler 5s leash task (boss_vanndar.cpp:72-79):
+-- 2D distance from home > 50 yd -> EnterEvadeMode + Talk(YELL_EVADE),
+-- task repeats every 5s. Distance twin: GetHomePosition + GetX/Y math,
+-- minus GetCombatReach (WorldObject::GetDistance2d(x, y),
+-- Object.cpp:1193-1197), clamped >= 0 — the balinda precedent. No
+-- IsCasting defer — the C++ scheduler has no casting gate. The evade
+-- fires ev2/ev23 (timers cancelled), so return without re-arming.
+local function onCheckInRoom(creature, guid)
+    local hx, hy = creature:GetHomePosition()
+    local dx = creature:GetX() - hx
+    local dy = creature:GetY() - hy
+    local dist = math.sqrt(dx * dx + dy * dy) - creature:GetCombatReach()
+    if dist < 0 then dist = 0 end
+    if dist > 50.0 then
+        creature:EnterEvadeMode()
+        creature:Talk(YELL_EVADE)
+        return
+    end
+    schedule(guid, "check_in_room", 5000, function() onCheckInRoom(creature, guid) end)
+end
+
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(YELL_AGGRO)
+    schedule(guid, "check_in_room", 5000, function() onCheckInRoom(creature, guid) end)
     schedule(guid, "avatar", 3000, function() onAvatar(creature, guid) end)
     schedule(guid, "thunderclap", 4000, function() onThunderclap(creature, guid) end)
     schedule(guid, "stormbolt", 6000, function() onStormbolt(creature, guid) end)
