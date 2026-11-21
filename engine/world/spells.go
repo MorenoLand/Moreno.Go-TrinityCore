@@ -24343,6 +24343,55 @@ func periodicTickEffectIndex(spell wotlk.Spell, auraType uint32) int {
 	return -1
 }
 
+// secondaryPeriodicTickShadows builds one shadow aura per second periodic
+// effect of the record's spell (AuraEffect::Update,
+// SpellAuraEffects.cpp:815-843: every periodic effect ticks on its own
+// timer). Go arms a single timer per record on the primary effect's
+// period, so only same-period second effects ride it — a different
+// period needs per-effect timers, which the record cannot model. The
+// shadow carries the effect's own AuraType/amount/misc/trigger spell
+// and a single-bit mask, so the tick executors run the effect's own arm
+// with its own Amounts[i] value; a trigger with no trigger spell (32686
+// eff1) falls through its arm as a no-op. Immune-stripped effects never
+// reach here (their mask bit is clear), and a record whose primary is
+// not periodic dispatches every periodic effect as a secondary.
+func secondaryPeriodicTickShadows(tickSpell wotlk.Spell, tickKnown bool, aura *activeAura) []*activeAura {
+	if !tickKnown || aura == nil || aura.SecondaryTick || aura.Stopped || aura.PeriodMs == 0 {
+		return nil
+	}
+	primaryIndex := -1
+	for i, eff := range tickSpell.Effects {
+		if eff.Aura == aura.AuraType && eff.AuraPeriod > 0 && aura.EffectMask&(1<<uint(i)) != 0 {
+			primaryIndex = i
+			break
+		}
+	}
+	var shadows []*activeAura
+	for i, eff := range tickSpell.Effects {
+		if i == primaryIndex || eff.Effect == 0 || eff.Aura == 0 || eff.AuraPeriod == 0 {
+			continue
+		}
+		if eff.AuraPeriod != aura.PeriodMs {
+			continue
+		}
+		if aura.EffectMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		shadow := *aura
+		shadow.AuraType = eff.Aura
+		shadow.Amount = uint32(aura.Amounts[i])
+		shadow.MiscValue = eff.MiscValue
+		shadow.TriggerSpell = eff.TriggerSpell
+		shadow.EffectMask = 1 << uint(i)
+		shadow.SecondaryTick = true
+		shadow.Timer = nil
+		shadow.TickTimer = nil
+		shadow.UpkeepTimer = nil
+		shadows = append(shadows, &shadow)
+	}
+	return shadows
+}
+
 // periodicTickStack mirrors Aura::GetStackAmount for a tick: a fresh aura
 // carries StackCount 0, which the stacking merge treats as 1.
 func periodicTickStack(aura *activeAura) uint32 {
@@ -35189,8 +35238,16 @@ type activeAura struct {
 	// caster->SpellHitResult per tick for those auras and skips the
 	// tick on a miss (SpellAuraEffects.cpp:5121/5241/5454).
 	PersistentAreaAura bool
-	Timer              *time.Timer
-	TickTimer          *time.Timer
+	// SecondaryTick marks a shadow copy built by
+	// secondaryPeriodicTickShadows for a record's second periodic
+	// effect (SpellAuraEffects.cpp:815-843: each AuraEffect ticks on its
+	// own timer; Go arms one timer per record). The shadow never
+	// dispatches further secondaries and never fires the Lua periodic
+	// hook — the hook carries no effect index, so a second fire would
+	// double-run a handler written for the primary effect.
+	SecondaryTick bool
+	Timer         *time.Timer
+	TickTimer     *time.Timer
 	// TickDueAt is the wall-clock deadline of the pending TickTimer, set
 	// whenever the tick chain is (re)scheduled. expirePlayerAura /
 	// expireCreatureAura use it to spot a tick due within one C++ world-
@@ -43942,6 +43999,25 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			tickSpell, tickKnown = sp, true
 		}
 	}
+	// U4-tail second-periodic dispatch (AuraEffect::Update,
+	// SpellAuraEffects.cpp:815-843): each periodic effect ticks
+	// independently, so a record's second periodic effect (31340 eff1
+	// trigger 31341, 21097 eff1 mana leech) rides the same timer via a
+	// shadow aura. Deferred so it runs even when the primary arm
+	// early-returns (script prevent, trigger caster-gone) — C++
+	// PreventDefaultAction is per-effect — and so a primary miss or
+	// immunity does not swallow the second effect's own gates. A
+	// trigger secondary decides dead-target legality in its own arm
+	// (CheckTarget); every other secondary needs a live target, the
+	// per-handler !target->IsAlive() gate the arms themselves carry.
+	defer func() {
+		for _, shadow := range secondaryPeriodicTickShadows(tickSpell, tickKnown, aura) {
+			if shadow.AuraType != spellAuraPeriodicTriggerSpell && shadow.AuraType != spellAuraPeriodicTriggerSpellWithValue && ts.isDeadOrGhost() {
+				continue
+			}
+			ts.executePeriodicTickOnPlayer(shadow)
+		}
+	}()
 	var pMap, pInst uint32
 	ts.playerStateMu.Lock()
 	if ts.player != nil {
@@ -43954,7 +44030,10 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	// and before the whole switch — and a handler returning true is
 	// PreventDefaultAction, skipping the default tick. _ticksDone already
 	// incremented above (AuraEffect::Update, SpellAuraEffects.cpp:827-830).
-	if ts.server != nil {
+	// Secondary shadow ticks skip the hook: it carries no effect index,
+	// so a second fire would double-run a handler written for the
+	// primary effect (see SecondaryTick).
+	if ts.server != nil && !aura.SecondaryTick {
 		auraRef := &luaAuraRef{server: ts.server, spellID: aura.SpellID, player: ts, mapID: pMap, instanceID: pInst}
 		if ts.server.fireAuraPeriodicTick(context.Background(), aura, auraRef.luaAuraObject(), ts.luaPlayer()) {
 			return
@@ -46207,9 +46286,40 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			tickSpell, tickKnown = sp, true
 		}
 	}
+	// U4-tail second-periodic dispatch — the executePeriodicTickOnPlayer
+	// twin: a record's second periodic effect rides the same timer via a
+	// shadow aura. Deferred so a primary miss, immunity or script
+	// prevent does not swallow the second effect's own gates. The
+	// dead-target gate below clears the aura, so it disables the
+	// dispatch; every other early return leaves it armed. A trigger
+	// secondary decides dead-target legality in its own arm
+	// (CheckTarget); every other secondary re-checks target liveness
+	// against the live motion, the C++ per-handler !target->IsAlive()
+	// gate the top snapshot cannot carry past the primary arm.
+	dispatchSecondaries := !aura.SecondaryTick
+	defer func() {
+		if !dispatchSecondaries {
+			return
+		}
+		for _, shadow := range secondaryPeriodicTickShadows(tickSpell, tickKnown, aura) {
+			if shadow.AuraType != spellAuraPeriodicTriggerSpell && shadow.AuraType != spellAuraPeriodicTriggerSpellWithValue {
+				targetAlive := false
+				if s.server != nil {
+					if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+						targetAlive = tm.Health != 0
+					}
+				}
+				if !targetAlive {
+					continue
+				}
+			}
+			s.executePeriodicTickOnCreature(shadow)
+		}
+	}()
 	s.faceChannelTargetOnPeriodicTick(aura, tickSpell, tickKnown, key.Map, key.InstanceID)
 	target, ok := s.getCombatTargetForAura(ctx, aura)
 	if !ok || target.Map != key.Map || target.InstanceID != key.InstanceID || target.Health == 0 || (s.server != nil && s.server.isCreatureEvadingInInstance(key.Map, key.InstanceID, key.GUID)) {
+		dispatchSecondaries = false
 		if s.server != nil {
 			s.server.clearCreatureAuras(key)
 		}
@@ -46245,7 +46355,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	// and the channel re-face above already ran, so a preventing handler
 	// on a channeled track-target aura does not skip the re-face the way
 	// C++ does. Live-target, non-channeled behavior is identical.
-	if s.server != nil {
+	// Secondary shadow ticks skip the hook (no effect index; see
+	// SecondaryTick).
+	if s.server != nil && !aura.SecondaryTick {
 		auraRef := &luaAuraRef{server: s.server, spellID: aura.SpellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID}
 		if s.server.fireAuraPeriodicTick(ctx, aura, auraRef.luaAuraObject(), s.server.luaUnitObjectForGUID(key.Map, key.InstanceID, aura.TargetGUID)) {
 			return true
