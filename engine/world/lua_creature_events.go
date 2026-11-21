@@ -6674,8 +6674,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// MOVE_RUN=1 and MOVE_FLIGHT=6, rate <= 0 clears the script
 	// override. The flight leg stores the m_speed_rate[MOVE_FLIGHT]
 	// slot with no refresh — Go has no SMSG_SPLINE_SET_FLIGHT_SPEED
-	// broadcast twin, so legs launched after the set read the rate
-	// (MoveCirclePath, creatureSplineVelocity for flyers).
+	// broadcast twin, and the rate feeds GetSpeed(MOVE_FLIGHT) reads
+	// only: no launched spline ever selects MOVE_FLIGHT for a creature
+	// (MOVEMENTFLAG_FLYING is player-only), so neither MoveCirclePath
+	// nor creatureSplineVelocity reads it.
 	methods["SetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -6718,8 +6720,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// absolute form divides by that base in Lua with a citation). The
 	// flight leg stores the m_speed_rate[MOVE_FLIGHT] slot with no
 	// refresh — Go has no SMSG_SPLINE_SET_FLIGHT_SPEED broadcast twin,
-	// so legs launched after the set read the rate (MoveCirclePath,
-	// creatureSplineVelocity for flyers). Other move types have no Go
+	// and the rate feeds GetSpeed(MOVE_FLIGHT) reads only: no launched
+	// spline ever selects MOVE_FLIGHT for a creature (MOVEMENTFLAG_FLYING
+	// is player-only). Other move types have no Go
 	// creature model and are rejected. rate <= 0 clears
 	// the script override, restoring the aura-fold/template rate (the C++
 	// Reset arms that restore _baseSpeed/DefaultMoveSpeedRate/SPEED_RUN).

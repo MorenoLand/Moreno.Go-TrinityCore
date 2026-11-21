@@ -221,10 +221,13 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 // points take the passed z (the flying branch — IsFlying reads
 // the given z; the ground branch's GetMapHeight + hover offset
 // has no Go twin). All in-tree callers fly (quel_delar sword,
-// malygos phase 3, yogg-saron). Speed is the flight speed
-// (creatureBaseFlightSpeed, folded by a script-set MOVE_FLIGHT
-// rate), the MoveSplineInit::Launch MOVE_FLIGHT selection for a
-// flying unit. A non-chain launch supersedes the run (the LAND
+// malygos phase 3, yogg-saron). Speed is the Launch-selected
+// velocity (creatureSplineVelocity): the flying branch's SetFly
+// only sets the spline flying flag (MoveSplineInit.h:146) — the
+// velocity still comes from SelectSpeedType, which for creatures
+// never takes the FLYING leg (player-only flag), so the circle
+// runs at MOVE_RUN, not the flight speed. A non-chain launch
+// supersedes the run (the LAND
 // leg's MoveLand); StopMoving alone does not clear a chain run
 // (the standing MoveClear collapse delta), so callers halt a
 // circle with a fresh launch. stepCount 0 or radius <= 0 fails
@@ -239,10 +242,7 @@ func (s *Server) moveCirclePath(ctx context.Context, motion *creatureMotion, cen
 	if clockwise {
 		step = -step
 	}
-	speed := float32(creatureBaseFlightSpeed)
-	if motion.ScriptFlightRateKnown {
-		speed *= motion.ScriptFlightRate
-	}
+	speed := creatureSplineVelocity(motion, false)
 	points := make([]splineChainPoint, 0, int(stepCount))
 	for i := uint8(0); i < stepCount; i++ {
 		points = append(points, splineChainPoint{

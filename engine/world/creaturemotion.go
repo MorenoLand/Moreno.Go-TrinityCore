@@ -704,15 +704,18 @@ const creatureTypeFlagBossMob = 0x4
 // creatureSplineVelocity mirrors the velocity selection of
 // MoveSplineInit::Launch (MoveSplineInit.cpp:106-124): without an explicit
 // SetVelocity the spline runs at SelectSpeedType(unit movement flags), and
-// MOVEMENTFLAG_FLYING selects MOVE_FLIGHT before the WALKING leg, so a
-// flying creature's waypoint/evade/pursuit/wander spline runs at
-// GetSpeed(MOVE_FLIGHT) = 1.0 * 7.0 (Creature::Initialize sets the flight
-// rate to 1.0, Creature.cpp:532). Go tracks the flying analog on
-// motion.CanFly, so flyers use the flight velocity regardless of walk.
-// A script-set flight rate (SetSpeedRate MOVE_FLIGHT) multiplies the
-// flight velocity, the m_speed_rate[MOVE_FLIGHT] slot.
-// Documented no-bridge arms of the same Launch block: the SWIMMING leg of
-// SelectSpeedType (creatureMotion carries no swim flag) and the client
+// the FLYING leg of SelectSpeedType (MoveSplineInit.cpp:30-38) never fires
+// for creatures — MOVEMENTFLAG_FLYING is player-only
+// (MOVEMENTFLAG_MASK_PLAYER_ONLY, UnitDefines.h:263; "creatures use
+// disable_gravity", UnitDefines.h:243), and no code sets it on a creature,
+// so a flying creature's waypoint/evade/pursuit/wander spline runs at
+// GetSpeed(MOVE_RUN) = template speed_run * 7.0 (8.0 default), not the
+// 1.0 * 7.0 flight speed (Creature::Initialize sets the flight rate to
+// 1.0, Creature.cpp:532). A script-set MOVE_FLIGHT rate therefore never
+// affects a launched spline; the MOVE_RUN rate already folds into
+// motion.RunSpeed via SetSpeedRate. The WALKING leg selects MOVE_WALK.
+// Documented no-bridge arms of the same Launch block: the SWIMMING leg
+// of SelectSpeedType (creatureMotion carries no swim flag) and the client
 // speed cap min(velocity, catmullrom||flying ? 50 : max(28, run*4)) —
 // vacuous for template speeds (velocity stays near the base rates).
 // Waypoint LAND/TAKEOFF set only AnimationTier (cosmetic), unmodeled.
@@ -721,12 +724,7 @@ const creatureTypeFlagBossMob = 0x4
 // including flight, exactly like Launch's unconditional post-select arm.
 func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
 	var speed float32
-	if motion != nil && motion.CanFly {
-		speed = creatureBaseFlightSpeed
-		if motion.ScriptFlightRateKnown {
-			speed *= motion.ScriptFlightRate
-		}
-	} else if walk || (motion != nil && motion.Walking) {
+	if walk || (motion != nil && motion.Walking) {
 		speed = motion.Speed
 	} else {
 		speed = motion.RunSpeed
