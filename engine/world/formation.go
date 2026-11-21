@@ -354,13 +354,18 @@ func (s *Server) stepFormationMember(motion *creatureMotion, now time.Time) bool
 // (FormationMovementGenerator.cpp:140-183). The member's destination is the
 // formation slot: the leader's position offset by (dist, angle+heading),
 // where heading is the leader's travel heading while it moves
-// (DoUpdate's relativeAngle = leader.GetRelativeAngle(spline destination))
-// and 0 when it is stationary. C++ predicts the leader's position 1.65s
+// (DoUpdate's relativeAngle = leader.GetRelativeAngle(spline destination),
+// which MovePositionToFirstCollision re-adds the orientation to) and the
+// leader's orientation while it stands still (relativeAngle stays 0 and
+// MovePositionToFirstCollision adds the orientation, Object.cpp:3386-3390).
+// C++ predicts the leader's position 1.65s
 // ahead (the sniffed 1650ms spline duration); Go's atomic splines already
 // jump the leader to its leg destination at launch, so the server-side
 // leader position IS the predicted position and no extra prediction is
-// applied. Catchup: member velocity = leader velocity *
-// min(slotDist/(leaderVel*1.65), 1.5). The member faces the leader's
+// applied. Catchup: while the leader moves, member velocity = leader
+// velocity * min(slotDist/(leaderVel*1.65), 1.5); a stationary leader's
+// member walks at the leader's walk speed with no mod, and the Launch cap
+// (MoveSplineInit.cpp:122) binds either way. The member faces the leader's
 // orientation at launch; C++ sets it at spline end (documented timing
 // delta — Go has no mid-leg update hook). Collision legs
 // (MovePositionToFirstCollision) have no Go model.
@@ -401,22 +406,40 @@ func (s *Server) planFormationLeg(motion, leader *creatureMotion, now time.Time)
 		if leader.MoveVelocity > 0 {
 			vel = leader.MoveVelocity
 		}
+	} else {
+		// Stationary leader: relativeAngle stays 0 and
+		// MovePositionToFirstCollision adds the leader's orientation
+		// (Object.cpp:3386-3390), so the slot sits at angle+orientation.
+		frame = leader.Orientation
 	}
 	ang := float64(motion.FormationAngle + frame)
 	destX := leader.X + motion.FormationDist*float32(math.Cos(ang))
 	destY := leader.Y + motion.FormationDist*float32(math.Sin(ang))
-	slotDist := math.Hypot(float64(destX-motion.X), float64(destY-motion.Y))
+	// GetExactDist (FormationMovementGenerator.cpp:165) is 3D, like the
+	// waypoint launcher's distance3D leg length (Spline.cpp:152-156).
+	slotDist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, leader.Z)
 	if slotDist < 0.5 {
 		motion.FormationLeaderX, motion.FormationLeaderY = leader.X, leader.Y
 		motion.FormationLeaderMoveEnds = leader.MoveEnds
 		motion.FormationPredicted = leaderMoving
 		return nil
 	}
-	velMod := slotDist / float64(vel*1.65)
-	if velMod > 1.5 {
-		velMod = 1.5
+	// The catchup mod lives inside LaunchMovement's moving branch only
+	// (FormationMovementGenerator.cpp:149-166); a stationary leader's
+	// velocity falls through to GetSpeed(MOVE_WALK) with no mod, so the
+	// member walks at the leader's walk speed (vel above) instead of up
+	// to 1.5x it.
+	memberVel := vel
+	if leaderMoving {
+		velMod := slotDist / float64(vel*1.65)
+		if velMod > 1.5 {
+			velMod = 1.5
+		}
+		memberVel = float32(float64(vel) * velMod)
 	}
-	memberVel := float32(float64(vel) * velMod)
+	// MoveSplineInit::Launch caps every SetVelocity spline
+	// (MoveSplineInit.cpp:122); the formation init is no exception.
+	memberVel = capSplineVelocity(memberVel, motion.RunSpeed)
 	if memberVel <= 0 {
 		memberVel = vel
 	}

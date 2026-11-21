@@ -3962,6 +3962,7 @@ func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, at
 	motion.X, motion.Y = destX, destY
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+	motion.MoveVelocity = speed
 	motion.FleeingUntil = now.Add(7 * time.Second)
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false, phase, transportGUID)
@@ -4019,6 +4020,7 @@ func (s *Server) startCreatureFlee(motion *creatureMotion, casterX, casterY floa
 	motion.X, motion.Y = destX, destY
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+	motion.MoveVelocity = speed
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false, phase, transportGUID)
 }
@@ -4231,6 +4233,7 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
+	motion.MoveVelocity = speed
 	motion.ScriptMoveType = moveType
 	motion.ScriptMovePointID = pointID
 	motion.ScriptMoveDestX = destX
@@ -4461,6 +4464,7 @@ func (s *Server) launchCreatureJumpSpline(motion *creatureMotion, destX, destY, 
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
+	motion.MoveVelocity = speedXY
 	motion.JumpUntil = motion.MoveEnds
 	motion.ScriptMoveType = movementGeneratorEffect
 	motion.ScriptMovePointID = id
@@ -4579,6 +4583,7 @@ func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, p
 	motion.X, motion.Y, motion.Z = destX, destY, tz
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+	motion.MoveVelocity = speed
 	motion.ScriptMoveType = movementGeneratorFollow
 	motion.Orientation = tOrient
 	return true
@@ -4759,6 +4764,7 @@ func (s *Server) startCreatureSeekAssistance(ctx context.Context, motion *creatu
 	motion.X, motion.Y, motion.Z = x, y, z
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+	motion.MoveVelocity = speed
 	motion.SeekAssistPending = true
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, x, y, z, duration, false, 0, false, phase, transportGUID)
@@ -4975,6 +4981,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		motion.Moving = true
 		motion.Evading = true
 		motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+		motion.MoveVelocity = speed
 		motion.WaitUntil = motion.MoveEnds
 	} else {
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
@@ -6732,6 +6739,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.Moving = true
 			motion.Evading = true
 			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+			motion.MoveVelocity = speed
 			motion.WaitUntil = motion.MoveEnds
 			return
 		}
@@ -9517,6 +9525,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							motion.ChaseTX, motion.ChaseTY = target.X, target.Y
 							motion.Moving = true
 							motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+							motion.MoveVelocity = speed
 						}
 					}
 				}
