@@ -41,6 +41,9 @@ type Store struct {
 	talentPos     map[uint32]uint32
 	talentPosErr  error
 
+	spellDifficultyOnce sync.Once
+	spellDifficultyIDs  map[uint32]uint32
+
 	positivityMu sync.RWMutex
 	positivity   map[uint32]uint32
 }
@@ -1437,6 +1440,46 @@ func (s *Store) SpellDifficulty(id uint32, difficulty uint32) (uint32, bool, err
 		return 0, false, err
 	}
 	return spellID, true, nil
+}
+
+// SpellDifficultyIDForSpell mirrors the reverse map SpellMgr builds at load
+// (DBCStores.cpp:503-523, SpellMgr::SetSpellDifficultyId): every spell id
+// appearing as a DifficultySpellID in a SpellDifficulty row maps to that
+// row's entry id. Built once by scanning the DBC (MapDifficulty precedent);
+// last row wins on duplicates, matching C++'s override. The SQL
+// spelldifficulty_dbc overrides have no Go twin (no such table in the world
+// DB), so the map is DBC-only. A missing DBC file leaves the map empty and
+// every lookup misses, degrading callers to the source spell.
+func (s *Store) SpellDifficultyIDForSpell(spellID uint32) (uint32, bool, error) {
+	if spellID == 0 {
+		return 0, false, nil
+	}
+	s.spellDifficultyOnce.Do(func() {
+		s.spellDifficultyIDs = make(map[uint32]uint32)
+		file, err := s.File("SpellDifficulty")
+		if err != nil {
+			return
+		}
+		for index := 0; index < file.Records(); index++ {
+			record, err := file.Record(index)
+			if err != nil {
+				continue
+			}
+			entryID, err := record.Uint32(0)
+			if err != nil || entryID == 0 {
+				continue
+			}
+			for field := 1; field <= 4; field++ {
+				variant, err := record.Uint32(field)
+				if err != nil || variant == 0 {
+					continue
+				}
+				s.spellDifficultyIDs[variant] = entryID
+			}
+		}
+	})
+	id, found := s.spellDifficultyIDs[spellID]
+	return id, found, nil
 }
 
 func (s *Store) SpellCategory(id uint32) (uint32, bool, error) {

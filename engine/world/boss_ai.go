@@ -1861,6 +1861,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	var spellInfo wotlk.Spell
 	spellKnown := false
 	if s != nil && s.Data != nil {
+		// Spell constructor difficulty remap (Spell.cpp:524): every
+		// creature cast resolves the difficulty variant up front, so
+		// the lookup, the disabled check below, and the packets all
+		// carry the mapped id, as m_spellInfo->Id does in C++.
+		spellID = s.spellIDForDifficulty(spellID, m.Map, m.InstanceID)
 		if si, found, err := s.Data.Spell(spellID); err == nil && found {
 			spellInfo, spellKnown = si, true
 		}
