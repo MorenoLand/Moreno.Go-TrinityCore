@@ -10305,7 +10305,7 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		existing := s.activeCreatureAuras[targetKey][spell.ID]
 		if existing != nil && !existing.Stopped {
 			if _, ok := castMerged[targetGUID]; ok {
-				refreshAuraEffectBasepoints(existing, spell, eff, amount)
+				refreshLaterAuraEffectBasepoints(existing, spell, eff, amount)
 				// Later effects of the same cast only refresh amounts, so
 				// the record's mask must gain this effect's bit or
 				// per-effect folds miss it.
@@ -10428,6 +10428,13 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			RemainingCharges:   maxCharges,
 		}
 		s.activeCreatureAuras[targetKey][spell.ID] = aura
+		// Spell::DoSpellEffectHit (Spell.cpp:2842): only the first aura
+		// effect per (cast, target) runs the merge — later effects only
+		// AddStaticApplication. Without this the next effect of this
+		// fresh cast takes the full merge branch (StackCount +1,
+		// TickTimer stop), the applyAuraToTarget firstMerge twin of
+		// this arm; the refresh-only branch below is the right leg.
+		castMerged[targetGUID] = struct{}{}
 		s.refreshCreaturePhaseOverrideLocked(targetKey)
 		scPurge := s.registerSingleCastAura(spell, aura)
 		purge := s.rankChainNoStackPurge(spell, m.GUID, 0, s.activeCreatureAuras[targetKey])

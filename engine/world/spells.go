@@ -37442,40 +37442,33 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				if immuneMask&(1<<uint(index)) != 0 {
 					continue
 				}
-				// The record keeps the first effect's type/amounts, but its
-				// mask must cover every aura effect the self-cast applies,
-				// or per-effect folds (immunity misc, HasAuraType) miss the
+				// The record keeps the first effect's type, but its mask
+				// must cover every aura effect the self-cast applies, or
+				// per-effect folds (immunity misc, HasAuraType) miss the
 				// non-first effects the way the live-cast record used to.
+				// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:425)
+				// runs per effect, so every aura effect gets its own
+				// rolled, level-scaled amount here — the old loop computed
+				// only the first effect's, and a second effect (speed /
+				// haste on a creature-cast aura) folded as 0 in the
+				// per-effect consumers (aura_haste.go, aura_stats.go).
 				if effect.Effect != 0 && effect.Aura != 0 {
 					effectMask |= 1 << uint(index)
-				}
-				if effect.Effect == 0 || (index > 0 && auraType != 0 && effect.Aura != spellAuraMounted && !(auraType == 4 && effect.Aura == 4)) {
-					continue
-				}
-				auraType = effect.Aura
-				miscValue = effect.MiscValue
-				if effect.Aura != 0 {
-					effectMask |= 1 << uint(index)
-					// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:425):
-					// the applied amount is CalcValue(caster, &m_baseAmount)
+					// The applied amount is CalcValue(caster, &m_baseAmount)
 					// — rolled and level-scaled — while the base amount stays
 					// the raw DBC base (SpellAuraEffects.cpp:386).
 					rolled := effect.CalcValueForLevel(sp, auraCasterLevel)
 					rolled = s.server.scaledEffectValue(sp, effect, auraCasterLevel, casterControlled, rolled)
-					effectAmount = uint32(rolled)
 					amounts[index] = rolled
 					// spell_pal_hand_of_salvation::CalculateAmount
 					// (spell_paladin.cpp:1004-1013): the self-cast command /
 					// creature-cast twin of the applyAuraToTarget leg — a
 					// self-cast Hand of Salvation sheds the Glyph of
 					// Salvation (63225 EFFECT_0) amount from EFFECT_1.
-					// This loop only computes amounts for the first aura
-					// effect, so the adjustment bites only when EFFECT_0
-					// is not an aura effect; the live-cast path carries
-					// the real leg. The glyph read is a direct map read
-					// under the already-held castMu (auraEffectAmount
-					// would nest the lock); a zero stored amount falls
-					// back to the DBC base, mirroring auraEffectAmount
+					// The glyph read is a direct map read under the
+					// already-held castMu (auraEffectAmount would nest the
+					// lock); a zero stored amount falls back to the DBC
+					// base, mirroring auraEffectAmount
 					// (SpellAuraEffects.cpp:386).
 					if spellID == 1038 && index == 1 && casterGUID == s.playerGUID {
 						if glyph, ok := s.activeAuras[63225]; ok && glyph != nil && !glyph.Stopped && len(glyph.Amounts) > 0 && glyph.EffectMask&(1<<0) != 0 {
@@ -37493,17 +37486,23 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 						total += total * sacredShieldDampen / 100
 						total += total * sacredShieldICC / 100
 						amounts[index] = total
-						effectAmount = uint32(total)
 					}
 					if wardCalc && index == 0 {
 						total := rolled + wardBonus
 						amounts[index] = total
-						effectAmount = uint32(total)
 					}
 					baseAmounts[index] = effect.BasePoints
 					if auraEffectCanBeRecalculated(effect.Aura) {
 						recalculateMask |= 1 << uint(index)
 					}
+				}
+				if effect.Effect == 0 || (index > 0 && auraType != 0 && effect.Aura != spellAuraMounted && !(auraType == 4 && effect.Aura == 4)) {
+					continue
+				}
+				auraType = effect.Aura
+				miscValue = effect.MiscValue
+				if effect.Aura != 0 {
+					effectAmount = uint32(amounts[index])
 				}
 				if auraType == spellAuraMounted {
 					break
@@ -37512,10 +37511,8 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 			// spell_pri_guardian_spirit::CalculateAmount
 			// (spell_priest.cpp:552-558): the self-cast twin of the
 			// applyAuraToTarget leg — EFFECT_1's amount is unlimited
-			// (-1). This loop only computes amounts for the first aura
-			// effect, so the -1 lands directly on Amounts[1] instead
-			// of through the rolled computation (the 1038 leg's
-			// structural note); the record's Amount stays EFFECT_0's.
+			// (-1), overwriting the rolled value above; the record's
+			// Amount stays EFFECT_0's.
 			if spellID == 47788 && effectMask&(1<<1) != 0 {
 				amounts[1] = -1
 			}
@@ -37552,6 +37549,22 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		positive = false
 	}
 	if effectMask == 0 {
+		if immuneMask != 0 {
+			// Unit::AddAura (Unit.cpp:12282-12295): the per-effect
+			// strip emptied the mask — C++ returns nullptr, no aura
+			// is created. The 0x01 fallback below only covers the
+			// no-immunity empty case (spell with no aura effects, or
+			// no DBC row); a fully immune target takes no phantom
+			// record, presence entry, or fresh slot — the dynobj
+			// cast-time fill relies on this, since it applies without
+			// a per-effect pre-check of its own.
+			delete(s.auras, spellID)
+			if freshSlot {
+				delete(s.auraSlots, spellID)
+			}
+			s.castMu.Unlock()
+			return
+		}
 		effectMask = 0x01
 	}
 	// Unit::IsHighestExclusiveAura (Unit.cpp:13991): a fresh aura whose
@@ -39142,6 +39155,30 @@ func (s *session) countActiveAuraType(auraType uint32) int {
 	return count
 }
 
+// refreshLaterAuraEffectBasepoints mirrors the later-effects half of a
+// multi-effect apply (Spell::DoSpellEffectHit, Spell.cpp:2842): only the
+// first aura effect per (cast, target) runs the merge — later effects only
+// AddStaticApplication, refreshing their own basepoints/amounts. The
+// record's scalar Amount is the FIRST effect's amount (the periodic tick
+// reads it for the record's AuraType), so a later slow/dummy must never
+// overwrite it the way refreshAuraEffectBasepoints does on the merging
+// effect — a dynobj DoT whose second effect merged last ticked for the
+// slow's amount (usually 0) instead of the damage.
+func refreshLaterAuraEffectBasepoints(existing *activeAura, spell wotlk.Spell, eff wotlk.SpellEffect, amount uint32) {
+	stacks := int32(existing.StackCount)
+	if stacks < 1 {
+		stacks = 1
+	}
+	for index, candidate := range spell.Effects {
+		if candidate != eff {
+			continue
+		}
+		existing.BaseAmounts[index] = eff.BasePoints
+		existing.Amounts[index] = int32(amount) * stacks
+		break
+	}
+}
+
 // refreshAuraEffectBasepoints mirrors the per-effect half of the
 // _TryStackingOrRefreshingExistingAura basepoint update (Unit.cpp:3360-3372):
 // the re-cast's basepoints and computed amount replace this effect's slots.
@@ -39164,7 +39201,16 @@ func refreshAuraEffectBasepoints(existing *activeAura, spell wotlk.Spell, eff wo
 		existing.BaseAmounts[index] = eff.BasePoints
 		scaled := int32(amount) * stacks
 		existing.Amounts[index] = scaled
-		existing.Amount = uint32(scaled)
+		// The scalar Amount is the record's ticking effect's amount
+		// (the periodic tick reads it, not Amounts[i]): a later effect
+		// of the same cast merging here must not overwrite it with
+		// its own amount — a trailing slow would zero the damage, a
+		// trailing haste would replace it. Only the effect matching
+		// the record's stored AuraType refreshes the scalar; a zero
+		// stored type keeps the old always-refresh behavior.
+		if existing.AuraType == 0 || eff.Aura == existing.AuraType {
+			existing.Amount = uint32(scaled)
+		}
 		break
 	}
 }
@@ -41272,7 +41318,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				// ChangeAmount re-credit: the merge recalculates the
 				// amounts, so the old skill bonus leaves first.
 				targetSess.refreshSkillBonusForAuraAmountChange(existing, func() {
-					refreshAuraEffectBasepoints(existing, spell, eff, amount)
+					refreshLaterAuraEffectBasepoints(existing, spell, eff, amount)
 				})
 				// Later effects of the same cast only refresh amounts, so
 				// without this the record's EffectMask would miss this
@@ -41660,6 +41706,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			aura.EffectMask |= previous.EffectMask
 		}
 		targetSess.activeAuras[spell.ID] = aura
+		// Spell::DoSpellEffectHit (Spell.cpp:2842): only the first aura
+		// effect per (cast, target) runs the merge — later effects only
+		// AddStaticApplication. Without this the next effect of this
+		// fresh cast takes the full merge branch (StackCount +1,
+		// PeriodMs overwrite, TickTimer stop): a multi-effect dynobj
+		// DoT lost its tick when the trailing slow reset PeriodMs to
+		// 0. The serverApplyAuraToCreatureTarget fresh-mark twin.
+		if castMerged != nil {
+			castMerged[targetGUID] = struct{}{}
+		}
 		// Unit::_AddAura single-target dance (Unit.cpp:3397-3420): a fresh
 		// single-target aura registers on its caster's single-cast list and
 		// purges the caster's other single-target-with auras on other
@@ -42423,7 +42479,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 		}
 		if !firstMerge {
-			refreshAuraEffectBasepoints(existing, spell, eff, amount)
+			refreshLaterAuraEffectBasepoints(existing, spell, eff, amount)
 			// Later effects of the same cast only refresh amounts, so
 			// without this the record's EffectMask would miss this
 			// effect and per-effect folds (the 267 mask fold above)
@@ -42639,6 +42695,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		CritChance:       s.periodicCritChanceForAura(spell, targetGUID, uint8(schoolMask)),
 	}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
+	// Spell::DoSpellEffectHit (Spell.cpp:2842): only the first aura
+	// effect per (cast, target) runs the merge — later effects only
+	// AddStaticApplication. Without this the next effect of this fresh
+	// cast takes the full merge branch (StackCount +1, PeriodMs
+	// overwrite, TickTimer stop). The applyAuraToTarget fresh-mark
+	// twin above.
+	if castMerged != nil {
+		castMerged[targetGUID] = struct{}{}
+	}
 	// AuraEffect::HandlePhase creature arm (SpellAuraEffects.cpp:1581-1632):
 	// the runtime phase mask (OR of the remaining 261 misc values) updates
 	// with the new aura in place — the C++ Unit::SetPhaseMask leg.
