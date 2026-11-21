@@ -28820,17 +28820,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		hitDamage.currentTarget = miss.TargetGUID
 		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, nil)
 	}
-	// Mixed-spell direct-hit rule (UnitAura::AddStaticApplication,
+	// Direct-hit rule (UnitAura::AddStaticApplication,
 	// SpellAuras.cpp:2729-2740): a direct-hit application carries
 	// eff-6 bits only — the area-aura effects (35/65/119/128/129/143)
 	// are EffectUnused at hit time and reach a target only through
 	// UnitAura::FillTargetMap. The creature hit loops already strip
-	// them (boss_ai.go creatureEffectApplyAura, eff6Only); this flag
-	// is the player-cast hit path's twin, consumed by the APPLY_AURA
-	// arm below. A pure area-aura spell is not mixed: the player path
-	// has no FillTargetMap fan-out (area_auras.go), so the hit loop
-	// stays its delivery and the arm still fires.
-	mixedAreaSpell := spellHasEffect(spell, spellEffectApplyAura) && spellHasAreaAuraEffect(spell)
+	// them (boss_ai.go creatureEffectApplyAura, eff6Only); the APPLY_AURA
+	// arm below is this path's twin, and the registerPlayerAreaAura
+	// hook after the effect loop owns their delivery.
 	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 && eff.Aura == 0 {
 			continue
@@ -30322,15 +30319,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if schoolMask == 0 {
 					schoolMask = 1
 				}
-				// Mixed-spell gate (AddStaticApplication rule above): on a
-				// mixed spell the area-aura effect never direct-applies to
-				// a hit target — its bits arrive only via FillTargetMap,
-				// which the player path does not model yet (a player-side
-				// fan-out is the follow-up unit that restores them). The
-				// only mixed spell in the seed, 31673, carries the area bit
-				// as an aura-4 dummy with period 0, so the skip is
-				// unobservable there; the fix is C++-principle.
-				if _, isAreaAura := areaAuraSelectionForEffect(eff.Effect); !isAreaAura || !mixedAreaSpell {
+				// Area-aura gate (AddStaticApplication rule above): an
+				// area-aura effect never direct-applies to a hit target —
+				// its bits arrive only via FillTargetMap, which the
+				// registerPlayerAreaAura hook after the effect loop runs.
+				// The only mixed spell in the seed, 31673, carries the
+				// area bit as an aura-4 dummy with period 0, so the skip
+				// is unobservable there; the fix is C++-principle.
+				if _, isAreaAura := areaAuraSelectionForEffect(eff.Effect); !isAreaAura {
 					s.applyAuraToTarget(ctx, effectTarget, spell, eff, effectIndex, durationMs, eff.AuraPeriod, amount, schoolMask, castMerged, false, auraCasterGUID, false, castItemGUID, triggeredByAura, nil)
 				}
 			} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
@@ -30939,6 +30935,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if eff.Effect == spellEffectPowerDrain && len(powerDrainLog) > 0 {
 			s.sendTakeTargetPowerLog(spellID, uint32(spellEffectPowerDrain), powerDrainLog)
 		}
+	}
+	if spellHasAreaAuraEffect(spell) {
+		// Caster-owned area-aura fan-out (area_auras.go): the hit loop
+		// above never direct-applies area effects (AddStaticApplication
+		// strips them), so a spell carrying any area-aura effect registers
+		// here — the cast-time fill adopts the caster (35/65/119/128) and
+		// the in-radius recipients, and the 500ms pass re-selects after.
+		// The creature twin (boss_ai.go) registers at the same point.
+		s.registerPlayerAreaAura(ctx, spell, durationMs)
 	}
 
 	// The client path's post-loop totem legs (spells.go:12128): C++
@@ -41282,6 +41287,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 
 		previous := targetSess.activeAuras[spell.ID]
 		if existing := previous; existing != nil && !existing.Stopped {
+			// A persistent-area application merging into a record a
+			// direct cast created must adopt the flag, or the area
+			// pass can never strip it on leave (area_auras.go): the
+			// merge path never rebuilds the record literal. One-way
+			// only — a direct re-cast never clears the flag of a
+			// record an area source maintains (the
+			// serverApplyAuraToCreatureTarget twin, boss_ai.go).
+			if persistentAreaAura {
+				existing.PersistentAreaAura = true
+			}
 			// Spell::DoSpellEffectHit (Spell.cpp:2842): only the first aura
 			// effect per (cast, target) runs the merge — the first hit sets
 			// hitInfo.HitAura and later effects only AddStaticApplication.
@@ -42460,6 +42475,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		s.server.activeCreatureAuras[targetKey] = make(map[uint32]*activeAura)
 	}
 	if existing, exists := s.server.activeCreatureAuras[targetKey][spell.ID]; exists && existing != nil && !existing.Stopped {
+		// A persistent-area application merging into a record a
+		// direct cast created must adopt the flag, or the area
+		// pass can never strip it on leave (area_auras.go): the
+		// merge path never rebuilds the record literal. One-way
+		// only — a direct re-cast never clears the flag of a
+		// record an area source maintains (the
+		// serverApplyAuraToCreatureTarget twin, boss_ai.go).
+		if persistentAreaAura {
+			existing.PersistentAreaAura = true
+		}
 		// Same ModStackAmount(+1) merge as the player path above
 		// (Unit.cpp:3326, SpellAuras.cpp:1030). Per Spell::DoSpellEffectHit
 		// (Spell.cpp:2842) only the first aura effect per (cast, target)

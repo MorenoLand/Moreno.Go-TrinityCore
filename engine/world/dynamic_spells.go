@@ -482,7 +482,7 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	// Caster-owned area auras (area_auras.go) share this 100ms tick's
 	// 500ms target-map pass shape: newcomers gain the aura, leavers
 	// lose it (Aura::UpdateTargetMap, SpellAuras.cpp:643-767).
-	s.updateCreatureAreaAuras(ctx, now)
+	s.updateAreaAuras(ctx, now)
 }
 
 // updateCreatureDynobjTargetMap runs the 500ms target-map pass for a
