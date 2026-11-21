@@ -984,6 +984,34 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		attTime = s.player.AttackTime
 	}
 
+	// Unit::CalculateMeleeDamage's second component (Unit.cpp:1227-1260):
+	// only players roll one (i > 0 breaks for creatures), and only the
+	// weapon's Damage[1] row feeds it — raw proto damage, no AP or
+	// flat/pct folds (Player::CalculateMinMaxDamage, StatSystem.cpp:517-530).
+	// UpdateDamagePhysical sums both rows into MINDAMAGE/MAXDAMAGE
+	// (StatSystem.cpp:62-92), so the component-0 range below subtracts
+	// the raw second range back out; the school (Player.cpp:7832-7838:
+	// 1 << Damage[damageIndex].DamageType) decides its armor/resist/
+	// absorb treatment downstream. No 0.5 off-hand halving on the second
+	// component: its CalculateMinMaxDamage arm ignores mods entirely.
+	secondMin, secondMax := float32(0), float32(0)
+	secondSchool := uint32(spellSchoolMaskNormal)
+	if attType == protocol.OffAttack {
+		secondMin, secondMax, secondSchool = s.player.MinOffhandSecondDamage, s.player.MaxOffhandSecondDamage, s.player.OffhandSecondDamageSchool
+	} else {
+		secondMin, secondMax, secondSchool = s.player.MinSecondDamage, s.player.MaxSecondDamage, s.player.SecondDamageSchool
+	}
+	if secondSchool == 0 {
+		secondSchool = spellSchoolMaskNormal
+	}
+	if secondMax > 0 && maxDmg > secondMax {
+		minDmg -= secondMin
+		maxDmg -= secondMax
+		if minDmg < 0 {
+			minDmg = 0
+		}
+	}
+
 	damage := uint32(20 + int(s.player.Level)*5)
 	// absorbedDmg carries the pre-absorb portion for the rage-from-damage
 	// legs (Unit.cpp:789-924): the dealt leg uses post-absorb damage while the
@@ -1049,6 +1077,27 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 	if damage < 1 {
 		damage = 1
+	}
+
+	// Second weapon-damage component (Unit.cpp:1227-1260): a raw proto
+	// roll only — no AP, no flat/pct folds — then MeleeDamageBonusDone /
+	// Taken with its own school and armor only when the school is
+	// physical (IsDamageReducedByArmor, Unit.cpp:1618-1622). The
+	// versus legs are school-independent and ride along; the 0.5
+	// off-hand penalty stays out (see above).
+	damage2 := uint32(0)
+	if secondMax > secondMin && secondMin >= 0 {
+		raw2 := float64(secondMin)
+		if variance := float64(secondMax - secondMin); variance > 0 {
+			raw2 += rand.Float64() * variance
+		}
+		done2 := (raw2+float64(s.meleeDamageDoneFlatForSchool(ctx, attType, secondSchool)))*s.meleeDamageDonePctModForSchool(ctx, attType, secondSchool) +
+			float64(s.swingDoneFlatBonus(ctx, false, false, target.GUID, target))
+		damage2 = uint32(done2 * s.meleeDamageDoneVersusMod(ctx, target.GUID))
+		damage2, _ = s.meleeWeaponDamageTaken(ctx, damage2, secondSchool, target.GUID, target, false, true)
+		if secondSchool&spellSchoolMaskNormal != 0 && armor > 0 {
+			damage2 = calcArmorReducedDamage(armor, s.player.Level, target.Level, damage2, s.getArmorPenPct(ctx, attType))
+		}
 	}
 
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
@@ -1258,6 +1307,18 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			targetState = protocol.VictimStateEvades
 		}
 	}
+	// Per-component immunity (Unit.cpp:1209-1223): a victim immune to the
+	// second component's school alone zeroes that component, not the swing;
+	// both-immune is already the IS_IMMUNE outcome above.
+	if damage2 > 0 && secondSchool != spellSchoolMaskNormal && s.server != nil {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+			if vicSess.isImmuneToDamage(secondSchool) {
+				damage2 = 0
+			}
+		} else if creatureImmuneToDamage(s.server, creatureAuraKeyForTarget(target), secondSchool) {
+			damage2 = 0
+		}
+	}
 	if attType == protocol.OffAttack {
 		hitInfo |= protocol.HitInfoOffHand
 	}
@@ -1266,60 +1327,122 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	switch outcome {
 	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 		damage = 0
+		damage2 = 0
 	case protocol.MeleeHitBlock:
 		// Unit::CalculateMeleeDamage MELEE_HIT_BLOCK arm (Unit.cpp:1340-1376):
-		// the victim's shield block value, doubled on a block crit, consumed
-		// against the swing; a full block zeroes damage and reports
-		// VICTIMSTATE_BLOCKS.
+		// one shield-block value, doubled on a block crit (rolled once),
+		// consumed component by component, comp0 first; a full block zeroes
+		// damage and reports VICTIMSTATE_BLOCKS only when both components
+		// are consumed.
 		blockValue, critChance := s.swingBlockValue(target, isPlayerVictim)
-		var fullBlock bool
-		blocked, fullBlock = applyShieldBlockValue(blockValue, critChance, damage)
+		if critChance > 0 && rand.IntN(100) < int(critChance) {
+			blockValue += blockValue
+		}
+		blocked = min(blockValue, damage)
 		damage -= blocked
-		if fullBlock {
+		if remaining := blockValue - blocked; remaining > 0 && damage2 > 0 {
+			blocked2 := min(remaining, damage2)
+			blocked += blocked2
+			damage2 -= blocked2
+		}
+		if damage == 0 && damage2 == 0 {
 			targetState = protocol.VictimStateBlocks
 		}
 	case protocol.MeleeHitCrit:
 		damage *= 2
 		// Unit::CalculateMeleeDamage crit leg (Unit.cpp:1302-1319): the
 		// 203/204 + 163 + 169 arms AddPct after the doubling, ahead of the
-		// resilience reduction below.
+		// resilience reduction below. The x2 and the bonus run per
+		// component, the 163 fold on each component's school.
 		damage = s.meleeCritDamageBonus(ctx, damage, target.GUID, target, false)
+		damage2 *= 2
+		damage2 = s.meleeCritDamageBonusForSchool(ctx, damage2, target.GUID, target, false, secondSchool)
 	case protocol.MeleeHitGlancing:
 		// Unit::CalculateMeleeDamage glancing leg (Unit.cpp:1377-1397).
 		damage = glancingReducedDamage(damage, s.player.Level, target.Level)
+		damage2 = glancingReducedDamage(damage2, s.player.Level, target.Level)
 	case protocol.MeleeHitCrushing:
 		damage = uint32(float64(damage) * 1.5)
+		damage2 = uint32(float64(damage2) * 1.5)
 	}
 
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			vicSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
-			if damage > 0 {
+			if damage2 > 0 {
+				vicSess.applyResilienceToDamage(true, &damage2, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+			}
+			if damage > 0 || damage2 > 0 {
 				// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
 				// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
-				bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(1))
-				absorbed, remaining := vicSess.applyAbsorptionShields(damage-bypass, 1)
-				absorbedDmg = absorbed
-				damage = remaining + bypass
-				if remaining == 0 && absorbed > 0 {
-					hitInfo |= protocol.HitInfoFullAbsorb
-				} else if absorbed > 0 {
+				// The absorb runs per component on its own school
+				// (Unit.cpp:1435-1452); the HitInfo merge (Unit.cpp:1455-1470)
+				// reports FULL only when comp0 is fully absorbed and comp1
+				// is not partially absorbed, PARTIAL when comp0 is partial —
+				// the comp1 flags drop entirely in that last case.
+				absorbFull0, absorbPart0, absorbFull1, absorbPart1 := false, false, false, false
+				if damage > 0 {
+					bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(1))
+					absorbed, remaining := vicSess.applyAbsorptionShields(damage-bypass, 1)
+					absorbedDmg = absorbed
+					damage = remaining + bypass
+					absorbFull0 = remaining == 0 && absorbed > 0
+					absorbPart0 = absorbed > 0 && !absorbFull0
+				}
+				if damage2 > 0 {
+					bypass2 := absorbIgnoreBypass(damage2, s.absorbIgnorePct(secondSchool))
+					absorbed2, remaining2 := vicSess.applyAbsorptionShields(damage2-bypass2, uint8(secondSchool))
+					absorbedDmg += absorbed2
+					damage2 = remaining2 + bypass2
+					absorbFull1 = remaining2 == 0 && absorbed2 > 0
+					absorbPart1 = absorbed2 > 0 && !absorbFull1
+				}
+				if absorbFull0 {
+					if absorbPart1 {
+						hitInfo |= protocol.HitInfoPartialAbsorb
+					} else {
+						hitInfo |= protocol.HitInfoFullAbsorb
+					}
+				} else if absorbPart0 {
 					hitInfo |= protocol.HitInfoPartialAbsorb
 				}
 			}
 		}
-	} else if !isPlayerVictim && s.server != nil && damage > 0 {
+	} else if !isPlayerVictim && s.server != nil && (damage > 0 || damage2 > 0) {
 		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
 		// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
-		bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(1))
-		absorbed, remaining := s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, 1)
-		damage = remaining + bypass
-		if remaining == 0 && absorbed > 0 {
-			hitInfo |= protocol.HitInfoFullAbsorb
-		} else if absorbed > 0 {
+		// Per-component absorb on each component's school, same HitInfo
+		// merge as the player-victim arm above (Unit.cpp:1455-1470).
+		absorbFull0, absorbPart0, absorbFull1, absorbPart1 := false, false, false, false
+		if damage > 0 {
+			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(1))
+			absorbed, remaining := s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, 1)
+			damage = remaining + bypass
+			absorbFull0 = remaining == 0 && absorbed > 0
+			absorbPart0 = absorbed > 0 && !absorbFull0
+		}
+		if damage2 > 0 {
+			bypass2 := absorbIgnoreBypass(damage2, s.absorbIgnorePct(secondSchool))
+			absorbed2, remaining2 := s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage2-bypass2, uint8(secondSchool))
+			damage2 = remaining2 + bypass2
+			absorbFull1 = remaining2 == 0 && absorbed2 > 0
+			absorbPart1 = absorbed2 > 0 && !absorbFull1
+		}
+		if absorbFull0 {
+			if absorbPart1 {
+				hitInfo |= protocol.HitInfoPartialAbsorb
+			} else {
+				hitInfo |= protocol.HitInfoFullAbsorb
+			}
+		} else if absorbPart0 {
 			hitInfo |= protocol.HitInfoPartialAbsorb
 		}
 	}
+
+	// Unit::DealMeleeDamage (Unit.cpp:1513-1523): the two components are
+	// dealt separately per school, but every downstream leg (rage, overkill,
+	// the ASU packet, procs, DealDamage) reads the summed total.
+	damage += damage2
 
 	// Unit::DealDamage (Unit.cpp:789-813): rage from damage dealt — direct
 	// weapon damage only, attacker POWER_RAGE, attacker != victim. Ranged

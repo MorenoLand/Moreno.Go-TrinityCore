@@ -107,8 +107,15 @@ func (s *session) damageDoneAuraAmounts(ctx context.Context, auraType uint32, mi
 // school bit (SPELL_SCHOOL_MASK_NORMAL) and which pass the
 // CheckAttackFitToAuraRequirement weapon-fit gate (Player.cpp:7945-7954).
 func (s *session) meleeDamageDoneFlat(ctx context.Context, attackType protocol.WeaponAttackType) int32 {
+	return s.meleeDamageDoneFlatForSchool(ctx, attackType, spellSchoolMaskNormal)
+}
+
+// meleeDamageDoneFlatForSchool is meleeDamageDoneFlat for an arbitrary
+// school mask — the second weapon-damage component's Done fold runs on its
+// own school (CalculateMeleeDamage, Unit.cpp:1236, schoolMask per component).
+func (s *session) meleeDamageDoneFlatForSchool(ctx context.Context, attackType protocol.WeaponAttackType, schoolMask uint32) int32 {
 	var total int32
-	for _, amt := range s.damageDoneAuraAmounts(ctx, spellAuraModDamageDone, spellSchoolMaskNormal, attackType) {
+	for _, amt := range s.damageDoneAuraAmounts(ctx, spellAuraModDamageDone, schoolMask, attackType) {
 		total += amt
 	}
 	return total
@@ -126,8 +133,19 @@ func (s *session) meleeDamageDoneFlat(ctx context.Context, attackType protocol.W
 // fold in spellDamagePctDone; the mutual-dormancy quirk of
 // GetTotalAuraMultiplier stays unmodeled.
 func (s *session) meleeDamageDonePctMod(ctx context.Context, attackType protocol.WeaponAttackType) float64 {
+	return s.meleeDamageDonePctModForSchool(ctx, attackType, spellSchoolMaskNormal)
+}
+
+// meleeDamageDonePctModForSchool is meleeDamageDonePctMod for an arbitrary
+// school mask — the second weapon-damage component's Done fold runs on its
+// own school (CalculateMeleeDamage, Unit.cpp:1236). The 122 off-hand arm
+// carries no misc gate in C++ and rides along unchanged; the 0.5 off-hand
+// penalty is not part of this fold (it lives in executeMeleeSwing, and
+// CalculateMinMaxDamage's second-component arm ignores mods entirely,
+// StatSystem.cpp:519-530).
+func (s *session) meleeDamageDonePctModForSchool(ctx context.Context, attackType protocol.WeaponAttackType, schoolMask uint32) float64 {
 	mod := 1.0
-	for _, amt := range s.damageDoneAuraAmounts(ctx, auraModDamagePercentDone, spellSchoolMaskNormal, attackType) {
+	for _, amt := range s.damageDoneAuraAmounts(ctx, auraModDamagePercentDone, schoolMask, attackType) {
 		mod *= 1 + float64(amt)/100
 	}
 	if attackType == protocol.OffAttack {
@@ -177,6 +195,13 @@ func (s *session) meleeDamageDoneVersusMod(ctx context.Context, targetGUID uint6
 // victim's creature-type mask. Runs on the doubled damage, ahead of the
 // resilience reduction, exactly like the C++ loop.
 func (s *session) meleeCritDamageBonus(ctx context.Context, damage uint32, targetGUID uint64, target combatTarget, ranged bool) uint32 {
+	return s.meleeCritDamageBonusForSchool(ctx, damage, targetGUID, target, ranged, spellSchoolMaskNormal)
+}
+
+// meleeCritDamageBonusForSchool is meleeCritDamageBonus for an arbitrary
+// school mask — the second weapon-damage component's 163 fold reads its
+// own school (CalculateMeleeDamage, Unit.cpp:1309).
+func (s *session) meleeCritDamageBonusForSchool(ctx context.Context, damage uint32, targetGUID uint64, target combatTarget, ranged bool, schoolMask uint32) uint32 {
 	if damage == 0 || s == nil || s.server == nil {
 		return damage
 	}
@@ -192,7 +217,7 @@ func (s *session) meleeCritDamageBonus(ctx context.Context, damage uint32, targe
 	}
 	// The 163 fold carries the Same Effect Stack Rule gating plus the passive
 	// talent and meta-gem legs, matching the spell-crit twin.
-	mod += (s.critDamageAuraMultiplier(spellSchoolMaskNormal) - 1.0) * 100
+	mod += (s.critDamageAuraMultiplier(schoolMask) - 1.0) * 100
 	if typMask, ok := s.targetCreatureTypeMask(ctx, targetGUID); ok && typMask != 0 {
 		for _, amt := range s.auraTypeModifiersByMiscMask(spellAuraModCritPercentVersus, typMask) {
 			mod += float64(amt)

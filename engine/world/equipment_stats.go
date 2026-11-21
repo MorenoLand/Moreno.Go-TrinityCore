@@ -20,10 +20,17 @@ type equippedItemStats struct {
 	Class     uint32
 	SubClass  uint32
 	// Player::_ApplyWeaponDamage (Player.cpp:7772-7812) stores all five
-	// damage rows and UpdateDamagePhysical sums them; rows 2..5 feed raw
-	// weapon damage only (CalculateMinMaxDamage, StatSystem.cpp:519-530).
+	// damage rows; UpdateDamagePhysical sums only the first two
+	// (MAX_ITEM_PROTO_DAMAGES=2, StatSystem.cpp:62-92) — rows 3..5 are
+	// dead in C++. The second row feeds raw weapon damage only
+	// (CalculateMinMaxDamage, StatSystem.cpp:519-530).
 	ExtraMinDamage [4]float64
 	ExtraMaxDamage [4]float64
+	// Damage[1..4] schools (ItemTemplate::Damage[i].DamageType); index 0
+	// is the second component C++ rolls separately (CalculateMeleeDamage,
+	// Unit.cpp:1227-1260) — its school decides its armor/resist/absorb
+	// treatment. Indices 1..3 are dead in C++ (MAX_ITEM_PROTO_DAMAGES=2).
+	ExtraDamageType [4]uint32
 	// Player::_ApplyItemBonuses applies the template resists as
 	// UNIT_MOD_RESISTANCE_HOLY..ARCANE BASE_VALUE (Player.cpp:7735-7752);
 	// index 1..6 mirrors state.Resistances (0 is armor).
@@ -201,6 +208,7 @@ func (s *session) loadEquippedItemStats(ctx context.Context, state *playerState)
 	defer rows.Close()
 	template, err := s.server.WorldStore.DB.PrepareContext(ctx, `SELECT armor, block, delay, dmg_min1, dmg_max1, class, subclass,
 		dmg_min2, dmg_max2, dmg_min3, dmg_max3, dmg_min4, dmg_max4, dmg_min5, dmg_max5,
+		dmg_type2, dmg_type3, dmg_type4, dmg_type5,
 		holy_res, fire_res, nature_res, frost_res, shadow_res, arcane_res,
 		stat_type1, stat_value1, stat_type2, stat_value2, stat_type3, stat_value3, stat_type4, stat_value4,
 		stat_type5, stat_value5, stat_type6, stat_value6, stat_type7, stat_value7, stat_type8, stat_value8,
@@ -219,6 +227,7 @@ func (s *session) loadEquippedItemStats(ctx context.Context, state *playerState)
 		err := template.QueryRowContext(ctx, entry).Scan(&item.Armor, &item.Block, &item.Delay, &item.MinDamage, &item.MaxDamage, &item.Class, &item.SubClass,
 			&item.ExtraMinDamage[0], &item.ExtraMaxDamage[0], &item.ExtraMinDamage[1], &item.ExtraMaxDamage[1],
 			&item.ExtraMinDamage[2], &item.ExtraMaxDamage[2], &item.ExtraMinDamage[3], &item.ExtraMaxDamage[3],
+			&item.ExtraDamageType[0], &item.ExtraDamageType[1], &item.ExtraDamageType[2], &item.ExtraDamageType[3],
 			&item.Resists[0], &item.Resists[1], &item.Resists[2], &item.Resists[3], &item.Resists[4], &item.Resists[5],
 			&item.StatTypes[0], &item.StatValues[0], &item.StatTypes[1], &item.StatValues[1], &item.StatTypes[2], &item.StatValues[2], &item.StatTypes[3], &item.StatValues[3],
 			&item.StatTypes[4], &item.StatValues[4], &item.StatTypes[5], &item.StatValues[5], &item.StatTypes[6], &item.StatValues[6], &item.StatTypes[7], &item.StatValues[7],

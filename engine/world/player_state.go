@@ -2435,13 +2435,14 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				if maxDmg > 0 {
 					state.MaxDamage = float32(maxDmg)
 				}
-				for i := 0; i < 4; i++ {
-					if item.ExtraMinDamage[i] > 0 {
-						state.MinDamage += float32(item.ExtraMinDamage[i])
-					}
-					if item.ExtraMaxDamage[i] > 0 {
-						state.MaxDamage += float32(item.ExtraMaxDamage[i])
-					}
+				// UpdateDamagePhysical sums only Damage[0..1]
+				// (MAX_ITEM_PROTO_DAMAGES=2, StatSystem.cpp:62-92); rows
+				// 3..5 are dead in C++.
+				if item.ExtraMinDamage[0] > 0 {
+					state.MinDamage += float32(item.ExtraMinDamage[0])
+				}
+				if item.ExtraMaxDamage[0] > 0 {
+					state.MaxDamage += float32(item.ExtraMaxDamage[0])
 				}
 				state.MinSecondDamage = float32(item.ExtraMinDamage[0])
 				state.MaxSecondDamage = float32(item.ExtraMaxDamage[0])
@@ -2456,13 +2457,14 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				if maxDmg > 0 {
 					state.MaxOffhandDamage = float32(maxDmg)
 				}
-				for i := 0; i < 4; i++ {
-					if item.ExtraMinDamage[i] > 0 {
-						state.MinOffhandDamage += float32(item.ExtraMinDamage[i])
-					}
-					if item.ExtraMaxDamage[i] > 0 {
-						state.MaxOffhandDamage += float32(item.ExtraMaxDamage[i])
-					}
+				// UpdateDamagePhysical sums only Damage[0..1]
+				// (MAX_ITEM_PROTO_DAMAGES=2, StatSystem.cpp:62-92); rows
+				// 3..5 are dead in C++.
+				if item.ExtraMinDamage[0] > 0 {
+					state.MinOffhandDamage += float32(item.ExtraMinDamage[0])
+				}
+				if item.ExtraMaxDamage[0] > 0 {
+					state.MaxOffhandDamage += float32(item.ExtraMaxDamage[0])
 				}
 				state.MinOffhandSecondDamage = float32(item.ExtraMinDamage[0])
 				state.MaxOffhandSecondDamage = float32(item.ExtraMaxDamage[0])
@@ -2477,13 +2479,14 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 				if maxDmg > 0 {
 					state.MaxRangedDamage = float32(maxDmg)
 				}
-				for i := 0; i < 4; i++ {
-					if item.ExtraMinDamage[i] > 0 {
-						state.MinRangedDamage += float32(item.ExtraMinDamage[i])
-					}
-					if item.ExtraMaxDamage[i] > 0 {
-						state.MaxRangedDamage += float32(item.ExtraMaxDamage[i])
-					}
+				// UpdateDamagePhysical sums only Damage[0..1]
+				// (MAX_ITEM_PROTO_DAMAGES=2, StatSystem.cpp:62-92); rows
+				// 3..5 are dead in C++.
+				if item.ExtraMinDamage[0] > 0 {
+					state.MinRangedDamage += float32(item.ExtraMinDamage[0])
+				}
+				if item.ExtraMaxDamage[0] > 0 {
+					state.MaxRangedDamage += float32(item.ExtraMaxDamage[0])
 				}
 				if delay > 0 {
 					state.RangedAttackTime = uint32(delay)
