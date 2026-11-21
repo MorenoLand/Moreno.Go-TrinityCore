@@ -3963,7 +3963,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				// DBC-driven range check (TC Spell::CheckRange, strict=true):
 				// the GetMinMaxRange reach / REQ_AMMO / spellmod terms apply
 				// here exactly as at completion.
-				minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
+				minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, s.spellRangeTargetMoving(targetGUID), uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
 				if maxRange > 0 && dist > maxRange {
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "out of range", "dist", dist, "max", maxRange)
@@ -4764,6 +4764,30 @@ func (s *session) spellRangeTargetHostile(targetGUID uint64, tgt combatTarget) b
 	return !s.server.isFriendlyFaction(tgt.Faction, caster) && s.server.isHostileFaction(tgt.Faction, caster)
 }
 
+// spellRangeTargetMoving mirrors the target half of the both-moving term of
+// Spell::GetMinMaxRange (Spell.cpp:6621-6625): the target must be moving and
+// not walking. Player targets read the session's cached isMoving (no walk/run
+// state is stored for players, so the caster-side !IsWalking() gate stays
+// dropped there, as the spellRangeBounds comment notes); creature targets read
+// the in-flight spline (Moving && now before MoveEnds, the
+// creatureMovementType test) with the persistent Walking flag as the
+// !IsWalking() gate.
+func (s *session) spellRangeTargetMoving(targetGUID uint64) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		return targetSess.isMoving
+	}
+	if motion := s.findCreatureMotion(targetGUID); motion != nil {
+		s.server.motionMu.Lock()
+		moving := motion.Moving && time.Now().Before(motion.MoveEnds) && !motion.Walking
+		s.server.motionMu.Unlock()
+		return moving
+	}
+	return false
+}
+
 // spellRangeBounds mirrors Spell::GetMinMaxRange (Spell.cpp:6584-6630): the
 // hostile/friendly DBC pair plus the combat-reach, moving-target, REQ_AMMO
 // ranged-weapon, and SPELLMOD_RANGE rangeMod terms. The pair is selected by
@@ -4775,9 +4799,11 @@ func (s *session) spellRangeTargetHostile(targetGUID uint64, tgt combatTarget) b
 // (Spell.cpp:6588-6589), disabling the range model. targetReach is the unit
 // target's combat reach; hasCorpseTarget covers the C++ corpse-target arm
 // (rangeMod = 2x caster reach, Spell.cpp:6616). The both-moving +8/3 term
-// (Spell.cpp:6622-6625) drops C++'s !IsWalking() gates — Go models no
-// walk/run movement state, so the term applies slightly more often than in
-// C++. The REQ_AMMO multiplier reads the equipped ranged weapon raw
+// (Spell.cpp:6622-6625) reads the target's movement through
+// spellRangeTargetMoving: the caster-side !IsWalking() gate is dropped — Go
+// stores no walk/run state for players — and the target-side gate is honored
+// for creatures (persistent Walking flag) and dropped for player targets, so
+// the term applies slightly more often than in C++. The REQ_AMMO multiplier reads the equipped ranged weapon raw
 // (Spell.cpp:6630, no zero guard in C++). NPCBOT's
 // ApplyCreatureSpellRangeMods has no Go creature-cast counterpart — this is
 // the player session path only.
@@ -4956,7 +4982,7 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 	if !ok {
 		return 0
 	}
-	minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, false, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
+	minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, false, float64(tgt.CombatReach), true, false, s.spellRangeTargetMoving(targetGUID), uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
 	// Spell::CheckRange (Spell.cpp:6543-6546): the non-strict completion
 	// recheck allows 10% (capped at 3.0) beyond max range for non-melee
 	// range entries.
@@ -27096,7 +27122,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 				if rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex); ok {
 					dist := distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z)
-					minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
+					minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, s.spellRangeTargetMoving(targetGUID), uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
 					if maxRange > 0 && dist > maxRange {
 						rejectTriggeredCast("triggered spell target out of range")
 						return

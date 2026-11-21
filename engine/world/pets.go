@@ -3815,7 +3815,24 @@ func (s *session) petActionBarCastFailedOpcode(motion *creatureMotion, actionBar
 // action-bar path keeps its pre-filtered motion and its documented dead-pet
 // behavior, so the arm stays off there.
 func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, castCount uint8, deathGate bool, actionBar bool) bool {
-	if s.isDeadOrGhost() {
+	// Spell::CheckPetCast UNIT_STATE_CASTING arm (Spell.cpp:6219-6220):
+	// a pet mid-cast fails SPELL_FAILED_SPELL_IN_PROGRESS. C++ order
+	// puts it ahead of the dead-owner arm (6222-6225) below, so it sits
+	// at the top here; the channel half is the backstop's
+	// creatureChannelLive gate, the cast-time half the CastingUntil
+	// stamp the L8 deferral sets.
+	if time.Now().Before(motion.CastingUntil) {
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedSpellInProgress), true)
+		return false
+	}
+	// Spell::CheckPetCast (Spell.cpp:6222-6225): a dead owner fails
+	// SPELL_FAILED_CASTER_DEAD unless the owner IsGhouled() — Unit::IsGhouled
+	// (Unit.cpp:8896-8898) is HasAura(SPELL_DK_RAISE_ALLY 46619, Player.h:880),
+	// and the aura survives death via SPELL_ATTR3_DEATH_PERSISTENT
+	// (death.go spellDeathPersistent keep), so a ghouled DK commands the
+	// ghoul while dead; playerHasAuraSpell is the death-context HasAura
+	// twin (death.go:2281).
+	if s.isDeadOrGhost() && !s.playerHasAuraSpell(spellRaiseAlly) {
 		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
 		return false
 	}
@@ -4041,14 +4058,17 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	// Spell::CheckPetCast (Spell.cpp:6219-6220): the UNIT_STATE_CASTING arm's
-	// cast-time half has no Go bridge — pet casts resolve instantly through
-	// executePetSpellWithOptions and the pet path stamps no CastingUntil — but
-	// its channel half is gated in the backstop (creatureChannelLive), so a
-	// command issued mid-channel fizzles there; the TRIGGERED_IGNORE_CAST_IN_PROGRESS
-	// wrapper is vacuous here (this path never carries triggered flags).
+	// cast-time half is the CastingUntil stamp the L8 deferral sets in
+	// executePetSpellWithOptions — a command issued mid-cast fizzles in
+	// the gauntlet (SPELL_FAILED_SPELL_IN_PROGRESS) and in the backstop;
+	// its channel half is gated in the backstop (creatureChannelLive), so
+	// a command issued mid-channel fizzles there; the
+	// TRIGGERED_IGNORE_CAST_IN_PROGRESS wrapper is vacuous here (this path
+	// never carries triggered flags).
 	// Dead-owner arm (Spell.cpp:6222-6225): the owner on this path is always
 	// the session player (petMotionForCast requires OwnerGUID/CharmerGUID ==
-	// playerGUID); the IsGhouled() exemption has no Go model.
+	// playerGUID); the IsGhouled() exemption rides checkPetCastGauntlet
+	// (playerHasAuraSpell(spellRaiseAlly 46619)).
 	if target.UnitGUID == 0 {
 		if isSelfCastOnly(spell) {
 			target.UnitGUID = motion.GUID

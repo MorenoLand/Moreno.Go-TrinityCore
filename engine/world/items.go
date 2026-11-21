@@ -4794,7 +4794,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 					// DBC-driven range check (TC Spell::CheckRange,
 					// strict=true): the GetMinMaxRange reach / REQ_AMMO /
 					// spellmod terms apply here exactly as at completion.
-					minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(target.UnitGUID>>48) == 0, s.spellRangeTargetHostile(target.UnitGUID, tgt))
+					minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, s.spellRangeTargetMoving(target.UnitGUID), uint16(target.UnitGUID>>48) == 0, s.spellRangeTargetHostile(target.UnitGUID, tgt))
 					dist := distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z)
 					if maxRange > 0 && dist > maxRange {
 						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedOutOfRange), true)

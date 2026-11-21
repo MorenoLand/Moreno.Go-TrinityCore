@@ -4198,7 +4198,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		if !ok {
 			return []any{nil}, nil
 		}
-		_, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, false, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
+		_, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, false, float64(tgt.CombatReach), true, false, s.spellRangeTargetMoving(targetGUID), uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
 		return []any{maxRange}, nil
 	}
 	// IsCharmed is Unit::IsCharmed (UnitMethods.h:376): the
