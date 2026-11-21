@@ -15072,7 +15072,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				channelObjectGUID = targetGUID
 			}
 			channelHits := append(append(append([]uint64(nil), hitTargets...), friendlyEffectTargets...), refCenteredFriendlyTargets...)
-			s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, target.Destination.X, target.Destination.Y, target.Destination.Z, channelHits)
+			s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, target.Destination.X, target.Destination.Y, target.Destination.Z, channelHits, castTimeMs, false)
 		}
 	}
 	if len(hitTargets) == 0 && len(friendlyEffectTargets) == 0 {
@@ -21752,10 +21752,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// (Spell.cpp:3937-3956) is ported above in the non-channeled branch
 	// (resetPlayerAttackTimersOnSpellFinish); the creature twin lives in
 	// resetCreatureAttackTimersOnSpellFinish. The channel-end application
-	// of the same leg (C++ finish runs at natural channel end) is not
-	// ported here — the creature twin skips it as well, for want of a
-	// creature channel-end event; Go's finishChannel is the player-side
-	// equivalent and remains the open follow-up.
+	// of the same leg (C++ finish runs at natural channel end) is ported
+	// in finishChannel for the player path; the creature twin skips it,
+	// for want of a creature channel-end event.
 	// The remaining finish legs have no Go bridge: UpdateInterruptMask
 	// (IsChanneled) and the UNIT_STATE_CASTING clear have no model (Go
 	// tracks cast/channel state in castMu, not unit states or interrupt
@@ -31622,7 +31621,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			channelObjectGUID = hitTargets[0]
 		}
 		channelHits := append(append(append(append([]uint64(nil), hitTargets...), triggeredFriendlyEffectTargets...), triggeredRefCenteredFriendlyTargets...), chainJumpGUIDs...)
-		s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, channelHits)
+		s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, channelHits, 0, true)
 	}
 
 	// Spell::handle_immediate (Spell.cpp:3493, 3613-3626): Go's triggered
@@ -51695,6 +51694,12 @@ type activeChannelState struct {
 	// the strip removes only a stored aura. Seeded once, never mutated.
 	HitTargets []uint64
 	Spell      wotlk.Spell
+	// CastTimeMs is the prepare-time cast time (m_casttime) frozen at
+	// cast start, which IsAutoActionResetSpell reads for its
+	// instant-cast gate (Spell.cpp:7532); Triggered is the m_triggered
+	// flag — a triggered channel never resets (Spell.cpp:7529).
+	CastTimeMs int32
+	Triggered  bool
 	DurationMs uint32
 	Remaining  time.Duration
 	PeriodMs   uint32
@@ -51842,7 +51847,7 @@ func (s *session) sendChannelUpdate(remainingMs uint32) {
 // record the cast's destination (SpellCastTargets::HasDst analog) so
 // SelectImplicitChannelTargets parity (Spell.cpp:1010) can resolve
 // TARGET_DEST_CHANNEL_TARGET for spells triggered during the channel.
-func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, targetGUID uint64, channelObjectGUID uint64, hasDest bool, destX, destY, destZ float32, hitTargets []uint64) {
+func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, targetGUID uint64, channelObjectGUID uint64, hasDest bool, destX, destY, destZ float32, hitTargets []uint64, castTimeMs int32, triggered bool) {
 	if s.player == nil || s.server.Data == nil {
 		return
 	}
@@ -51923,6 +51928,8 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 		ChannelObjectGUID: channelObjectGUID,
 		TargetKey:         creatureAuraKeyForPlayer(*s.player, targetGUID),
 		Spell:             spell,
+		CastTimeMs:        castTimeMs,
+		Triggered:         triggered,
 		DurationMs:        uint32(durationMs),
 		Remaining:         remaining,
 		PeriodMs:          period,
@@ -52001,13 +52008,20 @@ func (s *session) finishChannel() {
 	// cast/channel state in castMu, cleared above); the possessed-puppet
 	// unsummon needs the charm model Go does not have; ReleaseSpellFocus
 	// and the statue unsummon need creature casters (every Go cast runs
-	// on a player session). IsAutoActionResetSpell is ported on the
-	// non-channeled finish path (resetPlayerAttackTimersOnSpellFinish)
-	// and the creature paths (resetCreatureAttackTimersOnSpellFinish);
-	// its channel-end application (C++ finish runs at natural channel
-	// end) is the open follow-up here, as on the creature twin.
+	// on a player session). The creature twin's channel-end application
+	// is still open (no creature channel-end event); the player leg is
+	// ported below.
 	// context.Background: finishChannel runs from timer callbacks with no
 	// request context; the lookup is cached after the first fill.
+	// Spell::finish (Spell.cpp:3937-3956) runs at natural channel end
+	// (Spell::update, Spell.cpp:3874-3876: SendChannelUpdate(0) then
+	// finish()), so the IsAutoActionResetSpell leg fires here too, in
+	// C++ relative order — reset ahead of the potion flush (3959-3964)
+	// and the attack stop (3978-3983). Triggered channels never reset
+	// (Spell.cpp:7529); the helper carries the remaining gates.
+	if !channel.Triggered {
+		s.resetPlayerAttackTimersOnSpellFinish(spell, channel.CastTimeMs)
+	}
 	s.updatePotionCooldown(context.Background(), spell)
 	s.stopAttackOnSpellFinish(spell)
 	s.debug("channel finished", "account", s.accountName, "spell", spellID)
