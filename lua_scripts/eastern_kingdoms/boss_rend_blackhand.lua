@@ -62,7 +62,9 @@
 -- (TALK 1 / QUESTION 6 / ROAR 15 / POINT 25, SharedDefines.h),
 -- MovePath(REND_PATH_1 1379680, false) + victor MovePath(NEFARIUS_
 -- PATH_1 1379670, true), NearTeleportTo x2 (creature:NearTeleport),
--- SummonCreature(NPC_GYTH 10339, GythLoc), portcullis UseDoorOrButton
+-- SummonCreature(NPC_GYTH 10339, GythLoc, CORPSE_TIMED_DESPAWN 5 =
+-- the C++ SummonCreature default; the Go bridge defaults to MANUAL
+-- 7), portcullis UseDoorOrButton
 -- on each EVENT_WAVE_1..6 (the wave spawn tables are fully commented
 -- out in C++, so the wave bodies are the door toggle only).
 -- EVENT_TURN_TO_PLAYER's SelectNearestPlayer(60) rides victor:
@@ -125,6 +127,7 @@ local EMOTE_ONESHOT_TALK = 1 -- SharedDefines.h:1938
 local EMOTE_ONESHOT_QUESTION = 6 -- SharedDefines.h:1943
 local EMOTE_ONESHOT_ROAR = 15 -- SharedDefines.h:1950
 local EMOTE_ONESHOT_POINT = 25 -- SharedDefines.h:1960
+local SUMMON_CORPSE_TIMED_DESPAWN = 5 -- Go 0-based TempSummonType; C++ Creature::SummonCreature default
 
 -- Pre-fight gyth-event state, keyed by Rend GUID: the C++ victorGUID /
 -- portcullisGUID latches (instance_blackrock_spire.cpp ObjectAccessor
@@ -309,7 +312,7 @@ onWavesText3 = function(creature, guid)
 end
 
 onWavesText4 = function(creature, guid)
-    creature:Talk(1) -- SAY_BLACKHAND_1
+    creature:Talk(0) -- SAY_BLACKHAND_1 (boss_rend_blackhand.cpp:33; 0, not 1)
     pfSchedule(guid, "wavesemote2", 4000, function() onWavesEmote2(creature, guid) end)
     pfSchedule(guid, "turnfacing3", 8000, function() onTurnToFacing3(creature, guid) end)
     pfSchedule(guid, "wave5", 2000, function() usePortcullis(creature, guid) end)
@@ -342,7 +345,7 @@ onWavesCompleteText2 = function(creature, guid)
     if victor then
         victor:Talk(7) -- SAY_NEFARIUS_7
     end
-    creature:Talk(2) -- SAY_BLACKHAND_2
+    creature:Talk(1) -- SAY_BLACKHAND_2 (boss_rend_blackhand.cpp:34; 1, not 2)
     pfSchedule(guid, "pathrend", 1000, function() onPathRend(creature, guid) end)
     pfSchedule(guid, "wavescomplete3", 4000, function() onWavesCompleteText3(creature, guid) end)
 end
@@ -374,7 +377,7 @@ end
 
 onTeleport2 = function(creature, guid)
     creature:NearTeleport(216.485, -434.93, 110.888, -0.01225555)
-    creature:SummonCreature(NPC_GYTH, 211.762, -397.5885, 111.1817, 4.747295)
+    creature:SummonCreature(NPC_GYTH, 211.762, -397.5885, 111.1817, 4.747295, SUMMON_CORPSE_TIMED_DESPAWN)
 end
 
 -- C++ SetData (boss_rend_blackhand.cpp:205-224): type == AREATRIGGER
@@ -468,11 +471,11 @@ local function onEnterCombat(_, creature)
     schedule(guid, "mortalstrike", {17000, 19000}, function() onMortalStrike(creature, guid) end)
 end
 
+-- C++ LeaveCombat clears nothing: the pre-fight EventMap survives
+-- target death / combat end (only Reset/ev23 clears it), so the chain
+-- keeps running if the players wipe mid-intro. Combat timers only.
 local function onCombatEnd(_, creature)
-    local guid = creature:GetGUIDLow()
-    cancelTimers(guid)
-    pfCancelTimers(guid)
-    preFight[guid] = nil
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_rend_blackhand.cpp:198-203): _JustDied()

@@ -63,8 +63,10 @@
 -- MovePath(GYTH_PATH_1 1379681, false) via the 2026-11-21 MovePath
 -- bridge). The C++ SetData switch is on data only (type ignored).
 -- The pre-fight timers run outside the combat scheduler (C++ drains
--- them in the !UpdateVictim branch); the Lua timers fire regardless
--- of combat state and are cancelled on 2/4/23 with the rest.
+-- them in the !UpdateVictim branch); engaging Gyth mid-chain discards
+-- the pending ones via the combat drain's default arm, the same
+-- observable outcome as the Lua cancel on ev1 — they do NOT fire
+-- regardless of combat state.
 -- NEFARIUS_PATH_2/3 1379671/1379672 are enum-only here (no bridge
 -- consumes them; Nefarius walks them via his own AI, which C++ leaves
 -- unscripted — victor:SetData(1, 1) is a no-op dispatch).

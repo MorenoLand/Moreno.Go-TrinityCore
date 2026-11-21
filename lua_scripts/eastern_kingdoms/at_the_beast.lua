@@ -26,12 +26,11 @@ local DATA_BEAST_REACHED = 1 -- boss_the_beast.cpp:39
 local DATA_BEAST_ROOM = 2 -- boss_the_beast.cpp:40
 
 -- C++ at_trigger_the_beast_movement::OnTrigger (:223-242) and
--- at_the_beast_room::OnTrigger (:244-262).
+-- at_the_beast_room::OnTrigger (:244-262). No IsAlive gate in C++
+-- (unlike at_blackrock_stadium) — a ghost crossing the trigger fires
+-- it, so the Lua carries no alive check either.
 RegisterServerEvent(24, function(event, player, triggerId)
     if triggerId ~= TRIGGER_BEAST_MOVEMENT and triggerId ~= TRIGGER_BEAST_ROOM then
-        return
-    end
-    if not player:IsAlive() then
         return
     end
     local beast = player:FindNearestCreature(NPC_THE_BEAST, 200.0)

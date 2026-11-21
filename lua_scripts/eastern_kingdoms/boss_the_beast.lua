@@ -313,7 +313,15 @@ end
 -- latch stays unset and the leg retries on the next SetData.
 local function beastRoomLeg(creature, guid)
     local state = beastState[guid]
-    if not state or state.yelled then
+    if not state then
+        -- C++ FindNearbyOrcs runs on the ROOM leg even when _beastReached
+        -- is false (boss_the_beast.cpp:106-126 is not gated on it), so
+        -- a room trigger arriving before the movement trigger must
+        -- still yell; the state is created here, not skipped.
+        state = { reached = false, yelled = false }
+        beastState[guid] = state
+    end
+    if state.yelled then
         return
     end
     local orcs = findNearbyOrcs(creature)
