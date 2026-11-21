@@ -10738,8 +10738,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// matching the outer _cast's FINISHED check. Abort wins over
 	// re-cast when handlers set both. DELTAS: Cast's skipCheck is
 	// accepted but the completion revalidation below still runs (Go's
-	// finishSpellCast has no skipCheck parameter — the gap is narrow
-	// because the revalidation is power-only, not the full CheckCast);
+	// finishSpellCast has no skipCheck parameter — the revalidation covers
+	// power, reagents, caster auras, range, LoS, visibility, DR, and trade,
+	// not the full per-effect CheckCast loop);
 	// Finish skips the finish(true) tail (attack-timer reset, potion
 	// cooldown) that C++ runs before _cast notices FINISHED.
 	if spellAction != nil {
@@ -10759,6 +10760,55 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::_cast (Spell.cpp:3335) re-runs CheckCast(false) at bar end:
+	// the CheckItems arms (Spell.cpp:5489) run ahead of CheckPower
+	// (5502), so the reagent + totem revalidation sits here, before the
+	// power block below. Reagents traded, sold, or destroyed mid-cast
+	// fail SPELL_FAILED_REAGENTS with no spend; the failure shape is the
+	// _cast cleanupSpell (SendCastResult + SendInterrupted,
+	// Spell.cpp:3330-3334) the arms below already use. The cast-item
+	// NO_REAGENT_COST skip (Spell.cpp:6777-6858) mirrors the item-cast
+	// prepare arm (items.go:4705); spell casts pass 0/0 like prepare.
+	checkReagents := !s.canNoReagentCast(spell)
+	if !checkReagents && s.tradeItemTargetCast(target) {
+		checkReagents = true
+	}
+	skipReagents := false
+	if castItemEntry != 0 && s.server != nil {
+		if tplInfo, ok := s.server.getItemStoreTemplateInfo(ctx, castItemEntry); ok && tplInfo.Flags&itemFlagNoReagentCost != 0 {
+			skipReagents = true
+		}
+	}
+	if checkReagents && !skipReagents && !s.hasSpellReagents(ctx, spell, castItemGUID, castItemEntry) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, spellFailedReagents, s.firstMissingSpellReagent(ctx, spell, castItemGUID, castItemEntry)), true)
+		s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "missing reagents")
+		return
+	}
+	// Raise Dead scripted reagent check (spell_dk.cpp:2029-2048), the
+	// completion twin of the prepare arm: the reagent spell's Corpse
+	// Dust is re-checked at bar end the same way.
+	if spellID == 46584 {
+		if reagentSpell, found, err := s.server.Data.Spell(48289); err == nil && found &&
+			!s.canNoReagentCast(reagentSpell) && !s.hasSpellReagents(ctx, reagentSpell, 0, 0) {
+			s.sendCastFailed(ctx, castID, reagentSpell, spellFailedReagents)
+			s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "raise dead reagent missing")
+			return
+		}
+	}
+	// Totem item/category arm of CheckItems (Spell.cpp:6823-6856), the
+	// completion twin of the prepare arm: totems sit inside the same
+	// "do not take reagents" gate as the reagent arm, so the
+	// NO_REAGENT_COST skip above applies here too.
+	if !skipReagents {
+		if failReason := s.checkSpellTotemRequirements(ctx, spell); failReason != 0 {
+			s.sendCastFailed(ctx, castID, spell, failReason)
+			s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+			s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "totem requirements not met", "failReason", failReason)
+			return
+		}
+	}
 	// Spell::_cast (Spell.cpp:3335) re-runs CheckCast(false) when the cast timer
 	// finishes; power drained mid-cast must fail the cast, not clamp to zero.
 	pType := spell.PowerType
@@ -10810,6 +10860,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.sendInterrupted(castID, spellID, 0)
 			return
 		}
+	}
+
+	// Spell::_cast (Spell.cpp:3335) re-runs CheckCast(false) at bar end;
+	// CheckCasterAuras (Spell.cpp:5509) runs right after CheckPower
+	// (5502) in C++ order, so the caster-state gate sits after the power
+	// gate above. A stun/silence landed mid-cast is caught earlier by the
+	// interrupt paths (the cast is cancelled, never reaching completion);
+	// this is the net for states that do not interrupt — fear, confuse,
+	// pacify — plus the mechanic-param arm. Failure is the cleanupSpell
+	// exit (Spell.cpp:3330-3334: SendCastResult + SendInterrupted(0)),
+	// mirroring the prepare gauntlet (spells.go:4028).
+	if result, mechanic := s.checkCasterAuras(spell); result != 0 {
+		payload := buildCastFailed(castID, spellID, result)
+		if result == spellFailedPreventedByMechanic {
+			payload = buildCastFailedParams(castID, spellID, result, mechanic)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
+		s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
+		return
 	}
 
 	// Spell::_cast revalidates CheckCast at completion: the target may have

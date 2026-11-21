@@ -4556,7 +4556,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// gameobject is in range (SearchSpellFocus). C++ order: after the
 		// mounted gate, before CheckItems.
 		if spell.RequiresSpellFocus != 0 && !s.spellFocusFound(ctx, spell) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedRequiresSpellFocus), true)
+			s.sendCastFailed(ctx, castCount, spell, spellFailedRequiresSpellFocus)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "no spell focus object in range", "focus", spell.RequiresSpellFocus)
 			return true
 		}
@@ -4567,7 +4567,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// cooling down. The category arm reads the single
 		// _categoryCooldowns holder (playerCategoryCooldownBlocked:
 		// EraseCooldown, SpellHistory.h:140-144, erases the category
-		// entry when the holder spell's entry is erased). Runs after
+		// entry when the holder spell's entry is erased) — and the
+		// category itself resolves through GetCooldownDurations
+		// (SpellHistory.cpp:641-670): the item template's spell-slot
+		// SpellCategory wins when the slot matches this spell, the DBC
+		// category applies only when no item cooldown is found
+		// (spellCooldownDurationsForItem). Runs after
 		// the Eluna hooks, matching C++ SpellHandler.cpp order (OnItemUse
 		// at SpellHandler.cpp:176 precedes the cast and its CheckCast).
 		nowUnix := time.Now().Unix()
@@ -4578,7 +4583,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				return true
 			}
 		}
-		if categoryID := spell.Category; categoryID != 0 && s.playerCategoryCooldownBlocked(categoryID, nowUnix) {
+		if _, _, categoryID := s.server.spellCooldownDurationsForItem(ctx, spell, uint32(itemEntry)); categoryID != 0 && s.playerCategoryCooldownBlocked(categoryID, nowUnix) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 			s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
 			return true
