@@ -563,10 +563,12 @@ func (s *session) directWeaponCritChance(ctx context.Context, target combatTarge
 // SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL (71) term, then
 // SPELLMOD_CRITICAL_CHANCE via the spell-mod owner, clamped at zero.
 // For players the weapon-crit basis is the derived PLAYER_*_CRIT_PERCENTAGE
-// field selected by attack type; the flat aura terms (52/290) that
-// UpdateCritPercentage (StatSystem.cpp:624) folds into those fields are not
-// part of Go's stored fields, so they are added here. The weapon-skill term
-// (0.04%/skill vs max for level) has no Go model and stays a residual.
+// field selected by attack type; the flat aura terms (52/290) already ride
+// inside that field (UpdateCritPercentage, StatSystem.cpp:624, via
+// UpdateWeaponDependentCritAuras — calculatePlayerStats bakes the gated 52
+// and the 290 into the stored fields), so they are NOT re-added here:
+// C++ counts each once. The weapon-skill term (0.04%/skill vs max for
+// level) has no Go model and stays a residual.
 func (s *session) directWeaponCritChanceDone(ctx context.Context, spell wotlk.Spell, schoolMask uint8, attackType protocol.WeaponAttackType) float64 {
 	if s == nil || s.player == nil {
 		return 0
@@ -580,13 +582,10 @@ func (s *session) directWeaponCritChanceDone(ctx context.Context, spell wotlk.Sp
 	default:
 		chance = float64(s.player.MeleeCrit)
 	}
-	// Player.cpp:7899: SPELL_AURA_MOD_WEAPON_CRIT_PERCENT counts per attack
-	// type through CheckAttackFitToAuraRequirement (the weapon for that
-	// attack type must fit the aura spell's item requirements); the
-	// SPELL_AURA_MOD_CRIT_PCT (290) term carries no item requirement and
-	// stays unfiltered.
-	chance += float64(s.playerAuraModifierWeaponFit(ctx, spellAuraModWeaponCritPercent, attackType))
-	chance += float64(s.playerAuraModifier(spellAuraModCritPct))
+	// The 52/290 flat terms ride inside the stored PLAYER_*_CRIT_PERCENTAGE
+	// fields already (see the function comment); re-adding them here
+	// double-counted them — C++ SpellCritChanceDone counts each once
+	// (Unit.cpp:7196-7211 + StatSystem.cpp:624).
 	chance += float64(s.playerAuraModifierByMiscMask(spellAuraModSpellCritChanceSchool, int32(schoolMask)))
 	chance = s.applySpellModFloat(spell, spellModCriticalChance, chance)
 	if chance < 0 {
