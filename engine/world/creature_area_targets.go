@@ -4217,7 +4217,8 @@ func (s *Server) armInlineReflectProcDelayed(motion *creatureMotion, reflector *
 // not the session twin's spell-wide isHarmfulSpell read), cylinder
 // test + owner-online + bones-excluded corpse terms (SpellInfo.cpp:
 // 1697-1715, Spell.cpp:8316/8341: the ENEMY check is skipped for
-// corpses), center LOS, MaxTargets cap. Per-effect ImplicitTarget-
+// corpses), MaxTargets cap. Corpses take no line-of-sight gate:
+// AddCorpseTarget (Spell.cpp:2281) never calls CheckEffectTarget. Per-effect ImplicitTarget-
 // Conditions ride each leg (the session twin's arms): the selecting
 // effect's rows load via loadImplicitTargetConditionRows, the searcher
 // mask (ConditionMgr.cpp:679-695) drops legs whose rows name no
@@ -4316,13 +4317,10 @@ func (s *Server) creatureCorpseAreaTargets(ctx context.Context, m *creatureMotio
 			if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(corpse.Z-m.Z)) > float64(radius) {
 				continue
 			}
-			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
-			// area selection passes losPosition == center, so every
-			// candidate needs line of sight from the leg's center.
-			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-				!s.hasLineOfSightSpellCheck(m.Map, m.X, m.Y, m.Z, corpse.X, corpse.Y, corpse.Z) {
-				continue
-			}
+			// No line-of-sight gate on corpses (Spell.cpp:2281):
+			// AddCorpseTarget never calls CheckEffectTarget, so the
+			// default-arm LOS that the entry/friendly area paths apply
+			// to unit targets never runs for a corpse candidate.
 			// WorldObjectSpellTargetCheck tail (Spell.cpp:8368-8370):
 			// the selecting effect's ImplicitTargetConditions, evaluated
 			// against the corpse itself.

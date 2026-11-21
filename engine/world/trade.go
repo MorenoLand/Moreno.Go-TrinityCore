@@ -208,20 +208,25 @@ func clearAcceptTradeMode(my, partner *session) {
 // partner's — caller passes the target session accordingly), and a stored
 // cast-item GUID must still resolve in the caster's inventory (TradeData::
 // GetSpellCastItem = GetItemByGuid(_spellCastItem)). The CheckCast(true)
-// re-validation that follows the guard block (TradeHandler.cpp:380-401) is
-// a provable no-op for every representable deferred spell: under
-// TRIGGERED_FULL_MASK the death, cooldown, GCD, battleground, shapeshift,
-// aura-state, vehicle, power/reagent, caster-aura and dispel gates are all
-// skipped (Spell.cpp:5174-5555, SpellDefines.h:134-153); the strict-only
-// gates add nothing fireable for enchant spells; CheckExplicitTarget passes
-// trivially (enchant ExplicitTargetMask = 0, SpellInfo.cpp:1782-1797); and
-// the trade-slot check's only fireable term (m_CastItem ->
-// SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW, Spell.cpp:6167-6171) is
-// unreachable at accept because CheckCast(false) already rejected any
-// cast-item trade enchant at cast time — so a deferred spell always has a
-// null cast item here, the slot sentinel is always TRADE_SLOT_NONTRADED
-// (SetTradeItemTarget/Update, Spell.cpp:337-344/460-474), and the
-// ITEM_ALREADY_ENCHANTED term is gated on !IsTriggered().
+// re-validation that follows the guard block (TradeHandler.cpp:380-401)
+// is skipped under TRIGGERED_FULL_MASK for the death, cooldown, GCD,
+// battleground, shapeshift, aura-state, vehicle, power, caster-aura and
+// dispel gates (Spell.cpp:5174-5555, SpellDefines.h:134-153) — but NOT for
+// the reagent arm: Spell::CheckItems (Spell.cpp:5489) runs for every
+// non-passive spell regardless of triggered flags, and its non-owned-item
+// arm (Spell.cpp:6784-6790) forces the reagent check because the deferred
+// spell's item target is the trader's non-traded item (SetTradeItemTarget/
+// Update, Spell.cpp:337-344/460-474), whose owner is never the caster.
+// The strict-only gates add nothing fireable for enchant spells;
+// CheckExplicitTarget passes trivially (enchant ExplicitTargetMask = 0,
+// SpellInfo.cpp:1782-1797); and the trade-slot check's only fireable term
+// (m_CastItem -> SPELL_FAILED_ITEM_ENCHANT_TRADE_WINDOW,
+// Spell.cpp:6167-6171) is unreachable at accept because CheckCast(false)
+// already rejected any cast-item trade enchant at cast time — so a
+// deferred spell always has a null cast item here, the slot sentinel is
+// always TRADE_SLOT_NONTRADED (SetTradeItemTarget/Update,
+// Spell.cpp:337-344/460-474), and the ITEM_ALREADY_ENCHANTED term is
+// gated on !IsTriggered().
 func (caster *session) tradeSpellStillCastable(ctx context.Context, target *session) bool {
 	if caster.trade == nil || target.trade == nil {
 		return false
@@ -229,12 +234,14 @@ func (caster *session) tradeSpellStillCastable(ctx context.Context, target *sess
 	if caster.server == nil || caster.server.Data == nil {
 		return false
 	}
-	if _, found, err := caster.server.Data.Spell(caster.trade.SpellID); err != nil || !found {
+	spell, found, err := caster.server.Data.Spell(caster.trade.SpellID)
+	if err != nil || !found {
 		return false
 	}
 	if _, ok := target.trade.Items[tradeSlotNonTraded]; !ok {
 		return false
 	}
+	castItemEntry := tradeCastItemEntry(ctx, caster, caster.trade.SpellCastItemGUID)
 	if castItemGUID := caster.trade.SpellCastItemGUID; castItemGUID != 0 {
 		cdb := caster.server.CharactersStore.DB
 		if cdb == nil {
@@ -245,7 +252,65 @@ func (caster *session) tradeSpellStillCastable(ctx context.Context, target *sess
 			return false
 		}
 	}
+	// Spell::CheckItems reagent arm (Spell.cpp:6777-6818) inside the
+	// CheckCast(true) re-validation at accept (TradeHandler.cpp:380-401):
+	// CheckItems runs for every non-passive spell even under
+	// TRIGGERED_FULL_MASK, and the deferred spell's item target is the
+	// trader's non-traded item, whose owner is never the caster — so the
+	// non-owned-item arm forces the reagent check (checkReagents = true).
+	// Without it a player who spent the reagents after casting the
+	// enchant could still accept the trade and get the enchant for free.
+	// hasSpellReagents carries the cast-item-as-reagent arm and the
+	// CanNoReagentCast skip (Spell.cpp:6793-6808, 5053-5055); the
+	// ITEM_FLAG_NO_REAGENT_COST outer guard rides takeSpellReagents'
+	// twin in hasSpellReagents' callers, and a deferred spell never
+	// carries a NO_REAGENT_COST cast item (TradeHandler.cpp:382 sets
+	// m_CastItem only from the trade's stored cast item, which the
+	// trade-slot check rejects at cast time).
+	if !caster.hasSpellReagents(ctx, spell, caster.trade.SpellCastItemGUID, castItemEntry) {
+		return false
+	}
 	return true
+}
+
+// tradeCastItemEntry resolves the entry of a deferred trade spell's cast
+// item from its instance GUID (item_instance.itemEntry), for the
+// cast-item-as-reagent arm of hasSpellReagents / takeSpellReagents.
+// Returns 0 when there is no cast item or the row cannot be read.
+func tradeCastItemEntry(ctx context.Context, caster *session, castItemGUID uint64) uint32 {
+	if caster == nil || caster.server == nil || caster.server.CharactersStore == nil || caster.server.CharactersStore.DB == nil || castItemGUID == 0 {
+		return 0
+	}
+	var entry uint32
+	_ = caster.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1`, castItemGUID).Scan(&entry)
+	return entry
+}
+
+// takeDeferredTradeSpellReagents mirrors the Spell::_cast else branch
+// (Spell.cpp:3459-3463) for the deferred trade spell's prepare at trade
+// execute (TradeHandler.cpp:522-526): the spell runs under
+// TRIGGERED_FULL_MASK, so the cost gate skips power and reagents — but the
+// item target is the partner's non-traded item, whose owner is never the
+// caster, so TakeReagents still runs. The hasSpellReagents gate is the
+// CheckCast(false) twin that runs first in _cast (Spell.cpp:3349): if the
+// reagents are gone the C++ spell fizzles without taking anything, so a
+// failed check takes nothing here either. Called after the trade
+// persistence succeeds and before clearAcceptTradeMode, matching the C++
+// order (prepare runs after the item moves, before the accept-process
+// cleanup at TradeHandler.cpp:529).
+func (caster *session) takeDeferredTradeSpellReagents(ctx context.Context) {
+	if caster == nil || caster.trade == nil || caster.trade.SpellID == 0 || caster.server == nil || caster.server.Data == nil {
+		return
+	}
+	spell, found, err := caster.server.Data.Spell(caster.trade.SpellID)
+	if err != nil || !found {
+		return
+	}
+	castItemEntry := tradeCastItemEntry(ctx, caster, caster.trade.SpellCastItemGUID)
+	if !caster.hasSpellReagents(ctx, spell, caster.trade.SpellCastItemGUID, castItemEntry) {
+		return
+	}
+	caster.takeSpellReagents(ctx, spell, caster.trade.SpellCastItemGUID, castItemEntry)
 }
 
 // applyDeferredTradeEnchant mirrors the my_spell/his_spell->prepare at trade
@@ -1196,10 +1261,12 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 		// whose entry, target item, or cast item can no longer be resolved
 		// leaves the accept process (clearAcceptTradeMode both overloads)
 		// and is cleared (SetSpell(0)) in C++ order; the accept aborts and
-		// the window stays open. The CheckCast(true) + SendCastResult spell
-		// object validation has no Go model (no Spell object); the
-		// my_spell/his_spell prepare at execute is modeled by
-		// applyDeferredTradeEnchant for the SPELL_EFFECT_ENCHANT_ITEM slice.
+		// the window stays open. The CheckCast(true) re-validation rides
+		// tradeSpellStillCastable — its only fireable arm for a deferred
+		// spell is the CheckItems reagent check (the non-owned item target
+		// forces it); the my_spell/his_spell prepare at execute is modeled
+		// by applyDeferredTradeEnchant for the SPELL_EFFECT_ENCHANT_ITEM
+		// slice plus takeDeferredTradeSpellReagents for the cost leg.
 		if s.trade.SpellID != 0 && !s.tradeSpellStillCastable(ctx, partner) {
 			clearAcceptTradeMode(s, partner)
 			s.setTradeSpell(0, 0)
@@ -1727,6 +1794,14 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		partner.trade = nil
 		return
 	}
+
+	// Deferred-spell reagent take (Spell::_cast else branch,
+	// Spell.cpp:3459-3463): each side's deferred spell prepares under
+	// TRIGGERED_FULL_MASK after the item moves, so its reagents are taken
+	// here — after the trade persistence succeeds (a failed trade never
+	// prepares the spell) and before the accept-process cleanup below.
+	s.takeDeferredTradeSpellReagents(ctx)
+	partner.takeDeferredTradeSpellReagents(ctx)
 
 	// Reference: TradeHandler.cpp:537-538 — TRADE_COMPLETE goes to the
 	// trader's session first, then to self.

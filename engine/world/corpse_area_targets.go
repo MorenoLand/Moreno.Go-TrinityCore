@@ -51,9 +51,12 @@ func isCorpseAreaSpell(spell wotlk.Spell) bool {
 // TODO to restore it) — so any corpse whose owner is online passes.
 // CheckTarget's dead-owner gate (SpellInfo.cpp:1715) still applies: the
 // owner is dead by definition, so a spell that does not allow dead
-// targets selects nothing. LOS rides the CheckEffectTarget default arm
-// (Spell.cpp:7479-7481, losPosition == center), like the entry/friendly
-// area paths. Per-effect ImplicitTargetConditions ride each leg: the
+// targets selects nothing. Corpses take NO line-of-sight gate here:
+// AddCorpseTarget (Spell.cpp:2281) never calls CheckEffectTarget, the
+// area searcher (Spell.cpp:1881, WorldObjectSpellAreaTargetCheck) checks
+// only the cylinder + CheckTarget, and SpellInfo::CheckTarget carries no
+// LOS arm — the default-arm LOS (losPosition == center) applies only to
+// the UNIT targets AddUnitTarget adds, never to corpses. Per-effect ImplicitTargetConditions ride each leg: the
 // selecting effect's rows load via loadImplicitTargetConditions (the
 // entry-area precedent), the searcher mask (ConditionMgr.cpp:679-695)
 // drops legs whose rows name no TYPEID_CORPSE, and each candidate must
@@ -147,12 +150,10 @@ func (s *session) spellCorpseAreaTargets(ctx context.Context, spell wotlk.Spell,
 			if dx*dx+dy*dy > leg.radius*leg.radius || math.Abs(float64(corpse.Z-s.player.Z)) > leg.radius {
 				continue
 			}
-			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
-			// area selection passes losPosition == center, so every
-			// candidate needs line of sight from the leg's center.
-			if !s.implicitAreaTargetLOSPasses(spell, corpse.X, corpse.Y, corpse.Z, s.player.X, s.player.Y, s.player.Z) {
-				continue
-			}
+			// No line-of-sight gate on corpses (Spell.cpp:2281):
+			// AddCorpseTarget never calls CheckEffectTarget, so the
+			// default-arm LOS that the entry/friendly area paths apply
+			// to unit targets never runs for a corpse candidate.
 			// WorldObjectSpellTargetCheck tail (Spell.cpp:8368-8370):
 			// the selecting effect's ImplicitTargetConditions, evaluated
 			// against the corpse itself.
