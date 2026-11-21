@@ -2709,6 +2709,28 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 			}
 		}
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) for a creature
+		// caster: TARGET_CORPSE_SRC_AREA_ENEMY (93) legs join the hit list
+		// like the unit area legs above — previously a creature-cast 93
+		// spell selected no corpses on this path, so its resurrect arms
+		// (18/113) never fired. Area selection never chains, so the chain
+		// arm below still anchors on the nearby pick alone.
+		if isCorpseAreaSpell(spellInfo) {
+			seenCorpse := make(map[uint64]struct{}, len(hitTargets))
+			for _, guid := range hitTargets {
+				seenCorpse[guid] = struct{}{}
+			}
+			for _, corpseGUID := range s.creatureCorpseAreaTargets(ctx, m, spellInfo) {
+				if corpseGUID == 0 {
+					continue
+				}
+				if _, dup := seenCorpse[corpseGUID]; dup {
+					continue
+				}
+				seenCorpse[corpseGUID] = struct{}{}
+				hitTargets = append(hitTargets, corpseGUID)
+			}
+		}
 		// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032) for a
 		// creature caster: TARGET_UNIT_CHANNEL_TARGET (77) adds the live
 		// channel's object unit to the hit list, independent of the wire
@@ -6729,9 +6751,10 @@ func (s *Server) creatureResurrectLog(m *creatureMotion, spellID uint32, targetG
 // (SpellEffects.cpp:4270) for a creature caster: the HIT_TARGET arm
 // sending a resurrect request to each dead player hit target, with
 // health/mana as pcts of the target's maxima from the rolled damage.
-// Non-player targets fall through the C++ ToPlayer gate, and the
-// corpse-target arm has no Go model on either path. Self-resurrect (94)
-// and resurrect-pet (109) are player-caster-only in C++ and stay out.
+// Non-player targets fall through the C++ ToPlayer gate; a corpse hit
+// target resolves to its owner (SpellEffects.cpp:4280-4281).
+// Self-resurrect (94) and resurrect-pet (109) are player-caster-only
+// in C++ and stay out.
 func (s *Server) creatureEffectResurrect(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
@@ -6746,6 +6769,15 @@ func (s *Server) creatureEffectResurrect(ctx context.Context, m *creatureMotion,
 				continue
 			}
 			guid = m.GUID
+		}
+		// A corpse hit target resolves to its owner (the m_corpseTarget
+		// arm, SpellEffects.cpp:4280-4281); an unresolvable corpse takes
+		// nothing. The stale "no Go model" note is gone: the 93 area
+		// leg now feeds corpse GUIDs here.
+		if ownerGUID, ok := s.serverCorpseHitTargetOwnerGUID(ctx, guid, m.Map, m.InstanceID); ok {
+			guid = ownerGUID
+		} else if isCorpseGUID(guid) {
+			continue
 		}
 		targetSess := s.findSessionByGUID(guid)
 		if targetSess == nil || targetSess.player == nil {
@@ -6802,6 +6834,15 @@ func (s *Server) creatureEffectResurrectNew(ctx context.Context, m *creatureMoti
 				continue
 			}
 			guid = m.GUID
+		}
+		// A corpse hit target resolves to its owner (the m_corpseTarget
+		// arm, SpellEffects.cpp:256-257); an unresolvable corpse takes
+		// nothing. The stale "no Go model" note is gone: the 93 area
+		// leg now feeds corpse GUIDs here.
+		if ownerGUID, ok := s.serverCorpseHitTargetOwnerGUID(ctx, guid, m.Map, m.InstanceID); ok {
+			guid = ownerGUID
+		} else if isCorpseGUID(guid) {
+			continue
 		}
 		targetSess := s.findSessionByGUID(guid)
 		if targetSess == nil || targetSess.player == nil {

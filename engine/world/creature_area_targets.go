@@ -4207,3 +4207,124 @@ func (s *Server) armInlineReflectProcDelayed(motion *creatureMotion, reflector *
 		}
 	})
 }
+
+// creatureCorpseAreaTargets ports Spell::SelectImplicitAreaTargets
+// (Spell.cpp:1227) + Spell::SearchAreaTargets (Spell.cpp:1881) for
+// TARGET_CORPSE_SRC_AREA_ENEMY (93) for a creature caster, the twin of
+// the session spellCorpseAreaTargets: center SRC (the caster motion),
+// radius CalcRadius with the Spell.cpp:1281 range fallback per effect
+// (GetMaxRange(IsPositiveEffect), the creature entry-area precedent —
+// not the session twin's spell-wide isHarmfulSpell read), cylinder
+// test + owner-online + bones-excluded corpse terms (SpellInfo.cpp:
+// 1697-1715, Spell.cpp:8316/8341: the ENEMY check is skipped for
+// corpses), center LOS, MaxTargets cap. Per-effect ImplicitTarget-
+// Conditions on a 93 leg have no Go evaluator (no corpse-condition
+// twin) and are not applied, like the session twin. The MaxTargets
+// cap takes no MOD_MAX_AFFECTED_TARGETS fold — the motion has no aura
+// model, the creature entry-area precedent. An empty area list adds no
+// targets and never fails the cast. Each match carries only its
+// selecting effect's AddCorpseTarget bit (Spell.cpp:2281); Go's flat
+// hitTargets list is the standing mixed-effect approximation.
+func (s *Server) creatureCorpseAreaTargets(ctx context.Context, m *creatureMotion, spell wotlk.Spell) []uint64 {
+	if s == nil || m == nil || !isCorpseAreaSpell(spell) {
+		return nil
+	}
+	if !spellAllowsDeadTarget(spell) {
+		return nil
+	}
+	modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
+	var maxRangePositive, maxRangeNegative float32
+	if s.Data != nil {
+		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			maxRangePositive = float32(spellDBCMaxRange(true, rangeEntry))
+			maxRangeNegative = float32(spellDBCMaxRange(false, rangeEntry))
+			if modOwner != nil {
+				maxRangePositive = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangePositive)))
+				maxRangeNegative = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangeNegative)))
+			}
+		}
+	}
+	legs := make([]float32, 0)
+	maxRadius := float32(0)
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		switch {
+		case eff.ImplicitTargetA == implicitTargetCorpseSrcAreaEnemy:
+		case eff.ImplicitTargetB == implicitTargetCorpseSrcAreaEnemy && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB):
+		default:
+			continue
+		}
+		radius := float32(0)
+		if s.Data != nil {
+			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(m.Level)); err == nil && ok && value > 0 {
+				if modOwner != nil {
+					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
+				}
+				radius = value
+			} else if spell.IsPositiveEffect(i) {
+				radius = maxRangePositive
+			} else {
+				radius = maxRangeNegative
+			}
+		}
+		// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped
+		// radius multiplier folds in after the CalcRadius/range-fallback arm.
+		radius = applyCastRadiusMod(spell, radius)
+		if radius <= 0 {
+			continue
+		}
+		legs = append(legs, radius)
+		if radius > maxRadius {
+			maxRadius = radius
+		}
+	}
+	if len(legs) == 0 {
+		return nil
+	}
+	corpses := s.listCorpsesOnMap(ctx, m.Map, m.InstanceID)
+	targets := make([]uint64, 0, len(corpses))
+	seen := make(map[uint64]struct{})
+	for _, corpse := range corpses {
+		// WorldObjectSpellTargetCheck (Spell.cpp:8322-8328): a corpse
+		// whose owner is offline is not a valid target at all.
+		ownerSess := s.findSessionByGUID(corpse.OwnerGUID)
+		if ownerSess == nil || ownerSess.player == nil {
+			continue
+		}
+		matched := false
+		for _, radius := range legs {
+			// WorldObjectSpellAreaTargetCheck (Spell.cpp:8420): the
+			// cylinder test — 2D distance within radius and |dz|
+			// within radius — centered on the caster (SRC).
+			dx, dy := float64(corpse.X-m.X), float64(corpse.Y-m.Y)
+			if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(corpse.Z-m.Z)) > float64(radius) {
+				continue
+			}
+			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
+			// area selection passes losPosition == center, so every
+			// candidate needs line of sight from the leg's center.
+			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+				!s.hasLineOfSightSpellCheck(m.Map, m.X, m.Y, m.Z, corpse.X, corpse.Y, corpse.Z) {
+				continue
+			}
+			matched = true
+			break
+		}
+		if !matched {
+			continue
+		}
+		if _, dup := seen[corpse.GUID]; dup {
+			continue
+		}
+		seen[corpse.GUID] = struct{}{}
+		targets = append(targets, corpse.GUID)
+	}
+	// Spell.cpp:1293 — cap to MaxAffectedTargets, then RandomResize.
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(targets)) > maxTargets {
+		rand.Shuffle(len(targets), func(a, b int) { targets[a], targets[b] = targets[b], targets[a] })
+		targets = targets[:maxTargets]
+	}
+	return targets
+}

@@ -2488,6 +2488,30 @@ func (s *Server) lookupCorpse(ctx context.Context, corpseGUID uint64, mapID, ins
 	return corpse, true
 }
 
+// serverCorpseHitTargetOwnerGUID is the Server-level form of
+// corpseHitTargetOwnerGUID below, for creature casters: a corpse hit
+// target resolves to its owner's player GUID when the corpse exists on
+// the given map+instance and the owner is online
+// (ObjectAccessor::FindPlayer twin); a non-corpse GUID passes through
+// unchanged.
+func (s *Server) serverCorpseHitTargetOwnerGUID(ctx context.Context, targetGUID uint64, mapID, instanceID uint32) (uint64, bool) {
+	if !isCorpseGUID(targetGUID) {
+		return targetGUID, true
+	}
+	if s == nil {
+		return 0, false
+	}
+	corpse, ok := s.lookupCorpse(ctx, targetGUID, mapID, instanceID)
+	if !ok {
+		return 0, false
+	}
+	ts := s.findSessionByGUID(corpse.OwnerGUID)
+	if ts == nil || ts.player == nil {
+		return 0, false
+	}
+	return corpse.OwnerGUID, true
+}
+
 // corpseHitTargetOwnerGUID mirrors the m_corpseTarget arm of
 // Spell::EffectResurrect / EffectResurrectNew (SpellEffects.cpp:256-257,
 // 4280-4281): a corpse hit target resolves to its owner's player GUID when
@@ -2501,15 +2525,7 @@ func (s *session) corpseHitTargetOwnerGUID(ctx context.Context, targetGUID uint6
 	if s == nil || s.server == nil || s.player == nil {
 		return 0, false
 	}
-	corpse, ok := s.server.lookupCorpse(ctx, targetGUID, s.player.Map, s.player.InstanceID)
-	if !ok {
-		return 0, false
-	}
-	ts := s.server.findSessionByGUID(corpse.OwnerGUID)
-	if ts == nil || ts.player == nil {
-		return 0, false
-	}
-	return corpse.OwnerGUID, true
+	return s.server.serverCorpseHitTargetOwnerGUID(ctx, targetGUID, s.player.Map, s.player.InstanceID)
 }
 
 // handleReclaimCorpse mirrors WorldSession::HandleReclaimCorpse: a ghost in
