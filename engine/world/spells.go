@@ -17674,7 +17674,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.executeSpellMaxHealthHeal(effCtx, s.playerGUID, spellID, eff.CalcValueForLevel(spell, casterLevel))
 				}
-			case 6, 27: // Apply Aura
+			case 6: // Apply Aura
 				// SPELL_EFFECT_APPLY_AREA_AURA_PARTY (35) is EffectUnused
 				// (SpellEffects.cpp:104) — no HIT leg. Its aura reaches
 				// targets only through UnitAura::FillTargetMap, which the
@@ -17682,6 +17682,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// 129/143 effects already fall through to default. The
 				// triggered path's twin gate is the area-aura skip in
 				// castSpellDirectWithOverrides' APPLY_AURA arm.
+				// SPELL_EFFECT_PERSISTENT_AREA_AURA (27) left this case for
+				// the same reason: EffectPersistentAA runs only in
+				// SPELL_EFFECT_HANDLE_HIT mode (SpellEffects.cpp:1729-1733),
+				// once per effect, and the dynobj owns all application
+				// (spawnPersistentAreaAura above + the dynobj tick) — the
+				// triggered twin already excludes it (spells.go:30362).
 				// SpellScript::PreventHitDefaultEffect (SpellScript.cpp)
 				// skips the default handler for this effect: an ev4/ev5
 				// handler's veto suppresses the aura application (and its
@@ -28504,6 +28510,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			durationMs = 12000
 		case ProcSpellWoundPois:
 			durationMs = 15000
+		}
+	}
+	// Aura::CalcMaxDuration (SpellAuras.cpp:871-886): the DBC duration folds
+	// the caster's SPELLMOD_DURATION mods before the aura is created in
+	// DoSpellEffectHit — both the direct-hit applies below and the
+	// registerPlayerAreaAura fan-out take this value. Same arm as
+	// auraEffectParams (including its modded<=0 -> 0 corner).
+	if durationMs > 0 {
+		if modded := s.applySpellMod(spell, spellModDuration, int32(durationMs)); modded > 0 {
+			durationMs = uint32(modded)
+		} else {
+			durationMs = 0
 		}
 	}
 

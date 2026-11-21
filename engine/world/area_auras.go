@@ -551,24 +551,6 @@ func (s *Server) applyPlayerAreaAuraToHolder(ctx context.Context, state *areaAur
 	return s.areaAuraPresent(state, holderGUID)
 }
 
-// playerAreaAuraDurationMs mirrors the creature twin's duration fold
-// (boss_ai.go:9978-9995) and Aura::CalcMaxDuration (SpellAuras.cpp:871-886):
-// the DBC duration with the caster's SPELLMOD_DURATION mods. No haste fold,
-// matching the creature twin.
-func (s *session) playerAreaAuraDurationMs(spell wotlk.Spell) uint32 {
-	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || spell.DurationIndex == 0 {
-		return 0
-	}
-	dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level))
-	if err != nil || !ok || dur <= 0 {
-		return 0
-	}
-	if modded := s.applySpellMod(spell, spellModDuration, dur); modded > 0 {
-		dur = modded
-	}
-	return uint32(dur)
-}
-
 // registerPlayerAreaAura creates the caster-owned area aura at cast time for a
 // player caster — the registerCreatureAreaAura twin (Spell::DoSpellEffectHit,
 // Spell.cpp:2840-2872, creates the aura on the caster; Aura::UpdateTargetMap
