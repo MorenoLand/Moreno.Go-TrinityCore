@@ -75,6 +75,7 @@ const (
 	spellAttr6DontConsumeProcCharges       uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CastableWhileOnVehicle       uint32 = 0x00001000 // SPELL_ATTR6_CASTABLE_WHILE_ON_VEHICLE (SharedDefines.h:646) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6NotInRaidInstance            uint32 = 0x00000800 // SPELL_ATTR6_NOT_IN_RAID_INSTANCE (SharedDefines.h:645) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
+	spellAttr6NotResetSwingIfInstant       uint32 = 0x02000000 // SPELL_ATTR6_NOT_RESET_SWING_IF_INSTANT (SharedDefines.h:659) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr4NotStealable                 uint32 = 0x00000040 // SPELL_ATTR4_NOT_STEALABLE (SharedDefines.h:566) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4IgnoreResistances            uint32 = 0x00000001 // SPELL_ATTR4_IGNORE_RESISTANCES (SharedDefines.h:560) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4FixedDamage                  uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
@@ -664,6 +665,7 @@ const (
 	spellAuraModIgnoreTargetResist                    = 269  // SPELL_AURA_MOD_IGNORE_TARGET_RESIST (SpellAuraDefines.h:349)
 	spellAuraModCooldown                              = 196  // SPELL_AURA_MOD_COOLDOWN (SpellAuraDefines.h:276) — only 24818 Noxious Breath
 	spellAuraModDamageFromCaster                      = 271  // SPELL_AURA_MOD_DAMAGE_FROM_CASTER (SpellAuraDefines.h:351)
+	spellAuraIgnoreMeleeReset                         = 272  // SPELL_AURA_IGNORE_MELEE_RESET (SpellAuraDefines.h:352)
 	spellAuraDummy                                    = 4    // SPELL_AURA_DUMMY (SpellAuraDefines.h:84)
 	spellAuraModDurationByDispelNotStack              = 246  // SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK (SpellAuraDefines.h:326)
 	spellAuraMechanicDurationModNotStack              = 234  // SPELL_AURA_MECHANIC_DURATION_MOD_NOT_STACK (SpellAuraDefines.h:314) — strongest-negative twin of 232, consumed in WorldObject::ModSpellDuration (Object.cpp:2381)
@@ -21451,8 +21453,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell::finish(true) parity (Spell.cpp:3886-3985): two legs have no Go
 	// bridge and are intentionally absent here.
 	//   - IsAutoActionResetSpell -> resetAttackTimer(BASE/OFF/RANGED): the
-	//     Go tree has no attack-timer model at all (melee swing timing is not
-	//     simulated), so there is nothing to reset.
+	//     leg is ported on the creature paths
+	//     (resetCreatureAttackTimersOnSpellFinish, called from the inline
+	//     AI cast arm and castCreatureSpellInternalWithBasePoints); this
+	//     path serves player sessions only, and Go players have no swing
+	//     timer model, so there is nothing to reset here.
 	// The remaining finish legs have no Go bridge: UpdateInterruptMask
 	// (IsChanneled) and the UNIT_STATE_CASTING clear have no model (Go
 	// tracks cast/channel state in castMu, not unit states or interrupt
@@ -31228,7 +31233,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	//     finish(true) at 3625 anyway); ReleaseSpellFocus and the statue
 	//     unsummon need creature casters (every Go cast runs on a player
 	//     session); IsAutoActionResetSpell is always false for triggered
-	//     casts (Spell.cpp:7529) and Go has no attack-timer model
+	//     casts (Spell.cpp:7529) — the creature paths skip the reset on
+	//     the same gate, and Go players have no swing timer model
 	//     regardless; the potion flush is vacuous here — every Go
 	//     triggered cast carries TRIGGERED_FULL_MASK, so
 	//     IsIgnoringCooldowns() (Spell.cpp:7506-7509) makes
@@ -51460,10 +51466,12 @@ func (s *session) finishChannel() {
 	// The remaining finish legs have no Go bridge: UpdateInterruptMask
 	// and the UNIT_STATE_CASTING clear have no model (Go tracks
 	// cast/channel state in castMu, cleared above); the possessed-puppet
-	// unsummon needs the charm model Go does not have; ReleaseSpellFocus,
-	// the statue unsummon and IsAutoActionResetSpell need creature casters
-	// (every Go cast runs on a player session) and Go has no attack-timer
-	// model at all.
+	// unsummon needs the charm model Go does not have; ReleaseSpellFocus
+	// and the statue unsummon need creature casters (every Go cast runs
+	// on a player session). IsAutoActionResetSpell is ported on the
+	// creature paths (resetCreatureAttackTimersOnSpellFinish); this path
+	// serves player sessions only, and Go players have no swing timer
+	// model, so there is nothing to reset here.
 	// context.Background: finishChannel runs from timer callbacks with no
 	// request context; the lookup is cached after the first fill.
 	s.updatePotionCooldown(context.Background(), spell)

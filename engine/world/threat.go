@@ -1861,17 +1861,74 @@ func (s *Server) creatureAddThreat(motion *creatureMotion, victimGUID uint64, am
 // here — the session splitThreatRedirects already consumed its registry at
 // the call site. A zero or negative amount skips the split (the :348
 // amount > 0.0f gate) and adds plain, like C++.
+//
+// The vehicle-base leg (ThreatManager.cpp:319-325) runs ahead of the
+// registry split, like C++: while riding a vehicle all threat goes to the
+// vehicle base, not the pilot — the full amount recurses onto the base
+// (same ignoreRedirects), a minion accessory (UNIT_MASK_ACCESSORY,
+// vm.VehicleAccessoryMinion) takes nothing at all, and a non-accessory
+// pilot still takes a zero add so the ref exists (C++ amount = 0.0f).
+// The base resolves from the caller's already-resolved victim state only
+// (sess.player.VehicleGUID / vm.VehicleGUID) — never through the motion
+// map, per the deadlock rule in splitCreatureThreatRedirects — so a
+// nested vehicle (base seated on a further base) stops after one level,
+// and the recursive base add carries vm=nil.
 func (s *Server) creatureAddThreatWithRedirect(motion *creatureMotion, victimGUID uint64, amount float32, inMelee bool, sess *session, vm *creatureMotion, ignoreRedirects bool) (switched bool, newVictim uint64) {
 	if motion == nil || motion.ThreatMgr == nil {
 		return false, 0
 	}
+	baseSwitched, baseVictim := false, uint64(0)
+	if baseGUID, accessory := s.threatVehicleBaseGUID(sess, vm); baseGUID != 0 {
+		// ThreatManager::AddThreat (ThreatManager.cpp:319-325) recurses
+		// onto the vehicle base; a base that IS the list owner adds
+		// nothing — C++ drops it at the SetInCombatWith(self) gate
+		// (:380) — while the pilot's zero add below still runs.
+		if baseGUID != motion.GUID {
+			baseSwitched, baseVictim = s.creatureAddThreatWithRedirect(motion, baseGUID, amount, inMelee, nil, nil, ignoreRedirects)
+		}
+		if accessory {
+			if baseSwitched {
+				return true, baseVictim
+			}
+			return false, motion.ThreatMgr.GetCurrentVictim()
+		}
+		amount = 0
+	}
+	tailSwitched, tailVictim, tailRan := false, uint64(0), false
 	if !ignoreRedirects && sess == nil && vm != nil && vm.ThreatMgr != nil && amount > 0 && motion.ThreatMgr.OwnerCanHaveThreatList() {
 		if info := vm.ThreatMgr.redirectInfoSnapshot(); len(info) > 0 {
-			return s.splitCreatureThreatRedirects(motion, victimGUID, amount, inMelee, sess, vm, info)
+			tailSwitched, tailVictim = s.splitCreatureThreatRedirects(motion, victimGUID, amount, inMelee, sess, vm, info)
+			tailRan = true
 		}
 	}
-	s.evaluateThreatVictimState(motion, victimGUID, sess, vm)
-	return motion.ThreatMgr.AddThreat(victimGUID, amount, inMelee)
+	if !tailRan {
+		s.evaluateThreatVictimState(motion, victimGUID, sess, vm)
+		tailSwitched, tailVictim = motion.ThreatMgr.AddThreat(victimGUID, amount, inMelee)
+	}
+	if tailSwitched {
+		return true, tailVictim
+	}
+	if baseSwitched {
+		return true, tailVictim
+	}
+	return false, tailVictim
+}
+
+// threatVehicleBaseGUID resolves the C++ Unit::GetVehicleBase() leg for a
+// threat victim from the caller's already-resolved victim state: a player
+// victim rides the session's VehicleGUID stamp, a creature victim rides
+// vm.VehicleGUID. The accessory bit is the UNIT_MASK_ACCESSORY twin
+// (Vehicle.cpp:404 — InstallAccessory sets it for minions only);
+// players are never accessories. Returns base 0 when the victim rides
+// nothing or cannot be resolved (never through the motion map).
+func (s *Server) threatVehicleBaseGUID(sess *session, vm *creatureMotion) (base uint64, accessory bool) {
+	if sess != nil && sess.player != nil && sess.player.VehicleGUID != 0 {
+		return sess.player.VehicleGUID, false
+	}
+	if vm != nil && vm.VehicleGUID != 0 {
+		return vm.VehicleGUID, vm.VehicleAccessoryMinion
+	}
+	return 0, false
 }
 
 // splitCreatureThreatRedirects mirrors the redirect leg of
@@ -2211,12 +2268,12 @@ func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed bool, oldTauntState i
 // broadcast instead). FixateTarget and the taunt-state model are bridged:
 // the eager gate above honors fixate preference and taunt precedence, and
 // the Update tick runs the full ReselectVictim every second.
-// Out of scope for this unit: the vehicle redirect leg of C++ AddThreat
-// (ThreatManager.cpp:316-322) has no Go analog (Go models no vehicle
-// threat); the threat-redirect registry itself is bridged on the session
-// (spell_threat.go: redirectThreatRegistry, consumed by
-// splitThreatRedirects at every AddThreat site whose C++ call leaves
-// ignoreRedirects=false). getThreatMultiplier covers stance/aura
+// Out of scope for this unit: the threat-redirect registry itself is
+// bridged on the session (spell_threat.go: redirectThreatRegistry,
+// consumed by splitThreatRedirects at every AddThreat site whose C++ call
+// leaves ignoreRedirects=false). The vehicle-base leg of C++ AddThreat
+// (ThreatManager.cpp:319-325) rides creatureAddThreatWithRedirect above,
+// ahead of the registry split. getThreatMultiplier covers stance/aura
 // SPELL_AURA_MOD_THREAT; the CalculateModifiedThreat spell-mod leg
 // (SPELLMOD_THREAT) is bridged on the HandleThreatSpells cast-threat path
 // (spell_threat.go: handleSpellInitialThreat).

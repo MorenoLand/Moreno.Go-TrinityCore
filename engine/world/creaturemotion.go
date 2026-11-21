@@ -3103,6 +3103,83 @@ func (s *Server) creatureAISpellCastTimeMs(key creatureAuraKey, spell wotlk.Spel
 	return uint32(castTime)
 }
 
+// creatureHasIgnoreMeleeResetForSpell is the GetAuraEffectsByType
+// (SPELL_AURA_IGNORE_MELEE_RESET) + IsAffectedOnSpell leg of
+// Spell::finish (Spell.cpp:3940-3947): true when the creature carries a
+// live aura granting a 272 effect whose spell-family affect mask covers
+// the spell being cast (AuraEffect::IsAffectedOnSpell,
+// SpellAuraEffects.cpp:848). The per-effect scan follows the
+// prepareCreatureHitTriggerSpells pattern: the granting spell is
+// re-read from the DBC and each effect is tested against the aura's
+// EffectMask, since one aura spell can carry several aura types.
+func (s *Server) creatureHasIgnoreMeleeResetForSpell(m *creatureMotion, spell wotlk.Spell) bool {
+	if s == nil || m == nil || s.Data == nil {
+		return false
+	}
+	key := creatureAuraKeyForMotion(m)
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != spellAuraIgnoreMeleeReset || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resetCreatureAttackTimersOnSpellFinish is the Spell::finish
+// IsAutoActionResetSpell leg (Spell.cpp:3937-3956): a finished
+// non-triggered cast whose spell carries SPELL_INTERRUPT_FLAG_INTERRUPT
+// resets the caster's auto-attack timers to a full interval —
+// resetAttackTimer (Unit.cpp:578-580) sets m_attackTimer to
+// GetAttackTime * m_modAttackSpeedPct, which the Go timestamp model
+// (LastAttack / LastOffhandAttack compared against the live attack
+// interval) expresses as stamping now. The gates run in C++ order:
+// IsAutoActionResetSpell (Spell.cpp:7526-7535) — triggered casts never
+// reset, spells without the INTERRUPT flag never reset, and an instant
+// cast of a SPELL_ATTR6_NOT_RESET_SWING_IF_INSTANT spell never resets
+// — then the SPELL_ATTR2_NOT_RESET_AUTO_ACTIONS exemption and the
+// SPELL_AURA_IGNORE_MELEE_RESET aura exemption (Spell.cpp:3940-3950).
+// The offhand stamp rides haveOffhandWeapon (Unit.cpp:5743 twin:
+// CREATURE_FLAG_EXTRA_USE_OFFHAND_ATTACK); Go has no creature ranged
+// swing timer, so the RANGED_ATTACK reset has no model. Channeled
+// casts are excluded by the call sites: C++ runs finish — and this
+// leg — at natural channel end (Spell.cpp:3625), and Go has no
+// creature channel-end event to hang it on.
+func (s *Server) resetCreatureAttackTimersOnSpellFinish(m *creatureMotion, spell wotlk.Spell, castMs uint32, triggered bool, now time.Time) {
+	if m == nil || triggered {
+		return
+	}
+	if spell.InterruptFlags&spellInterruptFlagInterrupt == 0 {
+		return
+	}
+	if castMs == 0 && spell.AttributesEx6&spellAttr6NotResetSwingIfInstant != 0 {
+		return
+	}
+	if spell.AttributesEx1&spellAttr2NotResetAutoActions != 0 {
+		return
+	}
+	if s.creatureHasIgnoreMeleeResetForSpell(m, spell) {
+		return
+	}
+	m.LastAttack = now
+	if m.FlagsExtra&creatureFlagExtraUseOffhandAttack != 0 {
+		m.LastOffhandAttack = now
+	}
+}
+
 // aiSpellTargetClass mirrors the target-classification leg of
 // UnitAI::FillAISpellInfo (UnitAI.cpp:210-226): only when the spell has a
 // non-zero max range, implicit-target hits upgrade the default AITARGET_SELF:
@@ -7753,6 +7830,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							motion.PendingInlineTargetGUID = target.GUID
 							motion.PendingInlineFireAt = now.Add(time.Duration(castMs) * time.Millisecond)
 							motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+							// UnitAI::DoSpellAttackIfReady (UnitAI.cpp:88-100):
+							// the cast resets the base attack timer, so the
+							// next swing waits a full interval from the cast
+							// start. ArcherAI/TurretAI only — CombatAI and
+							// CasterAI fire through DoCast (UnitAI.cpp:113-171),
+							// which resets nothing. Stamped at t0 like C++;
+							// the firing run below skips it, its window
+							// already ran from t0.
+							if motion.AIName == "ArcherAI" || motion.AIName == "TurretAI" {
+								motion.LastAttack = now
+							}
 							return
 						}
 					}
@@ -9655,6 +9743,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				s.fireCreatureCastPhaseAuraProcs(ctx, motion, spellID, false)
 			}
 			motion.LastSpell = now
+			// UnitAI::DoSpellAttackIfReady (UnitAI.cpp:88-100): an instant
+			// ArcherAI/TurretAI cast resets the base attack timer, so the
+			// next swing waits a full interval from the cast — the
+			// CombatAI/CasterAI arms fire through DoCast, which resets
+			// nothing. A firing pending cast skips this stamp: its
+			// window already ran from t0 (deferral arm above).
+			if !firingPendingInline && (motion.AIName == "ArcherAI" || motion.AIName == "TurretAI") {
+				motion.LastAttack = now
+			}
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
 			// for its DBC cast time; the tick's early-out above bridges
 			// CombatAI.cpp:97 / CasterAI.cpp:159. A firing pending cast skips
@@ -9683,6 +9780,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						motion.CastingUntil = channelUntil
 					}
 				}
+			}
+			// Spell::finish IsAutoActionResetSpell leg (Spell.cpp:3937-3956):
+			// a finished non-triggered cast resets the swing timers —
+			// resetCreatureAttackTimersOnSpellFinish carries the predicate.
+			// Channeled casts skip it here: C++ runs finish at natural
+			// channel end, and Go has no creature channel-end event.
+			if !isChanneledSpell(dueSpell) {
+				s.resetCreatureAttackTimersOnSpellFinish(motion, dueSpell, s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell), false, now)
 			}
 			s.rearmAISpell(motion, dueSpell, spellID, now)
 			// CombatAI::UpdateAI (CombatAI.cpp:90-106): a fired spell event
@@ -9903,6 +10008,25 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// calls DoMeleeAttackIfReady (CombatAI.cpp:278-293), so a vehicle
 		// never swings either.
 		if motion.AIName == "TurretAI" || motion.AIName == "CasterAI" || motion.NoMeleeAttack || s.isVehicleAI(motion) {
+			return
+		}
+		// Chase-arrival swing gate (UnitAI::DoMeleeAttackIfReady,
+		// UnitAI.cpp:61-82, gated on IsWithinMeleeRange at the
+		// creature's true position): Go teleports the motion onto the
+		// chase destination at spline launch, so on the next tick the
+		// teleported position already reads in range while the spline
+		// is still in flight — C++ interpolates along the spline and
+		// IsWithinMeleeRange stays false until it finalizes (the
+		// range-check / MovementInform arrival,
+		// ChaseMovementGenerator.cpp:128-151). A swing launched
+		// mid-spline would land up to a spline duration early and
+		// stamp LastAttack early, shifting the whole cadence. Hold the
+		// swing — without stamping anything, so the timer keeps
+		// ticking toward ready exactly as Unit::Update decrements it
+		// mid-chase — until the spline finalizes; then the first
+		// in-range tick swings immediately, as C++ does on arrival.
+		// A zero MoveEnds never gates (now.Before(zero) is false).
+		if motion.Moving && now.Before(motion.MoveEnds) {
 			return
 		}
 		motion.Moving = false

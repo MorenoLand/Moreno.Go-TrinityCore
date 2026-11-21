@@ -4521,6 +4521,18 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	if spellKnown {
 		s.fireCreatureCastPhaseAuraProcs(ctx, m, spellID, triggered)
 	}
+	// Spell::finish IsAutoActionResetSpell leg (Spell.cpp:3937-3956):
+	// a finished non-triggered cast resets the swing timers — the
+	// resetCreatureAttackTimersOnSpellFinish helper carries the
+	// predicate. This is the finish site: the t0 scheduling pass
+	// returns at the deferral point above, so a cast-time cast resets
+	// only on the deferred-fire re-entry, at fire time; triggered
+	// casts never reset (IsAutoActionResetSpell, Spell.cpp:7529).
+	// Channeled casts skip it here: C++ runs finish at natural
+	// channel end, and Go has no creature channel-end event.
+	if spellKnown && !isChanneledSpell(spellInfo) {
+		s.resetCreatureAttackTimersOnSpellFinish(m, spellInfo, s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo), triggered, now)
+	}
 }
 
 // serverAuraScaleTargetLevel resolves a hit target's level for the
