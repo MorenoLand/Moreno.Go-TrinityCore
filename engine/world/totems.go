@@ -1795,7 +1795,7 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 			if !s.server.totemEnemyCreatureValid(m, owner) || !s.server.totemCreaturePhaseOverlapsOwner(m, ownerPhase) {
 				continue
 			}
-			s.applyPetAura(ctx, totemMotion, slowSpell, eff, m.GUID, slowDurationMs, uint32(amount))
+			s.applyPetAura(ctx, totemMotion, slowSpell, eff, m.GUID, slowDurationMs, uint32(amount), nil)
 		}
 	}
 	// Enemy-player leg: the same area aura reaches hostile sessions in

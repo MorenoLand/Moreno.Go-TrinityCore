@@ -43346,10 +43346,9 @@ func (s *session) applyAuraLinkedAurasAtApply(ctx context.Context, spellID uint3
 			if eff.Aura == 0 {
 				continue
 			}
-			var amount uint32
-			if bp := eff.CalcValueForLevel(linked, casterLevel); bp > 0 {
-				amount = uint32(bp)
-			}
+			// No non-negative clamp: a negative rolled value is a real
+			// amount (a slow), carried two's-complement into Amounts[i].
+			amount := uint32(eff.CalcValueForLevel(linked, casterLevel))
 			casterSess.applyAuraToTarget(ctx, s.playerGUID, linked, eff, effIndex, durationMs, eff.AuraPeriod, amount, linked.SchoolMask, castMerged, false, caster, false, 0, false, nil)
 		}
 	}

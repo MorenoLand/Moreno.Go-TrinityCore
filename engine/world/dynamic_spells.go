@@ -115,12 +115,12 @@ func dynobjAuraEffectList(spell wotlk.Spell, casterLevel int, now time.Time) []d
 		if periodMs == 0 && (effect.Aura == 3 || effect.Aura == 8 || effect.Aura == 23 || effect.Aura == 24 || effect.Aura == 89) {
 			periodMs = 3000
 		}
-		amount := uint32(0)
-		if effect.BasePoints >= 0 {
-			// The AuraEffect ctor default amount is the raw DBC base
-			// (SpellAuraEffects.cpp:386) — no +1.
-			amount = uint32(effect.BasePoints)
-		}
+		// The AuraEffect ctor default amount is the raw DBC base
+		// (SpellAuraEffects.cpp:386) — no +1, and no non-negative clamp:
+		// a negative base is a real amount (a -71 slow), carried
+		// two's-complement through the uint32 amount into the signed
+		// Amounts[i] slots the aura_haste/stats consumers read.
+		amount := uint32(effect.BasePoints)
 		if amount == 0 && (effect.Aura == 3 || effect.Aura == 23 || effect.Aura == 89) {
 			amount = uint32(10 + casterLevel*2)
 		}

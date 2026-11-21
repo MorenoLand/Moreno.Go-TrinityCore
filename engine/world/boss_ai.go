@@ -10056,11 +10056,10 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 				if prevent.defaultPrevented(i) {
 					continue
 				}
-				amount := uint32(0)
 				bp := s.scaledEffectValue(spell, eff, casterLevel(m), creatureIsPlayerControlled(m), eff.CalcValueForLevel(spell, casterLevel(m)))
-				if bp > 0 {
-					amount = uint32(bp)
-				}
+				// No non-negative clamp: a negative rolled value is a real
+				// amount (a slow), carried two's-complement into Amounts[i].
+				amount := uint32(bp)
 				os.applyAuraToTarget(ctx, guid, spell, eff, i, durationMs, eff.AuraPeriod, amount, spell.SchoolMask, castMerged, false, m.GUID, false, 0, false, nil)
 			}
 			continue
@@ -10279,11 +10278,10 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		if creatureImmuneToSpellEffect(s, targetKey, spell, i, stats, s.isTotemGUID(targetGUID), nil, s.creatureFriendlyToTarget(m, targetGUID)) {
 			continue
 		}
-		amount := uint32(0)
 		bp := s.scaledEffectValue(spell, eff, casterLevel(m), creatureIsPlayerControlled(m), eff.CalcValueForLevel(spell, casterLevel(m)))
-		if bp > 0 {
-			amount = uint32(bp)
-		}
+		// No non-negative clamp: a negative rolled value is a real amount
+		// (a slow), carried two's-complement into Amounts[i].
+		amount := uint32(bp)
 		positive := !isHarmfulAura(eff.Aura) && eff.ImplicitTargetA != 6
 		if isAreaEnemySpell(spell) {
 			positive = false

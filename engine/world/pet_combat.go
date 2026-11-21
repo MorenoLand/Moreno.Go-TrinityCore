@@ -6401,6 +6401,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				return immuneSet[guid] || evadedSet[guid] || reflectedSet[guid] || petMissVerdicts[guid] != protocol.SpellMissNone
 			})
 		}
+		// Spell::DoSpellEffectHit (Spell.cpp:2842): one first-merge marker map
+		// per cast, keyed by target GUID — the pet funnel's per-effect sweep
+		// shares it across effects so only the first aura effect per
+		// (cast, target) runs the ModStackAmount merge.
+		petCastMerged := make(map[uint64]struct{})
 		for i, effect := range spell.Effects {
 			if effect.Effect == spellEffectHeal || effect.Effect == spellEffectHealMechanical || effect.Effect == spellEffectHealPct {
 				// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
@@ -6876,7 +6881,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:505-518):
 					// the periodic done leg bakes at apply for unit auras.
 					amount = s.petPeriodicApplyDoneLegs(effCtx, motion, auraSpell, i, victimGUID, victim, amount)
-					if s.applyPetAura(effCtx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount) {
+					if s.applyPetAura(effCtx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount, petCastMerged) {
 						s.server.recordCreatureChannelHitTarget(motion, spell, victimGUID)
 					}
 				}
@@ -6890,7 +6895,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 						wAmount := uint32(wEffect.CalcValueForLevel(wSpell, uint32(motion.Level)))
 						wAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, wSpell, i, wVictimGUID, wVictim, wAmount)
-						if s.applyPetAura(effCtx, motion, wSpell, wEffect, wVictimGUID, wDurationMs, wAmount) {
+						if s.applyPetAura(effCtx, motion, wSpell, wEffect, wVictimGUID, wDurationMs, wAmount, petCastMerged) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, wVictimGUID)
 						}
 					}
@@ -6908,7 +6913,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 						cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
 						cAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
-						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount) {
+						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount, petCastMerged) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
 						}
 					}
@@ -6937,7 +6942,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 						aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 						aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
+						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
 						}
 					}
@@ -6963,7 +6968,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 						aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 						aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
+						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
 						}
 					}
@@ -6985,7 +6990,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 						aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 						aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
+						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
 						}
 					}
@@ -7014,7 +7019,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 						cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
 						cAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
-						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount) {
+						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount, petCastMerged) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
 						}
 					}
@@ -7407,11 +7412,11 @@ func petAuraDuration(s *Server, spell wotlk.Spell, motion *creatureMotion) uint3
 	return durationMs
 }
 
-func (s *session) applyPetAura(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs, amount uint32) bool {
-	return s.applyPetAuraWithSource(ctx, caster, spell, effect, targetGUID, durationMs, int32(amount), ownerPetAuraKey{}, 0, false)
+func (s *session) applyPetAura(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs, amount uint32, castMerged map[uint64]struct{}) bool {
+	return s.applyPetAuraWithSource(ctx, caster, spell, effect, targetGUID, durationMs, int32(amount), ownerPetAuraKey{}, 0, false, castMerged)
 }
 
-func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs uint32, amount int32, source ownerPetAuraKey, sourceDamage int32, removeOnChange bool) bool {
+func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs uint32, amount int32, source ownerPetAuraKey, sourceDamage int32, removeOnChange bool, castMerged map[uint64]struct{}) bool {
 	if s == nil || s.server == nil || caster == nil || targetGUID == 0 {
 		return false
 	}
@@ -7473,6 +7478,31 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 			return false
 		}
 		if previous := targetSess.activeAuras[spell.ID]; previous != nil && !previous.Stopped && previous.CasterGUID == caster.GUID {
+			// Spell::DoSpellEffectHit (Spell.cpp:2842): only the first aura
+			// effect per (cast, target) runs the merge — later effects only
+			// AddStaticApplication, refreshing their own basepoints/amounts.
+			// Go's per-effect sweep would otherwise run the ModStackAmount(+1)
+			// merge once per aura effect, so a re-cast of a stackable
+			// multi-effect pet aura would reach max stacks N× too fast, and
+			// the trailing effect's scalar refresh would overwrite the
+			// ticking effect's amount. The applyAuraToTarget twin of this
+			// arm (spells.go:41310) and the serverApply twin (boss_ai.go:10307)
+			// carry the same firstMerge gate; a nil map keeps the old
+			// always-first-merge behavior for single-effect callers.
+			firstMerge := true
+			if castMerged != nil {
+				if _, ok := castMerged[targetGUID]; ok {
+					firstMerge = false
+				} else {
+					castMerged[targetGUID] = struct{}{}
+				}
+			}
+			if !firstMerge {
+				refreshLaterAuraEffectBasepoints(previous, spell, effect, uint32(amount))
+				previous.EffectMask |= spellEffectMask(spell, effect)
+				targetSess.castMu.Unlock()
+				return true
+			}
 			// Unit::_TryStackingOrRefreshingExistingAura (Unit.cpp:3326) -> Aura::ModStackAmount(+1)
 			// (SpellAuras.cpp:1030): a re-cast by the same pet merges into the existing aura
 			// instead of replacing it — one more stack, clamped to the spell's stack amount
@@ -7551,6 +7581,13 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		}
 		aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, ApplyResilience: applyResilience, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), StoredCasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
 		targetSess.activeAuras[spell.ID] = aura
+		// Spell::DoSpellEffectHit (Spell.cpp:2842): the fresh apply marks
+		// this (cast, target) merged, so the next effect of the same cast
+		// takes the later-effect arm instead of the full merge — the
+		// applyAuraToTarget twin of this mark (spells.go:41716).
+		if castMerged != nil {
+			castMerged[targetGUID] = struct{}{}
+		}
 		targetSess.auras[spell.ID] = struct{}{}
 		// Unit::_AddAura single-target dance (Unit.cpp:3397-3420).
 		var scPurge []singleCastEntry
@@ -7673,6 +7710,29 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	// A previous aura from another caster keeps the replace path below (C++ finds
 	// no same-caster aura to merge into, and the no-stack purge removes it).
 	if previous := s.server.activeCreatureAuras[targetKey][spell.ID]; previous != nil && !previous.Stopped && previous.CasterGUID == caster.GUID {
+		// Spell::DoSpellEffectHit (Spell.cpp:2842): only the first aura
+		// effect per (cast, target) runs the merge — the applyAuraToTarget
+		// creature-branch twin of this arm (spells.go:42474). Later effects
+		// only refresh their own basepoints/amounts; the derived-stat
+		// recompute still runs, since it re-derives from the live amounts.
+		firstMerge := true
+		if castMerged != nil {
+			if _, ok := castMerged[targetGUID]; ok {
+				firstMerge = false
+			} else {
+				castMerged[targetGUID] = struct{}{}
+			}
+		}
+		if !firstMerge {
+			refreshLaterAuraEffectBasepoints(previous, spell, effect, uint32(amount))
+			previous.EffectMask |= spellEffectMask(spell, effect)
+			s.server.auraMu.Unlock()
+			s.server.recomputePetDerivedOnStatAuraChange(targetKey, spell.ID, true, nil)
+			s.server.recomputePetAttackPowerOnAuraChange(targetKey, spell.ID)
+			s.server.recomputePetDamageFieldsOnAuraChange(targetKey, spell.ID)
+			s.server.recomputeCreatureArmorOnAuraChange(targetKey, spell.ID)
+			return true
+		}
 		maxStack := int32(spell.StackAmount)
 		if maxStack == 0 {
 			maxStack = 1
@@ -7743,6 +7803,12 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	slot := uint8(len(s.server.activeCreatureAuras[targetKey]))
 	aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, TargetKey: targetKey, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, ApplyResilience: applyResilience, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), StoredCasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
+	// Spell::DoSpellEffectHit (Spell.cpp:2842): the fresh apply marks this
+	// (cast, target) merged — the serverApply twin of this mark
+	// (boss_ai.go:10437).
+	if castMerged != nil {
+		castMerged[targetGUID] = struct{}{}
+	}
 	s.server.creatureAuras[targetKey][spell.ID] = struct{}{}
 	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420).
 	var scPurge []singleCastEntry
