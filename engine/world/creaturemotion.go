@@ -244,9 +244,10 @@ type creatureMotion struct {
 	// step tick launches short walk hops until SetConfused(false)
 	// clears it; a live confuse aura blocks the clear per
 	// Unit::SetControlled (Unit.cpp:11502-11540).
-	Confused    bool
-	AttackTime  uint32
-	CombatReach float32
+	Confused         bool
+	AttackTime       uint32
+	RangedAttackTime uint32
+	CombatReach      float32
 
 	Armor       uint32
 	Resistances [7]uint32
@@ -1345,33 +1346,34 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			WanderSteps: 2 + rand.Intn(9), // urand(2,10), RandomMovementGenerator.cpp:DoInitialize
 			Health:      health,
 			// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
-			PlayerDamageReq: health / 2,
-			MaxHealth:       st.MaxHealth,
-			BaseMaxHealth:   st.MaxHealth,
-			Armor:           st.Armor,
-			Resistances:     st.Resistances,
-			MinDamage:       st.MinDamage,
-			MaxDamage:       st.MaxDamage,
-			Level:           st.Level,
-			AttackTime:      st.AttackTime,
-			CombatReach:     st.CombatReach,
-			UnitFlags:       st.UnitFlags,
-			FlagsExtra:      st.FlagsExtra,
-			TypeFlags:       st.TypeFlags,
-			Rank:            st.Rank,
-			NPCFlags:        st.NPCFlags,
-			UnitClass:       st.UnitClass,
-			CanFly:          st.CanFly,
-			MoveGround:      st.MoveGround,
-			MoveSwim:        st.MoveSwim,
-			MoveKnown:       true,
-			ReactState:      st.ReactState,
-			ReactStateKnown: st.ReactStateKnown,
-			CreatureType:    st.CreatureType,
-			AIName:          st.AIName,
-			BaseScale:       st.Scale,
-			DisplayID:       st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
-			NativeDisplayID: st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
+			PlayerDamageReq:  health / 2,
+			MaxHealth:        st.MaxHealth,
+			BaseMaxHealth:    st.MaxHealth,
+			Armor:            st.Armor,
+			Resistances:      st.Resistances,
+			MinDamage:        st.MinDamage,
+			MaxDamage:        st.MaxDamage,
+			Level:            st.Level,
+			AttackTime:       st.AttackTime,
+			RangedAttackTime: st.RangedAttackTime,
+			CombatReach:      st.CombatReach,
+			UnitFlags:        st.UnitFlags,
+			FlagsExtra:       st.FlagsExtra,
+			TypeFlags:        st.TypeFlags,
+			Rank:             st.Rank,
+			NPCFlags:         st.NPCFlags,
+			UnitClass:        st.UnitClass,
+			CanFly:           st.CanFly,
+			MoveGround:       st.MoveGround,
+			MoveSwim:         st.MoveSwim,
+			MoveKnown:        true,
+			ReactState:       st.ReactState,
+			ReactStateKnown:  st.ReactStateKnown,
+			CreatureType:     st.CreatureType,
+			AIName:           st.AIName,
+			BaseScale:        st.Scale,
+			DisplayID:        st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
+			NativeDisplayID:  st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
 		}
 		if st.UnitClass == 2 || st.UnitClass == 8 {
 			motion.MaxPowers[0] = st.Mana
@@ -1583,31 +1585,32 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				Level:      st.Level,
 				Health:     health,
 				// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
-				PlayerDamageReq: health / 2,
-				MaxHealth:       st.MaxHealth,
-				BaseMaxHealth:   st.MaxHealth,
-				Armor:           st.Armor,
-				MinDamage:       st.MinDamage,
-				MaxDamage:       st.MaxDamage,
-				AttackTime:      st.AttackTime,
-				CombatReach:     st.CombatReach,
-				UnitFlags:       st.UnitFlags,
-				FlagsExtra:      st.FlagsExtra,
-				TypeFlags:       st.TypeFlags,
-				Rank:            st.Rank,
-				NPCFlags:        st.NPCFlags,
-				UnitClass:       st.UnitClass,
-				CanFly:          st.CanFly,
-				MoveGround:      st.MoveGround,
-				MoveSwim:        st.MoveSwim,
-				MoveKnown:       true,
-				ReactState:      st.ReactState,
-				ReactStateKnown: st.ReactStateKnown,
-				Name:            name,
-				ScriptName:      scriptName,
-				BaseScale:       st.Scale,
-				DisplayID:       st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
-				NativeDisplayID: st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
+				PlayerDamageReq:  health / 2,
+				MaxHealth:        st.MaxHealth,
+				BaseMaxHealth:    st.MaxHealth,
+				Armor:            st.Armor,
+				MinDamage:        st.MinDamage,
+				MaxDamage:        st.MaxDamage,
+				AttackTime:       st.AttackTime,
+				RangedAttackTime: st.RangedAttackTime,
+				CombatReach:      st.CombatReach,
+				UnitFlags:        st.UnitFlags,
+				FlagsExtra:       st.FlagsExtra,
+				TypeFlags:        st.TypeFlags,
+				Rank:             st.Rank,
+				NPCFlags:         st.NPCFlags,
+				UnitClass:        st.UnitClass,
+				CanFly:           st.CanFly,
+				MoveGround:       st.MoveGround,
+				MoveSwim:         st.MoveSwim,
+				MoveKnown:        true,
+				ReactState:       st.ReactState,
+				ReactStateKnown:  st.ReactStateKnown,
+				Name:             name,
+				ScriptName:       scriptName,
+				BaseScale:        st.Scale,
+				DisplayID:        st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
+				NativeDisplayID:  st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
 			}
 			motions := s.motionMapLocked(motion.Map, instanceID)
 			motions[creatureGUID] = motion
@@ -4986,7 +4989,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	}
 	queryHead := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.orientation, c.MovementType, c.wander_distance,
 		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
-		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.dynamicflags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000),
+		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.dynamicflags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000), COALESCE(NULLIF(t.RangeAttackTime, 0), 2000),
 		c.curhealth, c.phaseMask
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
@@ -5010,9 +5013,9 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			continue
 		}
 		for rows.Next() {
-			var guid, entry, moveType, faction, level, unitFlags, dynamicFlags, flagsExtra, attackTime, curHealth, phaseMask int64
+			var guid, entry, moveType, faction, level, unitFlags, dynamicFlags, flagsExtra, attackTime, rangeAttackTime, curHealth, phaseMask int64
 			var x, y, z, orientation, wander, walkSpeed, runSpeed float64
-			if err := rows.Scan(&guid, &entry, &x, &y, &z, &orientation, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &dynamicFlags, &flagsExtra, &attackTime, &curHealth, &phaseMask); err != nil {
+			if err := rows.Scan(&guid, &entry, &x, &y, &z, &orientation, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &dynamicFlags, &flagsExtra, &attackTime, &rangeAttackTime, &curHealth, &phaseMask); err != nil {
 				continue
 			}
 			spawnKey := creatureMotionSpawnKey{MapID: p.Map, InstanceID: p.InstanceID, GUID: uint32(guid)}
@@ -5063,6 +5066,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 					}
 				}
 				motion.AttackTime = uint32(attackTime)
+				motion.RangedAttackTime = uint32(rangeAttackTime)
 				// Re-affirm absolute velocities on every sweep: motions created by
 				// older builds may still hold the raw template rate in Speed
 				// (see the motionFor rate/absolute fix) or a flat RunSpeed.

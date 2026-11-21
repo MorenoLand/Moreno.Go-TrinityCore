@@ -13702,7 +13702,8 @@ func (s *Server) creatureSpellHistoryReady(m *creatureMotion, spell wotlk.Spell,
 // cooldown-started-on-event spells are exempt (SpellHistory.cpp:181-184);
 // triggered casts never record (HandleCooldowns returns early for
 // IsIgnoringCooldowns, SpellHistory.cpp:165-166). The ranged-attack-time
-// fallback (category 76 / auto-repeat, SpellHistory.cpp:307-309) and the
+// fallback (category 76 / auto-repeat, SpellHistory.cpp:308-311) is
+// ported below from the motion's template RangeAttackTime; the
 // SPELLMOD_COOLDOWN / SPELL_AURA_MOD_COOLDOWN applications have no creature
 // model — documented no-bridges.
 func (s *Server) recordCreatureSpellCooldown(m *creatureMotion, spell wotlk.Spell) {
@@ -13719,6 +13720,17 @@ func (s *Server) recordCreatureSpellCooldown(m *creatureMotion, spell wotlk.Spel
 	categoryMs := int64(spell.CategoryRecoveryTime)
 	if categoryMs < 0 {
 		categoryMs = 0
+	}
+	// SpellHistory::StartCooldown (SpellHistory.cpp:308-311): a
+	// zero-cooldown shoot-category (76) or auto-repeat ranged spell other
+	// than Auto Shot (75) takes the ranged attack time as its cooldown.
+	// The ranged-haste fold has no creature model (the shared
+	// creatureAttackTimeFactor folds melee-only auras), so the raw
+	// template value applies.
+	if cooldownMs <= 0 && categoryMs <= 0 && (spell.Category == 76 || (spell.AttributesEx1&spellAttr2AutorepeatFlag != 0 && spell.ID != 75)) {
+		if m.RangedAttackTime > 0 {
+			cooldownMs = int64(m.RangedAttackTime)
+		}
 	}
 	if cooldownMs == 0 && categoryMs == 0 {
 		return

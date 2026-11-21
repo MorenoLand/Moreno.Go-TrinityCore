@@ -53,7 +53,7 @@ func (s *session) registerPetMotion(ctx context.Context, petGUID uint64, petID u
 		mod := petHappinessDamageMod(happiness)
 		minDamage, maxDamage = minDamage*mod, maxDamage*mod
 	}
-	motion := &creatureMotion{GUID: petGUID, Entry: entry, Map: s.player.Map, InstanceID: s.player.InstanceID, HomeX: x, HomeY: y, HomeZ: z, X: x, Y: y, Z: z, Orientation: orientation, Speed: 2.5, RunSpeed: 7, Faction: faction, Level: level, UnitFlags: unitFlagPlayerControlled, UnitFlags2: unitFlag2RegeneratePower, AttackTime: 2000, CombatReach: combatReach, Health: health, MaxHealth: maxHealth, Mana: mana, MaxMana: maxMana, PowerType: powerType, Powers: powers, MaxPowers: maxPowers, PetID: petID, PetType: petType, PetNextLevelXP: nextLevelXP, FocusRegenTimer: 4 * time.Second, HappinessTimer: 7500 * time.Millisecond, Happiness: happiness, Experience: experience, OwnerGUID: s.playerGUID, Spells: spells, SpellCooldowns: make(map[uint32]time.Time), SpellCategoryCooldowns: make(map[uint32]time.Time), SpellCooldownCategories: make(map[uint32]uint32), SpellCooldownCategoryEnds: make(map[uint32]time.Time), PetCommand: PetCommandFollow, PetReact: reactState, AutocastSpells: autocast, MinDamage: minDamage, MaxDamage: maxDamage, Refreshed: time.Now(), PhaseMask: s.currentPlayerPhaseMask()}
+	motion := &creatureMotion{GUID: petGUID, Entry: entry, Map: s.player.Map, InstanceID: s.player.InstanceID, HomeX: x, HomeY: y, HomeZ: z, X: x, Y: y, Z: z, Orientation: orientation, Speed: 2.5, RunSpeed: 7, Faction: faction, Level: level, UnitFlags: unitFlagPlayerControlled, UnitFlags2: unitFlag2RegeneratePower, AttackTime: 2000, RangedAttackTime: 2000, CombatReach: combatReach, Health: health, MaxHealth: maxHealth, Mana: mana, MaxMana: maxMana, PowerType: powerType, Powers: powers, MaxPowers: maxPowers, PetID: petID, PetType: petType, PetNextLevelXP: nextLevelXP, FocusRegenTimer: 4 * time.Second, HappinessTimer: 7500 * time.Millisecond, Happiness: happiness, Experience: experience, OwnerGUID: s.playerGUID, Spells: spells, SpellCooldowns: make(map[uint32]time.Time), SpellCategoryCooldowns: make(map[uint32]time.Time), SpellCooldownCategories: make(map[uint32]uint32), SpellCooldownCategoryEnds: make(map[uint32]time.Time), PetCommand: PetCommandFollow, PetReact: reactState, AutocastSpells: autocast, MinDamage: minDamage, MaxDamage: maxDamage, Refreshed: time.Now(), PhaseMask: s.currentPlayerPhaseMask()}
 	motion.Stats = attributes
 	s.loadPetCooldowns(ctx, petID, motion)
 	s.server.motionMu.Lock()
@@ -188,13 +188,25 @@ func ResolvePetCooldownEnds(now time.Time, spellRecovery, categoryRecovery uint3
 // itself (GetTotalAuraModifier on _owner) and Go has no pet-side aura
 // total; the only aura of that type is 24818 Noxious Breath, not a pet
 // spell. The shoot arm (:308-311, category 76 / auto-repeat ranged
-// attack time) stays out too — no pet ranged attack-time model.
+// attack time) is ported below: the motion carries the template
+// RangeAttackTime (Creature.cpp:589, SetAttackTime(RANGED_ATTACK)).
 func (s *session) recordPetSpellCooldown(motion *creatureMotion, spell wotlk.Spell, now time.Time) {
 	if s == nil || s.server == nil || motion == nil {
 		return
 	}
 	categoryID, categoryRecovery := spell.Category, spell.CategoryRecoveryTime
 	cooldownMs, categoryCooldownMs := int32(spell.RecoveryTime), int32(categoryRecovery)
+	// SpellHistory::StartCooldown (SpellHistory.cpp:308-311): a
+	// zero-cooldown shoot-category (76) or auto-repeat ranged spell other
+	// than Auto Shot (75) takes the ranged attack time as its cooldown.
+	// The ranged-haste fold has no creature model (the shared
+	// creatureAttackTimeFactor folds melee-only auras), so the raw
+	// template value applies.
+	if cooldownMs <= 0 && categoryCooldownMs <= 0 && (categoryID == 76 || (spell.AttributesEx1&spellAttr2AutorepeatFlag != 0 && spell.ID != 75)) {
+		if motion.RangedAttackTime > 0 {
+			cooldownMs = int32(motion.RangedAttackTime)
+		}
+	}
 	if cooldownMs >= 0 {
 		cooldownMs = s.applySpellMod(spell, spellModCooldown, cooldownMs)
 	}

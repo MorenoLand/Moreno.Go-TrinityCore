@@ -2745,28 +2745,29 @@ func calcArmorReducedDamage(armor float64, attackerLevel uint8, victimLevel uint
 }
 
 type creatureStats struct {
-	Level           uint32
-	Health          uint32
-	MaxHealth       uint32
-	Mana            uint32
-	UnitClass       uint32
-	Armor           uint32
-	Resistances     [7]uint32
-	MinDamage       float32
-	MaxDamage       float32
-	AttackTime      uint32
-	BoundingRadius  float32
-	CombatReach     float32
-	UnitFlags       uint32
-	FlagsExtra      uint32
-	TypeFlags       uint32
-	Rank            uint32 // creature_template.rank (SharedDefines.h CreatureEliteType); feeds Creature::isElite (Creature.cpp:2344-2350)
-	NPCFlags        uint32 // creature_template.npcflag; live value behind Lua CreatureMethods::GetNPCFlags/SetNPCFlags (UNIT_NPC_FLAGS)
-	CanFly          bool
-	MoveGround      uint32 // creature_template_movement.Ground (ObjectMgr.cpp field 44); missing row keeps the C++ default Run=1, so the query COALESCEs to 1
-	MoveSwim        bool   // creature_template_movement.Swim (field 45); missing row keeps the C++ default true, so the query COALESCEs to 1
-	ReactState      uint8
-	ReactStateKnown bool
+	Level            uint32
+	Health           uint32
+	MaxHealth        uint32
+	Mana             uint32
+	UnitClass        uint32
+	Armor            uint32
+	Resistances      [7]uint32
+	MinDamage        float32
+	MaxDamage        float32
+	AttackTime       uint32
+	RangedAttackTime uint32 // creature_template.RangeAttackTime (Creature.cpp:589, SetAttackTime(RANGED_ATTACK)); the shoot-fallback value for creature/pet StartCooldown (SpellHistory.cpp:308-311)
+	BoundingRadius   float32
+	CombatReach      float32
+	UnitFlags        uint32
+	FlagsExtra       uint32
+	TypeFlags        uint32
+	Rank             uint32 // creature_template.rank (SharedDefines.h CreatureEliteType); feeds Creature::isElite (Creature.cpp:2344-2350)
+	NPCFlags         uint32 // creature_template.npcflag; live value behind Lua CreatureMethods::GetNPCFlags/SetNPCFlags (UNIT_NPC_FLAGS)
+	CanFly           bool
+	MoveGround       uint32 // creature_template_movement.Ground (ObjectMgr.cpp field 44); missing row keeps the C++ default Run=1, so the query COALESCEs to 1
+	MoveSwim         bool   // creature_template_movement.Swim (field 45); missing row keeps the C++ default true, so the query COALESCEs to 1
+	ReactState       uint8
+	ReactStateKnown  bool
 	// CreatureType mirrors creature_template.type (SharedDefines.h creature
 	// types; 8 = critter, CritterAI::Permissible, PassiveAI.cpp:95-100).
 	CreatureType uint32
@@ -2799,19 +2800,20 @@ type creatureStats struct {
 func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureStats {
 	if s == nil {
 		return creatureStats{
-			Level:          1,
-			Health:         100,
-			MaxHealth:      100,
-			Armor:          10,
-			MinDamage:      1.0,
-			MaxDamage:      2.0,
-			AttackTime:     2000,
-			BoundingRadius: 0.306349,
-			CombatReach:    1.5,
-			ReactState:     creatureReactAggressive,
-			Scale:          1,
-			MoveGround:     1,
-			MoveSwim:       true,
+			Level:            1,
+			Health:           100,
+			MaxHealth:        100,
+			Armor:            10,
+			MinDamage:        1.0,
+			MaxDamage:        2.0,
+			AttackTime:       2000,
+			RangedAttackTime: 2000,
+			BoundingRadius:   0.306349,
+			CombatReach:      1.5,
+			ReactState:       creatureReactAggressive,
+			Scale:            1,
+			MoveGround:       1,
+			MoveSwim:         true,
 		}
 	}
 	s.statsMu.RLock()
@@ -2824,25 +2826,26 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	s.statsMu.RUnlock()
 
 	stats := creatureStats{
-		Level:          1,
-		Health:         100,
-		MaxHealth:      100,
-		Armor:          10,
-		MinDamage:      1.0,
-		MaxDamage:      2.0,
-		AttackTime:     2000,
-		BoundingRadius: 0.306349,
-		CombatReach:    1.5,
-		ReactState:     creatureReactAggressive,
-		Scale:          1,
-		MoveGround:     1,
-		MoveSwim:       true,
+		Level:            1,
+		Health:           100,
+		MaxHealth:        100,
+		Armor:            10,
+		MinDamage:        1.0,
+		MaxDamage:        2.0,
+		AttackTime:       2000,
+		RangedAttackTime: 2000,
+		BoundingRadius:   0.306349,
+		CombatReach:      1.5,
+		ReactState:       creatureReactAggressive,
+		Scale:            1,
+		MoveGround:       1,
+		MoveSwim:         true,
 	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return stats
 	}
 
-	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight, moveGround, moveSwim int64
+	var maxlevel, unitClass, exp, baseAttackTime, rangeAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight, moveGround, moveSwim int64
 	var rank int64
 	var creatureType int64
 	var mechanicImmuneMask, spellSchoolImmuneMask int64
@@ -2855,6 +2858,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(unit_class, 1), 
 		COALESCE(exp, 0), 
 		COALESCE(BaseAttackTime, 2000), 
+		COALESCE(RangeAttackTime, 2000), 
 		COALESCE(HealthModifier, 1.0), 
 		COALESCE(ManaModifier, 1.0),
 		COALESCE(ArmorModifier, 1.0), 
@@ -2875,7 +2879,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.modelid1, 0),
 		COALESCE(ct.VehicleId, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &rank, &npcFlags, &flight, &moveGround, &moveSwim, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &rangeAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &rank, &npcFlags, &flight, &moveGround, &moveSwim, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -2898,6 +2902,9 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	if baseAttackTime <= 0 {
 		baseAttackTime = 2000
 	}
+	if rangeAttackTime <= 0 {
+		rangeAttackTime = 2000
+	}
 	if healthMod <= 0 {
 		healthMod = 1.0
 	}
@@ -2911,6 +2918,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.Level = uint32(maxlevel)
 	stats.UnitClass = uint32(unitClass)
 	stats.AttackTime = uint32(baseAttackTime)
+	stats.RangedAttackTime = uint32(rangeAttackTime)
 	stats.UnitFlags = uint32(unitFlags)
 	stats.FlagsExtra = uint32(flagsExtra)
 	stats.TypeFlags = uint32(typeFlags)
@@ -3133,16 +3141,17 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 			UnitClass:       st.UnitClass,
 			Health:          target.Health,
 			// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
-			PlayerDamageReq: target.Health / 2,
-			MaxHealth:       target.MaxHealth,
-			Armor:           target.Armor,
-			Resistances:     target.Resistances,
-			MinDamage:       target.MinDamage,
-			MaxDamage:       target.MaxDamage,
-			Level:           uint32(target.Level),
-			AttackTime:      st.AttackTime,
-			CombatReach:     target.CombatReach,
-			Refreshed:       time.Now(),
+			PlayerDamageReq:  target.Health / 2,
+			MaxHealth:        target.MaxHealth,
+			Armor:            target.Armor,
+			Resistances:      target.Resistances,
+			MinDamage:        target.MinDamage,
+			MaxDamage:        target.MaxDamage,
+			Level:            uint32(target.Level),
+			AttackTime:       st.AttackTime,
+			RangedAttackTime: st.RangedAttackTime,
+			CombatReach:      target.CombatReach,
+			Refreshed:        time.Now(),
 		}
 		motions := s.motionMapLocked(target.Map, instanceID)
 		motions[target.GUID] = motion

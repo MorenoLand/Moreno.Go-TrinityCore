@@ -12065,19 +12065,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if (spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0) || spellID == 75 || spellID == 5019 {
 		s.autoRepeatSpell = spellID
 		s.autoRepeatTarget = targetGUID
-		// SpellHistory::StartCooldown (SpellHistory.cpp:306-311): a
-		// zero-cooldown shoot-category (76) or auto-repeat spell other
-		// than 75 takes the ranged attack time as its cooldown, so a
-		// manual re-cast inside the swing window fails NOT_READY
-		// instead of firing early. The loop re-fire path never
-		// consults the cooldown list, so only manual casts pay it.
-		if cdMs, catMs, catID := s.server.spellCooldownDurationsForItem(ctx, spell, castItemEntry); cdMs <= 0 && catMs <= 0 && (catID == 76 || (spell.AttributesEx1&spellAttr2AutorepeatFlag != 0 && spellID != 75)) {
-			rangedMs := int32(0)
-			if s.player.RangedAttackTime > 0 {
-				rangedMs = int32(s.getHastedRangedSpeed(time.Duration(s.player.RangedAttackTime) * time.Millisecond).Milliseconds())
-			}
-			s.startRealSpellCooldown(spell, rangedMs, catMs, catID, castItemEntry, time.Now())
-		}
+		// SpellHistory::StartCooldown (SpellHistory.cpp:308-311) runs
+		// inside startRealSpellCooldown: a zero-cooldown shoot-category
+		// (76) or auto-repeat spell other than 75 takes the ranged
+		// attack time as its cooldown, so a manual re-cast inside the
+		// swing window fails NOT_READY instead of firing early. The
+		// loop re-fire path never consults the cooldown list, so only
+		// manual casts pay it.
+		cdMs, catMs, catID := s.server.spellCooldownDurationsForItem(ctx, spell, castItemEntry)
+		s.startRealSpellCooldown(spell, cdMs, catMs, catID, castItemEntry, time.Now())
 		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
 			s.executeRangedAttack(ctx, tgt, spellID, castID)
 		}
@@ -14358,7 +14354,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// combat ends (Player::UpdatePotionCooldown, Player.cpp:22215).
 	if castItemEntry != 0 && (s.server.isPotionItem(ctx, castItemEntry) || s.server.spellIsCooldownStartedOnEvent(spell)) {
 		s.lastPotionId = castItemEntry
-	} else if applyCooldown && !s.server.spellIsCooldownStartedOnEvent(spell) && (cooldownMs > 0 || categoryCooldownMs > 0) {
+	} else if applyCooldown && !s.server.spellIsCooldownStartedOnEvent(spell) {
+		// SpellHistory::HandleCooldowns (SpellHistory.cpp:166-188) calls
+		// StartCooldown unconditionally once the potion / on-event /
+		// passive gates pass — the shoot fallback inside
+		// startRealSpellCooldown turns a zero-cooldown category-76 or
+		// auto-repeat spell into a ranged-attack-time cooldown, and the
+		// both-zero early return inside decides the rest. The old
+		// (cooldownMs > 0 || categoryCooldownMs > 0) gate skipped that
+		// arm for zero-DBC-cooldown shoot spells.
 		// SpellHistory::HandleCooldowns (SpellHistory.cpp:184):
 		// cooldown-started-on-event spells take no cooldown at cast time
 		// regardless of item — the lock is the onHold marker armed when
@@ -49201,6 +49205,18 @@ func (s *session) startRealSpellCooldown(spell wotlk.Spell, cooldownMs, category
 	if s == nil || s.player == nil {
 		return
 	}
+	// SpellHistory::StartCooldown (SpellHistory.cpp:308-311): a
+	// zero-cooldown shoot-category (76) or auto-repeat ranged spell other
+	// than Auto Shot (75) takes the ranged attack time as its cooldown —
+	// the shoot spells' cooldown is the weapon swing (GetAttackTime,
+	// Unit.cpp:8609-8612: UNIT_FIELD_RANGEDATTACKTIME / haste), so a
+	// manual re-cast inside the swing window fails NOT_READY instead of
+	// firing early. Runs before the spell-mod fold, matching C++ order.
+	if cooldownMs <= 0 && categoryCooldownMs <= 0 && (categoryID == 76 || (spell.AttributesEx1&spellAttr2AutorepeatFlag != 0 && spell.ID != 75)) {
+		if s.player.RangedAttackTime > 0 {
+			cooldownMs = int32(s.getHastedRangedSpeed(time.Duration(s.player.RangedAttackTime) * time.Millisecond).Milliseconds())
+		}
+	}
 	if cooldownMs >= 0 {
 		cooldownMs = s.applySpellMod(spell, spellModCooldown, cooldownMs)
 	}
@@ -49353,10 +49369,23 @@ func (s *session) replaceSpellCooldownEntry(entry spellCooldown) {
 // SPELL_AURA_MOD_COOLDOWN on the caster's own spells, the negative clamp,
 // the both-zero early return, and the conditional SMSG_SPELL_COOLDOWN
 // (needsCooldownPacket only — the flush never sends the main-path
-// packet). The auto-repeat-ranged arm (SpellHistory.cpp:308-311) has no
-// Go attack-time model on this path. The entry carries the item id like
+// packet). The auto-repeat-ranged arm (SpellHistory.cpp:308-311) is
+// ported below: a zero-cooldown shoot-category (76) or auto-repeat
+// spell other than Auto Shot (75) takes the hasted ranged attack time.
+// The entry carries the item id like
 // the player Cooldowns Item field (AddCooldown's itemId arm).
 func (s *session) startPotionCooldownEntry(spell wotlk.Spell, itemID uint32, cooldownMs, categoryCooldownMs int32, categoryID uint32) {
+	// SpellHistory::StartCooldown (SpellHistory.cpp:308-311), the
+	// shoot/auto-repeat fallback twin of startRealSpellCooldown: a
+	// zero-cooldown shoot-category (76) or auto-repeat ranged spell other
+	// than Auto Shot (75) takes the ranged attack time as its cooldown.
+	// SendCooldownEvent (SpellHistory.cpp:364-391) restarts through
+	// StartCooldown, so the potion flush pays it too.
+	if cooldownMs <= 0 && categoryCooldownMs <= 0 && (categoryID == 76 || (spell.AttributesEx1&spellAttr2AutorepeatFlag != 0 && spell.ID != 75)) {
+		if s != nil && s.player != nil && s.player.RangedAttackTime > 0 {
+			cooldownMs = int32(s.getHastedRangedSpeed(time.Duration(s.player.RangedAttackTime) * time.Millisecond).Milliseconds())
+		}
+	}
 	if cooldownMs >= 0 {
 		cooldownMs = s.applySpellMod(spell, spellModCooldown, cooldownMs)
 	}
