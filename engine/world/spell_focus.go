@@ -16,7 +16,11 @@ func (s *session) spellFocusObject(ctx context.Context, spell wotlk.Spell) (guid
 		return 0, 0, 0, 0, false
 	}
 	player := s.player
-	visibility := float64(s.server.Config.VisibilityDistanceContinents)
+	// WorldObject::GetVisibilityRange (Object.cpp:1534-1542) for a player
+	// caster is the map range: Map::GetVisibilityRange
+	// (Map.cpp:311/3823/4326) via visibilityRangeForMap, not the
+	// continents value on every map.
+	visibility := s.server.visibilityRangeForMap(player.Map)
 	if visibility <= 0 {
 		visibility = 90
 	}
@@ -116,7 +120,18 @@ func (s *Server) motionSpellFocusObject(ctx context.Context, m *creatureMotion, 
 	if s == nil || m == nil || spell.RequiresSpellFocus == 0 {
 		return 0, 0, 0, 0, false
 	}
-	visibility := float64(s.Config.VisibilityDistanceContinents)
+	// WorldObject::GetVisibilityRange (Object.cpp:1534-1542) for a creature
+	// caster: a far-visible creature (m_isFarVisible, motion.FarVisible)
+	// searches out to MAX_VISIBILITY_DISTANCE (SIZE_OF_GRIDS, 533.3333),
+	// otherwise the map range via visibilityRangeForMap
+	// (Map.cpp:311/3823/4326). No visibility-distance-override model
+	// exists in Go, so that arm is not mirrored here.
+	var visibility float64
+	if m.FarVisible {
+		visibility = terrainGridSize
+	} else {
+		visibility = s.visibilityRangeForMap(m.Map)
+	}
 	if visibility <= 0 {
 		visibility = 90
 	}
