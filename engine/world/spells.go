@@ -11626,18 +11626,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     gates (cast-item NO_REAGENT_COST flag, CanNoReagentCast).
 	//     Triggered casts never enter finishSpellCast — the flag exemption
 	//     is structural (see castSpellDirectWithOverrides). The non-owned
-	//     item-target else branch (Spell.cpp:3459-3462) is vacuous in
-	//     3.3.5, verified against C++: the only triggered cast carrying
-	//     an item target is Rockbiter Weapon's child casts
+	//     item-target else branch (Spell.cpp:3459-3463) DOES fire for one
+	//     live case: the deferred trade spell. TradeHandler.cpp:381 builds
+	//     it with TRIGGERED_FULL_MASK (not TRIGGERED_NONE) and prepares it
+	//     at :522-526 with the partner's non-traded item as its item
+	//     target, so owner != caster and TakeReagents runs. Bridged in
+	//     trade.go: the accept-time reagent check rides
+	//     tradeSpellStillCastable (the CheckItems arm, Spell.cpp:6784-6790)
+	//     and the execute-time take rides takeDeferredTradeSpellReagents
+	//     in completeTrade. The other triggered item-target casts do not
+	//     reach the branch: Rockbiter Weapon's child casts
 	//     (SpellEffects.cpp:2884-2893, TRIGGERED_FULL_MASK +
-	//     SetItemTarget on the caster's own weapon), so the owner ==
-	//     caster and the branch never fires; every other
-	//     TRIGGERED_FULL_MASK cast is unit-targeted (SpellEffects.cpp:
-	//     458/1098/2382/2523/4196/4851), and the npcbot lockpick
-	//     item-target casts (bot_ai.cpp:6096-6115) have no Go model.
-	//     Trade-window enchants — the comment's motivating case — are
-	//     prepared directly (TradeHandler.cpp:524-526, TRIGGERED_NONE),
-	//     so the main TakeReagents arm covers them. No bridge needed.
+	//     SetItemTarget on the caster's own weapon) have owner == caster,
+	//     every other TRIGGERED_FULL_MASK cast is unit-targeted
+	//     (SpellEffects.cpp:458/1098/2382/2523/4196/4851), and the npcbot
+	//     lockpick item-target casts (bot_ai.cpp:6096-6115) have no Go model.
 	//
 	// Spell::_cast (Spell.cpp:3438-3444): a player cast from an item
 	// (CMSG_USE_ITEM, m_CastItem) starts the item-use timed achievement and

@@ -537,13 +537,16 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 	// wild gameobject spells cause no threat at all — GO guids riding a
 	// mixed triggered cast's hit/miss lists must not dilute the divisor.
 	// Launch lists are units only, so this is behavior-identical there.
+	// Corpses dilute the same way: AddCorpseTarget (Spell.cpp:2281)
+	// writes only m_UniqueCorpseTargetInfo, so a 93-leg or explicit
+	// corpse wire target never counts toward the divisor either.
 	for _, guid := range hitTargets {
-		if uint16(guid>>48) == 0xF110 {
+		if uint16(guid>>48) == 0xF110 || uint16(guid>>48) == 0xF101 {
 			totalTargets--
 		}
 	}
 	for _, guid := range missGUIDs {
-		if uint16(guid>>48) == 0xF110 {
+		if uint16(guid>>48) == 0xF110 || uint16(guid>>48) == 0xF101 {
 			totalTargets--
 		}
 	}
@@ -697,7 +700,10 @@ func (s *Server) handleCreatureSpellInitialThreat(ctx context.Context, caster *c
 	seen := make(map[uint64]struct{}, len(hitTargets))
 	var targets []uint64
 	for _, guid := range hitTargets {
-		if guid == 0 || uint16(guid>>48) == 0xF110 {
+		// m_UniqueTargetInfo holds unit targets only (Spell.cpp:5123):
+		// GO guids ride AddGOTarget and corpse guids AddCorpseTarget
+		// (Spell.cpp:2281), so neither counts toward the divisor.
+		if guid == 0 || uint16(guid>>48) == 0xF110 || uint16(guid>>48) == 0xF101 {
 			continue
 		}
 		if _, dup := seen[guid]; dup {
