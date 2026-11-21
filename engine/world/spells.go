@@ -1132,7 +1132,7 @@ func (s *session) updateCraftSkill(ctx context.Context, spellID uint32) bool {
 			continue
 		}
 		skillValue := uint32(playerPureSkillValue(s.player, ability.SkillLine))
-		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.Mechanic == 28 { // MECHANIC_DISCOVERY (SharedDefines.h:1385)
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.Mechanic == mechanicDiscovery {
 			if discovered := s.getSkillDiscoverySpell(ability.SkillLine, spellID); discovered != 0 {
 				s.learnSpell(ctx, discovered)
 			}
@@ -10050,8 +10050,9 @@ func (s *session) unitHasAuraFromCaster(guid uint64, spellID uint32, casterGUID 
 // template supplies the inventory type (thrown weapons also supply the
 // display id); otherwise PLAYER_AMMO_ID's template does, falling back to
 // the Requires No Ammo aura (46699 -> display 5996, INVTYPE_AMMO) when no
-// ammo is equipped. finishSpellCast only serves player casters, so the
-// creature virtual-item branch is structural here.
+// ammo is equipped. The creature virtual-item branch lives in
+// creatureSpellAmmoData (boss_ai.go); finishSpellCast only serves player
+// casters.
 func (s *session) spellGoAmmoData(ctx context.Context) *protocol.SpellGoAmmo {
 	ammo := &protocol.SpellGoAmmo{}
 	if s == nil || s.server == nil {
@@ -12503,6 +12504,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dropWireTarget(targetGUID)
 				}
 				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: missInfo})
+			} else if spell.DefenseType == spellDamageClassMagic && s.spellMechanicResisted(ctx, spell, targetGUID, targetSess) {
+				// WorldObject::MagicSpellHitResult (Object.cpp:2585-2591):
+				// the GetMechanicResistChance leg, ahead of the
+				// debuff-resistance leg in C++'s combined resist chance.
+				if !listRollRan {
+					dropWireTarget(targetGUID)
+				}
+				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissResist})
 			} else if spell.DefenseType == spellDamageClassMagic && s.spellDebuffResisted(ctx, spell, targetGUID, targetSess) {
 				// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592):
 				// the SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm — a
@@ -26070,6 +26079,12 @@ func (s *session) triggeredSpellTableResult(ctx context.Context, spell wotlk.Spe
 		if missInfo := magicSpellHitResultFromBase(float64(baseHit), bonusHit); missInfo != protocol.SpellMissNone {
 			return missInfo
 		}
+		// WorldObject::MagicSpellHitResult (Object.cpp:2585-2591): the
+		// GetMechanicResistChance leg, ahead of the debuff-resistance leg
+		// in C++'s combined resist chance.
+		if s.spellMechanicResisted(ctx, spell, targetGUID, targetSess) {
+			return protocol.SpellMissResist
+		}
 		// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592): the
 		// SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm.
 		if s.spellDebuffResisted(ctx, spell, targetGUID, targetSess) {
@@ -31783,6 +31798,7 @@ const (
 	mechanicSnare      = 11 // MECHANIC_SNARE (SharedDefines.h:1368)
 	mechanicSlowAttack = 8  // MECHANIC_SLOW_ATTACK (SharedDefines.h:1365)
 	mechanicDisarm     = 3  // MECHANIC_DISARM (SharedDefines.h:1360)
+	mechanicDiscovery  = 28 // MECHANIC_DISCOVERY (SharedDefines.h:1385)
 )
 
 // triggerSpellEffectTarget mirrors one target invocation of
@@ -35636,14 +35652,61 @@ func (s *session) applyHealAbsorb(schoolMask uint32, heal uint32) uint32 {
 	return absorbed
 }
 
+// spellMechanicResistChance mirrors Unit::GetMechanicResistChance
+// (Unit.cpp:2439-2459): the strongest SPELL_AURA_MOD_MECHANIC_RESISTANCE
+// (117) total the victim carries for any of the spell's per-effect
+// mechanics (SpellInfo::GetEffectMechanic, SpellInfo.cpp:1925-1932: the
+// effect's own Mechanic, else the spell's Mechanic), in percent units,
+// clamped at 0. Unlike the debuff-resistance leg it has no positivity or
+// SPELL_ATTR4_IGNORE_RESISTANCES gate (Object.cpp:2585).
+func (s *session) spellMechanicResistChance(ctx context.Context, spell wotlk.Spell, targetGUID uint64, targetSess *session) int32 {
+	var resist int32
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		mech := eff.Mechanic
+		if mech == 0 {
+			mech = spell.Mechanic
+		}
+		if mech == 0 {
+			continue
+		}
+		var total int32
+		if targetSess != nil {
+			total = targetSess.totalAuraModifierByMiscValue(spellAuraModMechanicResistance, int32(mech))
+		} else if s != nil && s.server != nil {
+			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+				total = s.server.creatureAuraTypeSumByMisc(creatureAuraKeyForTarget(tgt), spellAuraModMechanicResistance, int32(mech))
+			}
+		}
+		if total > resist {
+			resist = total
+		}
+	}
+	if resist < 0 {
+		return 0
+	}
+	return resist
+}
+
+// spellMechanicResisted rolls the GetMechanicResistChance leg of
+// WorldObject::MagicSpellHitResult (Object.cpp:2585-2591) as its own roll;
+// C++ folds it into one combined resist_chance roll with the debuff and
+// binary legs, while Go rolls each arm separately (see spellDebuffResisted).
+func (s *session) spellMechanicResisted(ctx context.Context, spell wotlk.Spell, targetGUID uint64, targetSess *session) bool {
+	chance := s.spellMechanicResistChance(ctx, spell, targetGUID, targetSess)
+	return chance > 0 && rand.Float64()*100 < float64(chance)
+}
+
 // spellDebuffResisted rolls the SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm of
 // WorldObject::MagicSpellHitResult (Object.cpp:2585-2592): a non-positive
 // spell without SPELL_ATTR4_IGNORE_RESISTANCES that carries at least one aura
 // effect can be fully resisted — the victim's 178 auras, summed where the
 // effect MiscValue equals the spell's DispelType, add to the resist chance in
-// percent units. The GetMechanicResistChance leg has no Go model. Go rolls
-// this arm separately from the binary-spell average-resist roll; C++ folds
-// both into one combined resist_chance roll (Object.cpp:2591).
+// percent units. Go rolls this arm separately from the binary-spell
+// average-resist roll and the mechanic-resist roll; C++ folds all three
+// into one combined resist_chance roll (Object.cpp:2591).
 func (s *session) spellDebuffResisted(ctx context.Context, spell wotlk.Spell, targetGUID uint64, targetSess *session) bool {
 	if spellIsPositive(spell) || spell.AttributesEx4&spellAttr4IgnoreResistances != 0 {
 		return false
@@ -35955,8 +36018,15 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 		return protocol.SpellMissMiss
 	}
 
-	// 2. Mechanic resist (Unit.cpp:2497): victim->GetMechanicResistChance —
-	// Go has no mechanic model; the roll passes through unbridged.
+	// 2. Mechanic resist (Unit.cpp:2497-2503): victim->GetMechanicResistChance —
+	// the victim's SPELL_AURA_MOD_MECHANIC_RESISTANCE (117) total for the
+	// spell's strongest per-effect mechanic, folded into the shared roll.
+	if resistChance := s.spellMechanicResistChance(ctx, spell, targetGUID, targetSess); resistChance > 0 {
+		tmp += resistChance * 100
+		if roll < int(tmp) {
+			return protocol.SpellMissResist
+		}
+	}
 
 	// 3. Same spells cannot be parried/dodged (Unit.cpp:2505-2506).
 	if spell.Attributes&spellAttr0ImpossibleDodgeParryBlock != 0 {
@@ -36351,6 +36421,12 @@ func (s *session) spellTargetMissResult(ctx context.Context, targetGUID uint64, 
 	missInfo := magicSpellHitResultFromBase(float64(baseHit), s.spellHitTableBonus(spell, targetSess))
 	if missInfo != protocol.SpellMissNone {
 		return missInfo
+	}
+	// WorldObject::MagicSpellHitResult (Object.cpp:2585-2591): the
+	// GetMechanicResistChance leg — chain-jump targets roll it too, ahead
+	// of the debuff-resistance leg in C++'s combined resist chance.
+	if s.spellMechanicResisted(ctx, spell, targetGUID, targetSess) {
+		return protocol.SpellMissResist
 	}
 	// WorldObject::MagicSpellHitResult (Object.cpp:2585-2592): the
 	// SPELL_AURA_MOD_DEBUFF_RESISTANCE (178) arm — chain-jump targets roll it
@@ -52384,9 +52460,10 @@ func (srv *Server) delayCreatureOwnedAura(key creatureAuraKey, spellID uint32, c
 }
 
 type itemTemplateClassInfo struct {
-	Class    uint32
-	SubClass uint32
-	InvType  uint32
+	Class         uint32
+	SubClass      uint32
+	InvType       uint32
+	DisplayInfoID uint32
 }
 
 func (s *Server) getItemTemplateClassInfo(ctx context.Context, entry uint32) (itemTemplateClassInfo, bool) {
@@ -52406,13 +52483,13 @@ func (s *Server) getItemTemplateClassInfo(ctx context.Context, entry uint32) (it
 		return itemTemplateClassInfo{}, false
 	}
 
-	var class, subclass, invType uint32
-	err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT class, subclass, InventoryType FROM item_template WHERE entry = ? LIMIT 1", entry).Scan(&class, &subclass, &invType)
+	var class, subclass, invType, display uint32
+	err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT class, subclass, InventoryType, displayid FROM item_template WHERE entry = ? LIMIT 1", entry).Scan(&class, &subclass, &invType, &display)
 	if err != nil {
 		return itemTemplateClassInfo{}, false
 	}
 
-	info := itemTemplateClassInfo{Class: class, SubClass: subclass, InvType: invType}
+	info := itemTemplateClassInfo{Class: class, SubClass: subclass, InvType: invType, DisplayInfoID: display}
 	s.itemTemplateMu.Lock()
 	if s.itemTemplates == nil {
 		s.itemTemplates = make(map[uint32]itemTemplateClassInfo)

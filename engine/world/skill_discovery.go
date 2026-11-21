@@ -14,9 +14,8 @@ type skillDiscoveryEntry struct {
 // skillDiscoverySpells mirrors SkillDiscoveryStore
 // (SkillDiscovery.cpp LoadSkillDiscoveryTable): reqSpell -> the
 // spells it can discover, from TDB 335.25101 skill_discovery_template
-// (reqSpell > 0 rows only; reqSpell == 0 rows are keyed by negative
-// skill line and never match a spell-ID lookup in
-// HasDiscoveredAllSpells). C++ drops rows whose reqSpell lacks
+// (reqSpell > 0 rows only; the reqSpell == 0 rows live in
+// skillDiscoverySkillLineSpells below). C++ drops rows whose reqSpell lacks
 // MECHANIC_DISCOVERY and is not an explicit-discovery spell; that
 // gate is Spell.dbc-bound and unverifiable in-tree (no Spell.dbc),
 // so the table is carried as TDB states it.
@@ -32,6 +31,19 @@ var skillDiscoverySpells = map[uint32][]skillDiscoveryEntry{
 	61288: {{56965, 350, 100}, {56990, 350, 100}, {57209, 325, 100}, {57215, 300, 100}, {57217, 325, 100}, {57228, 300, 100}, {57229, 300, 100}, {57230, 300, 100}, {57253, 350, 100}, {58286, 100, 100}, {58287, 150, 100}, {58288, 100, 100}, {58289, 75, 100}, {58296, 75, 100}, {58297, 200, 100}, {58298, 75, 100}, {58299, 75, 100}, {58300, 75, 100}, {58301, 75, 100}, {58302, 150, 100}, {58303, 75, 100}, {58305, 100, 100}, {58306, 75, 100}, {58307, 125, 100}, {58308, 75, 100}, {58310, 75, 100}, {58311, 100, 100}, {58312, 75, 100}, {58313, 75, 100}, {58314, 75, 100}, {58315, 100, 100}, {58316, 150, 100}, {58317, 75, 100}, {58318, 75, 100}, {58319, 175, 100}, {58320, 100, 100}, {58321, 150, 100}, {58322, 350, 100}, {58323, 75, 100}, {58324, 125, 100}, {58325, 100, 100}, {58326, 75, 100}, {58327, 200, 100}, {58328, 125, 100}, {58329, 150, 100}, {58330, 150, 100}, {58331, 125, 100}, {58332, 100, 100}, {58333, 150, 100}, {58336, 100, 100}, {58337, 75, 100}, {58338, 150, 100}, {58339, 150, 100}, {58340, 125, 100}, {58341, 350, 100}, {58342, 75, 100}, {58343, 75, 100}, {58344, 75, 100}, {58345, 100, 100}, {58346, 75, 100}, {58347, 325, 100}, {59315, 150, 100}, {59326, 100, 100}, {68166, 350, 100}},
 	61756: {{56944, 0, 100}, {56946, 0, 100}, {56947, 0, 100}, {56949, 0, 100}, {56950, 0, 100}, {56954, 0, 100}, {56958, 0, 100}, {56960, 0, 100}, {56975, 0, 100}, {56977, 0, 100}, {56980, 0, 100}, {56983, 0, 100}, {56986, 0, 100}, {56987, 0, 100}, {56988, 0, 100}, {56989, 0, 100}, {56996, 0, 100}, {56998, 0, 100}, {56999, 0, 100}, {57006, 0, 100}, {57010, 0, 100}, {57011, 0, 100}, {57012, 0, 100}, {57013, 0, 100}, {57014, 0, 100}, {57019, 0, 100}, {57021, 0, 100}, {57028, 0, 100}, {57034, 0, 100}, {57035, 0, 100}, {57036, 0, 100}, {57112, 0, 100}, {57115, 0, 100}, {57116, 0, 100}, {57117, 0, 100}, {57124, 0, 100}, {57126, 0, 100}, {57127, 0, 100}, {57128, 0, 100}, {57130, 0, 100}, {57152, 0, 100}, {57153, 0, 100}, {57155, 0, 100}, {57159, 0, 100}, {57160, 0, 100}, {57164, 0, 100}, {57166, 0, 100}, {57169, 0, 100}, {57170, 0, 100}, {57181, 0, 100}, {57189, 0, 100}, {57190, 0, 100}, {57191, 0, 100}, {57193, 0, 100}, {57195, 0, 100}, {57198, 0, 100}, {57199, 0, 100}, {57202, 0, 100}, {57207, 0, 100}, {57208, 0, 100}, {57211, 0, 100}, {57212, 0, 100}, {57214, 0, 100}, {57218, 0, 100}, {57220, 0, 100}, {57223, 0, 100}, {57225, 0, 100}, {57232, 0, 100}, {57233, 0, 100}, {57234, 0, 100}, {57235, 0, 100}, {57237, 0, 100}, {57243, 0, 100}, {57247, 0, 100}, {57248, 0, 100}, {57250, 0, 100}, {57258, 0, 100}, {57260, 0, 100}, {57261, 0, 100}, {57263, 0, 100}, {57264, 0, 100}, {57267, 0, 100}, {57268, 0, 100}, {57273, 0, 100}, {57276, 0, 100}, {57719, 0, 100}, {58322, 0, 100}, {58341, 0, 100}, {59559, 0, 100}, {59560, 0, 100}, {59561, 0, 100}, {61677, 0, 100}},
 	64323: {{64246, 0, 100}, {64247, 0, 100}, {64248, 0, 100}, {64249, 0, 100}, {64250, 0, 100}, {64251, 0, 100}, {64252, 0, 100}, {64253, 0, 100}, {64254, 0, 100}, {64255, 0, 100}, {64256, 0, 100}, {64257, 0, 100}, {64268, 0, 100}, {64270, 0, 100}, {64271, 0, 100}, {64273, 0, 100}, {64274, 0, 100}, {64275, 0, 100}, {64276, 0, 100}, {64277, 0, 100}, {64278, 0, 100}, {64279, 0, 100}, {64280, 0, 100}, {64281, 0, 100}, {64282, 0, 100}, {64283, 0, 100}, {64284, 0, 100}, {64285, 0, 100}, {64286, 0, 100}, {64287, 0, 100}, {64288, 0, 100}, {64289, 0, 100}, {64291, 0, 100}, {64294, 0, 100}, {64295, 0, 100}, {64296, 0, 100}, {64297, 0, 100}, {64298, 0, 100}, {64299, 0, 100}, {64300, 0, 100}, {64302, 0, 100}, {64303, 0, 100}, {64304, 0, 100}, {64305, 0, 100}, {64307, 0, 100}, {64308, 0, 100}, {64309, 0, 100}, {64310, 0, 100}, {64311, 0, 100}, {64312, 0, 100}, {64313, 0, 100}, {64314, 0, 100}, {64315, 0, 100}, {64316, 0, 100}, {64317, 0, 100}, {64318, 0, 100}, {65245, 0, 100}},
+}
+
+// skillDiscoverySkillLineSpells mirrors the reqSpell == 0 rows of TDB
+// 335.25101 skill_discovery_template (spellId 28580-28591, chance 0.1):
+// C++ LoadSkillDiscoveryTable (SkillDiscovery.cpp:130-138) keys each under
+// -SkillLine for every SkillLineAbility row of the discovered spell, so the
+// rows are carried unkeyed here and getSkillDiscoverySpell resolves the
+// skill line through SkillLineAbilities at roll time — the same keying
+// without baking a skill-line guess into the table.
+var skillDiscoverySkillLineSpells = []skillDiscoveryEntry{
+	{28580, 0, 0.1}, {28581, 0, 0.1}, {28582, 0, 0.1}, {28583, 0, 0.1},
+	{28584, 0, 0.1}, {28585, 0, 0.1}, {28586, 0, 0.1}, {28587, 0, 0.1},
+	{28588, 0, 0.1}, {28589, 0, 0.1}, {28590, 0, 0.1}, {28591, 0, 0.1},
 }
 
 // hasDiscoveredAllSpells mirrors HasDiscoveredAllSpells
@@ -131,13 +143,12 @@ func (s *session) getExplicitDiscoverySpell(reqSpell uint32) uint32 {
 // default is the value.
 const skillDiscoveryRate = 1.0
 
-// skillDiscoveryBySkillLine mirrors the reqSpell == 0 rows of
-// skill_discovery_template (SkillDiscovery.cpp LoadSkillDiscoveryTable):
-// keyed by skill line. No such rows are carried in-tree (the table above
-// holds reqSpell > 0 rows only, and world.db's skill_discovery_template
-// is empty), so the map is empty and the skill-line case below never
-// fires until TDB rows are loaded.
-var skillDiscoveryBySkillLine = map[uint32][]skillDiscoveryEntry{}
+// skillDiscoveryBySkillLine is the load-time twin of the reqSpell == 0
+// keying (SkillDiscovery.cpp:130-138): the 28580-28591 rows live unkeyed
+// in skillDiscoverySkillLineSpells above and are resolved to a skill line
+// through SkillLineAbilities at roll time (see
+// skillDiscoverySpellHasSkillLine), which is the same keying without
+// baking a skill-line guess into the table.
 
 // getSkillDiscoverySpell mirrors GetSkillDiscoverySpell
 // (SkillDiscovery.cpp:224-257): the first undiscovered entry for the
@@ -167,12 +178,36 @@ func (s *session) getSkillDiscoverySpell(skillID, spellID uint32) uint32 {
 	if skillID == 0 {
 		return 0
 	}
-	for _, entry := range skillDiscoveryBySkillLine[skillID] {
+	for _, entry := range skillDiscoverySkillLineSpells {
+		if !skillDiscoverySpellHasSkillLine(s, entry.spellID, skillID) {
+			continue
+		}
 		if rand.Float64()*100 < entry.chance*skillDiscoveryRate && entry.reqSkillValue <= skillValue && !discoverySpellKnown(s.player, entry.spellID) {
 			return entry.spellID
 		}
 	}
 	return 0
+}
+
+// skillDiscoverySpellHasSkillLine is the load-time keying twin for a
+// reqSpell == 0 row (SkillDiscovery.cpp:130-138): the discovered spell is
+// keyed under -SkillLine for every SkillLineAbility row it carries, so
+// the row belongs to skillID when any of its rows names that line. A
+// spell with no SkillLineAbility rows is dropped at load in C++.
+func skillDiscoverySpellHasSkillLine(s *session, spellID, skillID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	abilities, found, err := s.server.Data.SkillLineAbilities(spellID)
+	if err != nil || !found {
+		return false
+	}
+	for _, ability := range abilities {
+		if ability.SkillLine == skillID {
+			return true
+		}
+	}
+	return false
 }
 
 // discoverySpellKnown is the HasSpell predicate shared by the
