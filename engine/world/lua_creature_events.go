@@ -6132,7 +6132,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// speed-taking core); the spline itself is straight-line like
 	// every other script launch — Go has no PathGenerator. Arg
 	// order follows the Lua MoveTo family (id first), not the C++
-	// (x, y, z, speed, id) order. Backs the flame leviathan
+	// (x, y, z, speed, id) order; speed defaults to SPEED_CHARGE
+	// (42.0) when omitted and folds to the unit's run speed when
+	// non-positive (PointMovementGenerator.cpp:82-85). Backs the flame leviathan
 	// ACTION_MOVE_TO_CENTER_POSITION leg (boss_flame_leviathan.cpp
 	// :557-565) and the blood-prince-council kinetic-bomb jump. The
 	// player surface stays out (client-driven movement).
@@ -6153,9 +6155,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		speed, err := luaFloat32Arg(args, 4)
-		if err != nil {
-			return nil, err
+		// MotionMaster::MoveCharge defaults the speed to SPEED_CHARGE
+		// (42.0, MovementDefines.h:23) and a non-positive speed leaves
+		// the velocity unset, so the spline takes the unit's GetSpeed
+		// (PointMovementGenerator.cpp:82-85, MoveSplineInit.cpp:106-121)
+		// — the launcher refuses sub-0.001 speeds, so fold that leg to
+		// creatureSplineVelocity here instead of failing the launch.
+		speed := float32(42.0)
+		if len(args) >= 5 {
+			var err error
+			speed, err = luaFloat32Arg(args, 4)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if speed <= 0 {
+			speed = creatureSplineVelocity(motion, false)
 		}
 		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed)
 		return nil, nil
@@ -8147,6 +8162,8 @@ func (s *Server) seatCreatureEntry(ctx context.Context, motion *creatureMotion, 
 	motion.NPCFlagsKnown = true
 	motion.MoveGround = stats.MoveGround
 	motion.MoveSwim = stats.MoveSwim
+	motion.MoveChase = stats.MoveChase
+	motion.MoveRandom = stats.MoveRandom
 	motion.MoveKnown = true
 	attackTime := uint32(baseAttackTime)
 	if attackTime == 0 {

@@ -1771,13 +1771,19 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 					s.removeAura(2584)
 				}
 			}
-			// Battleground.cpp:826-828: spirit-of-redemption shapeshift strip.
-			// The SPELL_AURA_MOUNTED strip (Battleground.cpp:830) is deliberately
-			// not mirrored, as in handleLeaveBattlefield: C++ restores the mount
-			// via DELAYED_BG_MOUNT_RESTORE, which has no Go twin.
+			// Battleground.cpp:847-848: spirit-of-redemption shapeshift strip.
 			if s.hasAuraType(spellAuraSpiritOfRedemption) {
 				s.removeAurasByType(spellAuraModShapeshift)
 			}
+			// Battleground.cpp:850 (RemovePlayerAtLeave, :819): the mount
+			// strip runs here too — and, unlike the voluntary-leave path,
+			// with no restore: Transport=false means no
+			// TeleportToBGEntryPoint, so no DELAYED_BG_MOUNT_RESTORE is ever
+			// armed (BattleGroundHandler.cpp:476-479) and the jumper enters
+			// the new battleground unmounted. The mount spell captured at
+			// the original entry point stays in bgData for the eventual
+			// leave's far-ack restore.
+			s.removeAurasByType(spellAuraMounted)
 			// Battleground.cpp:894-900: drop the player from the old BG raid
 			// and restore the original group. Reads the still-old bgData, so
 			// it must run before the overwrite below; the new raid arm then
@@ -2060,7 +2066,24 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_STATUS), buf.Bytes(), true)
 }
 
-func (s *session) restoreBattlegroundLoginQueue(state playerState) {
+// resurrectLoginBGRelogger mirrors the RemovePlayerAtLeave resurrect arm
+// (Battleground.cpp:854-855) for a login-time WAIT_LEAVE relogger: a
+// player who died in the match and logged out resurrects at full health
+// with corpse bones, instead of relogging as a ghost at the entry point.
+// C++ IsAlive is Health > 0, so the gate is the saved health, not the
+// ghost flag. The same arm's aura strips are deliberately not mirrored:
+// C++ runs them before _LoadAuras (Player.cpp:17963), so a saved
+// mount/spirit aura loads intact afterwards; Go loads auras earlier, in
+// loadPlayerState, so stripping here would remove an aura C++ keeps.
+func (s *session) resurrectLoginBGRelogger(ctx context.Context) {
+	if s == nil || s.player == nil || s.player.Health != 0 {
+		return
+	}
+	s.resurrectPlayer(ctx, 1.0)
+	s.spawnCorpseBones(ctx)
+}
+
+func (s *session) restoreBattlegroundLoginQueue(ctx context.Context, state playerState) {
 	if s == nil || s.bgData.InstanceID == 0 || !isBattlegroundMap(state.Map) {
 		return
 	}
@@ -2141,6 +2164,14 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 			s.server.updateArenaWorldState(arena, ArenaWorldStateAlivePlayersGold, restoredGoldAlive)
 		}
 		if !inRoster || waitLeave {
+			// Battleground::RemovePlayerAtLeave (Battleground.cpp:854-855),
+			// called from LoadFromDB's player_at_bg leg (Player.cpp:17617):
+			// only an in-roster WAIT_LEAVE member resurrects — a
+			// non-roster relogger takes the not-found leg, where C++
+			// never calls RemovePlayerAtLeave.
+			if inRoster && waitLeave {
+				s.resurrectLoginBGRelogger(ctx)
+			}
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
 			s.clearAFKLeaveState()
@@ -2181,6 +2212,18 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		if !exists || ended {
 			s.server.deleteBGScoreRow(state.Map, s.bgData.InstanceID, s.playerGUID)
 			s.server.dropBGOfflineHolder(state.Map, s.playerGUID)
+			// Same RemovePlayerAtLeave resurrect arm as the arena
+			// WAIT_LEAVE leg above (Battleground.cpp:854-855, via
+			// Player.cpp:17617): the ended leg is that arm's
+			// player/score-map form, so only a found, ended match
+			// resurrects — the not-found leg never calls it. Go has no
+			// per-map roster, so the ended leg cannot prove the relogger
+			// was in the roster; a dead stale-id relogger on an ended map
+			// resurrects where C++ would not, the same conflation the
+			// score-row delete above already carries.
+			if exists && ended {
+				s.resurrectLoginBGRelogger(ctx)
+			}
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
 			s.clearAFKLeaveState()

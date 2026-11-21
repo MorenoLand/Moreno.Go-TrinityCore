@@ -2630,7 +2630,12 @@ func (s *session) updateFallInformationIfNeed(info movementInfo, opcode uint16) 
 // Go has no world-rate config); no UpdateGroundPositionZ leg (no ground-height model);
 // isImmuneToDamage does not consume aura charges (Go models no charge counters).
 func (s *session) handleFall(ctx context.Context, info movementInfo) {
-	if s.player == nil || s.player.Health == 0 || s.inFlight {
+	// Player.cpp:25380: !isDead() — Unit::isDead (Unit.h:1142) is
+	// deathState DEAD || CORPSE, which covers released ghosts (they
+	// carry Health=1, death.go:1314), so the gate reads isDeadOrGhost,
+	// not just Health==0: a ghost's long fall must not reach the
+	// FALL_WITHOUT_DYING credit below.
+	if s.player == nil || s.player.Health == 0 || s.isDeadOrGhost() || s.inFlight {
 		return
 	}
 	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0

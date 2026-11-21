@@ -98,6 +98,8 @@ type creatureMotion struct {
 	CanFly                bool
 	MoveGround            uint32 // creature_template_movement.Ground via loadCreatureStats; 0=None, 1=Run, 2=Hover (CreatureData.h)
 	MoveSwim              bool   // creature_template_movement.Swim via loadCreatureStats
+	MoveChase             uint32 // creature_template_movement.Chase via loadCreatureStats; 0=Run, 1=CanWalk, 2=AlwaysWalk (CreatureData.h:96-100)
+	MoveRandom            uint32 // creature_template_movement.Random via loadCreatureStats; 0=Walk, 1=CanRun, 2=AlwaysRun (CreatureData.h:103-108)
 	MoveKnown             bool   // set at the stats-backed creation sites; pets/totems built without stats read the C++ defaults instead
 	ReactState            uint8
 	ReactStateKnown       bool
@@ -731,6 +733,43 @@ func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
 		speed *= 0.66
 	}
 	return speed
+}
+
+// chaseWalk is the ChaseMovementGenerator walk leg
+// (ChaseMovementGenerator.cpp:202-216): AlwaysWalk chases at walk speed,
+// CanWalk follows the owner's MOVEMENTFLAG_WALKING (motion.Walking,
+// Creature::SetWalk), Run never walks. Pets are excluded in C++
+// (!cOwner->IsPet()); Go pets never reach the combat pursuit
+// (updatePetMotion owns them), so the exclusion is vacuous here.
+func chaseWalk(motion *creatureMotion) bool {
+	if motion == nil {
+		return false
+	}
+	switch motion.MoveChase {
+	case 2: // AlwaysWalk
+		return true
+	case 1: // CanWalk
+		return motion.Walking
+	default:
+		return false
+	}
+}
+
+// randomWalk is the RandomMovementGenerator walk leg
+// (RandomMovementGenerator.cpp:156-167): AlwaysRun wanders at run speed,
+// CanRun follows the owner's walk flag, Walk always walks.
+func randomWalk(motion *creatureMotion) bool {
+	if motion == nil {
+		return true
+	}
+	switch motion.MoveRandom {
+	case 2: // AlwaysRun
+		return false
+	case 1: // CanRun
+		return motion.Walking
+	default:
+		return true
+	}
 }
 
 // capSplineVelocity mirrors the client speed cap in MoveSplineInit::Launch
@@ -1416,6 +1455,8 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			CanFly:           st.CanFly,
 			MoveGround:       st.MoveGround,
 			MoveSwim:         st.MoveSwim,
+			MoveChase:        st.MoveChase,
+			MoveRandom:       st.MoveRandom,
 			MoveKnown:        true,
 			ReactState:       st.ReactState,
 			ReactStateKnown:  st.ReactStateKnown,
@@ -1653,6 +1694,8 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				CanFly:           st.CanFly,
 				MoveGround:       st.MoveGround,
 				MoveSwim:         st.MoveSwim,
+				MoveChase:        st.MoveChase,
+				MoveRandom:       st.MoveRandom,
 				MoveKnown:        true,
 				ReactState:       st.ReactState,
 				ReactStateKnown:  st.ReactStateKnown,
@@ -9448,13 +9491,31 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// ChaseMovementGenerator::Update (ChaseMovementGenerator.cpp:98-106):
 				// UNIT_STATE_NOT_MOVE (root | stun | died | distracted, Unit.h:256)
 				// pauses the chase. Died rides the tick's Health gate and
-				// distracted rides DistractedUntil above; fear and confuse
-				// replace the chase with the fleeing and confused generators,
-				// which have no Go model (documented no-bridge), so they are
-				// not paused here. The melee swing below still fires while
-				// stunned or rooted (DoMeleeAttackIfReady gates UNIT_STATE_CASTING
+				// distracted rides DistractedUntil above; fear replaces
+				// the chase with the fleeing generator, which has no Go
+				// model (documented no-bridge), so it is not paused
+				// here — confuse is paused below, where the confused
+				// generator's hop replaces the chase re-path. The melee
+				// swing below still fires while stunned or rooted
+				// (DoMeleeAttackIfReady gates UNIT_STATE_CASTING
 				// only, UnitAI.cpp:61-63), so only the pursuit pauses.
 				if !motion.ScriptRooted && !motion.ScriptStunned && !motion.NoCombatMovement && !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) {
+					// ConfusedMovementGenerator::DoUpdate
+					// (ConfusedMovementGenerator.cpp): the confused
+					// generator runs at MOTION_PRIORITY_HIGHEST, so a
+					// confused creature wanders instead of chasing —
+					// the hop re-arms on its 800-1500ms pause
+					// (WaitUntil, stamped by
+					// launchCreatureConfusedSpline) instead of
+					// re-pathing to the victim. Spells and the
+					// in-range swing already ran above, matching
+					// C++'s AI update under the generator.
+					if motion.Confused {
+						if !now.Before(motion.WaitUntil) {
+							s.launchCreatureConfusedSpline(motion)
+						}
+						return
+					}
 					// ChaseMovementGenerator re-paths whenever the target moves
 					// (_lastTargetPosition, ChaseMovementGenerator.cpp:157-159):
 					// relaunch the spline when the victim left the launch
@@ -9518,7 +9579,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						// The 2D dist can sit inside the archer stop distance
 						// while the 3D band check above passed (large dz): never
 						// launch onto the victim's center in that case.
-						if speed := creatureSplineVelocity(motion, false); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) {
+						if speed := creatureSplineVelocity(motion, chaseWalk(motion)); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) {
 							duration := splineDurationMs(float64(dist), speed)
 							s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true, motion.PhaseMask, motion.TransportGUID)
 							motion.X, motion.Y, motion.Z = destX, destY, target.Z
@@ -10130,9 +10191,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// generator and no new leg is launched until the state clears. Go's atomic
 	// splines make the mid-leg StopMoving unbridgeable; the launch gate is the
 	// observable arm — a rooted or casting patrol no longer teleports along its
-	// path while stunned. UNIT_STATE_LOST_CONTROL (fear/confuse generators)
-	// stays unmodeled (no Go fear/confuse generator), matching the chase arm's
-	// documented delta.
+	// path while stunned. UNIT_STATE_LOST_CONTROL's fear leg stays unmodeled
+	// (no Go fleeing generator); confuse has the hop model plus the in-combat
+	// chase suppression in the combat section above.
 	if motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
 		return
 	}
@@ -10141,9 +10202,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// creature hops to short random points (the launchCreatureConfusedSpline
 	// arm: 4*frand-2 yards, walk, 800-1500ms pause) instead of wandering.
 	// The launch gate above already enforces the generator's NOT_MOVE /
-	// casting-prevented stop, and in-combat creatures never reach this
-	// section — their pursuit leg runs instead, the standing delta for
-	// a CONTROLLED-slot confused generator that would suppress chase.
+	// casting-prevented stop. In-combat creatures take the same hop from
+	// the combat section's chase gate instead of chasing; this arm covers
+	// the out-of-combat wander.
 	if motion.Confused && !motion.InCombat {
 		s.launchCreatureConfusedSpline(motion)
 		return
@@ -10229,9 +10290,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// re-check, and the PathGenerator leg (30.0 path-length limit) have no
 		// bridge — Go has no PathGenerator model, consistent with the NO_PATH
 		// note at the evade arm. The walk/run legs of
-		// CreatureMovementData::Random (CanRun/AlwaysRun, CreatureData.h:105)
-		// have no bridge either (Go models no creature_template_addon fields
-		// beyond path_id). SignalFormationMovement (creature groups) is
+		// CreatureMovementData::Random (CanRun/AlwaysRun, CreatureData.h:103-108)
+		// ride randomWalk below (the movement row loads via loadCreatureStats).
+		// SignalFormationMovement (creature groups) is
 		// unmodeled; the UNIT_STATE_NOT_MOVE/casting interruption guards of
 		// SetRandomLocation (RandomMovementGenerator.cpp:204-210) ride the
 		// shared launch gate above (the LOST_CONTROL leg has no Go
@@ -10241,9 +10302,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		destX = float32(float64(motion.HomeX) + dist*math.Cos(angle))
 		destY = float32(float64(motion.HomeY) + dist*math.Sin(angle))
 		destZ = motion.HomeZ
-		// RandomMovementGenerator defaults to walk (RandomMovementGenerator.cpp:156-167);
-		// CanRun/AlwaysRun template legs stay unmodeled (no creature_template_addon bridge).
-		speed = creatureSplineVelocity(motion, true)
+		// RandomMovementGenerator::SetRandomLocation
+		// (RandomMovementGenerator.cpp:156-167): the walk/run leg reads the
+		// template Random type — AlwaysRun runs, CanRun follows the owner's
+		// walk flag, Walk always walks.
+		walk = randomWalk(motion)
+		speed = creatureSplineVelocity(motion, walk)
 	} else {
 		// MoveType 0 is IDLE_MOTION_TYPE (MovementDefines.h:28): Creature::Initialize
 		// (Creature.cpp:543-545) demotes RANDOM to IDLE when wander_distance is 0,
@@ -10691,10 +10755,12 @@ func (s *Server) creatureSightInvisibilityBlocked(motion *creatureMotion, ts *se
 // confuse/stun/fear aura store (creatureHasControlLossAura) covers
 // stunned scanners, which have no motion field, and JUMPING rides the
 // MoveJump spline window (JumpUntil, set only by
-// launchCreatureJumpSpline). CHARGING stays a documented gap: spell
-// charges snap to the destination (creatureEffectCharge, no
-// MoveCharge spline model) and no MoveCharge bridge exists, so a
-// creature scanner never spans a charge window in Go.
+// launchCreatureJumpSpline). CHARGING stays a documented gap: the
+// spell-charge effect snaps to the destination (creatureEffectCharge
+// has no MoveCharge spline model); the Lua MoveCharge bridge exists
+// but launches a plain script spline, and the tick-head Moving gate
+// returns while it is in flight, so a creature scanner never spans a
+// charge window in Go.
 func (s *Server) creatureSightlessScanner(motion *creatureMotion, now time.Time) bool {
 	if motion == nil {
 		return false

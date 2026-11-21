@@ -659,6 +659,22 @@ func (s *session) continueTaxiFlight() {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
+	// Player::LoadFromDB (Player.cpp:17685-17694): a login with a saved
+	// taxi string takes the battleground entry point's saved taxi path
+	// first — the HasTaxiPath leg runs instead of
+	// LoadTaxiDestinationsFromString, so a stale pre-BG flight resumes
+	// over the string's newer one. The faction stays 0: PlayerTaxi
+	// defaults m_flightMasterFactionId to 0 (PlayerTaxi.h:33) and the
+	// string load that would set it never runs on this leg, so the
+	// resumed legs take no reputation discount. The pair is deliberately
+	// NOT cleared here: C++ clears it only in ProcessDelayedOperations
+	// (Player.cpp:1937) or at the next BG entry, so a later login with a
+	// fresh taxi string re-resumes this same pair. The delayed-restore
+	// caller clears the pair before calling here, so this cannot
+	// double-apply there.
+	if s.player.TaxiPath != "" && s.bgData.TaxiStart != 0 && s.bgData.TaxiEnd != 0 {
+		s.player.TaxiPath = formatTaxiPath(0, []uint32{s.bgData.TaxiStart, s.bgData.TaxiEnd})
+	}
 	// PlayerTaxi::SaveTaxiDestinationsToString: "faction n0 n1 ..."; the
 	// hop-boundary rewrites keep nodes[0] as the current source, so a relog
 	// resumes the current hop with the remaining chain intact — the C++

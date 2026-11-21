@@ -946,7 +946,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	// login packet reads the today/yesterday fields.
 	s.updateHonorFields()
 	s.grantEarnedAchievementTitles()
-	s.restoreBattlegroundLoginQueue(state)
+	s.restoreBattlegroundLoginQueue(ctx, state)
 	if (mapEntry.IsBattleground() || mapEntry.IsBattleArena()) && s.bgData.InstanceID == 0 {
 		// Player::LoadFromDB (Player.cpp:17603-17637) "Bg was not found"
 		// leg: a battleground map with no battleground instance relocates
