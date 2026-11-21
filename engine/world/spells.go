@@ -779,6 +779,28 @@ func summonPropertiesIsGuardian(props wotlk.SummonProperties) bool {
 	}
 }
 
+// summonPropertiesMasks mirrors Map::SummonCreature's mask rule
+// (Object.cpp:1897-1947) for a SummonProperties row, as the
+// (guardian, minion) bits it mints: Guardian and Puppet both inherit
+// Minion, so the guardian bit always implies the minion bit, while the
+// minion-only shapes are VEHICLE control, PUPPET control and the MINIPET
+// title. summonPropertiesIsGuardian is the guardian half of this rule;
+// the minion half closes the ThreatManager::CanHaveThreatList leg
+// (ThreatManager.cpp:156-179) for player-summoned minion-only summons,
+// which otherwise kept a threat list in Go.
+func summonPropertiesMasks(props wotlk.SummonProperties) (guardian, minion bool) {
+	guardian = summonPropertiesIsGuardian(props)
+	switch props.Control {
+	case summonCategoryPuppet, summonCategoryVehicle:
+		return guardian, true
+	case summonCategoryWild, summonCategoryAlly, summonCategoryUnk:
+		if props.Title == summonTitleMinipet {
+			return guardian, true
+		}
+	}
+	return guardian, guardian
+}
+
 // spellStartCastFlags mirrors the castFlags computation in
 // Spell::SendSpellStart (Spell.cpp:4220-4252): base CAST_FLAG_UNKNOWN_2,
 // CAST_FLAG_NO_GCD for rune spells (RuneCostID + POWER_RUNE),

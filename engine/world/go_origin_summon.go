@@ -95,7 +95,7 @@ func (s *Server) serverSummonFromGameObject(ctx context.Context, obj *dynamicGam
 				continue
 			}
 		}
-		guardian := summonPropertiesIsGuardian(props)
+		guardian, minion := summonPropertiesMasks(props)
 		// C++ damage (SpellEffects.cpp:2225-2242): the effect's calculated
 		// value at the caster's level keys the multi-summon property-ID
 		// list; 64 is on it, but 24081's base points are 0, so one spawn.
@@ -120,9 +120,10 @@ func (s *Server) serverSummonFromGameObject(ctx context.Context, obj *dynamicGam
 			if summoned == nil {
 				continue
 			}
-			if guardian {
+			if guardian || minion {
 				s.motionMu.Lock()
-				summoned.IsGuardian = true
+				summoned.IsGuardian = guardian
+				summoned.IsMinion = minion
 				s.motionMu.Unlock()
 			}
 			// Default leg (SpellEffects.cpp:2333-2337): an ALLY summon

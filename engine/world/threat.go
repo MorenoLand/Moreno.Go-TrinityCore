@@ -139,15 +139,17 @@ type ThreatManager struct {
 
 // motionCanHaveThreatList mirrors ThreatManager::CanHaveThreatList
 // (ThreatManager.cpp:156-179) leg by leg: only creatures keep a list;
-// pets (motionIsPet, the IsPet twin), totems (not motions at all) and
-// triggers (no type flag on the motion, documented residual) do not; and
-// a TempSummon loses its list ONLY when it carries the MINION or
-// GUARDIAN mask AND its summoner is a player. Go stamps the GUARDIAN
-// mask as IsGuardian (summonPropertiesIsGuardian); the MINION-only
-// shapes (VEHICLE control, MINIPET title) have no Go flag and stay
-// list-holding as a documented residual, and puppets have no Go model.
-// The summoner is read off CreatedByGUID — the stable TempSummon
-// creator stamp — not OwnerGUID: charm overwrites OwnerGUID with the
+// pets (motionIsPet, the IsPet twin), totems (motion.IsTotem, the
+// Unit::IsTotem twin — Totem.cpp:34 stamps UNIT_MASK_TOTEM on the Totem
+// class, so every totem motion carries it) and triggers
+// (creatureFlagExtraTrigger, the CREATURE_FLAG_EXTRA_TRIGGER twin) do
+// not; and a TempSummon loses its list ONLY when it carries the MINION or
+// GUARDIAN mask AND its summoner is a player. Go stamps both mask bits
+// (IsGuardian + IsMinion, summonPropertiesMasks — the Map::SummonCreature
+// rule, Object.cpp:1897-1947); the minion-only shapes (VEHICLE control,
+// PUPPET control, MINIPET title) close the earlier residual that left
+// them list-holding. The summoner is read off CreatedByGUID — the stable
+// TempSummon creator stamp — not OwnerGUID: charm overwrites OwnerGUID with the
 // charmer (creaturemotion.go:3491, restored :3579), so an OwnerGUID test
 // wrongly excluded every creature-summoned add and every plain
 // TempSummon (mask SUMMON keeps its list for any summoner), while the
@@ -161,7 +163,13 @@ func motionCanHaveThreatList(motion *creatureMotion) bool {
 	if motionIsPet(motion) {
 		return false
 	}
-	if motion.IsTempSummon && motion.IsGuardian && motion.CreatedByGUID != 0 && uint16(motion.CreatedByGUID>>48) == 0 {
+	if motion.IsTotem {
+		return false
+	}
+	if motion.FlagsExtra&creatureFlagExtraTrigger != 0 {
+		return false
+	}
+	if motion.IsTempSummon && (motion.IsGuardian || motion.IsMinion) && motion.CreatedByGUID != 0 && uint16(motion.CreatedByGUID>>48) == 0 {
 		return false
 	}
 	return true

@@ -539,6 +539,24 @@ type creatureMotion struct {
 	// UNIT_MASK_SUMMON and pets carry UNIT_MASK_PET instead.
 	// Read by Lua unit:IsGuardian on the creature surface; the player
 	// surface always reads false (Player never sets m_unitTypeMask).
+	IsMinion bool
+	// IsMinion is the UNIT_MASK_MINION bit of m_unitTypeMask, minted by
+	// Map::SummonCreature's mask rule (Object.cpp:1897-1947) — C++ reads
+	// it only through HasUnitTypeMask, there is no Unit::IsMinion twin.
+	// every IsGuardian summon also carries it; the minion-only shapes are
+	// VEHICLE control, PUPPET control and the MINIPET title. Stamped by
+	// the same spell-summon sites as IsGuardian, via
+	// summonPropertiesMasks; the Lua SummonCreature funnel and the pet
+	// path leave it false — C++ null-properties summons are UNIT_MASK_SUMMON
+	// and pets carry UNIT_MASK_PET instead.
+	IsTotem bool
+	// IsTotem is the Unit::IsTotem twin (Unit.h:841 — the UNIT_MASK_TOTEM
+	// bit of m_unitTypeMask, stamped by the Totem ctor, Totem.cpp:34).
+	// Map::SummonCreature mints Totem objects for both SUMMON_TYPE_TOTEM
+	// and SUMMON_TYPE_LIGHTWELL (Object.cpp:1897-1947), so both titles
+	// stamp it at the spell-summon site; player-slot totems stamp it at
+	// summonTotem / summonSessionNoSlotTotem. Read only by
+	// motionCanHaveThreatList.
 
 	// Looted mirrors Loot::isLooted (Loot.h:236 — gold == 0 && unlootedCount
 	// == 0): set when the corpse's loot window fully empties, cleared on
