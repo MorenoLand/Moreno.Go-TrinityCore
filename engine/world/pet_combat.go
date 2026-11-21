@@ -910,8 +910,15 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 	destroyBuf.WriteU64(guid)
 	destroyBuf.WriteU8(0)
 	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, tx, ty, tz, motion.PhaseMask)
+	// Minion::RemoveFromWorld (TemporarySummon.cpp:367) reaches the
+	// Unit::SetMinion remove-arm (Unit.cpp:6137-6139) below: a guardian
+	// created by a cooldown-started-on-event spell releases the owner's
+	// infinity cooldown via SendCooldownEvent. Read the creating spell
+	// before the row is deleted.
+	var createdBySpell int64
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil && petID != 0 {
 		cdb := s.CharactersStore.DB
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(CreatedBySpell, 0) FROM character_pet WHERE id = ? AND owner = ?", petID, ownerGUID).Scan(&createdBySpell)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_pet WHERE id = ? AND owner = ?", petID, ownerGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ?", petID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM pet_aura WHERE guid = ?", petID)
@@ -926,6 +933,18 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 			buf := protocol.NewBuffer(8)
 			buf.WriteU64(0)
 			_ = owner.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+		}
+		// Unit::SetMinion remove-arm (Unit.cpp:6137-6139): removing a
+		// minion created by a cooldown-started-on-event spell releases
+		// the owner's infinity cooldown via SendCooldownEvent. The
+		// unsummonPet twin (pets.go) covers dismissal; this is the
+		// expiry/death leg the park at spawnPet (pets.go) had no release
+		// for — without it the onHold entry leaked as infinity until
+		// logout and the spell stayed uncastable in-session.
+		if createdBySpell > 0 && createdBySpell <= int64(^uint32(0)) && s.Data != nil {
+			if minionSpell, found, serr := s.Data.Spell(uint32(createdBySpell)); serr == nil && found && s.spellIsCooldownStartedOnEvent(minionSpell) {
+				owner.sendSpellCooldownEvent(minionSpell)
+			}
 		}
 	}
 	// TempSummon::UnSummon (TemporarySummon.cpp:274-284) fires

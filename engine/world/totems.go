@@ -2620,6 +2620,18 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 	// untouched). buildCooldownEvent matches the C++ wire order (spell
 	// u32, raw u64 owner GUID; SpellHistory.cpp:386-388).
 	if creatingSpellID != 0 {
+		// SpellHistory::SendCooldownEvent (SpellHistory.cpp:364-391) also
+		// fires the category holder's event first when a different spell
+		// holds the creating spell's category (AddCooldown only records
+		// nonzero categories, :405-406), still packet-only here since
+		// startCooldown=false — no real cooldown restarts on either spell.
+		if s.server != nil && s.server.Data != nil {
+			if creating, found, err := s.server.Data.Spell(creatingSpellID); err == nil && found && creating.Category != 0 {
+				if holderID, ok := s.playerCategoryCooldownHolder(creating.Category, time.Now().Unix()); ok && holderID != creatingSpellID {
+					_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, holderID), true)
+				}
+			}
+		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_COOLDOWN_EVENT), buildCooldownEvent(s.playerGUID, creatingSpellID), true)
 	}
 

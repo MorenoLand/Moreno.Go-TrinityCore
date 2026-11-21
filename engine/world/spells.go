@@ -41488,6 +41488,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				auraRef := &luaAuraRef{server: s.server, spellID: spell.ID, player: targetSess, mapID: tMap, instanceID: tInst}
 				s.server.fireAuraChangeAmount(ctx, spell.ID, auraRef.luaAuraObject(), targetSess.luaPlayer())
 			}
+			// Aura::HandleAuraSpecificMods (SpellAuras.cpp:1405-1407) at reapply:
+			// a re-cast merge of Heroic Fury (60970) resets Intercept (20252)
+			// like the fresh-apply arm (SetStackAmount re-runs the apply
+			// branch with onReapply=true).
+			if spell.ID == 60970 {
+				targetSess.resetPlayerCooldown(20252, true)
+			}
 			return
 		}
 		if existing := previous; existing != nil {
@@ -41675,6 +41682,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			if casterSess := s.server.findSessionByGUID(casterGUID); casterSess != nil && casterSess.playerGUID == casterGUID {
 				casterSess.startSpellCooldownOnHold(ctx, spell, castItemGUID)
 			}
+		}
+		// Aura::HandleAuraSpecificMods (SpellAuras.cpp:1405-1407): applying
+		// Heroic Fury (60970) resets Intercept's cooldown (20252, update=true).
+		// The C++ arm gates on the target being a player; this funnel only
+		// serves player targets, so the gate is implicit. Silent when
+		// Intercept holds no cooldown (ResetCooldown, SpellHistory.cpp:432).
+		if spell.ID == 60970 {
+			targetSess.resetPlayerCooldown(20252, true)
 		}
 		// AuraEffect::ApplySpellMod on fresh apply / replace
 		// (SpellAuraEffects.cpp:755): the replaced aura's modifiers leave
