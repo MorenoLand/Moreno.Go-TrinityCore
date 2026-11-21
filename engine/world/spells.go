@@ -227,6 +227,7 @@ const (
 	spellFailedCantCastOnTapped          uint8  = 18    // SPELL_FAILED_CANT_CAST_ON_TAPPED (SharedDefines.h:1000)
 	spellFailedTargetCannotBeResurrected uint8  = 186   // SPELL_FAILED_TARGET_CANNOT_BE_RESURRECTED (SharedDefines.h:1168)
 	spellFailedNeedMoreItems             uint8  = 55    // SPELL_FAILED_NEED_MORE_ITEMS (SharedDefines.h:1037)
+	spellFailedItemNotReady              uint8  = 45    // SPELL_FAILED_ITEM_NOT_READY (SharedDefines.h:1027)
 	spellFailedLowCastlevel              uint8  = 49    // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
 	spellFailedEquippedItem              uint8  = 28    // SPELL_FAILED_EQUIPPED_ITEM (SharedDefines.h:1010)
 	spellFailedNoAmmo                    uint8  = 75    // SPELL_FAILED_NO_AMMO (SharedDefines.h:1057)
@@ -10739,7 +10740,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// re-cast when handlers set both. DELTAS: Cast's skipCheck is
 	// accepted but the completion revalidation below still runs (Go's
 	// finishSpellCast has no skipCheck parameter — the revalidation covers
-	// power, reagents, caster auras, range, LoS, visibility, DR, and trade,
+	// power, reagents, totems, caster auras, range, LoS, visibility, DR, and trade,
 	// not the full per-effect CheckCast loop);
 	// Finish skips the finish(true) tail (attack-timer reset, potion
 	// cooldown) that C++ runs before _cast notices FINISHED.
@@ -10769,6 +10770,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell.cpp:3330-3334) the arms below already use. The cast-item
 	// NO_REAGENT_COST skip (Spell.cpp:6777-6858) mirrors the item-cast
 	// prepare arm (items.go:4705); spell casts pass 0/0 like prepare.
+	// Spell::CheckItems (Spell.cpp:6683-6699), the cast-item presence
+	// arm ahead of the reagent arm in C++ order: an item traded, sold,
+	// or destroyed mid-cast fails SPELL_FAILED_ITEM_NOT_READY at
+	// completion — Player::HasItemCount (playerHasItemCount) is the
+	// total stack count of the entry, so a second copy still passes.
+	// The null-template arm is vacuous here (prepare already resolved
+	// the template, items.go); the !m_CastItem arm rides the same
+	// count read (Go holds no item pointer, only the GUID/entry).
+	if castItemGUID != 0 && castItemEntry != 0 && !s.playerHasItemCount(ctx, castItemEntry) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedItemNotReady), true)
+		s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "cast item no longer in inventory")
+		return
+	}
 	checkReagents := !s.canNoReagentCast(spell)
 	if !checkReagents && s.tradeItemTargetCast(target) {
 		checkReagents = true

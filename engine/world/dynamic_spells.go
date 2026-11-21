@@ -22,12 +22,21 @@ type dynamicSpellObjectState struct {
 	Map, InstanceID           uint32
 	PhaseMask                 uint32 // caster phase at spawn; 0 = unknown, fan-out stays phase-blind
 	X, Y, Z, Orientation      float32
-	Radius                    float32
-	CastTime                  uint32
-	ObjectType                uint8 // DYNAMICOBJECT_BYTES type: area spell vs farsight focus
-	IsFarsightFocus           bool  // SetCasterViewpoint viewpoint; cleared on despawn
-	SpellData                 wotlk.Spell
-	AuraEffect                wotlk.SpellEffect
+	// TransportGUID + TransportOffset are the DynamicObject::Create
+	// transport arm (DynamicObject.cpp:114-126): a dynobj whose caster
+	// rides a transport stores the passenger offset
+	// (TransportBase::CalculatePassengerOffset, VehicleDefines.h:145-156)
+	// and the transport GUID, so the patch follows the transport — the
+	// world position is re-derived from the offset on every 500ms pass.
+	// Zero TransportGUID means the caster rode no transport at spawn.
+	TransportGUID                                                          uint64
+	TransportOffsetX, TransportOffsetY, TransportOffsetZ, TransportOffsetO float32
+	Radius                                                                 float32
+	CastTime                                                               uint32
+	ObjectType                                                             uint8 // DYNAMICOBJECT_BYTES type: area spell vs farsight focus
+	IsFarsightFocus                                                        bool  // SetCasterViewpoint viewpoint; cleared on despawn
+	SpellData                                                              wotlk.Spell
+	AuraEffect                                                             wotlk.SpellEffect
 	// AuraEffectIndex is the DBC effect row feeding AuraEffect; -1 when
 	// no aura effect was found (mirrors the synthetic-effIndex
 	// convention in applyAuraToTarget). Carried so the target-map
@@ -426,6 +435,14 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 	} else if m := s.findCreatureMotion(object.Map, object.InstanceID, object.CasterGUID); m != nil {
 		object.PhaseMask = m.PhaseMask
 	}
+	// DynamicObject::Create transport arm (DynamicObject.cpp:114-126):
+	// a caster riding a transport spawns the dynobj as a passenger — the
+	// offset is computed from the transport's current position and the
+	// object is added to the transport before it enters the map. Go has
+	// no passenger registry for dynobjs; the stored GUID + offset is the
+	// AddPassenger analog, and dynobjFollowTransport re-derives the
+	// world position from it on every 500ms pass.
+	s.dynobjCaptureTransport(object)
 	s.objectsMu.Lock()
 	if s.dynamicSpellObjects == nil {
 		s.dynamicSpellObjects = make(map[uint64]*dynamicSpellObjectState)
@@ -443,6 +460,54 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 			s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), object.Map, object.InstanceID, object.X, object.Y, object.Z, nil)
 		}
 	}
+}
+
+// dynobjCaptureTransport records the DynamicObject::Create transport arm
+// (DynamicObject.cpp:114-126) on a dynobj at spawn: when the caster rides
+// a transport, the passenger offset is computed from the transport's
+// current position via CalculatePassengerOffset
+// (TransportBase::CalculatePassengerOffset, VehicleDefines.h:145-156).
+// A caster on no transport, or on a transport Go cannot resolve (an
+// instance transport outside the continent registry), leaves the fields
+// zero and the patch stays world-anchored, as before. Called before
+// registration so the spawn broadcast already carries the world position
+// the offset was computed from.
+func (s *Server) dynobjCaptureTransport(object *dynamicSpellObjectState) {
+	if s == nil || object == nil {
+		return
+	}
+	var transportGUID uint64
+	if sess := s.findSessionByGUID(object.CasterGUID); sess != nil && sess.player != nil {
+		transportGUID = sess.player.TransportGUID
+	} else if m := s.findCreatureMotion(object.Map, object.InstanceID, object.CasterGUID); m != nil {
+		transportGUID = m.TransportGUID
+	}
+	if transportGUID == 0 {
+		return
+	}
+	spawn, ok := s.transportSpawnForGUID(transportGUID)
+	if !ok {
+		return
+	}
+	object.TransportGUID = transportGUID
+	object.TransportOffsetX, object.TransportOffsetY, object.TransportOffsetZ, object.TransportOffsetO = CalculatePassengerOffset(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, object.X, object.Y, object.Z, object.Orientation)
+}
+
+// dynobjFollowTransport re-derives a transport passenger dynobj's world
+// position from its stored passenger offset and the transport's current
+// position (TransportBase::CalculatePassengerPosition, the inverse of
+// the Create-time CalculatePassengerOffset). A transport that no longer
+// resolves leaves the last position in place — the patch keeps ticking
+// where the transport dropped it rather than despawning.
+func (s *Server) dynobjFollowTransport(object *dynamicSpellObjectState) {
+	if s == nil || object == nil || object.TransportGUID == 0 {
+		return
+	}
+	spawn, ok := s.transportSpawnForGUID(object.TransportGUID)
+	if !ok {
+		return
+	}
+	object.X, object.Y, object.Z, object.Orientation = CalculatePassengerPosition(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, object.TransportOffsetX, object.TransportOffsetY, object.TransportOffsetZ, object.TransportOffsetO)
 }
 
 // dynobjTargetMapInterval mirrors UPDATE_TARGET_MAP_INTERVAL
@@ -530,6 +595,14 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 	}
 	s.objectsMu.Unlock()
 	for _, object := range objects {
+		// DynamicObject transport following (DynamicObject.cpp:114-126
+		// + Transport::UpdatePassengerPositions): the patch rides the
+		// transport — re-derive the world position from the stored
+		// passenger offset on every 500ms pass so the radius sweep and
+		// the upkeep/tick legs track the moving transport. Runs ahead
+		// of the upkeep and caster gates so both the player and the
+		// creature target-map passes see the followed position.
+		s.dynobjFollowTransport(object)
 		// DynObjAura upkeep (SpellAuras.cpp:838-857 via
 		// DynamicObject::Update, DynamicObject.cpp:158-173): the m_timeCla
 		// drain runs once per second on the dynobj's own aura, and a
