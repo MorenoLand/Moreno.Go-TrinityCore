@@ -108,8 +108,11 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 	// WorldSession::HandleQuestgiverHelloOpcode (QuestHandler.cpp:78) has none.
 	// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:171-185) checks
 	// only the battleground — no death gate: a living player clicking a
-	// spirit guide in a BG is queued for resurrection the same way.
-	if !questPath && isBattlegroundMap(s.player.Map) && npcFlags&npcFlagSpiritGuide != 0 {
+	// spirit guide in a BG is queued for resurrection the same way. The
+	// C++ gate is GetBattleground() non-null (Player.h:1906), mirrored by
+	// bgData.InstanceID — a BG map alone (GM-teleported non-participant)
+	// does not queue.
+	if !questPath && isBattlegroundMap(s.player.Map) && s.bgData.InstanceID != 0 && npcFlags&npcFlagSpiritGuide != 0 {
 		// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:171-185): a
 		// spirit guide queues the ghost (== AddPlayerToResurrectQueue) and
 		// answers with the wave timer (== SendAreaSpiritHealerQueryOpcode)

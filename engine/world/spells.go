@@ -39597,6 +39597,17 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 		auraRef := &luaAuraRef{server: s.server, spellID: spellID, player: s, mapID: tMap, instanceID: tInst, snapshot: removedAura, removeMode: mode}
 		s.server.fireAuraRemove(context.Background(), spellID, auraRef.luaAuraObject(), s.luaPlayer())
 	}
+	// SpellAuraEffects.cpp:4479 (case 2584, remove leg): any removal of
+	// SPELL_WAITING_FOR_RESURRECT drops the player from the BG and
+	// Battlefield resurrect queues — not just the leave paths that
+	// already delete the entry (a queued ghost accepting a priest
+	// resurrect, or a GM .unaura, otherwise leaves a stale entry).
+	if auraWasPresent && spellID == 2584 && s.server != nil {
+		s.server.spiritWaveMu.Lock()
+		delete(s.server.spiritReviveQueue, s.playerGUID)
+		s.server.spiritWaveMu.Unlock()
+		s.server.dequeueWGSpiritRevive(s.playerGUID)
+	}
 }
 
 // removePartySpellReflectionAuras runs the Improved Spell Reflection party

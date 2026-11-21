@@ -1808,6 +1808,17 @@ func (s *Server) queueWGSpiritRevive(playerGUID, spiritGUID uint64) bool {
 	return !dup
 }
 
+// dequeueWGSpiritRevive mirrors the Battlefield half of the 2584 remove
+// arm (SpellAuraEffects.cpp:4479): any removal of
+// SPELL_WAITING_FOR_RESURRECT drops the player from the Wintergrasp
+// revive queue, not just the wave/leave paths that already delete it.
+func (s *Server) dequeueWGSpiritRevive(playerGUID uint64) {
+	wg := s.getOrCreateWGState()
+	wg.mu.Lock()
+	delete(wg.ReviveQueue, playerGUID)
+	wg.mu.Unlock()
+}
+
 // wgSpiritHealerTimeLeftMs mirrors Battlefield::SendAreaSpiritHealerQueryOpcode
 // (Battlefield.cpp:635-641): SMSG_AREA_SPIRIT_HEALER_TIME carries the spirit
 // guide's GUID and m_LastResurrectTimer, the milliseconds until the next
@@ -2077,10 +2088,14 @@ func (s *Server) handleWGPlayerLeave(sess *session) {
 	sess.removeAura(WGSpellGreatHonor)
 	sess.removeAura(WGSpellGreaterHonor)
 	sess.removeAura(WGSpellGreatestHonor)
+	wg.mu.Unlock()
+
+	// The 2584 strip runs AFTER the unlock: removeAura's 2584 remove arm
+	// dequeues from the WG revive queue (SpellAuraEffects.cpp:4479), which
+	// takes wg.mu — stripping under the lock above self-deadlocks.
 	if queued {
 		sess.removeAura(2584) // SPELL_WAITING_FOR_RESURRECT
 	}
-	wg.mu.Unlock()
 
 	s.UpdateWGTenacity()
 }

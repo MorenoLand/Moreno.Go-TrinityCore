@@ -1434,6 +1434,17 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 	var ok bool
 	if loc, found := s.server.closestRepopGraveyard(s.player.X, s.player.Y, s.player.Z, repopMap, team); found {
 		grave, ok = loc, true
+	} else if s.inWintergraspBattlefield() {
+		// Player.cpp:5130-5131: a zone owned by a battlefield takes its
+		// grave from Battlefield::GetClosestGraveyard — nearest grave the
+		// player's team controls, else nothing. A miss stays put: the
+		// battlefield leg replaces the generic lookup, it does not fall
+		// through to it. closestWGGraveyard compares against TeamControl
+		// (WGTeamAlliance 0 / WGTeamHorde 1), so the team here is
+		// teamForRace, not the 469/67 graveyard-faction team above.
+		if loc, found := s.server.closestWGGraveyard(teamForRace(s.player.Race), s.player.X, s.player.Y); found {
+			grave, ok = loc, true
+		}
 	} else if !hasBGClosestGraveyardOverride(repopMap) {
 		// Player.cpp:5127-5134: a battleground member's grave comes from
 		// bg->GetClosestGraveyard alone, with no generic fallback, so an
@@ -1941,18 +1952,12 @@ func (s *session) luaCorpseObject(state corpseObjectState) *scripting.Object {
 }
 
 func (s *session) sendLoadedCorpse(ctx context.Context) bool {
-	corpse, ok := s.loadCorpseObject(ctx)
-	if !ok {
+	if _, ok := s.loadCorpseObject(ctx); !ok {
 		return false
 	}
-	pvp := corpse.CorpseType == corpseTypePvP
-	reclaimEnabled := s.server.Config.DeathCorpseReclaimDelayPvE
-	if pvp {
-		reclaimEnabled = s.server.Config.DeathCorpseReclaimDelayPvP
-	}
-	if delay, ok := CalculateLoadedCorpseReclaimDelay(time.Now().Unix(), s.deathExpireTime, corpse.GhostTime, reclaimEnabled); ok {
-		s.sendCorpseReclaimDelay(delay)
-	}
+	// Player::CalculateCorpseReclaimDelay's load=true arm has no C++
+	// callers (Player.cpp:24346-24385) — no reclaim-delay packet is ever
+	// sent on ghost login — so only the water-walk goes out here.
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
 	return true
 }
@@ -2401,6 +2406,18 @@ func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) b
 		s.resurrection = nil
 		return true
 	}
+	// Player::ResurrectUsingRequestDataImpl (Player.cpp:24214-24226):
+	// ResurrectPlayer(0.0f, false) emits no packet carrying intermediate
+	// values — SetHealth/SetPower follow inside the same call — so the
+	// stored values are applied BEFORE the helper's update, not after:
+	// the helper otherwise sends one update with the ghost's 1 HP and
+	// the ghost flag already cleared, then a second with the real values.
+	s.player.Health = data.Health
+	s.player.Powers[0] = data.Mana
+	s.player.Powers[1] = 0 // rage
+	if s.player.MaxPowers[3] > 0 {
+		s.player.Powers[3] = s.player.MaxPowers[3] // full energy
+	}
 	// Reference teleports to the caster location before resurrecting so the
 	// player does not revive into nearby creatures at the corpse; the delayed
 	// teleport retry path has no Go equivalent because teleportTo is sync.
@@ -2408,12 +2425,6 @@ func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) b
 		s.teleportTo(data.MapID, data.X, data.Y, data.Z, s.player.Orientation)
 	}
 	s.resurrectPlayerNoSickness(ctx, 0)
-	s.player.Health = data.Health
-	s.player.Powers[0] = data.Mana
-	s.player.Powers[1] = 0 // rage
-	if s.player.MaxPowers[3] > 0 {
-		s.player.Powers[3] = s.player.MaxPowers[3] // full energy
-	}
 	s.persistResurrectionState(ctx)
 	s.resurrection = nil
 	s.spawnCorpseBones(ctx)
@@ -2890,11 +2901,16 @@ func (s *session) handleEffectSelfResurrect(ctx context.Context, spell wotlk.Spe
 			mana = uint32(float32(s.player.MaxPowers[0]) * float32(damage) / 100)
 		}
 	}
-	s.resurrectPlayerWithBones(ctx, 0, true, false)
+	// SpellEffects.cpp:4429-4462 (EffectSelfResurrect): ResurrectPlayer(0.0f)
+	// emits no packet carrying intermediate values — SetHealth/SetPower
+	// follow inside the same call — so the computed values are applied
+	// BEFORE the helper's update, not after: the helper otherwise sends
+	// one update with the ghost's 1 HP and the ghost flag already cleared.
 	s.player.Health = health
 	s.player.Powers[0] = mana
 	s.player.Powers[1] = 0
 	s.player.Powers[3] = s.player.MaxPowers[3]
+	s.resurrectPlayerWithBones(ctx, 0, true, false)
 	s.persistResurrectionState(ctx)
 	s.sendPlayerUpdate()
 }
@@ -2994,8 +3010,10 @@ func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byt
 	// MiscHandler.cpp:1468-1477: the query routes through the live
 	// Battleground AND, independently, through the Battlefield owning the
 	// player's zone (Battlefield::SendAreaSpiritHealerQueryOpcode,
-	// Battlefield.cpp:635-641).
-	if s.inBattlegroundWaveMap() {
+	// Battlefield.cpp:635-641). The BG leg needs a live instance
+	// (GetBattleground() non-null, Player.h:1906) — a BG map alone is
+	// silent. The Wintergrasp leg is zone-based, not instance-based.
+	if s.inBattlegroundWaveMap() && s.bgData.InstanceID != 0 {
 		s.sendAreaSpiritHealerTime(guid, s.server.spiritWaveTimeLeftMs())
 	}
 	if s.inWintergraspBattlefield() {
@@ -3036,7 +3054,9 @@ func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byt
 	// MiscHandler.cpp:1484-1500: the queue opcode routes through the live
 	// Battleground AND the Battlefield independently
 	// (Battlefield::AddPlayerToResurrectQueue, Battlefield.cpp:605-616).
-	if s.inBattlegroundWaveMap() {
+	// The BG leg needs a live instance (GetBattleground() non-null,
+	// Player.h:1906) — a BG map alone does not queue.
+	if s.inBattlegroundWaveMap() && s.bgData.InstanceID != 0 {
 		s.server.spiritWaveMu.Lock()
 		if s.server.spiritReviveQueue == nil {
 			s.server.spiritReviveQueue = make(map[uint64]uint64)

@@ -89,7 +89,8 @@ func (s *session) canInteractWithNPC(ctx context.Context, guid, requiredFlags ui
 	// worse creature (GetReactionTo <= REP_UNFRIENDLY) rejects the interaction;
 	// creatureToPlayerRank ports the creature->player GetReactionTo tail
 	// (Object.cpp:2795-2842) including the at-war neutral clamp.
-	if motion := s.findCreatureMotion(guid); motion != nil {
+	motion := s.findCreatureMotion(guid)
+	if motion != nil {
 		if motion.Charmed {
 			return false
 		}
@@ -113,7 +114,24 @@ func (s *session) canInteractWithNPC(ctx context.Context, guid, requiredFlags ui
 		}
 		return false
 	}
-	if uint32(mapID) != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, x, y, z) > 5.0 {
+	if uint32(mapID) != s.player.Map {
+		return false
+	}
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2314-2357): a dead
+	// creature cannot be interacted with unless its template carries
+	// CREATURE_TYPE_FLAG_CAN_INTERACT_WHILE_DEAD, and the distance is
+	// the creature's combat reach + 4.0, not a flat 5.0. The motion
+	// record carries both (Health 0 is the dead signal, combat.go:1604);
+	// a creature outside the motion system (static spawns such as spirit
+	// healers) is alive by construction and keeps the flat gate.
+	if motion != nil && motion.Health == 0 && uint32(typeFlags)&creatureTypeFlagInteractDead == 0 {
+		return false
+	}
+	interactDist := 5.0
+	if motion != nil {
+		interactDist = float64(motion.combatReachOrDefault()) + 4.0
+	}
+	if distance3D(s.player.X, s.player.Y, s.player.Z, x, y, z) > interactDist {
 		return false
 	}
 	// Player::GetNPCIfCanInteractWith (Player.cpp:2332): a dead player

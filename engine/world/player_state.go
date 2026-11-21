@@ -685,6 +685,12 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.loadInventorySlots(ctx, &state)
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
+	// Player::LoadFromDB (Player.cpp:18090): a recruiter or recruited
+	// player carries UNIT_DYNFLAG_REFER_A_FRIEND from login, not just
+	// from the next resurrect.
+	if s.isRecruiter || s.recruiterID != 0 {
+		state.DynamicFlags |= unitDynFlagReferAFriend
+	}
 	s.player = &state
 	// Player::_LoadAuras re-applies a restored 296 aura
 	// (SpellAuraEffects.cpp:5006-5035: CreateVehicleKit +
@@ -3106,10 +3112,15 @@ func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerSta
 	}
 	// The row survives login untouched (Player::LoadCorpse,
 	// Player.cpp:18301-18313); mark it so buildPlayerRepop skips the
-	// convert+rewrite that a fresh death performs.
+	// convert+rewrite that a fresh death performs. CharacterHandler.cpp:1011-1015
+	// repops on login only for CORPSE (Health 0): a released ghost logs in
+	// where it stood, keeping the row for sendLoadedCorpse — so repopOnLogin
+	// is gated on Health == 0, never set for a ghost.
 	state.loadedCorpseRow = true
 	state.PlayerFlags |= playerFlagGhost
-	state.repopOnLogin = true
+	if state.Health == 0 {
+		state.repopOnLogin = true
+	}
 	state.PlayerFieldBytes &^= playerFieldByteReleaseTimer
 	if s.server.Data == nil {
 		state.PlayerFieldBytes |= playerFieldByteReleaseTimer
