@@ -2619,9 +2619,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			checkfaction = b
 		}
 		s.motionMu.Lock()
-		faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID := motion.Faction, isCreaturePassive(motion), motion.Health, motion.Evading, motion.InCombat, motion.UnitFlags, motion.OwnerGUID, motion.CharmerGUID
+		faction, nonAggressive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID := motion.Faction, !creatureIsSightAggressive(motion), motion.Health, motion.Evading, motion.InCombat, motion.UnitFlags, motion.OwnerGUID, motion.CharmerGUID
 		s.motionMu.Unlock()
-		return []any{s.creatureCanAssistTo(faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID, friend, enemy, checkfaction)}, nil
+		return []any{s.creatureCanAssistTo(faction, nonAggressive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID, friend, enemy, checkfaction)}, nil
 	}
 	// CanSwim is Creature::CanSwim (Creature.h:105):
 	// GetMovementTemplate().IsSwimAllowed() || IsPet(). The template
@@ -8878,7 +8878,15 @@ func (s *session) livePetMotion() *creatureMotion {
 // is discarded. Go fires this only on the respawn path; C++ also fires it
 // on first grid activation of a fresh spawn, which has no Go fire site.
 func (s *Server) fireCreatureSpawned(ctx context.Context, motion *creatureMotion) {
-	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
+	if s == nil || motion == nil {
+		return
+	}
+	// SmartAI::JustAppeared (SmartAI.cpp:536-540): SMART_EVENT_RESPAWN,
+	// then OnReset — ahead of the Lua hooks below, which are gated on
+	// the Scripts feature; the SmartAI engine is not.
+	s.smartProcessEvents(ctx, motion, smartEventRespawn, 0, 0, 0)
+	s.smartReset(ctx, motion)
+	if s.Features == nil || s.Features.Scripts == nil {
 		return
 	}
 	creature := s.luaMotionCreature(motion)

@@ -15,10 +15,13 @@
 // source_type-0 AGGRO rows over 1,426 entries): TALK, CAST, SET_FACTION,
 // PLAY_EMOTE, AUTO_ATTACK, SET_EVENT_PHASE, SET_INST_DATA (type 1),
 // CALL_FOR_HELP, SET_DATA, SOUND, STORE_TARGET_LIST, REMOVEAURASFROMSPELL,
-// REMOVE_UNIT_FIELD_BYTES_1 (byte 0 only). Everything else (SUMMON_CREATURE,
-// timed-action lists, GO/instance/area-trigger sources, .reload refresh,
-// RESET wiring) is a documented residual in smartProcessAction / the call
-// sites below, not a silent gap.
+// REMOVE_UNIT_FIELD_BYTES_1 (byte 0 only). RESET wiring landed with
+// smartReset / smartJustReachedHome (evade-follow legs, home arrival,
+// spawn): the EVADE event fires from triggerCreatureEvade, RESPAWN +
+// OnReset from fireCreatureSpawned. Everything else (SUMMON_CREATURE,
+// timed-action lists, GO/instance/area-trigger sources, .reload refresh)
+// is a documented residual in smartProcessAction / the call sites below,
+// not a silent gap.
 //
 // Locking: every entry point assumes motionMu is NOT held (the Nov-17
 // motionMu self-deadlock). The three hook sites run after their local unlock:
@@ -46,6 +49,8 @@ const (
 	smartEventDeath          uint32 = 6
 	smartEventEvade          uint32 = 7
 	smartEventRange          uint32 = 9
+	smartEventRespawn        uint32 = 11
+	smartEventReachedHome    uint32 = 21
 	smartEventReset          uint32 = 25
 	smartEventDataSet        uint32 = 38 // SMART_EVENT_DATA_SET; 26 is SMART_EVENT_IC_LOS, not DATA_SET
 	smartEventTargetHealthPc uint32 = 12
@@ -101,6 +106,7 @@ const (
 // SMART_EVENT_FLAG bits (SmartScriptMgr.h:1522-1531).
 const (
 	smartEventFlagNotRepeatable uint32 = 0x001
+	smartEventFlagDontReset     uint32 = 0x100
 	smartEventFlagDifficulty0   uint32 = 0x002
 	smartEventFlagDifficulty1   uint32 = 0x004
 	smartEventFlagDifficulty2   uint32 = 0x008
@@ -352,6 +358,38 @@ func (s *Server) smartRecalcTimer(ev *smartScriptEvent, min, max uint32) {
 	ev.active = ev.timer == 0
 }
 
+// smartReset is SmartScript::OnReset (SmartScript.cpp:170-189): every
+// event without the DONT_RESET flag re-inits its timer and clears
+// runOnce, then the SMART_EVENT_RESET events fire, then the last
+// invoker clears. The priority reset has no Go twin (no per-event
+// priority field); ResetBaseObject is a no-op (targets resolve from
+// the motion on every call, there is no cached base object). Call
+// sites are the C++ OnReset callers in SmartAI.cpp: EnterEvadeMode
+// (:453, only when the EVADE state cleared — the owner-follow legs),
+// JustAppeared (:539, after the RESPAWN event) and JustReachedHome
+// (:544, before the REACHED_HOME event).
+func (s *Server) smartReset(ctx context.Context, motion *creatureMotion) {
+	st := s.smartStateFor(ctx, motion)
+	if st == nil {
+		return
+	}
+	for _, ev := range st.events {
+		if ev.row.eventFlags&smartEventFlagDontReset == 0 {
+			s.smartInitTimer(ev)
+			ev.runOnce = false
+		}
+	}
+	st.lastInvoker = 0
+	s.smartProcessEvents(ctx, motion, smartEventReset, 0, 0, 0)
+}
+
+// smartJustReachedHome is SmartAI::JustReachedHome (SmartAI.cpp:542-545):
+// OnReset, then the SMART_EVENT_REACHED_HOME events fire.
+func (s *Server) smartJustReachedHome(ctx context.Context, motion *creatureMotion) {
+	s.smartReset(ctx, motion)
+	s.smartProcessEvents(ctx, motion, smartEventReachedHome, 0, 0, 0)
+}
+
 func (st *smartScriptState) inPhase(mask uint32) bool {
 	if mask == 0 {
 		return true
@@ -498,7 +536,8 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		s.smartRecalcTimer(ev, 500, 500)
 		return
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
-		smartEventReset, smartEventAIInit, smartEventJustCreated,
+		smartEventRespawn, smartEventReachedHome, smartEventReset,
+		smartEventAIInit, smartEventJustCreated,
 		smartEventTextOver, smartEventPhaseChange:
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	default:

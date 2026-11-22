@@ -729,9 +729,9 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			return []any{false}, nil
 		}
 		s.server.motionMu.Lock()
-		faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID := motion.Faction, isCreaturePassive(motion), motion.Health, motion.Evading, motion.InCombat, motion.UnitFlags, motion.OwnerGUID, motion.CharmerGUID
+		faction, nonAggressive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID := motion.Faction, !creatureIsSightAggressive(motion), motion.Health, motion.Evading, motion.InCombat, motion.UnitFlags, motion.OwnerGUID, motion.CharmerGUID
 		s.server.motionMu.Unlock()
-		return []any{s.server.creatureCanAssistTo(faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID, friend, enemy, checkfaction)}, nil
+		return []any{s.server.creatureCanAssistTo(faction, nonAggressive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID, friend, enemy, checkfaction)}, nil
 	}
 	// CanSwim is Creature::CanSwim (Creature.h:105), the
 	// session-creature twin of the handler binding: template Swim or

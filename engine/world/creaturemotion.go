@@ -1131,11 +1131,13 @@ const (
 //     trigger, critter, spirit-service; the civilian/REACT_DEFENSIVE arm is
 //     commented out in C++ too, so creatureReactDefensive is defined but
 //     never assigned); the aggro scan skips passive motions.
-//   - neutral (REACT_NEUTRAL): no model — C++ init never assigns it either
-//     (only scripted SetReactState produces neutrals); faction-neutral
-//     creatures are still covered by the isAttackableFaction gate, so only
-//     scripted hostile-faction neutrals diverge (they aggro on sight in Go
-//     instead of engaging on damage only).
+//   - neutral: no REACT_NEUTRAL in this tree's enum (UnitDefines.h:
+//     340-342 — PASSIVE/DEFENSIVE/AGGRESSIVE only); faction-neutral
+//     creatures are covered by the isAttackableFaction gate. The live
+//     scripted case is REACT_DEFENSIVE: it never sight-aggros or assists
+//     (MoveInLineOfSight / CanAssistTo require REACT_AGGRESSIVE) but
+//     engages on damage / owner-combat interaction — gated by
+//     creatureIsSightAggressive in both sight scans and the assist funnel.
 //   - hostile: the default path, fully covered by the aggro scan.
 //   - critter: maps to passive via creatureType 8, matching C++
 //     IsCritter()->REACT_PASSIVE; CritterAI::JustEngagedWith's flee
@@ -1167,6 +1169,26 @@ func creatureReactState(creatureType, npcFlags, flagsExtra uint32, aiName string
 
 func isCreaturePassive(motion *creatureMotion) bool {
 	return motion != nil && motion.ReactStateKnown && motion.ReactState == creatureReactPassive
+}
+
+// creatureIsSightAggressive is the REACT_AGGRESSIVE gate shared by
+// CreatureAI::MoveInLineOfSight (CreatureAI.cpp:117-123: sight-aggro only
+// when HasReactState(REACT_AGGRESSIVE)) and Creature::CanAssistTo
+// (Creature.cpp:2454-2457: assist only when HasReactState(REACT_AGGRESSIVE)).
+// REACT_DEFENSIVE creatures engage on damage / owner-combat interaction
+// (triggerCreatureAggro's passive-only gate, OnOwnerCombatInteraction's
+// !REACT_PASSIVE leg) but never sight-aggro or assist. Only the Lua
+// SetReactState bridge can produce a defensive motion (init never assigns
+// it; the civilian arm is commented out in C++ too), so an unset motion
+// keeps the old behavior and reads aggressive here.
+func creatureIsSightAggressive(motion *creatureMotion) bool {
+	if motion == nil || isCreaturePassive(motion) {
+		return false
+	}
+	if motion.ReactStateKnown && motion.ReactState == creatureReactDefensive {
+		return false
+	}
+	return true
 }
 
 // creatureCanWalkMotion is Creature::CanWalk (Creature.h:104):
@@ -2141,7 +2163,7 @@ func (s *Server) callCreatureAssistance(ctx context.Context, caller *creatureMot
 			}
 			if creatureEnemy.ok {
 				friend := assistParty{ok: true, faction: m.Faction}
-				if !s.creatureCanAssistTo(a.Faction, isCreaturePassive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, creatureEnemy, true) {
+				if !s.creatureCanAssistTo(a.Faction, !creatureIsSightAggressive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, creatureEnemy, true) {
 					continue
 				}
 			} else if !canCreatureAssistTo(s, a, m, enemy) {
@@ -2188,10 +2210,12 @@ func canCreatureAssistTo(s *Server, assistant, caller *creatureMotion, enemy pla
 	if s == nil || assistant == nil || caller == nil || assistant == caller {
 		return false
 	}
-	// REACT_AGGRESSIVE (Creature.cpp:2462); the civilian arm
-	// (Creature.cpp:2475) folds into the same gate — civilian maps to
-	// passive in creatureReactState.
-	if isCreaturePassive(assistant) {
+	// REACT_AGGRESSIVE (Creature.cpp:2454-2457): passive AND defensive
+	// assistants refuse — the same creatureIsSightAggressive gate as
+	// the sight scans and the funnel. The civilian arm (Creature.cpp:
+	// 2475) folds into the same gate — civilian maps to passive in
+	// creatureReactState.
+	if !creatureIsSightAggressive(assistant) {
 		return false
 	}
 	// we don't need help from zombies (Creature.cpp:2465); evade mode
@@ -2295,14 +2319,16 @@ func (s *Server) creatureTemplateFriendlyTo(a, b uint32) bool {
 // caller passes a motion snapshot's fields, never a locked motion: the
 // faction helpers read DBC data, which the funnel already reads under
 // motionMu, but Lua surfaces must not nest sessionsMu under motionMu.
-func (s *Server) creatureCanAssistTo(assistantFaction uint32, assistantPassive bool, assistantHealth uint32, assistantEvading, assistantInCombat bool, assistantUnitFlags uint32, assistantOwnerGUID, assistantCharmerGUID uint64, friend, enemy assistParty, checkfaction bool) bool {
+func (s *Server) creatureCanAssistTo(assistantFaction uint32, assistantNonAggressive bool, assistantHealth uint32, assistantEvading, assistantInCombat bool, assistantUnitFlags uint32, assistantOwnerGUID, assistantCharmerGUID uint64, friend, enemy assistParty, checkfaction bool) bool {
 	if !friend.ok || !enemy.ok {
 		return false
 	}
-	// REACT_AGGRESSIVE (Creature.cpp:2462); the civilian arm
-	// (Creature.cpp:2475) folds into the same gate — civilian maps to
-	// passive in creatureReactState.
-	if assistantPassive {
+	// REACT_AGGRESSIVE (Creature.cpp:2454-2457): passive AND defensive
+	// assistants refuse — the caller passes !creatureIsSightAggressive,
+	// the same gate as the sight scans. The civilian arm (Creature.cpp:
+	// 2475) folds into the same gate — civilian maps to passive in
+	// creatureReactState.
+	if assistantNonAggressive {
 		return false
 	}
 	// we don't need help from zombies (Creature.cpp:2465); evade mode
@@ -2982,7 +3008,7 @@ func (s *Server) callCreatureForHelp(ctx context.Context, caller *creatureMotion
 		if guid == live.GUID || a == nil {
 			continue
 		}
-		if !s.creatureCanAssistTo(a.Faction, isCreaturePassive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, enemy, false) {
+		if !s.creatureCanAssistTo(a.Faction, !creatureIsSightAggressive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, enemy, false) {
 			continue
 		}
 		if float32(distance3D(live.X, live.Y, live.Z, a.X, a.Y, a.Z)) > radius {
@@ -3149,7 +3175,7 @@ func (s *Server) fireCreatureAssistance(ctx context.Context, motion *creatureMot
 				if a == nil {
 					continue
 				}
-				if !s.creatureCanAssistTo(a.Faction, isCreaturePassive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, creatureEnemy, true) {
+				if !s.creatureCanAssistTo(a.Faction, !creatureIsSightAggressive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, creatureEnemy, true) {
 					continue
 				}
 				a.AlreadyCallAssistance = true
@@ -5238,7 +5264,7 @@ func (s *Server) creatureFleeToGetAssistance(ctx context.Context, caller *creatu
 		if guid == live.GUID || a == nil {
 			continue
 		}
-		if !s.creatureCanAssistTo(a.Faction, isCreaturePassive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, enemy, true) {
+		if !s.creatureCanAssistTo(a.Faction, !creatureIsSightAggressive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, enemy, true) {
 			continue
 		}
 		d := float32(distance3D(live.X, live.Y, live.Z, a.X, a.Y, a.Z))
@@ -5537,6 +5563,11 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			unitFieldDynamicFlags: motion.DynamicFlags,
 		})
 	}
+	// SmartAI::EnterEvadeMode (SmartAI.cpp:429) fires SMART_EVENT_EVADE
+	// after _EnterEvadeMode (spells, auras, combat stop) — the
+	// _evadeDisabled early arm has no Go model (evade is never disabled)
+	// and the !IsAIControlled arm is vacuous here.
+	s.smartProcessEvents(ctx, motion, smartEventEvade, 0, 0, 0)
 	homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
 	// CreatureAI::EnterEvadeMode (CreatureAI.cpp:222-228): a creature
 	// seated on a vehicle never launches the home move ("otherwise me will
@@ -5548,6 +5579,9 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	if motion.TransportGUID != 0 || motion.VehicleGUID != 0 {
 		motion.Moving = false
 		motion.Evading = false
+		// No home move launches, so no arrival resets the script: the
+		// EVADE-state-cleared OnReset (SmartAI.cpp:452-453) runs here.
+		s.smartReset(ctx, motion)
 	} else {
 		// CreatureAI::EnterEvadeMode (CreatureAI.cpp:222-236): a charmed
 		// or owned creature follows its charmer/owner instead of walking
@@ -5577,6 +5611,10 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 				motion.Moving = false
 				motion.Evading = false
 				followOwner = true
+				// SmartAI::EnterEvadeMode (SmartAI.cpp:444-453): the
+				// owner-follow leg clears UNIT_STATE_EVADE, so OnReset runs
+				// here instead of at home arrival.
+				s.smartReset(ctx, motion)
 			}
 		}
 		if !followOwner {
@@ -5601,6 +5639,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 					// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
 					motion.Active = false
 					s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+					s.smartJustReachedHome(ctx, motion)
 					return
 				}
 				// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the
@@ -5647,6 +5686,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
 				motion.Active = false
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+				s.smartJustReachedHome(ctx, motion)
 			}
 		}
 	}
@@ -7653,6 +7693,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
 				motion.Active = false
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+				s.smartJustReachedHome(ctx, motion)
 			}
 		}
 		if !chainSpline {
@@ -7754,6 +7795,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
 				motion.Active = false
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+				s.smartJustReachedHome(ctx, motion)
 				return
 			}
 			// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the
@@ -10868,6 +10910,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
 		motion.Active = false
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+		s.smartJustReachedHome(ctx, motion)
 		return
 	}
 
@@ -11050,7 +11093,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if p.Sess != nil && p.Sess.player != nil && p.Sess.player.CombatReach > 0 {
 			victimReach = p.Sess.player.CombatReach
 		}
-		if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && s.turretCanAIAttack(motion, p, dist) && s.creatureSightAccessiblePlaceOK(motion, p.X, p.Y, p.Z) && s.creatureSightHomeDistanceOK(motion, p.X, p.Y, p.Z, victimReach) && creatureBossBoundaryOK(motion, p.X, p.Y, p.Z) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
+		if !s.isVehicleAI(motion) && creatureIsSightAggressive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && s.turretCanAIAttack(motion, p, dist) && s.creatureSightAccessiblePlaceOK(motion, p.X, p.Y, p.Z) && s.creatureSightHomeDistanceOK(motion, p.X, p.Y, p.Z, victimReach) && creatureBossBoundaryOK(motion, p.X, p.Y, p.Z) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			// Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27): a boolean true vetoes
 			// the default aggro engage, mirroring ElunaCreatureAI::
@@ -11063,9 +11106,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// (CreatureAI.cpp:118-123) + Creature::CanStartAttack
 			// (Creature.cpp:1960-2004): the IsEngaged return lands via block
 			// order (this scan only runs when !InCombat); the REACT_AGGRESSIVE
-			// gate lands via the !isCreaturePassive guard (C++ InitializeReactState,
-			// Creature.cpp:1255-1266, also only distinguishes passive vs
-			// aggressive — the civilian arm is commented out there too);
+			// gate lands via creatureIsSightAggressive (CreatureAI.cpp:122
+			// HasReactState(REACT_AGGRESSIVE) — passive AND defensive
+			// refuse; only Lua SetReactState produces a defensive motion,
+			// init never assigns it, and the civilian arm is commented
+			// out in C++ InitializeReactState too);
 			// stealth detection rides canCreatureDetectStealthOfPlayer
 			// plus the invisibility gate above (the full CanDetect
 			// pair for player victims); LOS rides hasLineOfSight; the civilian arm of
@@ -11186,7 +11231,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// and their neighbours when no player is online (Axis1#6), so a
 	// player-free map/instance sight-aggros exactly where C++ keeps the
 	// grid active.
-	if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && !creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) && motion.FlagsExtra&0x00000400 == 0 && motion.FlagsExtra&0x00000002 == 0 && !sightlessScanner {
+	if !s.isVehicleAI(motion) && creatureIsSightAggressive(motion) && !creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) && motion.FlagsExtra&0x00000400 == 0 && motion.FlagsExtra&0x00000002 == 0 && !sightlessScanner {
 		s.motionMu.Lock()
 		registry := s.motionMapLocked(motion.Map, motion.InstanceID)
 		victims := make([]*creatureMotion, 0, len(registry))
