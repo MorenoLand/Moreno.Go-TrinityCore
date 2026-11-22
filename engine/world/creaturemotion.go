@@ -593,6 +593,14 @@ type creatureMotion struct {
 	CharmActionBar    [10]uint32
 	CharmActionBarSet bool
 	PetCommand        uint8 // 0: stay, 1: follow, 2: attack
+	PetReturning      bool  // CharmInfo::_isReturning twin (PetAI.cpp:392-402,
+	// HandleReturnMovement COMMAND_FOLLOW arm): set when the owner
+	// clicks follow while the pet is not already following, cleared
+	// by the follow-arrival MovementInform arm (PetAI.cpp:465-475).
+	// While set, CanAttack returns false for a follow command
+	// (PetAI.cpp:514-515) and the aggressive auto-select is
+	// suppressed (PetAI.cpp:351), so a returning pet does not
+	// re-engage mid-return.
 	// TempSummonLifetime is the TempSummon::m_lifetime twin
 	// (TemporarySummon.cpp:168-173, InitStats): the creating spell's
 	// duration stamped at summon for temporary-duration guardians

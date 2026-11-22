@@ -277,6 +277,9 @@ func (s *Server) onPetCommandAttack(ctx context.Context, mapID, instanceID uint3
 		motion.TargetGUID = targetGUID
 		motion.InCombat = true
 		motion.PetCommand = PetCommandAttack
+		// DoAttack clears the charm flags (PetAI.cpp:420-421): an
+		// attack order ends any return-to-owner in progress.
+		motion.PetReturning = false
 		motion.Moving = true
 	}
 	s.motionMu.Unlock()
@@ -304,6 +307,14 @@ func (s *Server) onPetCommandFollow(ctx context.Context, mapID, instanceID uint3
 		}
 		motion.TargetGUID = 0
 		motion.InCombat = false
+		// PetAI::HandleReturnMovement COMMAND_FOLLOW arm
+		// (PetAI.cpp:392-402): a follow click starts a return unless
+		// the pet is already following (command follow, not
+		// returning) or already returning; the arrival
+		// MovementInform arm clears it (updatePetMotion §4).
+		if motion.PetCommand != PetCommandFollow || motion.PetReturning {
+			motion.PetReturning = true
+		}
 		motion.PetCommand = PetCommandFollow
 		motion.Moving = false
 		if motion.ThreatMgr != nil {
@@ -334,6 +345,10 @@ func (s *Server) onPetCommandStay(mapID, instanceID uint32, petGUID uint64) {
 	defer s.motionMu.Unlock()
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
 		motion.PetCommand = PetCommandStay
+		// A stay click ends any return-to-owner (HandleReturnMovement
+		// switches to the stay arm, PetAI.cpp:377-390); the stay-point
+		// return itself is unported — Go records no stay position.
+		motion.PetReturning = false
 		motion.Moving = false
 	}
 }
@@ -405,6 +420,9 @@ func (s *Server) petCommandOnSpellCast(mapID, instanceID uint32, petGUID uint64)
 	}
 	prev := motion.PetCommand
 	motion.PetCommand = PetCommandAttack
+	// DoAttack clears the charm flags (PetAI.cpp:420-421): a
+	// spell-cast attack order ends any return-to-owner in progress.
+	motion.PetReturning = false
 	return prev
 }
 
@@ -671,6 +689,12 @@ func (s *Server) triggerPetDefensive(ctx context.Context, mapID, instanceID uint
 		if m.TargetGUID != 0 && m.InCombat {
 			continue
 		}
+		// PetAI::CanAttack returning arm (PetAI.cpp:514-515) via
+		// _AttackStart (PetAI.cpp:268): a pet returning to its owner
+		// on a follow command cannot start an attack.
+		if m.PetReturning && m.PetCommand == PetCommandFollow {
+			continue
+		}
 		cands = append(cands, m.GUID)
 	}
 	s.motionMu.Unlock()
@@ -705,6 +729,12 @@ func (s *Server) triggerPetDefensive(ctx context.Context, mapID, instanceID uint
 			continue
 		}
 		if m.TargetGUID != 0 && m.InCombat {
+			continue
+		}
+		// PetAI::CanAttack returning arm (PetAI.cpp:514-515) via
+		// _AttackStart (PetAI.cpp:268): a pet returning to its owner
+		// on a follow command cannot start an attack.
+		if m.PetReturning && m.PetCommand == PetCommandFollow {
 			continue
 		}
 		if !m.InCombat {
@@ -763,6 +793,12 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 		if m.TargetGUID != 0 && m.InCombat {
 			continue
 		}
+		// PetAI::CanAttack returning arm (PetAI.cpp:514-515) via
+		// _AttackStart (PetAI.cpp:268): a pet returning to its owner
+		// on a follow command cannot start an attack.
+		if m.PetReturning && m.PetCommand == PetCommandFollow {
+			continue
+		}
 		cands = append(cands, m.GUID)
 	}
 	s.motionMu.Unlock()
@@ -791,6 +827,12 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 			continue
 		}
 		if m.TargetGUID != 0 && m.InCombat {
+			continue
+		}
+		// PetAI::CanAttack returning arm (PetAI.cpp:514-515) via
+		// _AttackStart (PetAI.cpp:268): a pet returning to its owner
+		// on a follow command cannot start an attack.
+		if m.PetReturning && m.PetCommand == PetCommandFollow {
 			continue
 		}
 		if !m.InCombat {
@@ -1050,7 +1092,11 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 
 	// 3. Pet Aggressive Reaction: PetAI::SelectNextTarget's aggressive arm
 	// (PetAI.cpp:349-354) — nearest hostile in the pet's aggro range.
-	if motion.PetReact == PetReactAggressive && motion.PetCommand != PetCommandStay {
+	// The arm is suppressed while the pet is returning to its owner
+	// (PetAI.cpp:351: !IsReturning() || IsFollowing() || IsAtStay();
+	// a follow-commanded returning pet is neither following nor at
+	// stay, so no auto-select until the arrival inform clears it).
+	if motion.PetReact == PetReactAggressive && motion.PetCommand != PetCommandStay && !motion.PetReturning {
 		hostileGUID := s.findNearbyPetHostile(motion, players)
 		if hostileGUID != 0 {
 			motion.TargetGUID = hostileGUID
@@ -1083,6 +1129,30 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 		if petReach <= 0 {
 			petReach = 1.5
 		}
+		ownerOrient := float32(0)
+		if owner.Sess != nil && owner.Sess.player != nil {
+			ownerOrient = owner.Sess.player.Orientation
+		}
+		relAngle := math.Atan2(float64(motion.Y-owner.Y), float64(motion.X-owner.X)) - float64(ownerOrient)
+		for relAngle < 0 {
+			relAngle += 2 * math.Pi
+		}
+		for relAngle >= 2*math.Pi {
+			relAngle -= 2 * math.Pi
+		}
+		// ChaseAngle::IsAngleOkay (MovementDefines.cpp:43-48):
+		// PositionOkay (FollowMovementGenerator.cpp:43-50) needs
+		// the distance AND the relative angle inside PI/4 of the
+		// PET_FOLLOW_ANGLE center (PI/2, PetDefines.h:85). In range
+		// at a bad angle the generator does not inform and does
+		// re-path (:117-119), so the stand branch below needs the
+		// angle leg too — the old distance-only stand let a pet sit
+		// in front of its owner instead of circling behind.
+		followAngleDiff := math.Abs(relAngle - math.Pi/2)
+		if followAngleDiff > math.Pi {
+			followAngleDiff = 2*math.Pi - followAngleDiff
+		}
+		followAngleOkay := followAngleDiff <= math.Pi/4
 		if dist > 45.0 {
 			// Teleport directly to owner if too far
 			motion.X = owner.X + 1.5
@@ -1093,7 +1163,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			}
 			motion.Moving = false
 			s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PhaseMask, motion.TransportGUID)
-		} else if dist > petFollowDist+petFollowRangeTolerance+ownerReach+petReach {
+		} else if dist > petFollowDist+petFollowRangeTolerance+ownerReach+petReach || !followAngleOkay {
 			// Run to catch up with owner.
 			// FollowMovementGenerator (FollowMovementGenerator.cpp:57-140):
 			// the pet holds ChaseAngle(PI/2, PI/4) relative to the owner
@@ -1114,17 +1184,6 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			// adding FOLLOW_RANGE_TOLERANCE. The 45-yard teleport above has no
 			// C++ arm — a Go pragmatism (the generator would keep running
 			// indefinitely), documented here rather than bridged.
-			ownerOrient := float32(0)
-			if owner.Sess != nil && owner.Sess.player != nil {
-				ownerOrient = owner.Sess.player.Orientation
-			}
-			relAngle := math.Atan2(float64(motion.Y-owner.Y), float64(motion.X-owner.X)) - float64(ownerOrient)
-			for relAngle < 0 {
-				relAngle += 2 * math.Pi
-			}
-			for relAngle >= 2*math.Pi {
-				relAngle -= 2 * math.Pi
-			}
 			const followAngleCenter = math.Pi / 2
 			const followAngleTol = math.Pi / 4
 			upperBound, lowerBound := followAngleCenter+followAngleTol, followAngleCenter-followAngleTol
@@ -1184,7 +1243,17 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 			}
 		} else {
+			// In range at a good angle: the pet stands. This is the
+			// FollowMovementGenerator arrival — the spline-finalize
+			// inform (FollowMovementGenerator.cpp:110-116) lands the
+			// pet at the near point inside this same band, so the
+			// PetAI::MovementInform FOLLOW arm (PetAI.cpp:465-475)
+			// twin fires here: clear the return flags, the pet is
+			// following now. No Lua event fires for it: charmed
+			// creatures get PetAI, not ElunaCreatureAI
+			// (Unit.cpp:9884), so C++ Eluna never sees a pet inform.
 			motion.Moving = false
+			motion.PetReturning = false
 		}
 	}
 }
