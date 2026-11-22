@@ -47,7 +47,7 @@ const (
 	smartEventEvade          uint32 = 7
 	smartEventRange          uint32 = 9
 	smartEventReset          uint32 = 25
-	smartEventDataSet        uint32 = 26
+	smartEventDataSet        uint32 = 38 // SMART_EVENT_DATA_SET; 26 is SMART_EVENT_IC_LOS, not DATA_SET
 	smartEventTargetHealthPc uint32 = 12
 	smartEventTargetManaPct  uint32 = 18
 	smartEventAIInit         uint32 = 37
@@ -889,8 +889,9 @@ func (s *Server) smartActionSetInstData(ctx context.Context, motion *creatureMot
 // smartActionSetData is SMART_ACTION_SET_DATA (SmartScript.cpp:1173-1195):
 // SmartAI targets fire their own SMART_EVENT_DATA_SET (SmartAI::SetData,
 // SmartAI.cpp:718-721); any other creature target latches the pair into
-// its ScriptData store, the Go twin of CreatureAI::SetData (the same map
-// Lua creature SetData/GetData reads). TDB 26091: 19 AGGRO rows, and none
+// its ScriptData store (the map Lua creature SetData/GetData reads) —
+// a Go-side latch with no C++ twin, since base CreatureAI::SetData is a
+// no-op and only SmartAI overrides it. TDB 26091: 19 AGGRO rows, and none
 // of their (field, value) pairs matches a DATA_SET event in the table, so
 // the live effect is the latch.
 func (s *Server) smartActionSetData(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
