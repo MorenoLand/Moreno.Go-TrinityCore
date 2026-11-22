@@ -612,6 +612,26 @@ func (s *Server) setGameObjectFlagsValue(mapID, instanceID uint32, guid uint64, 
 	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})
 }
 
+// setGameObjectActive mirrors WorldObject::setActive (Object.cpp:1011)
+// for game objects: flips the live dynamic state's m_isActive twin.
+// No packet — active is not a sent field — and the no-op-when-unchanged
+// early return rides the same guard. Static GOs stay out: unlike the
+// flags twin there is no live record to materialize into and nothing
+// consumes the flag yet, so a pure probe leaves no live state behind.
+func (s *Server) setGameObjectActive(mapID, instanceID uint32, guid uint64, active bool) {
+	if s == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	st := s.gameObjectStateLocked(mapID, instanceID, guid)
+	if st == nil || st.Active == active {
+		s.objectsMu.Unlock()
+		return
+	}
+	st.Active = active
+	s.objectsMu.Unlock()
+}
+
 // gameObjectHasFlag mirrors GameObject::HasFlag(GAMEOBJECT_FLAGS, flag):
 // the live dynamic flags field when one exists, else the spawn flags in
 // grid-stream precedence: the destructible-health override for damaged

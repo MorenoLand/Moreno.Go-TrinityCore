@@ -112,7 +112,7 @@ type dynamicGameObjectState struct {
 	smart           *smartScriptState // the GO's SmartScript state (SmartGameObjectAI twin), attached on first use by smartStateForGO
 	RespawnDelaySec int32             // m_respawnDelayTime twin (GameObject.cpp:1330-1336); valid only when RespawnDelaySet
 	RespawnDelaySet bool
-	Active          bool                // m_isActive twin (Object.h:501); C++ sets it for GOs only in Battlefield::AddGameObject, which Go does not model, so it stays false
+	Active          bool                // m_isActive twin (Object.h:501); C++ sets it for GOs only in Battlefield::AddGameObject, which Go does not model, so it stays false except via SMART_ACTION_SET_ACTIVE (48, setGameObjectActive)
 	UseCount        uint32              // m_usetimes twin (GameObject.h:320); AddUse increments, GetUseCount reads
 	RitualOwnerGUID uint64              // summoning-ritual owner for ownerless GOs (m_ritualOwnerGUID twin, GameObject.cpp:1803)
 	RitualUsers     map[uint64]struct{} // summoning-ritual unique participants (m_unique_users twin)

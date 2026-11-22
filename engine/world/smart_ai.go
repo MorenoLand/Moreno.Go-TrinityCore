@@ -366,6 +366,8 @@ const (
 	smartActionRemoveGOFlag                   uint32 = 106
 	smartActionSummonCreatureGroup            uint32 = 107
 	smartActionSetPower                       uint32 = 108
+	smartActionAddPower                       uint32 = 109
+	smartActionRemovePower                    uint32 = 110
 	smartActionGameEventStop                  uint32 = 111
 	smartActionGameEventStart                 uint32 = 112
 	smartActionStartClosestWaypoint           uint32 = 113
@@ -2767,6 +2769,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionUnitFlag(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetVisibility:
 		s.smartActionSetVisibility(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetActive:
+		s.smartActionSetActive(ctx, motion, st, ev, invokerGUID)
 	case smartActionInterruptSpell:
 		s.smartActionInterruptSpell(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetRoot:
@@ -3071,6 +3075,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSummonCreatureGroup(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetPower:
 		s.smartActionSetPower(ctx, motion, st, ev, invokerGUID)
+	case smartActionAddPower, smartActionRemovePower:
+		s.smartActionModifyPower(ctx, motion, st, ev, invokerGUID)
 	case smartActionGameEventStop:
 		s.smartActionGameEventStop(ctx, motion, st, ev, invokerGUID)
 	case smartActionGameEventStart:
@@ -7367,6 +7373,87 @@ func (s *Server) smartActionSetPower(ctx context.Context, motion *creatureMotion
 	}
 }
 
+// smartActionModifyPower is SMART_ACTION_ADD_POWER (109) /
+// SMART_ACTION_REMOVE_POWER (110) (SmartScript.cpp:2052-2064): the
+// target's power is SetPower(GetPower +/- newPower) — param1 is the
+// power type, param2 the delta, the same power struct as SET_POWER
+// (108, SmartScriptMgr.h:1073-1077). The arithmetic is uint32, so a
+// remove larger than the current power wraps and SetPower then clamps
+// it to max (Unit.cpp:9616-9623); the no-change early return and the
+// SMSG_POWER_UPDATE send ride the SET_POWER twin. TDB 26091: zero
+// rows for both actions.
+func (s *Server) smartActionModifyPower(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	powerType := ev.row.actionParam1
+	delta := ev.row.actionParam2
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isGameObject {
+			continue
+		}
+		if tgt.isPlayer {
+			sess := s.findSessionByGUID(tgt.guid)
+			if sess == nil || sess.player == nil {
+				continue
+			}
+			if powerType >= uint32(len(sess.player.Powers)) {
+				continue
+			}
+			val := sess.player.Powers[powerType]
+			if ev.row.actionType == smartActionAddPower {
+				val += delta
+			} else {
+				val -= delta
+			}
+			if sess.player.Powers[powerType] == val {
+				continue
+			}
+			if val > sess.player.MaxPowers[powerType] {
+				val = sess.player.MaxPowers[powerType]
+			}
+			sess.player.Powers[powerType] = val
+			packet := protocol.NewBuffer(packedGUIDSize(tgt.guid) + 5)
+			packet.WritePackedGUID(tgt.guid)
+			packet.WriteU8(uint8(powerType))
+			packet.WriteU32(val)
+			_ = sess.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), true)
+			s.broadcastToVisibleSetFromSession(sess, uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes())
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		if powerType >= uint32(len(tm.Powers)) {
+			continue
+		}
+		s.motionMu.Lock()
+		val := tm.Powers[powerType]
+		if ev.row.actionType == smartActionAddPower {
+			val += delta
+		} else {
+			val -= delta
+		}
+		if tm.Powers[powerType] == val {
+			s.motionMu.Unlock()
+			continue
+		}
+		if val > tm.MaxPowers[powerType] {
+			val = tm.MaxPowers[powerType]
+		}
+		tm.Powers[powerType] = val
+		if powerType == 0 {
+			tm.Mana = val
+		}
+		x, y, z, phase := tm.X, tm.Y, tm.Z, tm.PhaseMask
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, tgt.guid, map[int]uint32{unitFieldPower1 + int(powerType): val})
+		packet := protocol.NewBuffer(packedGUIDSize(tgt.guid) + 5)
+		packet.WritePackedGUID(tgt.guid)
+		packet.WriteU8(uint8(powerType))
+		packet.WriteU32(val)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), motion.Map, motion.InstanceID, x, y, z, phase)
+	}
+}
+
 // smartActionGameEventStop is SMART_ACTION_GAME_EVENT_STOP
 // (SmartScript.cpp:2066-2075): when the event is not active C++ logs
 // a sql error and skips; otherwise StopEvent(id, true) — overwrite
@@ -7825,6 +7912,40 @@ func (s *Server) smartActionSetVisibility(ctx context.Context, motion *creatureM
 		if !visible {
 			s.broadcastCreatureDestroyToPlayers(mapID, instanceID, guid)
 		}
+	}
+}
+
+// smartActionSetActive is SMART_ACTION_SET_ACTIVE (48)
+// (SmartScript.cpp:1232-1237): every target's setActive(state) —
+// param1 is the state. WorldObject::setActive (Object.cpp:1011-1013)
+// no-ops when already in that state and for players, and flips
+// m_isActive, which the player-free update loop reads (motion.Active,
+// creaturemotion.go:352-361; stepPlayerFreeActiveCreatures keeps
+// active creatures updating with no players on the map). The GO leg
+// flips the live dynamic state's Active flag; static GOs stay out —
+// no live record exists to flip and nothing consumes the flag yet.
+// TDB 26091: 198 rows, all target SELF (141 src-0 + 57 src-9).
+func (s *Server) smartActionSetActive(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	active := ev.row.actionParam1 != 0
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		if tgt.isGameObject {
+			s.setGameObjectActive(motion.Map, motion.InstanceID, tgt.guid, active)
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		if tm.Active == active {
+			s.motionMu.Unlock()
+			continue
+		}
+		tm.Active = active
+		s.motionMu.Unlock()
 	}
 }
 
