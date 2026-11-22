@@ -1434,9 +1434,11 @@ func (s *Server) creatureSpellTargetHasAuraState(m *creatureMotion, spell wotlk.
 // session.targetHasAura for wild-creature casters (SpellInfo::CheckTarget,
 // SpellInfo.cpp:1769-1772): whether the target currently carries auraSpell.
 // Player targets resolve to their session's aura set; creature targets
-// consult the server creature aura maps. The C++ GetSpellIdForDifficulty
-// remap is omitted — documented standing delta shared with the session
-// twin.
+// consult the server creature aura maps. The id arrives already resolved
+// through GetSpellIdForDifficulty for the SpellInfo-driven gates
+// (boss_ai.go:1645/1648 resolve TargetAuraSpell/ExcludeTargetAuraSpell
+// before calling); literal script ids pass through unmapped, as C++ does
+// (SmartScript.cpp checks the raw DB id).
 func (s *Server) creatureSpellTargetHasAura(m *creatureMotion, targetGUID uint64, auraSpell uint32) bool {
 	if s == nil || m == nil || auraSpell == 0 || targetGUID == 0 {
 		return false
@@ -11975,16 +11977,25 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 // completion, so triggered auras gained mid-cast cannot affect the caster and
 // proc chance uses the combo-point-independent base amount. Same arms as the
 // player-path snapshot (AuraEffect::IsAffectedOnSpell family gate,
-// TriggerSpell DBC-known gate, base-amount chance times stack amount — the
-// CalculateSpellDamage fold stays a documented delta, as on that path).
+// TriggerSpell DBC-known gate, full CalculateSpellDamage fold on the chance:
+// level-scaled base + DieSides roll, then the owner's SPELLMOD_ALL_EFFECTS +
+// per-effect fold, times the stack amount — the a0345d72 player-path
+// decomposition). The combo-point leg is vacuous: combo points are a player
+// field, so a creature caster's GetComboPoints is 0.
 func (s *Server) prepareCreatureHitTriggerSpells(m *creatureMotion, spell wotlk.Spell) []spellHitTrigger {
 	if s == nil || m == nil || s.Data == nil {
 		return nil
 	}
 	key := creatureAuraKeyForMotion(m)
+	type creatureHitTriggerCandidate struct {
+		auraSpell wotlk.Spell
+		effect    wotlk.SpellEffect
+		index     int
+		base      int32
+		stack     int32
+	}
+	var candidates []creatureHitTriggerCandidate
 	s.auraMu.Lock()
-	defer s.auraMu.Unlock()
-	var triggers []spellHitTrigger
 	for _, aura := range s.activeCreatureAuras[key] {
 		if aura == nil || aura.Stopped {
 			continue
@@ -12007,17 +12018,39 @@ func (s *Server) prepareCreatureHitTriggerSpells(m *creatureMotion, spell wotlk.
 			if _, found, err := s.Data.Spell(effect.TriggerSpell); err != nil || !found {
 				continue
 			}
-			chance := aura.BaseAmounts[index]
-			if chance == 0 {
-				chance = effect.BasePoints
+			base := aura.BaseAmounts[index]
+			if base == 0 {
+				base = effect.BasePoints
 			}
-			chance *= int32(aura.StackAmount)
-			triggers = append(triggers, spellHitTrigger{
-				TriggerSpellID:       effect.TriggerSpell,
-				TriggeredByAuraSpell: aura.SpellID,
-				Chance:               chance,
-			})
+			candidates = append(candidates, creatureHitTriggerCandidate{auraSpell: auraSpell, effect: effect, index: index, base: base, stack: int32(aura.StackAmount)})
 		}
+	}
+	s.auraMu.Unlock()
+	// The chance fold runs after the auraMu release: the mod-owner fold
+	// takes the owner session's castMu (spellModTotals), and the in-tree
+	// precedent (the creature exclusive-highest check, boss_ai.go) never
+	// nests it under auraMu.
+	modOwner := s.spellModOwnerSessionForMotion(m)
+	var triggers []spellHitTrigger
+	for _, cand := range candidates {
+		chance := cand.effect.CalcValueForBase(cand.auraSpell, cand.base, uint32(m.Level))
+		if modOwner != nil {
+			chance = modOwner.applySpellMod(cand.auraSpell, spellModAllEffects, chance)
+			switch cand.index {
+			case 0:
+				chance = modOwner.applySpellMod(cand.auraSpell, spellModEffect1, chance)
+			case 1:
+				chance = modOwner.applySpellMod(cand.auraSpell, spellModEffect2, chance)
+			case 2:
+				chance = modOwner.applySpellMod(cand.auraSpell, spellModEffect3, chance)
+			}
+		}
+		chance *= cand.stack
+		triggers = append(triggers, spellHitTrigger{
+			TriggerSpellID:       cand.effect.TriggerSpell,
+			TriggeredByAuraSpell: cand.auraSpell.ID,
+			Chance:               chance,
+		})
 	}
 	return triggers
 }
@@ -14422,8 +14455,10 @@ func (s *Server) creatureHasAura(m *creatureMotion, spellID uint32) bool {
 // bypass runs first (Unit.cpp:5946-5954); per-caster states need an aura the
 // creature itself applied (CasterGUID == motion GUID, Unit.cpp:5957-5965),
 // otherwise the unit-wide mask (health thresholds + spell-granted states)
-// decides. The GetSpellIdForDifficulty wrapper on the C++ side is omitted:
-// the player-side bridge does the same.
+// decides. The aura-state arms carry no spell id (C++ HasAuraState takes
+// an AuraStateType, Spell.cpp:5299-5300), so no GetSpellIdForDifficulty
+// wrapper applies on either side; the aura-SPELL arms of the same block
+// resolve at checkCreatureSpellCasterState (Spell.cpp:5305-5307).
 func (s *Server) creatureCasterHasAuraState(m *creatureMotion, spell wotlk.Spell, state uint32) bool {
 	if state == auraStateNone || s == nil || m == nil {
 		return false

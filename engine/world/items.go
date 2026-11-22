@@ -3852,6 +3852,14 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	// read but never used for casting. The learning case returns its
 	// SPELLVALUE_BASE_POINT0 override (the taught spell) alongside.
 	spellID, learnBasePoint := s.resolveItemUseSpell(ctx, uint32(itemEntry), dbItemGUID)
+	// SpellMgr::GetSpellForDifficultyFromSpell (SpellMgr.cpp:227-243) via
+	// the Spell constructor (Spell.cpp:524): Player::CastItemUseSpell
+	// (Player.cpp:8232) casts through the constructor, so the item-use
+	// spell resolves to its difficulty variant up front — the CheckCast
+	// arms, the START packet and the cast-time read below all carry the
+	// mapped id, the handleCastSpell twin (spells.go:2689). Idempotent,
+	// so the finish path's own resolution keeps the same id.
+	spellID = s.spellDifficultyID(spellID)
 	if spellID != 0 && s.server != nil && s.server.Data != nil {
 		spell, found, spellErr := s.server.Data.Spell(spellID)
 		if spellErr != nil || !found {
