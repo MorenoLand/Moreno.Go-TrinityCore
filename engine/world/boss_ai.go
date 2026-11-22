@@ -55,10 +55,11 @@ import (
 // Eluna parity (fireCreatureDied fires Lua event 23 On_Reset then event 4
 // On_Died) with the native hook fired right after, matching the
 // Eluna-first/native-second order used at respawn (kill.go:2932/:3016).
-// _JustReachedHome (520-523) = me->setActive(false): no active model in Go;
-// already documented at creaturemotion.go:659-671 (Eluna event 24 fires, the
-// veto discarded as a provable no-op since only BossAI overrides
-// JustReachedHome). Go-native AIs carry no home-arrival model.
+// _JustReachedHome (520-523) = me->setActive(false): modeled as the
+// creatureMotion.Active clear at every DoFinalize twin
+// (creaturemotion.go OnReachHome sites); the Eluna event 24 fires and the
+// veto is discarded as a provable no-op since only BossAI overrides
+// JustReachedHome.
 // _JustEngagedWith (525-539) vs OnAggro (creaturemotion.go:443/1301):
 // CheckRequiredBosses SEQUENCE_BREAK documented no-bridge; instance
 // SetBossState(IN_PROGRESS) is bridged per-boss via creature:SetBossState
@@ -69,7 +70,8 @@ import (
 // is raid-gated (IsRaid) and a no-op for all five Go bosses (Deadmines and
 // Wailing Caverns are dungeons; only Lua-ported raid bosses use it);
 // SetCombatPulseDelay(5) is bridged (creature:SetCombatPulseDelay,
-// lua_creature_events.go); setActive(true) has no Go model — no bridge;
+// lua_creature_events.go); setActive(true) is modeled as the
+// creatureMotion.Active set in triggerCreatureAggro's BossAI engage arm;
 // DoZoneInCombat() has no engine analog — no bridge (the C++ vancleef
 // summons.DoZoneInCombat() arm likewise; the Reset-summoned blackguards
 // aggro via the proximity scan). ScheduleTasks() needs no aggro-time

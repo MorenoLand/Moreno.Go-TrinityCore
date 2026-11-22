@@ -1016,6 +1016,10 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		// like C++.
 		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
 			s.server.clearCreatureVisualTarget(motion)
+			// Creature::setDeathState(JUST_DIED) (Creature.cpp:2100):
+			// setActive(false) — a dead boss leaves m_activeNonPlayers
+			// and stops updating player-free.
+			motion.Active = false
 		}
 		// Unit::setDeathState (Unit.cpp:8909-8911): any combo points
 		// pointed at the dying unit are lost — every holder's bank is
@@ -1867,6 +1871,10 @@ func (s *Server) clearCreatureDeathState(dead *creatureMotion) {
 	}
 	s.clearCreatureVisualTarget(dead)
 	s.clearComboPointHolders(dead.GUID)
+	// Creature::setDeathState(JUST_DIED) (Creature.cpp:2100):
+	// setActive(false) — a dead boss leaves m_activeNonPlayers and
+	// stops updating player-free.
+	dead.Active = false
 	// Unit::setDeathState (Unit.cpp:8909-8911) interrupts a non-melee
 	// cast in flight; the cancel packets broadcast like every other
 	// InterruptNonMeleeSpells clear, ahead of the JustDied hooks the

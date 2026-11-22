@@ -337,6 +337,16 @@ type creatureMotion struct {
 
 	TargetGUID uint64
 	InCombat   bool
+	// Active is WorldObject::isActiveObject (Object.h:501): m_isActive.
+	// BossAI::_JustEngagedWith sets it (ScriptedCreature.cpp:541); cleared
+	// on death (Creature::setDeathState JUST_DIED, Creature.cpp:2100) and
+	// on home arrival (BossAI::_JustReachedHome, ScriptedCreature.cpp:524).
+	// Active creatures keep their grids loaded and keep updating with no
+	// players on the map (Map::Update visits m_activeNonPlayers' cells and
+	// ProcessRelocationNotifies runs, Map.cpp:859-870/904), so their
+	// creature-vs-creature sight-aggro scan still fires player-free.
+	// Ordinary creatures never set it: their grids go idle without players.
+	Active     bool
 	LastAttack time.Time
 	// LastOffhandAttack is the offhand twin of LastAttack for
 	// CREATURE_FLAG_EXTRA_USE_OFFHAND_ATTACK creatures (Creature.cpp:539/
@@ -1928,6 +1938,12 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				if playerSess != nil {
 					s.beginInstanceEncounter(motion, playerSess.player)
 				}
+				// BossAI::_JustEngagedWith (ScriptedCreature.cpp:541):
+				// me->setActive(true) — the creature joins
+				// m_activeNonPlayers, so its grid stays loaded and it
+				// keeps updating (and sight-aggroing creatures) with no
+				// players on the map. Ordinary creatures never set this.
+				motion.Active = true
 				motion.BossAI.OnAggro(ctx, s, motion, playerGUID)
 			}
 		}
@@ -5548,6 +5564,8 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 					s.restoreCreatureSpawnHealth(motion)
 					// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 					s.resetVehicleKitOnReachHome(ctx, motion)
+					// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
+					motion.Active = false
 					s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 					return
 				}
@@ -5583,8 +5601,8 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 				// JustReachedHome (CreatureHooks.cpp:220) is START_HOOK_WITH_RETVAL
 				// (CREATURE_EVENT_ON_REACH_HOME, 24; args (event, creature)); the veto
 				// gates only ScriptedAI::JustReachedHome, which no ScriptedAI subclass
-				// overrides — BossAI::_JustReachedHome is me->setActive(false) and
-				// Go's native boss AIs carry no ReachedHome model — so the return is
+				// overrides — BossAI::_JustReachedHome is me->setActive(false),
+				// modeled as the Active clear just below — so the return is
 				// discarded as a provable no-op, matching the JustDied/SpellHit
 				// rulings. The spawn-health restore runs here, ahead of the
 				// hook, exactly as DoFinalize orders SetSpawnHealth before
@@ -5592,6 +5610,8 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 				s.restoreCreatureSpawnHealth(motion)
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
+				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
+				motion.Active = false
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 			}
 		}
@@ -5636,6 +5656,75 @@ func (s *Server) loadWaypoints(ctx context.Context, pathID uint32) []waypointPoi
 	return points
 }
 
+// stepPlayerFreeActiveCreatures steps the C++ m_activeNonPlayers set when no
+// player is online: Map::Update still visits the cells around active objects
+// (Map.cpp:859-870) and ProcessRelocationNotifies still runs (Map.cpp:904),
+// so an active boss and the creatures near it keep updating — including the
+// creature-vs-creature sight-aggro scan in stepCreatureMotion §3 — while
+// ordinary creatures freeze with their idle grids. The step set is the
+// Active motions plus every live non-pet motion in the visibility bbox
+// around one (the VisitNearbyCellsOf twin); pets ride updatePetRuntime, which
+// is already player-free, so they are excluded to avoid a double step.
+// Temp summons step with summoned=true, like stepSummonedNonVehicleMotions.
+// Stepped motions are Refreshed so the TTL prune does not reap them while
+// the map is player-free.
+func (s *Server) stepPlayerFreeActiveCreatures(ctx context.Context, now time.Time) {
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 100.0
+	}
+	s.motionMu.Lock()
+	var all []*creatureMotion
+	for _, motions := range s.instanceCreatureMotion {
+		for _, m := range motions {
+			if m != nil {
+				all = append(all, m)
+			}
+		}
+	}
+	var actives []*creatureMotion
+	for _, m := range all {
+		if m.Active && m.Health > 0 {
+			actives = append(actives, m)
+		}
+	}
+	if len(actives) == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	seen := make(map[*creatureMotion]struct{})
+	var live []*creatureMotion
+	for _, a := range actives {
+		if _, dup := seen[a]; dup {
+			continue
+		}
+		seen[a] = struct{}{}
+		a.Refreshed = now
+		live = append(live, a)
+		for _, m := range all {
+			if m == nil || m.Health == 0 || m.PetID != 0 || m.Map != a.Map || m.InstanceID != a.InstanceID {
+				continue
+			}
+			if _, dup := seen[m]; dup {
+				continue
+			}
+			if math.Abs(float64(m.X-a.X)) > distance || math.Abs(float64(m.Y-a.Y)) > distance {
+				continue
+			}
+			seen[m] = struct{}{}
+			m.Refreshed = now
+			live = append(live, m)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, m := range live {
+		if m.Health == 0 {
+			continue
+		}
+		s.stepCreatureMotion(ctx, m, nil, now, m.IsTempSummon)
+	}
+}
+
 // updateActiveCreatures drives wander/patrol/combat motion for creatures near
 // online players, mirroring RandomMovementGenerator, WaypointMovementGenerator,
 // and TargetedMovementGenerator behaviour.
@@ -5674,6 +5763,10 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	}
 	s.sessionsMu.RUnlock()
 	if len(players) == 0 {
+		// No players: ordinary creatures freeze (their grids go idle),
+		// but active creatures keep stepping — see
+		// stepPlayerFreeActiveCreatures.
+		s.stepPlayerFreeActiveCreatures(ctx, time.Now())
 		return
 	}
 	now := time.Now()
@@ -6414,6 +6507,23 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 		}
 		return
 	}
+	// Unit::AttackerStateUpdate (Unit.cpp:2141-2142): AtTargetAttacked
+	// engages the victim with the attacker ahead of the outcome roll — a
+	// missed swing still pulls the victim into combat — and the victim's
+	// charmer-or-owner engages too (Unit.cpp:8971-8973,
+	// engageAttackedTargetOwner); then the attacker's own
+	// MELEE_ATTACK-interrupt auras drop. A player victim is marked in
+	// combat with the attacker (the EngageWithTarget twin for players;
+	// the damage block below re-marks on a hit). Without this arm a
+	// defensive creature victim never fought back: its own sight scan
+	// requires REACT_AGGRESSIVE, so only the swing could engage it.
+	if target.Sess != nil && target.Sess.player != nil {
+		markPlayerInCombat(ctx, target.Sess, motion.GUID)
+	} else {
+		s.triggerCreatureAggro(ctx, target.GUID, motion.GUID, true)
+		s.engageAttackedTargetOwner(ctx, target.GUID, motion.GUID)
+	}
+	s.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagMeleeAttack)
 	// Unit::AttackerStateUpdate (Unit.cpp:2147-2148): a creature turns
 	// to face its victim on every swing unless possessed or
 	// UNIT_FLAG2_DISABLE_TURN; SetFacingToObject (:13685-13694) only
@@ -7488,6 +7598,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				motion.Orientation = motion.HomeO
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
+				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
+				motion.Active = false
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 			}
 		}
@@ -7587,6 +7699,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// AI()->JustReachedHome() still fires (HomeMovementGenerator.cpp:139-151).
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
+				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
+				motion.Active = false
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 				return
 			}
@@ -10616,10 +10730,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// (CreatureHooks.cpp:220), CREATURE_EVENT_ON_REACH_HOME (24), args
 		// (event, creature). Same provable no-op veto ruling as the instant
 		// arm above: the veto gates ScriptedAI::JustReachedHome, which only
-		// BossAI overrides (me->setActive(false), unmodeled in Go), so the
-		// return is discarded.
+		// BossAI overrides (me->setActive(false), modeled as the Active
+		// clear just below), so the return is discarded.
 		// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 		s.resetVehicleKitOnReachHome(ctx, motion)
+		// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
+		motion.Active = false
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 		return
 	}
@@ -10885,6 +11001,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if p.Sess != nil {
 					s.beginInstanceEncounter(motion, p.Sess.player)
 				}
+				// BossAI::_JustEngagedWith (ScriptedCreature.cpp:541):
+				// me->setActive(true) — sight-aggro engages via
+				// MoveInLineOfSight -> AttackStart -> EngageWithTarget
+				// -> AtEngage -> JustEngagedWith (Creature.cpp:3450),
+				// so a sight-aggroed boss joins m_activeNonPlayers
+				// like any other engage; same set as triggerCreatureAggro.
+				motion.Active = true
 				motion.BossAI.OnAggro(ctx, s, motion, p.GUID)
 			}
 			// CombatAI::JustEngagedWith AICOND_AGGRO arm (CombatAI.cpp:76-88):
@@ -10927,11 +11050,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// accessible-place + home-distance ride the guard below, as do the
 	// civilian scanner gate and the victim valid-target filter;
 	// phase rides the CanNeverSee gate
-	// below, as it now does in the player loop. The scan inherits the stepping
-	// pipeline's player gate (updateActiveCreatures returns early with no
-	// players, and stepSummonedNonVehicleMotions does the same), so a
-	// player-free map/instance still never sight-aggros — a separate
-	// stepping-scope question, not a scan gap.
+	// below, as it now does in the player loop. The scan runs player-free
+	// for the active set: stepPlayerFreeActiveCreatures steps Active motions
+	// and their neighbours when no player is online (Axis1#6), so a
+	// player-free map/instance sight-aggros exactly where C++ keeps the
+	// grid active.
 	if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && !creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) && motion.FlagsExtra&0x00000400 == 0 && motion.FlagsExtra&0x00000002 == 0 && !sightlessScanner {
 		s.motionMu.Lock()
 		registry := s.motionMapLocked(motion.Map, motion.InstanceID)
@@ -11097,6 +11220,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			startPkt := buildAttackStart(motion.GUID, victim.GUID)
 			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
 			if motion.BossAI != nil {
+				// BossAI::_JustEngagedWith (ScriptedCreature.cpp:541):
+				// me->setActive(true) — creature-victim sight-aggro
+				// engages through the same AtEngage -> JustEngagedWith
+				// chain (Creature.cpp:3450); same set as the player tail.
+				motion.Active = true
 				motion.BossAI.OnAggro(ctx, s, motion, victim.GUID)
 			}
 			s.castAggroConditionSpells(ctx, motion, victim.GUID)
