@@ -4260,8 +4260,34 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		m.Moving = false
 		mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
 		phase := m.PhaseMask
+		// Unit::SendTeleportPacket (Unit.cpp:13353-13355) builds the
+		// teleport packet from the teleported unit's own
+		// m_movementInfo — the acked flags/time/transport of a mover
+		// creature (possessed, or a driven vehicle base) — not a fresh
+		// zero-flags packet. The motion store
+		// (MovementHandler.cpp:389 twin) is that info's home; seed
+		// from it when set, relocating only the position, and
+		// recompute the transport offsets from the destination when
+		// the unit rides a transport (Unit.cpp:13355-13367,
+		// CalculatePassengerOffset twin). A never-moved creature
+		// keeps the fresh packet: Go maintains no engine-side
+		// movement-flags word for creatures (MoveSplineInit sets
+		// them in C++), so the store is the only faithful source.
+		packetInfo := movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o}
+		if m.MovementInfoSet {
+			packetInfo = m.MovementInfo
+			packetInfo.X, packetInfo.Y, packetInfo.Z, packetInfo.Orientation = x, y, z, o
+		}
 		s.motionMu.Unlock()
-		_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
+		if packetInfo.Transport != nil && packetInfo.Flags&movementOnTransport != 0 {
+			if spawn, found := s.transportSpawnForGUID(packetInfo.Transport.GUID); found {
+				ox, oy, oz, oo := CalculatePassengerOffset(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, x, y, z, o)
+				transport := *packetInfo.Transport
+				transport.X, transport.Y, transport.Z, transport.Orientation = ox, oy, oz, oo
+				packetInfo.Transport = &transport
+			}
+		}
+		_, nearby := buildTeleportMovementPackets(guid, packetInfo)
 		s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, x, y, z, nearby, phase)
 		s.syncCreatureVehiclePassengers(m)
 		return nil, nil

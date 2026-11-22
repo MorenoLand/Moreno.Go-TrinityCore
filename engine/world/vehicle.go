@@ -114,6 +114,8 @@ func (v *VehicleKit) setMovementInfo(info movementInfo) {
 }
 
 // movementInfoSnapshot returns the kit's stored movement info, if any.
+// Read by exitVehicle for the Vehicle::RemovePassenger transport arm
+// (Vehicle.cpp:525-528).
 func (v *VehicleKit) movementInfoSnapshot() (movementInfo, bool) {
 	if v == nil {
 		return movementInfo{}, false
@@ -2135,6 +2137,43 @@ func (s *session) exitVehicle(ctx context.Context) {
 				s.player.UnitFlags &^= 0x02000000
 			}
 		}
+		// Vehicle::RemovePassenger (Vehicle.cpp:518-529): leaving a
+		// vehicle that itself rides a transport hands the passenger
+		// the base's transport (GUID + offsets), so the passenger
+		// stays aboard; leaving a vehicle that rides nothing resets
+		// the passenger's transport. The base's transport is its
+		// stored m_movementInfo (the kit snapshot, acked from the
+		// driver's packets) — or, when the driver never moved, the
+		// base motion's static-passenger TransportGUID, whose offsets
+		// Go cannot recover (creatureMotion carries no transport
+		// offsets), so the passenger keeps its own. Only the snapshot
+		// carries offsets, so only it arms the inherit leg; the motion
+		// GUID — or a player base's session TransportGUID — only
+		// vetoes the reset.
+		if primary != nil {
+			baseOnTransport := false
+			var baseTransport *transportMovement
+			if snap, ok := primary.movementInfoSnapshot(); ok && snap.Transport != nil && snap.Transport.GUID != 0 {
+				baseTransport = snap.Transport
+				baseOnTransport = true
+			}
+			if !baseOnTransport {
+				if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, oldVehGUID); motion != nil && motion.TransportGUID != 0 {
+					baseOnTransport = true
+				} else if baseSess := s.server.findSessionByGUID(oldVehGUID); baseSess != nil && baseSess.player != nil && baseSess.player.TransportGUID != 0 {
+					baseOnTransport = true
+				}
+			}
+			if baseTransport != nil {
+				s.player.TransportGUID = baseTransport.GUID
+				s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = baseTransport.X, baseTransport.Y, baseTransport.Z, baseTransport.Orientation
+				s.player.TransportSeat = baseTransport.Seat
+			} else if !baseOnTransport {
+				s.player.TransportGUID = 0
+				s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
+				s.player.TransportSeat = 0
+			}
+		}
 	}
 
 	// Unit::_ExitVehicle (Unit.cpp:13199-13200): a player leaving a vehicle
@@ -2384,10 +2423,29 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 		return true
 	}
 	// vehicle_base->m_movementInfo = movementInfo (VehicleHandler.cpp:87):
-	// parsed for wire fidelity, then discarded — the creature motion model
-	// carries position but no m_movementInfo equivalent to store it on.
-	if _, err := readMovementInfo(b); err != nil {
+	// stored on the base's mover store before the seat/guid validation
+	// below, as in C++ — a creature base's motion store, a player
+	// base's session store (the kit's IsPlayer flag discriminates).
+	// Stored as parsed (client time), matching C++'s direct assignment
+	// rather than the generic path's clock-rewritten store.
+	info, err := readMovementInfo(b)
+	if err != nil {
 		return true
+	}
+	if s.server != nil {
+		baseIsPlayer := false
+		for _, loc := range s.server.findVehicleKits(vehGUID) {
+			if loc.kit != nil && loc.kit.IsPlayer {
+				baseIsPlayer = true
+			}
+		}
+		if baseIsPlayer {
+			if baseSess := s.server.findSessionByGUID(vehGUID); baseSess != nil {
+				baseSess.setLastMovementInfo(info)
+			}
+		} else {
+			s.server.setCreatureMovementInfo(s.player.Map, s.player.InstanceID, vehGUID, info)
+		}
 	}
 	accessory, err := b.ReadPackedGUID()
 	if err != nil {
