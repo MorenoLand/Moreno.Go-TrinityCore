@@ -148,6 +148,17 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 			return true
 		}
 	}
+	// SmartAI::OnGossipHello (SmartAI.cpp:758-763) runs after the Eluna
+	// hook on both hello paths (NPCHandler.cpp:190, QuestHandler.cpp:108):
+	// it resets _gossipReturn, fires SMART_EVENT_GOSSIP_HELLO (64) with
+	// the player as invoker, and returns _gossipReturn — set by a
+	// SEND_GOSSIP_MENU (98) action, which sends its own menu. A set
+	// value vetoes the default menu below, exactly like the Lua veto.
+	if s.server != nil && s.player != nil {
+		if motion := s.findCreatureMotion(guid); motion != nil && s.server.smartGossipHello(ctx, motion, s.player.GUID) {
+			return true
+		}
+	}
 	if s.gossip == nil && !s.gossipClosed {
 		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, objectUint32OrZero(creature, "GossipMenuID"), true, true)
 		if err != nil {

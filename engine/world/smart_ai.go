@@ -83,6 +83,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -117,6 +118,7 @@ const (
 	smartEventUpdate              uint32 = 60
 	smartEventLink                uint32 = 61
 	smartEventJustCreated         uint32 = 63
+	smartEventGossipHello         uint32 = 64 // SMART_EVENT_GOSSIP_HELLO (SmartScriptMgr.h:163)
 	smartEventPhaseChange         uint32 = 66
 	smartEventGOLootStateChanged  uint32 = 70 // SMART_EVENT_GO_LOOT_STATE_CHANGED (SmartScriptMgr.h:169), var0 = loot state
 	smartEventCounterSet          uint32 = 77 // SMART_EVENT_COUNTER_SET (SmartScriptMgr.h:176), var0 = counter id
@@ -160,8 +162,12 @@ const (
 // / 76 OVERRIDE_SCRIPT_BASE_OBJECT (0 rows) / 77 RESET_SCRIPT_BASE_OBJECT
 // (0 rows) / 78 CALL_SCRIPT_RESET (50) / 79 SET_RANGED_MOVEMENT (9) are
 // ported below. The 84 SIMPLE_TALK (4 rows) / 85 SELF_CAST (481) / 86
-// CROSS_CAST (127) are ported below. The next unported block is 89
-// RANDOM_MOVE / 90 SET_UNIT_FIELD_BYTES_1 / 97 JUMP_TO_POS.
+// CROSS_CAST (127) are ported below. The 89 RANDOM_MOVE (131) / 90
+// SET_UNIT_FIELD_BYTES_1 (297) / 97 JUMP_TO_POS (12) are ported below.
+// The 98 SEND_GOSSIP_MENU (14) / 99 GO_SET_LOOT_STATE (22) / 100
+// SEND_TARGET_TO_TARGET (155) are ported below. The next unported
+// block is 101 SET_HOME_POS (102) / 102 SET_HEALTH_REGEN (23) / 107
+// SUMMON_CREATURE_GROUP (231).
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -252,6 +258,9 @@ const (
 	smartActionRemoveUnitFieldBytes1          uint32 = 91
 	smartActionInterruptSpell                 uint32 = 92
 	smartActionJumpToPos                      uint32 = 97
+	smartActionSendGossipMenu                 uint32 = 98
+	smartActionGOSetLootState                 uint32 = 99
+	smartActionSendTargetToTarget             uint32 = 100
 	smartActionSetRoot                        uint32 = 103
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
@@ -403,19 +412,24 @@ type smartScriptEvent struct {
 // guard (SmartScript.cpp:3952-3958) that refuses a list overwrite from
 // inside a list event's own action.
 type smartScriptState struct {
-	events               []*smartScriptEvent
-	phase                uint32
-	nested               int
-	linkDepth            int
-	lastInvoker          uint64
-	defaultFaction       uint32
-	textTimer            uint32
-	useTextTimer         bool
-	lastTextID           uint32
-	talkerEntry          uint32
-	lastTick             time.Time
-	firedInit            bool
-	storedTargets        map[uint32][]uint64
+	events         []*smartScriptEvent
+	phase          uint32
+	nested         int
+	linkDepth      int
+	lastInvoker    uint64
+	defaultFaction uint32
+	textTimer      uint32
+	useTextTimer   bool
+	lastTextID     uint32
+	talkerEntry    uint32
+	lastTick       time.Time
+	firedInit      bool
+	storedTargets  map[uint32][]uint64
+	// SmartAI::_gossipReturn (SmartAI.h:331): set by
+	// SMART_ACTION_SEND_GOSSIP_MENU (98) while a GOSSIP_HELLO event
+	// runs; SmartAI::OnGossipHello resets it first (SmartAI.cpp:760)
+	// and returns it, so a set value vetoes the default gossip menu.
+	gossipReturn         bool
 	timedList            []*smartScriptEvent
 	timedListInvoker     uint64
 	processingTimedList  bool
@@ -920,6 +934,24 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		if ev.row.eventParam2 != 0 && ev.row.eventParam2 != var1 {
 			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventGossipHello:
+		// SMART_EVENT_GOSSIP_HELLO (SmartScript.cpp:3071-3095): the
+		// event_param1 filter gates on var0 (noReportUse): 0 always
+		// runs, 1 runs only on a plain hello (var0 == 0), 2 only on
+		// a report-use (var0 != 0); any other value runs. The
+		// creature hello passes var0 = 0 (SmartAI::OnGossipHello).
+		// TDB 26091: all 14 SEND_GOSSIP_MENU rows carry filter 0.
+		switch ev.row.eventParam1 {
+		case 1:
+			if var0 != 0 {
+				return
+			}
+		case 2:
+			if var0 == 0 {
+				return
+			}
 		}
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
@@ -1630,6 +1662,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionRemoveUnitFieldBytes1(ctx, motion, st, ev, invokerGUID)
 	case smartActionJumpToPos:
 		s.smartActionJumpToPos(ctx, motion, st, ev, invokerGUID)
+	case smartActionSendGossipMenu:
+		s.smartActionSendGossipMenu(ctx, motion, st, ev, invokerGUID)
+	case smartActionGOSetLootState:
+		s.smartActionGOSetLootState(ctx, motion, st, ev, invokerGUID)
+	case smartActionSendTargetToTarget:
+		s.smartActionSendTargetToTarget(ctx, motion, st, ev, invokerGUID)
 	default:
 		// Residual: the remaining AGGRO-row action (146) has no Go
 		// twin. 146 has no enum value in this C++ revision
@@ -4940,6 +4978,131 @@ func (s *Server) smartActionJumpToPos(ctx context.Context, motion *creatureMotio
 			continue
 		}
 		s.launchCreatureJumpSpline(tm, ev.row.targetX, ev.row.targetY, ev.row.targetZ, speedXY, speedZ, smartMoveJumpEventID)
+	}
+}
+
+// smartGossipHello is SmartAI::OnGossipHello (SmartAI.cpp:758-763):
+// reset _gossipReturn, fire SMART_EVENT_GOSSIP_HELLO (64) with the
+// player as invoker, return _gossipReturn. A SEND_GOSSIP_MENU (98)
+// action sets it while the event runs, vetoing the default menu.
+func (s *Server) smartGossipHello(ctx context.Context, motion *creatureMotion, invokerGUID uint64) bool {
+	st := s.smartStateFor(ctx, motion)
+	if st == nil {
+		return false
+	}
+	st.gossipReturn = false
+	s.smartProcessEvents(ctx, motion, smartEventGossipHello, invokerGUID, 0, 0)
+	return st.gossipReturn
+}
+
+// smartActionSendGossipMenu is SMART_ACTION_SEND_GOSSIP_MENU
+// (SmartScript.cpp:1946-1972): override the default gossip —
+// SetGossipReturn(true) on the base AI — then every player target
+// takes PrepareGossipMenu(base, menuId, showQuests=true) when menuId
+// is set, or a cleared menu when it is 0, followed by
+// SendGossipMenu(npcTextId, baseGUID), which sends SMSG_GOSSIP_MESSAGE
+// with the prepared menu and the explicit npc text. The Go twin is
+// prepareCreatureGossip with the explicit (non-default) menu and the
+// TitleID overridden to the row's npcTextId — C++ never takes the
+// gossip_menu TextID here. The GO base leg stays out: Go has no GO
+// script state (the SMART_ACTION_OVERRIDE_SCRIPT_BASE_OBJECT (76) GO
+// residual), and all 14 live rows are creature-source. TDB 26091: 14
+// rows, all src-0 / GOSSIP_HELLO (64) / ACTION_INVOKER (7), menuId
+// and npcTextId both nonzero on every row.
+func (s *Server) smartActionSendGossipMenu(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	st.gossipReturn = true
+	menuID := ev.row.actionParam1
+	npcTextID := ev.row.actionParam2
+	s.motionMu.Lock()
+	baseGUID, baseEntry, npcFlags := motion.GUID, motion.Entry, motion.NPCFlags
+	s.motionMu.Unlock()
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isPlayer {
+			continue
+		}
+		sess := s.findSessionByGUID(tgt.guid)
+		if sess == nil {
+			continue
+		}
+		if menuID == 0 {
+			sess.gossip = &gossipMenuState{SenderGUID: baseGUID, MenuID: 0, TitleID: npcTextID, Items: make(map[uint32]gossipMenuItem)}
+			sess.gossipClosed = false
+			_ = sess.sendGossipMenu()
+			continue
+		}
+		menu, err := sess.prepareCreatureGossip(ctx, baseGUID, baseEntry, npcFlags, menuID, false, true)
+		if err != nil {
+			continue
+		}
+		if menu == nil {
+			// The TAXIVENDOR abort inside PrepareGossipMenu leaves
+			// C++ sending the (cleared) menu with the npc text
+			// anyway — SendGossipMenu still runs.
+			menu = &gossipMenuState{SenderGUID: baseGUID, MenuID: menuID, TitleID: npcTextID, Items: make(map[uint32]gossipMenuItem)}
+		} else {
+			menu.TitleID = npcTextID
+		}
+		sess.gossip = menu
+		sess.gossipClosed = false
+		_ = sess.sendGossipMenu()
+	}
+}
+
+// smartActionGOSetLootState is SMART_ACTION_GO_SET_LOOT_STATE
+// (SmartScript.cpp:1900-1907): every gameobject target takes
+// SetLootState(state) — a plain field write (GameObject.cpp:2371)
+// that fires OnLootStateChanged, whose Eluna twin is the
+// GAMEOBJECT_EVENT_ON_LOOT_STATE_CHANGE trigger the Lua SetLootState
+// bridge fires (lua_objects.go:4652). The Go twin is the
+// setGameObjectLootState store plus that trigger. TDB 26091: 22 rows;
+// the 13 live src-9 (timed-actionlist) rows ride the creature leg — 7
+// CLOSEST_GAMEOBJECT, the 5 SELF + 1 INVOKER_PARTY rows no-op on both
+// sides (IsGameObject false) — and the 9 src-1 GO-script rows stay out
+// (no GO script engine). States in rows: 0/1/2/3, the whole LootState
+// enum (GameObject.h:68-74); no validation, matching the C++ cast.
+func (s *Server) smartActionGOSetLootState(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	state := ev.row.actionParam1
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isGameObject {
+			continue
+		}
+		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, uint8(state))
+		s.triggerGameObjectEvent(ctx, tgt.guid, scripting.GameObjectEventOnLootState, state)
+	}
+}
+
+// smartActionSendTargetToTarget is SMART_ACTION_SEND_TARGET_TO_TARGET
+// (SmartScript.cpp:1914-1945): copy this script's stored list id into
+// every creature target's own script (a copy, not the shared slice).
+// A missing id breaks with nothing stored — the map presence check is
+// the GetStoredTargetVector null check, so a stored-but-empty list
+// still propagates. Non-SmartAI creature targets log-and-skip in C++;
+// Go skips them the same way. GO targets stay out — Go has no GO
+// script state (the SMART_ACTION_OVERRIDE_SCRIPT_BASE_OBJECT (76) GO
+// residual). TDB 26091: 155 rows; 93 live src-0/9 (51 timed-actionlist
+// + 42 creature), the 28 GO-source + 34 areatrigger rows stay out (no
+// GO / areatrigger script engine). Ids are 1 (153 rows) and 2 (2 rows).
+func (s *Server) smartActionSendTargetToTarget(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	stored, ok := st.storedTargets[ev.row.actionParam1]
+	if !ok {
+		return
+	}
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer || tgt.isGameObject {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil || tm.AIName != "SmartAI" {
+			continue
+		}
+		tst := s.smartStateForTimedList(ctx, tm)
+		if tst == nil {
+			continue
+		}
+		if tst.storedTargets == nil {
+			tst.storedTargets = make(map[uint32][]uint64)
+		}
+		tst.storedTargets[ev.row.actionParam1] = append([]uint64(nil), stored...)
 	}
 }
 
