@@ -24,9 +24,12 @@
 // (674) / 55 WP_STOP (12) are ported below with the SmartAI
 // StartPath/PausePath/StopPath escort machine (waypoints-table
 // paths, WAYPOINT_* events, UpdatePath/UpdateDespawn ticks). The
-// next unported block is 56 ADD_ITEM / 57 REMOVE_ITEM / 58
-// INSTALL_AI_TEMPLATE / 59 SET_RUN / 60 SET_DISABLE_GRAVITY / 61
-// SET_SWIM / 62 TELEPORT / 63 SET_COUNTER.
+// 56 ADD_ITEM (0 rows) / 57 REMOVE_ITEM (8) / 58 INSTALL_AI_TEMPLATE
+// (0 rows) / 59 SET_RUN (266) / 60 SET_DISABLE_GRAVITY (50) / 61
+// SET_SWIM (0 rows) / 62 TELEPORT (11) / 63 SET_COUNTER (40) are
+// ported below with the COUNTER_SET (77) event dispatch. The next
+// unported block is 65 WP_RESUME / 66 SET_ORIENTATION / 68 PLAYMOVIE
+// / 69 MOVE_TO_POS / 70 ENABLE_TEMP_GOBJ / 71 EQUIP / 72 CLOSE_GOSSIP.
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -93,6 +96,7 @@ const (
 	smartEventTextOver            uint32 = 52
 	smartEventTimedEventTriggered uint32 = 59 // SMART_EVENT_TIMED_EVENT_TRIGGERED (SmartScriptMgr.h:158), event_param1 = timed-event id
 	smartEventFollowCompleted     uint32 = 65 // SMART_EVENT_FOLLOW_COMPLETED (SmartScriptMgr.h:164)
+	smartEventMovementInform      uint32 = 34 // SMART_EVENT_MOVEMENTINFORM (SmartScriptMgr.h:133), var0 = movement type, var1 = point id
 	smartEventWaypointStart       uint32 = 39 // SMART_EVENT_WAYPOINT_START (SmartScriptMgr.h:138), var0 = node id, var1 = path id
 	smartEventWaypointReached     uint32 = 40 // SMART_EVENT_WAYPOINT_REACHED (SmartScriptMgr.h:139)
 	smartEventWaypointPaused      uint32 = 55 // SMART_EVENT_WAYPOINT_PAUSED (SmartScriptMgr.h:154)
@@ -103,6 +107,8 @@ const (
 	smartEventLink                uint32 = 61
 	smartEventJustCreated         uint32 = 63
 	smartEventPhaseChange         uint32 = 66
+	smartEventGOLootStateChanged  uint32 = 70 // SMART_EVENT_GO_LOOT_STATE_CHANGED (SmartScriptMgr.h:169), var0 = loot state
+	smartEventCounterSet          uint32 = 77 // SMART_EVENT_COUNTER_SET (SmartScriptMgr.h:176), var0 = counter id
 	smartEventPhase12             uint32 = 12 // SMART_EVENT_PHASE_12 (SmartScriptMgr.h:55), the IncPhase clamp (SmartScript.cpp:3996-4000)
 )
 
@@ -133,9 +139,12 @@ const (
 // (674) / 55 WP_STOP (12) are ported below with the SmartAI
 // StartPath/PausePath/StopPath escort machine (waypoints-table
 // paths, WAYPOINT_* events, UpdatePath/UpdateDespawn ticks). The
-// next unported block is 56 ADD_ITEM / 57 REMOVE_ITEM / 58
-// INSTALL_AI_TEMPLATE / 59 SET_RUN / 60 SET_DISABLE_GRAVITY / 61
-// SET_SWIM / 62 TELEPORT / 63 SET_COUNTER.
+// 56 ADD_ITEM (0 rows) / 57 REMOVE_ITEM (8) / 58 INSTALL_AI_TEMPLATE
+// (0 rows) / 59 SET_RUN (266) / 60 SET_DISABLE_GRAVITY (50) / 61
+// SET_SWIM (0 rows) / 62 TELEPORT (11) / 63 SET_COUNTER (40) are
+// ported below with the COUNTER_SET (77) event dispatch. The next
+// unported block is 65 WP_RESUME / 66 SET_ORIENTATION / 68 PLAYMOVIE
+// / 69 MOVE_TO_POS / 70 ENABLE_TEMP_GOBJ / 71 EQUIP / 72 CLOSE_GOSSIP.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -188,6 +197,14 @@ const (
 	smartActionWPStart                        uint32 = 53
 	smartActionWPPause                        uint32 = 54
 	smartActionWPStop                         uint32 = 55
+	smartActionAddItem                        uint32 = 56
+	smartActionRemoveItem                     uint32 = 57
+	smartActionInstallAITemplate              uint32 = 58
+	smartActionSetRun                         uint32 = 59
+	smartActionSetDisableGravity              uint32 = 60
+	smartActionSetSwim                        uint32 = 61
+	smartActionTeleport                       uint32 = 62
+	smartActionSetCounter                     uint32 = 63
 	smartActionStoreTargetList                uint32 = 64
 	smartActionCreateTimedEvent               uint32 = 67
 	smartActionTriggerTimedEvent              uint32 = 73
@@ -364,6 +381,13 @@ type smartScriptState struct {
 	invincibilityHPLevel uint32
 	storedEvents         []*smartScriptEvent // mStoredEvents (SmartScript.h:122): CREATE_TIMED_EVENT holders, ticked in smartUpdateTimers
 	remTimedEventIDs     []uint32            // mRemIDs (SmartScript.h:123): stored-event ids queued for removal, drained after the timed-list leg
+	// mCounterList (SmartScript.h:94) + mTemplate (SmartScript.h:96):
+	// SET_COUNTER (63) stores per-id counters on the target's script
+	// and fires SMART_EVENT_COUNTER_SET (77); INSTALL_AI_TEMPLATE
+	// (58) sets the template once (BASIC 0 = unset) and installs its
+	// synthetic events.
+	counters   map[uint32]uint32
+	templateID uint32
 	// SmartAI follow state (SmartAI.h: _followGUID/_followDistance/
 	// _followAngle/_followCredit/_followArrivedEntry/_followCreditType,
 	// _followArrivedTimer): armed by SMART_ACTION_FOLLOW, ticked by
@@ -752,6 +776,14 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		s.smartRecalcTimer(ev, ev.row.eventParam3, ev.row.eventParam4)
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventCounterSet:
+		// SMART_EVENT_COUNTER_SET (SmartScript.cpp:3460-3464): the
+		// event fires only for its (id, value) pair, then runs the
+		// timed action on the cooldown window (event_param3/4).
+		if ev.row.eventParam1 != var0 || s.smartCounterValue(st, ev.row.eventParam1) != ev.row.eventParam2 {
+			return
+		}
+		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam3, ev.row.eventParam4, invokerGUID, var0, var1)
 	case smartEventUpdate, smartEventUpdateOOC, smartEventUpdateIC:
 		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam3, ev.row.eventParam4, invokerGUID, var0, var1)
 	case smartEventHealthPct, smartEventTargetHealthPc:
@@ -805,6 +837,17 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		// action with no timer re-arm (a stored event's own repeat
 		// window re-arms the stored holder, not this row).
 		if ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventMovementInform:
+		// SMART_EVENT_MOVEMENTINFORM (SmartScript.cpp:3214-3219): the
+		// event fires only for its (movement type, point id) pair,
+		// 0 = any.
+		if ev.row.eventParam1 != 0 && ev.row.eventParam1 != var0 {
+			return
+		}
+		if ev.row.eventParam2 != 0 && ev.row.eventParam2 != var1 {
 			return
 		}
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
@@ -1341,6 +1384,26 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionWPPause(ctx, motion, st, ev, invokerGUID)
 	case smartActionWPStop:
 		s.smartActionWPStop(ctx, motion, st, ev, invokerGUID)
+	case smartActionAddItem:
+		s.smartActionAddItem(ctx, motion, st, ev, invokerGUID)
+	case smartActionRemoveItem:
+		s.smartActionRemoveItem(ctx, motion, st, ev, invokerGUID)
+	case smartActionInstallAITemplate:
+		s.smartActionInstallAITemplate(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetRun:
+		// SMART_ACTION_SET_RUN (SmartScript.cpp:1367-1374): me-only
+		// (IsSmart gate = this dispatch), SmartAI::SetRun — the
+		// smartSetRun twin (escort _run flag + node move types +
+		// SetWalk). Targets are ignored by C++.
+		s.smartSetRun(motion, st, ev.row.actionParam1 != 0)
+	case smartActionSetDisableGravity:
+		s.smartActionSetDisableGravity(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetSwim:
+		s.smartActionSetSwim(ctx, motion, st, ev, invokerGUID)
+	case smartActionTeleport:
+		s.smartActionTeleport(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetCounter:
+		s.smartActionSetCounter(ctx, motion, st, ev, invokerGUID)
 	case smartActionRemoveAurasFromSpell:
 		s.smartActionRemoveAuras(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetInstData:
@@ -2544,9 +2607,9 @@ func (s *Server) smartStopFollow(ctx context.Context, motion *creatureMotion, st
 // loadSmartWaypoints is the SmartWaypointMgr::LoadSmartWaypoints twin
 // (SmartScriptMgr.cpp): the `waypoints`-table rows for one path id,
 // ordered by pointid — the WORLD_SEL_SMARTAI_WP statement's rows
-// filtered to the entry. This is NOT waypoint_data (loadWaypoints):
-// that table keys creature patrol paths by id, while `waypoints` keys
-// SmartAI escort paths by entry. A missing table or empty path loads
+// filtered to the entry — falling back to waypoint_data (loadWaypoints)
+// when the `waypoints` table is empty or missing (see below). A
+// missing table in both places, or an empty path in both, loads
 // nothing, matching C++'s failed GetPath.
 func (s *Server) loadSmartWaypoints(ctx context.Context, entry uint32) []waypointPoint {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || entry == 0 {
@@ -2554,7 +2617,10 @@ func (s *Server) loadSmartWaypoints(ctx context.Context, entry uint32) []waypoin
 	}
 	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT pointid, position_x, position_y, position_z, orientation, delay FROM waypoints WHERE entry = ? ORDER BY pointid`, entry)
 	if err != nil {
-		return nil
+		// A missing `waypoints` table is a query error, not an empty
+		// result — fall through to the waypoint_data fallback below
+		// instead of returning nil (fold flag 1).
+		return s.loadWaypoints(ctx, entry)
 	}
 	defer rows.Close()
 	var points []waypointPoint
@@ -2568,7 +2634,17 @@ func (s *Server) loadSmartWaypoints(ctx context.Context, entry uint32) []waypoin
 		p.Point, p.X, p.Y, p.Z, p.Orientation, p.Delay = uint32(point), float32(x), float32(y), float32(z), float32(orientation), uint32(delay)
 		points = append(points, p)
 	}
-	return points
+	if len(points) > 0 {
+		return points
+	}
+	// TDB 26091 carries no `waypoints` table (no CREATE TABLE /
+	// INSERT in the extract; the repo placeholder world.db has the
+	// table with 0 rows), while all 761 WP_START pathIDs resolve in
+	// waypoint_data — the C++ snapshot's SmartWaypointMgr predates the
+	// TDB's move of SmartAI paths there. Without this fallback
+	// LoadPath could never load a path against the actual data, and
+	// every WP_START would no-op.
+	return s.loadWaypoints(ctx, entry)
 }
 
 // smartLoadPath is SmartAI::LoadPath (SmartAI.cpp:78-101): the escort
@@ -2600,8 +2676,8 @@ func (s *Server) smartLoadPath(ctx context.Context, st *smartScriptState, entry 
 
 // smartSetRun is SmartAI::SetRun (SmartAI.cpp:730-736): the _run flag
 // plus the move type on every loaded escort node, live motion points
-// included. The walk flag itself (me->SetWalk) has no Go slot — the
-// stepper reads the node move type.
+// included, plus me->SetWalk(!run) on the persistent Walking flag
+// (creaturemotion.go:708, the Creature::SetWalk twin).
 func (s *Server) smartSetRun(motion *creatureMotion, st *smartScriptState, run bool) {
 	if st == nil {
 		return
@@ -2618,6 +2694,7 @@ func (s *Server) smartSetRun(motion *creatureMotion, st *smartScriptState, run b
 		return
 	}
 	s.motionMu.Lock()
+	motion.Walking = !run
 	if motion.PathID == st.escortPathID {
 		for i := range motion.Points {
 			motion.Points[i].MoveType = moveType
@@ -2987,18 +3064,19 @@ func (s *Server) smartEscortInvokerInRange(motion *creatureMotion, st *smartScri
 	return false
 }
 
-// smartWaypointReached is SmartAI::WaypointReached (SmartAI.cpp:359-394),
-// fired from waypointNodeArrival: WAYPOINT_REACHED fires for every
-// SmartAI creature arriving at a waypoint node (patrol or escort),
-// with the DB point id and path id. On an escort path the current node
-// latches first; a pending unforced pause latches _waypointReached and
-// holds the motion (PauseMovement + SetHomePosition), else a reached
-// last node ends the path — C++ compares the node id against the node
-// COUNT (SmartAI.cpp:377-380), so only contiguous 1-based point ids
-// ever end the path this way, mirrored literally. A forced pause holds
-// the motion across the arrival: the arrival's node-delay write would
-// otherwise release it.
-func (s *Server) smartWaypointReached(ctx context.Context, motion *creatureMotion, nodeID, pathID uint32) {
+// smartWaypointReached is SmartAI::WaypointReached (SmartAI.cpp:359-394)
+// plus the MovementInform arm (SmartAI.cpp:396-410), fired from
+// waypointNodeArrival: MOVEMENTINFORM (waypoint type, node index) then
+// WAYPOINT_REACHED (DB point id, path id) fire for every SmartAI
+// creature arriving at a waypoint node (patrol or escort). On an escort
+// path the current node latches first; a pending unforced pause latches
+// _waypointReached and holds the motion (PauseMovement +
+// SetHomePosition), else a reached last node ends the path — C++
+// compares the node id against the node COUNT (SmartAI.cpp:377-380),
+// so only contiguous 1-based point ids ever end the path this way,
+// mirrored literally. A forced pause holds the motion across the
+// arrival: the arrival's node-delay write would otherwise release it.
+func (s *Server) smartWaypointReached(ctx context.Context, motion *creatureMotion, nodeID, pathID, nodeIndex uint32) {
 	if motion == nil {
 		return
 	}
@@ -3010,6 +3088,11 @@ func (s *Server) smartWaypointReached(ctx context.Context, motion *creatureMotio
 	if escorting {
 		st.escortNode = nodeID
 	}
+	// WaypointMovementGenerator::OnArrived (WaypointMovementGenerator.cpp:256-260)
+	// informs the AI before the reached hook. POINT_MOTION_TYPE rows
+	// (script MovePoint landings) stay out — no Go twin fires them
+	// from the script-move finalize site yet.
+	s.smartProcessEvents(ctx, motion, smartEventMovementInform, 0, waypointMotionType, nodeIndex)
 	s.smartProcessEvents(ctx, motion, smartEventWaypointReached, 0, nodeID, pathID)
 	if !escorting {
 		return
@@ -3029,6 +3112,23 @@ func (s *Server) smartWaypointReached(ctx context.Context, motion *creatureMotio
 		motion.EscortPaused = true
 		s.motionMu.Unlock()
 	}
+}
+
+// smartWaypointPathEnded is SmartAI::WaypointPathEnded (SmartAI.cpp:387-394),
+// fired from the motion's one-shot path-end leg: WAYPOINT_ENDED fires
+// for a non-escorting creature with the last node's id and path id.
+// An escorting creature ends through UpdatePath's path-ended leg
+// instead (SmartAI.cpp:377-380 + 948-951), so this returns early
+// while escorting.
+func (s *Server) smartWaypointPathEnded(ctx context.Context, motion *creatureMotion, nodeID, pathID uint32) {
+	if motion == nil {
+		return
+	}
+	st := s.smartStateFor(ctx, motion)
+	if st == nil || st.escortState&smartEscortEscorting != 0 {
+		return
+	}
+	s.smartProcessEvents(ctx, motion, smartEventWaypointEnded, 0, nodeID, pathID)
 }
 
 // smartUpdatePath is SmartAI::UpdatePath (SmartAI.cpp:919-963): the
@@ -3149,6 +3249,359 @@ func (s *Server) smartUpdateFollow(ctx context.Context, motion *creatureMotion, 
 		st.followArrivedTimer = 1000
 	} else {
 		st.followArrivedTimer -= diff
+	}
+}
+
+// smartActionAddItem is SMART_ACTION_ADD_ITEM (SmartScript.cpp:1313-1322):
+// every player target takes AddItem(entry, count) (Player.cpp:26543:
+// CanStoreNewItem with the partial-fit leg, StoreNewItem, SendNewItem).
+// The Go twin is the .additem command's storeOrStackItem +
+// sendAddItemPushResult + inventory refresh; the no-space sysmessage
+// leg stays out (SmartAI actions send no sysmessages). TDB 26091: 0 rows.
+func (s *Server) smartActionAddItem(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	entry, count := ev.row.actionParam1, ev.row.actionParam2
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isPlayer {
+			continue
+		}
+		sess := s.findSessionByGUID(tgt.guid)
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		res, err := sess.storeOrStackItem(ctx, tgt.guid, entry, count)
+		if err != nil || res == nil {
+			fitting := sess.addItemFittingCount(ctx, tgt.guid, entry, count)
+			if fitting == 0 {
+				continue
+			}
+			res, err = sess.storeOrStackItem(ctx, tgt.guid, entry, fitting)
+			if err != nil || res == nil {
+				continue
+			}
+			count = fitting
+		}
+		sess.sendAddItemPushResult(sess, res, entry, count)
+		_ = sess.sendInventoryItems(ctx)
+		sess.sendPlayerUpdate()
+	}
+}
+
+// smartActionRemoveItem is SMART_ACTION_REMOVE_ITEM
+// (SmartScript.cpp:1324-1333): every player target takes
+// DestroyItemCount(entry, count, true). The Go twin is the
+// .additem negative-count leg's destroyPlayerItemCount plus the
+// command's inventory refresh. TDB 26091: 8 rows, all target 7
+// (ACTION_INVOKER) on QUEST_ACCEPTED (19) / QUEST_COMPLETED (20) /
+// GOSSIP_SELECT (62) events; the gossip row stays unfireable until
+// the GOSSIP_SELECT dispatch exists (the OFFER_QUEST residual).
+func (s *Server) smartActionRemoveItem(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	entry, count := ev.row.actionParam1, ev.row.actionParam2
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isPlayer {
+			continue
+		}
+		sess := s.findSessionByGUID(tgt.guid)
+		if sess == nil {
+			continue
+		}
+		if destroyed := sess.destroyPlayerItemCount(ctx, tgt.guid, entry, count); destroyed > 0 {
+			_ = sess.sendInventoryItems(ctx)
+			sess.sendPlayerUpdate()
+		}
+	}
+}
+
+// SMARTAI_TEMPLATE ids (SmartScriptMgr.h:1208-1216).
+const (
+	smartAITemplateBasic        uint32 = 0
+	smartAITemplateCaster       uint32 = 1
+	smartAITemplateTurret       uint32 = 2
+	smartAITemplatePassive      uint32 = 3
+	smartAITemplateCagedGOPart  uint32 = 4
+	smartAITemplateCagedNPCPart uint32 = 5
+)
+
+// smartInstallTemplateEvent is SmartScript::AddEvent
+// (SmartScript.cpp:2473-2476) + CreateSmartEvent (:2478-2508): the
+// holder takes chance 100, source CREATURE, the caller's event/action/
+// target params and phase mask, InitTimer rolls its timer, and it
+// joins mEvents — Go appends to st.events directly (InstallEvents,
+// :3604-3613, merges mInstallEvents on the next update; the append
+// lands after the live range loop, so it cannot fire mid-dispatch).
+// SMART_ACTION_MOVE_OFFSET (114) has no Go dispatch, so it is passed
+// as the literal id rather than a smartAction const — the census
+// counts named consts as ported, and 114 is not.
+func (s *Server) smartInstallTemplateEvent(st *smartScriptState, eventType, eventFlags, ep1, ep2, ep3, ep4, ep5, actionType, ap1, ap2, ap3, ap4, ap5, ap6, targetType, tp1, tp2, tp3, tp4, phaseMask uint32) {
+	row := &smartScriptRow{
+		entryOrGUID:    0,
+		eventType:      eventType,
+		eventPhaseMask: phaseMask,
+		eventChance:    100,
+		eventFlags:     eventFlags,
+		eventParam1:    ep1,
+		eventParam2:    ep2,
+		eventParam3:    ep3,
+		eventParam4:    ep4,
+		eventParam5:    ep5,
+		actionType:     actionType,
+		actionParam1:   ap1,
+		actionParam2:   ap2,
+		actionParam3:   ap3,
+		actionParam4:   ap4,
+		actionParam5:   ap5,
+		actionParam6:   ap6,
+		targetType:     targetType,
+		targetParam1:   tp1,
+		targetParam2:   tp2,
+		targetParam3:   tp3,
+		targetParam4:   tp4,
+	}
+	sev := &smartScriptEvent{row: row}
+	s.smartInitTimer(sev)
+	st.events = append(st.events, sev)
+}
+
+// smartCreatureTextExists is sCreatureTextMgr->TextExist
+// (CreatureTextMgr.h): whether the entry has any row in the group.
+// It reuses broadcastCreatureTalk's lazy-load cache.
+func (s *Server) smartCreatureTextExists(ctx context.Context, entry uint32, groupID uint8) bool {
+	if s == nil || entry == 0 {
+		return false
+	}
+	if s.creatureTextMgr == nil {
+		s.creatureTextMgr = newCreatureTextMgr()
+	}
+	s.creatureTextMgr.mu.RLock()
+	groups, found := s.creatureTextMgr.texts[entry]
+	s.creatureTextMgr.mu.RUnlock()
+	if !found {
+		loaded := s.loadCreatureTexts(ctx, entry)
+		s.creatureTextMgr.mu.Lock()
+		if s.creatureTextMgr.texts == nil {
+			s.creatureTextMgr.texts = make(map[uint32]map[uint8][]CreatureText)
+		}
+		s.creatureTextMgr.texts[entry] = loaded
+		groups = loaded
+		s.creatureTextMgr.mu.Unlock()
+	}
+	if groups == nil {
+		return false
+	}
+	rows, ok := groups[groupID]
+	return ok && len(rows) > 0
+}
+
+// smartActionInstallAITemplate is SMART_ACTION_INSTALL_AI_TEMPLATE
+// (SmartScript.cpp:1308-1312 + InstallTemplate :2397-2471): a template
+// installs at most once (mTemplate != BASIC logs and skips), then its
+// AddEvent set joins the script. TDB 26091: 0 rows. Residuals: the
+// installed MANA_PCT (3) / RANGE (9) events ride Go's timer-only
+// arms for those types (no live power / no action fire), the
+// MOVEMENTINFORM (34) events have no Go dispatch, the MOVE_OFFSET
+// (114) event has no Go action, and CAGED_GO_PART returns early — a
+// creature script has no GO base object (SmartScript.cpp:2460).
+func (s *Server) smartActionInstallAITemplate(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if st == nil || st.templateID != smartAITemplateBasic {
+		return
+	}
+	id := ev.row.actionParam1
+	st.templateID = id
+	p1, p2, p3, p4, p5 := ev.row.actionParam2, ev.row.actionParam3, ev.row.actionParam4, ev.row.actionParam5, ev.row.actionParam6
+	tp1 := ev.row.targetParam1
+	switch id {
+	case smartAITemplateCaster:
+		s.smartInstallTemplateEvent(st, smartEventUpdateIC, 0, 0, 0, p2, p3, 0, smartActionCast, p1, tp1, 0, 0, 0, 0, smartTargetVictim, 0, 0, 0, 0, 1)
+		s.smartInstallTemplateEvent(st, smartEventRange, 0, p4, 300, 0, 0, 0, smartActionAllowCombatMovement, 1, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 1)
+		maxDist := uint32(0)
+		if p4 > 10 {
+			maxDist = p4 - 10
+		}
+		s.smartInstallTemplateEvent(st, smartEventRange, 0, 0, maxDist, 0, 0, 0, smartActionAllowCombatMovement, 0, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 1)
+		// C++ manaMin is the literal unsigned expression
+		// param5-15>100?100:param5+15 (SmartScript.cpp:2422): param5
+		// < 15 underflows the subtraction, so the min is 100 there,
+		// and param5 > 100 yields param5+15 unclamped — Go uint32
+		// arithmetic reproduces both legs exactly.
+		manaMin := p5 + 15
+		if p5-15 > 100 {
+			manaMin = 100
+		}
+		s.smartInstallTemplateEvent(st, smartEventManaPct, 0, manaMin, 100, 1000, 1000, 0, smartActionSetEventPhase, 1, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 0)
+		s.smartInstallTemplateEvent(st, smartEventManaPct, 0, 0, p5, 1000, 1000, 0, smartActionSetEventPhase, 0, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 0)
+		s.smartInstallTemplateEvent(st, smartEventManaPct, 0, 0, p5, 1000, 1000, 0, smartActionAllowCombatMovement, 1, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 0)
+	case smartAITemplateTurret:
+		s.smartInstallTemplateEvent(st, smartEventUpdateIC, 0, 0, 0, p2, p3, 0, smartActionCast, p1, tp1, 0, 0, 0, 0, smartTargetVictim, 0, 0, 0, 0, 0)
+		s.smartInstallTemplateEvent(st, smartEventJustCreated, 0, 0, 0, 0, 0, 0, smartActionAllowCombatMovement, 0, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 0)
+	case smartAITemplateCagedNPCPart:
+		s.smartInstallTemplateEvent(st, smartEventDataSet, 0, 0, 0, 0, 0, 0, smartActionStoreTargetList, 1, 0, 0, 0, 0, 0, smartTargetClosestGameObject, p1, 10, 0, 0, 0)
+		s.smartInstallTemplateEvent(st, smartEventUpdate, smartEventFlagNotRepeatable, 0, 0, 0, 0, 0, smartActionResetGObject, 0, 0, 0, 0, 0, 0, smartTargetGameObjectDist, p1, 5, 0, 0, 0)
+		s.smartInstallTemplateEvent(st, smartEventDataSet, 0, 0, 0, 0, 0, 0, smartActionSetRun, p3, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 0)
+		s.smartInstallTemplateEvent(st, smartEventDataSet, 0, 0, 0, 0, 0, 0, smartActionSetEventPhase, 1, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 0)
+		s.smartInstallTemplateEvent(st, smartEventUpdate, smartEventFlagNotRepeatable, 1000, 1000, 0, 0, 0, 114, 0, 0, 0, 0, 0, 0, smartTargetSelf, 0, p4, 0, 0, 1)
+		s.smartInstallTemplateEvent(st, smartEventMovementInform, 0, 8, 0xFFFFFE, 0, 0, 0, smartActionSetData, 0, 0, 0, 0, 0, 0, smartTargetStored, 1, 0, 0, 0, 1)
+		s.smartInstallTemplateEvent(st, smartEventMovementInform, 0, 8, 0xFFFFFE, 0, 0, 0, smartActionForceDespawn, p2, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 1)
+		if s.smartCreatureTextExists(ctx, motion.Entry, uint8(p5)) {
+			s.smartInstallTemplateEvent(st, smartEventMovementInform, 0, 8, 0xFFFFFE, 0, 0, 0, smartActionTalk, p5, 0, 0, 0, 0, 0, smartTargetNone, 0, 0, 0, 0, 1)
+		}
+	case smartAITemplateCagedGOPart:
+		return
+	default:
+		return
+	}
+}
+
+// smartActionSetDisableGravity is SMART_ACTION_SET_DISABLE_GRAVITY
+// (SmartScript.cpp:1351-1359): me-only (IsSmart gate = this dispatch),
+// SmartAI::SetDisableGravity -> Creature::SetDisableGravity. The body
+// mirrors the Lua SetDisableGravity bridge (lua_creature_events.go:
+// no-op-on-unchanged, GravityDisabled latch, SMSG_SPLINE_MOVE_GRAVITY_
+// DISABLE/ENABLE broadcast). TDB 26091: 50 rows, all SELF, param 0/1.
+func (s *Server) smartActionSetDisableGravity(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	disable := ev.row.actionParam1 != 0
+	s.motionMu.Lock()
+	if motion.GravityDisabled == disable {
+		s.motionMu.Unlock()
+		return
+	}
+	motion.GravityDisabled = disable
+	mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+	phase := motion.PhaseMask
+	s.motionMu.Unlock()
+	opcode := protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_ENABLE
+	if disable {
+		opcode = protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_DISABLE
+	}
+	s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+}
+
+// smartActionSetSwim is SMART_ACTION_SET_SWIM (SmartScript.cpp:1375-1382):
+// me-only, SmartAI::SetSwim -> Unit::SetSwim. The body mirrors the Lua
+// SetSwim bridge (lua_creature_events.go: no-op-on-unchanged, Swimming
+// latch, SMSG_SPLINE_MOVE_START/STOP_SWIM broadcast). TDB 26091: 0 rows.
+func (s *Server) smartActionSetSwim(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	enable := ev.row.actionParam1 != 0
+	s.motionMu.Lock()
+	if motion.Swimming == enable {
+		s.motionMu.Unlock()
+		return
+	}
+	motion.Swimming = enable
+	mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+	phase := motion.PhaseMask
+	s.motionMu.Unlock()
+	opcode := protocol.OpcodeSMSG_SPLINE_MOVE_STOP_SWIM
+	if enable {
+		opcode = protocol.OpcodeSMSG_SPLINE_MOVE_START_SWIM
+	}
+	s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+}
+
+// smartTeleportCreature is Unit::NearTeleportTo (Unit.cpp:13332-13346)
+// for a creature motion: the position write plus the teleport-movement
+// broadcast, mirroring the Lua Teleport bridge (lua_creature_events.go).
+func (s *Server) smartTeleportCreature(tm *creatureMotion, x, y, z, o float32) {
+	s.motionMu.Lock()
+	motions := s.motionMapLocked(tm.Map, tm.InstanceID)
+	m, ok := motions[tm.GUID]
+	if !ok {
+		s.motionMu.Unlock()
+		return
+	}
+	m.X, m.Y, m.Z, m.Orientation = x, y, z, o
+	m.Moving = false
+	mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
+	phase := m.PhaseMask
+	s.motionMu.Unlock()
+	_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
+	s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, x, y, z, nearby, phase)
+	s.syncCreatureVehiclePassengers(m)
+}
+
+// smartActionTeleport is SMART_ACTION_TELEPORT (SmartScript.cpp:1340-1350):
+// players take TeleportTo(mapID, target x/y/z/o), creatures take
+// NearTeleportTo on the same coords; anything else is skipped. The
+// destination rides the row's target_x/y/z/o, the map is action_param1.
+// TDB 26091: 11 rows — 3 creature-source SELF rows (same-map creature
+// legs) and 8 areatrigger-source rows, which stay residual (Go loads no
+// areatrigger-source scripts).
+func (s *Server) smartActionTeleport(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	mapID := ev.row.actionParam1
+	x, y, z, o := ev.row.targetX, ev.row.targetY, ev.row.targetZ, ev.row.targetO
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			if sess := s.findSessionByGUID(tgt.guid); sess != nil {
+				sess.teleportTo(mapID, x, y, z, o)
+			}
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.smartTeleportCreature(tm, x, y, z, o)
+	}
+}
+
+// smartCounterValue is SmartScript::GetCounterValue
+// (SmartScript.cpp:139-145): 0 when the id was never stored.
+func (s *Server) smartCounterValue(st *smartScriptState, id uint32) uint32 {
+	if st == nil || st.counters == nil {
+		return 0
+	}
+	return st.counters[id]
+}
+
+// smartStoreCounter is SmartScript::StoreCounter (SmartScript.cpp:123-137):
+// an existing counter adds the value (or resets to it when reset != 0),
+// a new id inserts the value, then SMART_EVENT_COUNTER_SET fires for
+// the id on that script (invoker nil in C++).
+func (s *Server) smartStoreCounter(ctx context.Context, motion *creatureMotion, st *smartScriptState, id, value uint32, reset bool) {
+	if st == nil {
+		return
+	}
+	if st.counters == nil {
+		st.counters = make(map[uint32]uint32)
+	}
+	if cur, ok := st.counters[id]; ok {
+		if reset {
+			st.counters[id] = value
+		} else {
+			st.counters[id] = cur + value
+		}
+	} else {
+		st.counters[id] = value
+	}
+	s.smartProcessEvents(ctx, motion, smartEventCounterSet, 0, id, 0)
+}
+
+// smartActionSetCounter is SMART_ACTION_SET_COUNTER
+// (SmartScript.cpp:1383-1407): with no targets the counter stores on
+// the owner's script; otherwise each creature target stores on its own
+// SmartAI script (CAST_AI null leg = skip, the not-using-SmartAI
+// log-and-skip) and each gameobject target on its SmartGameObjectAI
+// script — the GO leg stays residual, Go has no GO script engine.
+// TDB 26091: 40 rows (37 src 0, 3 src 9): 13 SELF, 15 CLOSEST_CREATURE,
+// 8 CLOSEST_GAMEOBJECT, 4 OWNER_OR_SUMMONER; 5 rows carry reset=1.
+func (s *Server) smartActionSetCounter(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	id, value, reset := ev.row.actionParam1, ev.row.actionParam2, ev.row.actionParam3 != 0
+	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
+	if len(targets) == 0 {
+		s.smartStoreCounter(ctx, motion, st, id, value, reset)
+		return
+	}
+	for _, tgt := range targets {
+		if tgt.isGameObject {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		tst := s.smartStateFor(ctx, tm)
+		if tst == nil {
+			continue
+		}
+		s.smartStoreCounter(ctx, tm, tst, id, value, reset)
 	}
 }
 

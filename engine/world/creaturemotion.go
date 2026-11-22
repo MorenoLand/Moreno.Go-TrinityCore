@@ -6328,11 +6328,12 @@ func (s *Server) waypointNodeArrival(ctx context.Context, motion *creatureMotion
 	if point.Delay > 0 {
 		motion.WaitUntil = at.Add(time.Duration(point.Delay) * time.Millisecond)
 	}
-	// SmartAI::WaypointReached (SmartAI.cpp:359-394): the escort
-	// machine's arrival hook — WAYPOINT_REACHED fires for every
-	// SmartAI creature here, patrol or escort (see
+	// SmartAI::WaypointReached (SmartAI.cpp:359-394) + MovementInform
+	// (SmartAI.cpp:396-410): the escort machine's arrival hook —
+	// MOVEMENTINFORM (node index) then WAYPOINT_REACHED (DB point id)
+	// fire for every SmartAI creature here, patrol or escort (see
 	// smartWaypointReached); the Lua event above already fired.
-	s.smartWaypointReached(ctx, motion, point.Point, motion.PathID)
+	s.smartWaypointReached(ctx, motion, point.Point, motion.PathID, uint32(arrived))
 }
 
 // stepCreatureRegen runs the Creature::Update regen arm (Creature.cpp:887-921):
@@ -11587,8 +11588,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// UpdateCurrentWaypointInfo(0, 0) clears the last-arrival id,
 		// and the generator stops (MoveType drops to idle; the
 		// DoFinalize SetWalk(false) leg clears the walk flag). The
-		// WaypointPathEnded AI hook has no Eluna event, so it stays
-		// out. NextIdx wrapped to 0 when the last node launched and
+		// WaypointPathEnded AI hook has no Eluna event; the SmartAI
+		// WAYPOINT_ENDED arm fires at the end of this leg. NextIdx
+		// wrapped to 0 when the last node launched and
 		// PathStarted marks a run in progress, so a fresh path
 		// (NextIdx 0, not started) launches its first node normally.
 		if motion.PathOneShot && motion.PathStarted && motion.NextIdx == 0 {
@@ -11600,6 +11602,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.Walking = false
 			motion.PathOneShot = false
 			motion.PathStarted = false
+			// SmartAI::WaypointPathEnded (SmartAI.cpp:387-394): a
+			// non-repeating path end fires WAYPOINT_ENDED for a
+			// non-escorting creature; the escort end rides UpdatePath's
+			// path-ended leg instead (see smartWaypointPathEnded).
+			s.smartWaypointPathEnded(ctx, motion, last.Point, motion.PathID)
 			return
 		}
 		point := motion.Points[motion.NextIdx]
