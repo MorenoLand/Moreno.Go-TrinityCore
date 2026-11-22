@@ -117,6 +117,7 @@ const (
 	smartEventWaypointEnded       uint32 = 58 // SMART_EVENT_WAYPOINT_ENDED (SmartScriptMgr.h:157)
 	smartEventUpdate              uint32 = 60
 	smartEventLink                uint32 = 61
+	smartEventGossipSelect        uint32 = 62 // SMART_EVENT_GOSSIP_SELECT (SmartScriptMgr.h:161), event_param1 = menuID (sender), event_param2 = gossip list id (action)
 	smartEventJustCreated         uint32 = 63
 	smartEventGossipHello         uint32 = 64 // SMART_EVENT_GOSSIP_HELLO (SmartScriptMgr.h:163)
 	smartEventPhaseChange         uint32 = 66
@@ -977,6 +978,15 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 			return
 		}
 		if ev.row.eventParam2 != 0 && ev.row.eventParam2 != var1 {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventGossipSelect:
+		// SMART_EVENT_GOSSIP_SELECT (SmartScript.cpp:3309-3316): the
+		// event fires only for its exact (sender, action) pair — the
+		// packet menuID (var0) and gossip list id (var1); unlike
+		// MOVEMENTINFORM/WAYPOINT there is no 0=any wildcard.
+		if ev.row.eventParam1 != var0 || ev.row.eventParam2 != var1 {
 			return
 		}
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
@@ -5186,6 +5196,22 @@ func (s *Server) smartActionJumpToPos(ctx context.Context, motion *creatureMotio
 		}
 		s.launchCreatureJumpSpline(tm, ev.row.targetX, ev.row.targetY, ev.row.targetZ, speedXY, speedZ, smartMoveJumpEventID)
 	}
+}
+
+// smartGossipSelect is SmartAI::OnGossipSelect (SmartAI.cpp:765-770):
+// reset _gossipReturn, fire SMART_EVENT_GOSSIP_SELECT (62) with the
+// player as invoker and the (menuID, listID) pair, return
+// _gossipReturn. A SEND_GOSSIP_MENU (98) action sets it while the
+// event runs, vetoing the native Player::OnGossipSelect arms
+// (MiscHandler.cpp:209-212).
+func (s *Server) smartGossipSelect(ctx context.Context, motion *creatureMotion, invokerGUID uint64, menuID, listID uint32) bool {
+	st := s.smartStateFor(ctx, motion)
+	if st == nil {
+		return false
+	}
+	st.gossipReturn = false
+	s.smartProcessEvents(ctx, motion, smartEventGossipSelect, invokerGUID, menuID, listID)
+	return st.gossipReturn
 }
 
 // smartGossipHello is SmartAI::OnGossipHello (SmartAI.cpp:758-763):

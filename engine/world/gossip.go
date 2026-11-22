@@ -402,6 +402,20 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			return true
 		}
 	}
+	// SmartAI::OnGossipSelect (SmartAI.cpp:765-770) runs after the Eluna
+	// hook and before the native Player::OnGossipSelect arms
+	// (MiscHandler.cpp:209-212): it fires SMART_EVENT_GOSSIP_SELECT (62)
+	// with the player as invoker and the packet (menuID, listID) pair —
+	// not the option's sender/action — and returns _gossipReturn, set by
+	// a SEND_GOSSIP_MENU (98) action. A set value vetoes the native arms
+	// below, exactly like the Lua veto above; the stale-menu gate is part
+	// of Player::OnGossipSelect (Player.cpp:14565-14570), so it runs after
+	// the AI here as in C++.
+	if s.server != nil && s.player != nil {
+		if motion := s.findCreatureMotion(guid); motion != nil && s.server.smartGossipSelect(ctx, motion, s.player.GUID, menuID, listID) {
+			return true
+		}
+	}
 	if s.gossip == nil && !s.gossipClosed {
 		// Player::OnGossipSelect (Player.cpp:14565-14569): the menuId gate
 		// runs after the Eluna/AI hooks — a stale select fires the hooks
