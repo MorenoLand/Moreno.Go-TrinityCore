@@ -59,6 +59,11 @@ type creatureMotion struct {
 	HomeY                  float32
 	HomeZ                  float32
 	HomeO                  float32 // home orientation (C++ m_homePosition.GetOrientation()): spawn orientation, SetHomePosition o, or the waypoint end-of-path arm's owner orientation; returned as GetHomePosition's 4th value
+	SpawnX                 float32 // C++ m_respawnPosition (CreatureData position): the EVADE action's SetHomePosition target; Home drifts via waypoints/SetHomePosition, Spawn never moves
+	SpawnY                 float32
+	SpawnZ                 float32
+	SpawnO                 float32
+	SpawnKnown             bool // set at DB-spawn attach; summons/pets/totems carry no spawn record
 	X                      float32
 	Y                      float32
 	Z                      float32
@@ -1597,6 +1602,11 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			HomeY:       y,
 			HomeZ:       z,
 			HomeO:       orientation,
+			SpawnX:      x,
+			SpawnY:      y,
+			SpawnZ:      z,
+			SpawnO:      orientation,
+			SpawnKnown:  true,
 			Orientation: orientation,
 			X:           x,
 			Y:           y,
@@ -1819,14 +1829,14 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	stdKey := creatureWorldGUID(guid, entry)
 	motion := s.findCreatureMotionLocked(mapID, instanceID, creatureGUID)
 	if motion == nil && s.WorldStore != nil && s.WorldStore.DB != nil {
-		var x, y, z float64
+		var x, y, z, o float64
 		var mapID, faction, curHealth int64
 		var name, scriptName string
-		if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z,
+		if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z, c.position_o,
 			COALESCE(t.faction, 0), COALESCE(t.name, ''), COALESCE(t.ScriptName, ''), COALESCE(c.curhealth, 0)
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
-			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &name, &scriptName, &curHealth); err == nil {
+			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &o, &faction, &name, &scriptName, &curHealth); err == nil {
 			st := s.loadCreatureStats(ctx, entry)
 			health := st.Health
 			if curHealth > 0 {
@@ -1844,6 +1854,11 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				HomeX:      float32(x),
 				HomeY:      float32(y),
 				HomeZ:      float32(z),
+				SpawnX:     float32(x),
+				SpawnY:     float32(y),
+				SpawnZ:     float32(z),
+				SpawnO:     float32(o),
+				SpawnKnown: true,
 				X:          float32(x),
 				Y:          float32(y),
 				Z:          float32(z),

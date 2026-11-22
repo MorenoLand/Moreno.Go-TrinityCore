@@ -55,48 +55,57 @@ import (
 
 // SMART_EVENT ids (SmartScriptMgr.h:97-183).
 const (
-	smartEventUpdateIC       uint32 = 0
-	smartEventUpdateOOC      uint32 = 1
-	smartEventHealthPct      uint32 = 2
-	smartEventManaPct        uint32 = 3
-	smartEventAggro          uint32 = 4
-	smartEventKill           uint32 = 5
-	smartEventDeath          uint32 = 6
-	smartEventEvade          uint32 = 7
-	smartEventRange          uint32 = 9
-	smartEventRespawn        uint32 = 11
-	smartEventReachedHome    uint32 = 21
-	smartEventReset          uint32 = 25
-	smartEventDataSet        uint32 = 38 // SMART_EVENT_DATA_SET; 26 is SMART_EVENT_IC_LOS, not DATA_SET
-	smartEventTargetHealthPc uint32 = 12
-	smartEventTargetManaPct  uint32 = 18
-	smartEventAIInit         uint32 = 37
-	smartEventTextOver       uint32 = 52
-	smartEventUpdate         uint32 = 60
-	smartEventLink           uint32 = 61
-	smartEventJustCreated    uint32 = 63
-	smartEventPhaseChange    uint32 = 66
-	smartEventPhase12        uint32 = 12 // SMART_EVENT_PHASE_12 (SmartScriptMgr.h:55), the IncPhase clamp (SmartScript.cpp:3996-4000)
+	smartEventUpdateIC            uint32 = 0
+	smartEventUpdateOOC           uint32 = 1
+	smartEventHealthPct           uint32 = 2
+	smartEventManaPct             uint32 = 3
+	smartEventAggro               uint32 = 4
+	smartEventKill                uint32 = 5
+	smartEventDeath               uint32 = 6
+	smartEventEvade               uint32 = 7
+	smartEventRange               uint32 = 9
+	smartEventRespawn             uint32 = 11
+	smartEventReachedHome         uint32 = 21
+	smartEventReset               uint32 = 25
+	smartEventDataSet             uint32 = 38 // SMART_EVENT_DATA_SET; 26 is SMART_EVENT_IC_LOS, not DATA_SET
+	smartEventTargetHealthPc      uint32 = 12
+	smartEventTargetManaPct       uint32 = 18
+	smartEventAIInit              uint32 = 37
+	smartEventTextOver            uint32 = 52
+	smartEventTimedEventTriggered uint32 = 59 // SMART_EVENT_TIMED_EVENT_TRIGGERED (SmartScriptMgr.h:158), event_param1 = timed-event id
+	smartEventUpdate              uint32 = 60
+	smartEventLink                uint32 = 61
+	smartEventJustCreated         uint32 = 63
+	smartEventPhaseChange         uint32 = 66
+	smartEventPhase12             uint32 = 12 // SMART_EVENT_PHASE_12 (SmartScriptMgr.h:55), the IncPhase clamp (SmartScript.cpp:3996-4000)
 )
 
-// SMART_ACTION ids (SmartScriptMgr.h:457-600), AGGRO-used set. The
-// remaining AGGRO-row actions (74, 146) hit the default arm: 74 needs
-// the unported timed-event store (67/73/74 + mStoredEvents, see the
-// dispatch default) and 146 has no enum value in this C++ revision
-// (SMART_ACTION_END = 140), so C++ log-and-skips it too
-// (SmartScript.cpp:2370-2372).
+// SMART_ACTION ids (SmartScriptMgr.h:457-600), ported set. The
+// remaining AGGRO-row action (146) hits the default arm: it has no enum
+// value in this C++ revision (SMART_ACTION_END = 140), so C++ log-and-skips
+// it too (SmartScript.cpp:2370-2372). The timed-event store (67/73/74/125
+// + mStoredEvents/mRemIDs) is ported below.
+// Full action census (TDB 26091, all 140 enum ids x Go consts x rows)
+// lives in hidden_files/smartai_action_census.py; the next unported
+// block starts at 6/7/9.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
+	smartActionMorphToEntryOrModel            uint32 = 3
 	smartActionSound                          uint32 = 4
 	smartActionPlayEmote                      uint32 = 5
 	smartActionSetReactState                  uint32 = 8
+	smartActionRandomEmote                    uint32 = 10
 	smartActionCast                           uint32 = 11
 	smartActionSummonCreature                 uint32 = 12
+	smartActionThreatSinglePct                uint32 = 13
+	smartActionThreatAllPct                   uint32 = 14
+	smartActionSetEmoteState                  uint32 = 17
 	smartActionAutoAttack                     uint32 = 20
 	smartActionAllowCombatMovement            uint32 = 21
 	smartActionSetEventPhase                  uint32 = 22
 	smartActionIncEventPhase                  uint32 = 23
+	smartActionEvade                          uint32 = 24
 	smartActionFleeForAssist                  uint32 = 25
 	smartActionRemoveAurasFromSpell           uint32 = 28
 	smartActionRandomPhase                    uint32 = 30
@@ -112,6 +121,8 @@ const (
 	smartActionSetActive                      uint32 = 48
 	smartActionAttackStart                    uint32 = 49
 	smartActionStoreTargetList                uint32 = 64
+	smartActionCreateTimedEvent               uint32 = 67
+	smartActionTriggerTimedEvent              uint32 = 73
 	smartActionRemoveTimedEvent               uint32 = 74
 	smartActionCallTimedActionList            uint32 = 80
 	smartActionSetNPCFlag                     uint32 = 81
@@ -122,6 +133,7 @@ const (
 	smartActionRemoveUnitFieldBytes1          uint32 = 91
 	smartActionInterruptSpell                 uint32 = 92
 	smartActionSetRoot                        uint32 = 103
+	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
 )
 
@@ -215,12 +227,16 @@ type smartScriptRow struct {
 // timer, active, runOnce; SmartScript.cpp InitTimer/RecalcTimer).
 // enableTimed is the timed-action-list chaining flag (SmartScriptMgr.h:1573):
 // only the enabled list event ticks, and firing it enables the next one.
+// timedEventID is the C++ event_id of a stored timed event (SmartScript.cpp:
+// CREATE_TIMED_EVENT stores the synthetic holder with event_id = the timed
+// event's id; RemoveStoredEvent matches on it); 0 on ordinary rows.
 type smartScriptEvent struct {
-	row         *smartScriptRow
-	timer       uint32
-	active      bool
-	runOnce     bool
-	enableTimed bool
+	row          *smartScriptRow
+	timer        uint32
+	active       bool
+	runOnce      bool
+	enableTimed  bool
+	timedEventID uint32
 }
 
 // smartScriptState is the per-creature SmartScript (SmartScript.h): the
@@ -252,6 +268,8 @@ type smartScriptState struct {
 	timedListInvoker     uint64
 	processingTimedList  bool
 	invincibilityHPLevel uint32
+	storedEvents         []*smartScriptEvent // mStoredEvents (SmartScript.h:122): CREATE_TIMED_EVENT holders, ticked in smartUpdateTimers
+	remTimedEventIDs     []uint32            // mRemIDs (SmartScript.h:123): stored-event ids queued for removal, drained after the timed-list leg
 }
 
 // loadSmartScripts loads the creature-source smart_scripts rows into the
@@ -639,6 +657,15 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		s.smartRecalcTimer(ev, 500, 500)
 		return
+	case smartEventTimedEventTriggered:
+		// SMART_EVENT_TIMED_EVENT_TRIGGERED (SmartScript.cpp:3303-3307):
+		// the event fires only for its timed-event id, then runs its
+		// action with no timer re-arm (a stored event's own repeat
+		// window re-arms the stored holder, not this row).
+		if ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
 		smartEventAIInit, smartEventJustCreated,
@@ -741,7 +768,109 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 			ev.timer -= diff
 		}
 	}
+	s.smartUpdateStoredEvents(ctx, motion, st, diff)
 	s.smartUpdateTimedActionList(ctx, motion, st, diff)
+	// mRemIDs drain (SmartScript.cpp:3741-3746): after the stored-event
+	// and timed-list legs, each queued id drops its stored event (first
+	// match only, RemoveStoredEvent :3615-3623), then the queue clears.
+	if len(st.remTimedEventIDs) > 0 {
+		for _, id := range st.remTimedEventIDs {
+			s.smartRemoveStoredEvent(st, id)
+		}
+		st.remTimedEventIDs = nil
+	}
+}
+
+// smartCreateTimedEvent is the SMART_ACTION_CREATE_TIMED_EVENT arm
+// (SmartScript.cpp:1586-1613): the synthetic holder is an UPDATE event
+// with the creator's chance (0 defaults to 100), the initial window in
+// event_param1/2 and the repeat window in param3/4, NOT_REPEATABLE when
+// neither repeat bound is set, the creator's target, and the
+// TRIGGER_TIMED_EVENT action for the id; InitTimer rolls the initial
+// window and the holder joins mStoredEvents. The row id is the timed
+// event's id (C++ ev.event_id), so the ProcessTimedAction conditions
+// check and RemoveStoredEvent both key on it, exactly as in C++.
+func (s *Server) smartCreateTimedEvent(st *smartScriptState, ev *smartScriptEvent) {
+	if st == nil || ev == nil || ev.row == nil {
+		return
+	}
+	chance := ev.row.actionParam6
+	if chance == 0 {
+		chance = 100
+	}
+	flags := uint32(0)
+	if ev.row.actionParam4 == 0 && ev.row.actionParam5 == 0 {
+		flags = smartEventFlagNotRepeatable
+	}
+	row := &smartScriptRow{
+		// entryOrGUID 0: C++ builds the holder from a default
+		// SmartScriptHolder (SmartScriptMgr.h:1551, entryOrGuid(0)),
+		// so the holder's condition check keys on (0, id) and never
+		// inherits the creator row's conditions.
+		entryOrGUID:  0,
+		sourceType:   ev.row.sourceType,
+		id:           ev.row.actionParam1,
+		eventType:    smartEventUpdate,
+		eventChance:  chance,
+		eventFlags:   flags,
+		eventParam1:  ev.row.actionParam2,
+		eventParam2:  ev.row.actionParam3,
+		eventParam3:  ev.row.actionParam4,
+		eventParam4:  ev.row.actionParam5,
+		actionType:   smartActionTriggerTimedEvent,
+		actionParam1: ev.row.actionParam1,
+		targetType:   ev.row.targetType,
+		targetParam1: ev.row.targetParam1,
+		targetParam2: ev.row.targetParam2,
+		targetParam3: ev.row.targetParam3,
+		targetParam4: ev.row.targetParam4,
+		targetX:      ev.row.targetX,
+		targetY:      ev.row.targetY,
+		targetZ:      ev.row.targetZ,
+		targetO:      ev.row.targetO,
+	}
+	sev := &smartScriptEvent{row: row, timedEventID: ev.row.actionParam1}
+	s.smartInitTimer(sev)
+	st.storedEvents = append(st.storedEvents, sev)
+}
+
+// smartRemoveStoredEvent is SmartScript::RemoveStoredEvent
+// (SmartScript.cpp:3615-3623): erase the first stored event whose
+// event_id matches, then stop.
+func (s *Server) smartRemoveStoredEvent(st *smartScriptState, id uint32) {
+	if st == nil {
+		return
+	}
+	for i, sev := range st.storedEvents {
+		if sev.timedEventID == id {
+			st.storedEvents = append(st.storedEvents[:i], st.storedEvents[i+1:]...)
+			return
+		}
+	}
+}
+
+// smartUpdateStoredEvents is the OnUpdate stored-events leg
+// (SmartScript.cpp:3710-3717): each stored holder ticks like a main-loop
+// UPDATE event — phase gate, timer expiry sets active and runs
+// ProcessEvent (whose UPDATE arm re-arms on the repeat window via
+// ProcessTimedAction, then fires the TRIGGER_TIMED_EVENT action).
+// Stored events never tick while evading: the caller returns before this
+// point on the evade branch, matching OnUpdate's early return.
+func (s *Server) smartUpdateStoredEvents(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
+	if st == nil || len(st.storedEvents) == 0 {
+		return
+	}
+	for _, sev := range st.storedEvents {
+		if sev.row.eventPhaseMask != 0 && !st.inPhase(sev.row.eventPhaseMask) {
+			continue
+		}
+		if sev.timer < diff {
+			sev.active = true
+			s.smartProcessEvent(ctx, motion, st, sev, 0, 0, 0)
+		} else {
+			sev.timer -= diff
+		}
+	}
 }
 
 // smartUpdateTimedActionList is SmartScript::OnUpdate's timed-action-list
@@ -914,8 +1043,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 			packet.WriteU64(tgt.guid)
 			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), mapID, instanceID, x, y, z, phase)
 		}
+	case smartActionRandomEmote:
+		s.smartActionRandomEmote(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetReactState:
 		s.smartActionSetReactState(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetEmoteState:
+		s.smartActionSetEmoteState(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetVisibility:
 		s.smartActionSetVisibility(ctx, motion, st, ev, invokerGUID)
 	case smartActionInterruptSpell:
@@ -926,6 +1059,10 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionCast(ctx, motion, st, ev, invokerGUID)
 	case smartActionSummonCreature:
 		s.smartActionSummonCreature(ctx, motion, st, ev, invokerGUID)
+	case smartActionThreatSinglePct:
+		s.smartActionThreatSinglePct(ctx, motion, st, ev, invokerGUID)
+	case smartActionThreatAllPct:
+		s.smartActionThreatAllPct(ctx, motion, st, ev, invokerGUID)
 	case smartActionAutoAttack:
 		motion.NoMeleeAttack = ev.row.actionParam1 == 0
 	case smartActionAllowCombatMovement:
@@ -974,6 +1111,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		// CreatureTextMgr — Go has no BroadcastText twin, so the emote
 		// stays out, the CALL_FOR_HELP precedent.
 		s.creatureFleeToGetAssistance(ctx, motion)
+	case smartActionEvade:
+		s.smartActionEvade(ctx, motion, st, ev, invokerGUID)
 	case smartActionRandomPhase:
 		// SMART_ACTION_RANDOM_PHASE (SmartScript.cpp:939-953): pick one of
 		// the nonzero phases (params 1-6). All-zero rows are rejected at
@@ -1030,6 +1169,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSetInvincibilityHPLevel(ctx, motion, st, ev, invokerGUID)
 	case smartActionMountToEntryOrModel:
 		s.smartActionMountToEntryOrModel(ctx, motion, st, ev, invokerGUID)
+	case smartActionMorphToEntryOrModel:
+		s.smartActionMorphToEntryOrModel(ctx, motion, st, ev, invokerGUID)
 	case smartActionRespawnBySpawnID:
 		s.smartActionRespawnBySpawnID(ctx, motion, ev)
 	case smartActionStoreTargetList:
@@ -1042,6 +1183,44 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 			st.storedTargets = make(map[uint32][]uint64)
 		}
 		st.storedTargets[ev.row.actionParam1] = guids
+	case smartActionCreateTimedEvent:
+		// SMART_ACTION_CREATE_TIMED_EVENT (SmartScript.cpp:1586-1613):
+		// builds a synthetic UPDATE holder — chance (0 defaults to
+		// 100), initial window (min/max), repeat window, NOT_REPEATABLE
+		// when no repeat window — whose action is TRIGGER_TIMED_EVENT
+		// for the id, then stores it in mStoredEvents. The target
+		// rides along (ev.target = e.target), so the trigger resolves
+		// the creator's targets. InitTimer rolls the initial window.
+		s.smartCreateTimedEvent(st, ev)
+	case smartActionTriggerTimedEvent:
+		// SMART_ACTION_TRIGGER_TIMED_EVENT (SmartScript.cpp:1615-1620):
+		// fires every TIMED_EVENT_TRIGGERED row for the id (invoker
+		// nil in C++), then queues the id for removal when the firing
+		// event is NOT_REPEATABLE — for a stored event's own fire
+		// that is the stored holder's flag, which is what C++ reads.
+		s.smartProcessEvents(ctx, motion, smartEventTimedEventTriggered, 0, ev.row.actionParam1, 0)
+		if ev.row.eventFlags&smartEventFlagNotRepeatable != 0 {
+			st.remTimedEventIDs = append(st.remTimedEventIDs, ev.row.actionParam1)
+		}
+	case smartActionRemoveTimedEvent:
+		// SMART_ACTION_REMOVE_TIMED_EVENT (SmartScript.cpp:1622-1623):
+		// queues the id for removal; the drain runs after the
+		// timed-list leg, matching OnUpdate's order.
+		st.remTimedEventIDs = append(st.remTimedEventIDs, ev.row.actionParam1)
+	case smartActionTriggerRandomTimedEvent:
+		// SMART_ACTION_TRIGGER_RANDOM_TIMED_EVENT (SmartScript.cpp:
+		// 2295-2298): a random id in [minId, maxId] fires its
+		// TIMED_EVENT_TRIGGERED rows; the stored holder keeps ticking
+		// on its own repeat window — no removal queued.
+		minID, maxID := ev.row.actionParam1, ev.row.actionParam2
+		if maxID < minID {
+			maxID = minID
+		}
+		id := minID
+		if maxID > minID {
+			id = minID + uint32(rand.Int63n(int64(maxID-minID+1)))
+		}
+		s.smartProcessEvents(ctx, motion, smartEventTimedEventTriggered, 0, id, 0)
 	case smartActionCallTimedActionList, smartActionCallRandomTimedActionList, smartActionCallRandomRangeTimedActionList:
 		s.smartActionCallTimedActionList(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetNPCFlag, smartActionAddNPCFlag, smartActionRemoveNPCFlag:
@@ -1049,18 +1228,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 	case smartActionRemoveUnitFieldBytes1:
 		s.smartActionRemoveUnitFieldBytes1(motion, st, ev, invokerGUID)
 	default:
-		// Residual: the remaining AGGRO-row actions (74, 146) have no
-		// Go twin. 74 REMOVE_TIMED_EVENT needs the unported timed-event
-		// store — CREATE_TIMED_EVENT (67) / TRIGGER (73) / REMOVE (74)
-		// over mStoredEvents + mRemIDs (SmartScript.cpp:1597-1624) —
-		// and its 3 live rows (1 src-0: Terokk 21838, AGGRO, remove id
-		// 1; 2 src-9 timed-list rows) pair with 67 rows the store
-		// would own; porting 74 alone would be dead code. 146 has no
-		// enum value in this C++ revision (SMART_ACTION_END = 140,
-		// SmartScriptMgr.h:600), so its 70 TDB rows hit C++'s
-		// log-and-skip default exactly as they hit this one
-		// (SmartScript.cpp:2370-2372). The event still consumed its
-		// chance roll and link below.
+		// Residual: the remaining AGGRO-row action (146) has no Go
+		// twin. 146 has no enum value in this C++ revision
+		// (SMART_ACTION_END = 140, SmartScriptMgr.h:600), so its 70
+		// TDB rows hit C++'s log-and-skip default exactly as they hit
+		// this one (SmartScript.cpp:2370-2372). The event still
+		// consumed its chance roll and link below.
 	}
 	if ev.row.link != 0 && ev.row.link != ev.row.id {
 		if st.linkDepth >= smartMaxNestedEvents {
@@ -1410,6 +1583,165 @@ func (s *Server) smartActionUpdateTemplate(ctx context.Context, motion *creature
 		}
 		s.seatCreatureEntry(ctx, tm, ev.row.actionParam1, ev.row.actionParam2 != 0)
 	}
+}
+
+// smartActionMorphToEntryOrModel is SMART_ACTION_MORPH_TO_ENTRY_OR_MODEL
+// (SmartScript.cpp:383-417): Creature::SetDisplayId on every creature
+// target — the entry leg takes the template's ChooseDisplayId
+// (ObjectMgr.cpp:1581-1593, the smartChooseDisplayID twin); a zero
+// entry with a nonzero model sets the model id directly; both zero
+// demorphs (DeMorph restores the native display). A missing template
+// skips the target outright. A zero ChooseDisplayId (template with no
+// valid model) is skipped like the Mount twin's guard — no TDB 26091
+// row hits it (all 34 morph entries carry a model). TDB 26091: 140
+// rows (37 entry, 99 model, 4 demorph).
+func (s *Server) smartActionMorphToEntryOrModel(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		if ev.row.actionParam1 != 0 {
+			displayID, ok := s.smartChooseDisplayID(ctx, ev.row.actionParam1)
+			if !ok || displayID == 0 {
+				continue
+			}
+			s.setMotionDisplayID(ctx, tm, displayID)
+		} else if ev.row.actionParam2 != 0 {
+			s.setMotionDisplayID(ctx, tm, ev.row.actionParam2)
+		} else {
+			s.motionMu.Lock()
+			native := tm.NativeDisplayID
+			s.motionMu.Unlock()
+			if native != 0 {
+				s.setMotionDisplayID(ctx, tm, native)
+			}
+		}
+	}
+}
+
+// smartActionRandomEmote is SMART_ACTION_RANDOM_EMOTE
+// (SmartScript.cpp:475-491): one random emote per target unit, drawn
+// uniformly from the nonzero params 1-6 — the PLAY_EMOTE broadcast
+// (SMSG_EMOTE to the per-target visible set) with a per-target pick.
+// All-zero rows would select from an empty vector in C++; TDB 26091
+// has none (min 1 nonzero of 121 rows), so the empty guard is
+// defensive only.
+func (s *Server) smartActionRandomEmote(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	emotes := make([]uint32, 0, 6)
+	for _, e := range [6]uint32{ev.row.actionParam1, ev.row.actionParam2, ev.row.actionParam3, ev.row.actionParam4, ev.row.actionParam5, ev.row.actionParam6} {
+		if e != 0 {
+			emotes = append(emotes, e)
+		}
+	}
+	if len(emotes) == 0 {
+		return
+	}
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+		if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid); tm != nil {
+			s.motionMu.Lock()
+			mapID, instanceID, x, y, z, phase = tm.Map, tm.InstanceID, tm.X, tm.Y, tm.Z, tm.PhaseMask
+			s.motionMu.Unlock()
+		} else if sess := s.findSessionByGUID(tgt.guid); sess != nil && sess.player != nil {
+			mapID, instanceID, x, y, z = sess.player.Map, sess.player.InstanceID, sess.player.X, sess.player.Y, sess.player.Z
+			phase = sess.currentPlayerPhaseMask()
+		}
+		packet := protocol.NewBuffer(12)
+		packet.WriteU32(emotes[rand.Intn(len(emotes))])
+		packet.WriteU64(tgt.guid)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), mapID, instanceID, x, y, z, phase)
+	}
+}
+
+// smartThreatPct is the THREAT_PCT value (SmartScript.cpp:493-519):
+// threatINC (param1) minus threatDEC (param2), floored at -100 —
+// the ModifyThreatByPercent percent, applied as a 0.01*(100+pct)
+// scale (ThreatManager.h:143; the Lua ModifyThreatByPercent bridge).
+func smartThreatPct(inc, dec uint32) int32 {
+	pct := int32(inc) - int32(dec)
+	if pct < -100 {
+		pct = -100
+	}
+	return pct
+}
+
+// smartActionThreatSinglePct is SMART_ACTION_THREAT_SINGLE_PCT
+// (SmartScript.cpp:506-519): ModifyThreatByPercent on every target
+// unit — a victim with no threat entry no-ops (ScaleThreat's unknown
+// victim leg), and pct 0 scales by 1.0, the C++ no-op. TDB 26091:
+// 11 rows, all SELF-targeted via VICTIM/INVOKER.
+func (s *Server) smartActionThreatSinglePct(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if motion.ThreatMgr == nil {
+		return
+	}
+	pct := smartThreatPct(ev.row.actionParam1, ev.row.actionParam2)
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		motion.ThreatMgr.ScaleThreat(tgt.guid, float32(0.01*float64(100+pct)))
+	}
+}
+
+// smartActionThreatAllPct is SMART_ACTION_THREAT_ALL_PCT
+// (SmartScript.cpp:493-504): ModifyThreatByPercent on every entry in
+// the owner's threat list (the EntryGUIDs snapshot — C++ iterates the
+// modifiable list). TDB 26091: 4 rows.
+func (s *Server) smartActionThreatAllPct(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if motion.ThreatMgr == nil {
+		return
+	}
+	pct := smartThreatPct(ev.row.actionParam1, ev.row.actionParam2)
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		motion.ThreatMgr.ScaleThreat(guid, float32(0.01*float64(100+pct)))
+	}
+}
+
+// smartActionSetEmoteState is SMART_ACTION_SET_EMOTE_STATE
+// (SmartScript.cpp:721-730): SetUInt32Value(UNIT_NPC_EMOTESTATE) on
+// every target unit — the motion EmoteState slot plus the values
+// broadcast, the .npc playemote arm's path. Player targets stay out:
+// Go has no player-side emote-state twin on this path and no TDB
+// 26091 row targets one (target types 1/0/19/10/11 only). TDB 26091:
+// 646 rows, 321 of them clearing to 0.
+func (s *Server) smartActionSetEmoteState(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tm.EmoteState = ev.row.actionParam1
+		tm.EmoteStateKnown = true
+		mapID, instanceID, guid := tm.Map, tm.InstanceID, tm.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCEmoteState: ev.row.actionParam1})
+	}
+}
+
+// smartActionEvade is SMART_ACTION_EVADE (SmartScript.cpp:820-835):
+// when param1 (toRespawnPosition) is 0 the home position resets to
+// the respawn position first, then EnterEvadeMode runs — the
+// triggerCreatureEvade twin, which already fires SMART_EVENT_EVADE
+// after _EnterEvadeMode (SmartAI.cpp:429) and takes the owner-follow
+// leg. TDB 26091: 121 rows, param1 0 on all of them, so the reset
+// always runs. The _evadeDisabled early arm (SmartAI.cpp:411-415,
+// action 117, unported) stays out: evade is never disabled in Go.
+// Summons/pets/totems carry no Spawn record, so the reset is a
+// no-op for them and their (undrifted) home stands.
+func (s *Server) smartActionEvade(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if ev.row.actionParam1 == 0 {
+		s.motionMu.Lock()
+		if motion.SpawnKnown {
+			motion.HomeX, motion.HomeY, motion.HomeZ, motion.HomeO = motion.SpawnX, motion.SpawnY, motion.SpawnZ, motion.SpawnO
+		}
+		s.motionMu.Unlock()
+	}
+	s.triggerCreatureEvade(ctx, motion, time.Now())
 }
 
 // smartActionForceDespawn is SMART_ACTION_FORCE_DESPAWN
