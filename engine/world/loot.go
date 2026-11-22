@@ -1784,12 +1784,13 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 		// chest left partially looted (GO_ACTIVATED) re-rolls its loot once
 		// its respawn delay has elapsed since generation — the stale
 		// remainder is not re-shown. Rows in the gameobject table are
-		// default spawns (isSpawnedByDefault); instances are excluded (C++
-		// avoids duplicate boss-loot exploits there). The same open fills
-		// the fresh loot.
+		// default spawns (isSpawnedByDefault); Instanceable maps (dungeons,
+		// raids, battlegrounds, arenas — Map::Instanceable,
+		// Player.cpp:8574-8578) are excluded, since C++ avoids duplicate
+		// boss-loot exploits there. The same open fills the fresh loot.
 		if goType == GameObjectTypeChest && !lootFullyLooted(loot) && respawnDelay > 0 &&
 			loot.GeneratedAt > 0 && loot.GeneratedAt+respawnDelay < time.Now().Unix() &&
-			!s.isDungeonMap(goMap) {
+			!instanceableMapID(s.server, goMap) {
 			loot.Items = make(map[uint8]lootItem)
 			loot.QuestItems = nil
 			loot.FFATaken = nil
@@ -1810,6 +1811,20 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 			s.activeLoot = loot
 			s.interruptCurrentCast()
 			return s.finishLootOpen(ctx, loot)
+		}
+	}
+
+	// Player::SendLoot GO arm (Player.cpp:8579-8586): inside a battleground
+	// the fill is refused when bg->CanActivateGO(entry, team) is false —
+	// BattlegroundAV::CanActivateGO (BattlegroundAV.cpp:708) gates only the
+	// two mine supply objects on the owning team. The gate runs only on the
+	// fill path (GO_READY), like C++; an already-activated window re-shows
+	// without it.
+	if entry == AVObjectMineSupplyN || entry == AVObjectMineSupplyS {
+		if bgTypeID, _, _, bgOK := battlegroundTypeForMap(s.player.Map); bgOK && bgTypeID == 1 && s.bgData.InstanceID != 0 {
+			if !s.server.avMineActivatable(s.player.Map, entry, uint8(teamForRace(s.player.Race)+1)) {
+				return s.sendLootReleaseResponse(targetGUID) == nil
+			}
 		}
 	}
 
@@ -2019,8 +2034,11 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	// default LOOT_MODE_DEFAULT) — and money rolls only when the mode is
 	// non-zero (GetLootMode() > 0). A zero mode adds no rows either: the
 	// lootMode filter (row.lootMode&lootMode) drops every row.
+	// A stored 0 is a script mode (SetLootMode(0)/RemoveLootMode via the Lua
+	// bridges), not an unset field: every motion is created with
+	// lootModeDefault, so the mode is honored even when zero.
 	lootMode := uint32(lootModeDefault)
-	if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); motion != nil && motion.LootMode != 0 {
+	if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, targetGUID); motion != nil {
 		lootMode = uint32(motion.LootMode)
 	}
 	if lootMode != 0 {
@@ -2376,12 +2394,14 @@ func (s *session) fishingHoleNearby(ctx context.Context, bobber *dynamicGameObje
 	return err == nil && found == 1
 }
 
-// finishLootOpen completes a successful corpse-loot open: after the response is
-// on the wire it sets the UNIT_FLAG_LOOTING bit (UnitDefines.h:134), the
-// Player::SendLoot arm at Player.cpp:8906-8910 (loot_type == LOOT_CORPSE &&
-// !guid.IsItem()); the handleLoot paths are corpse loot of creatures and
-// gameobjects only, so the !IsItem leg is vacuous here. Item loot (items.go)
-// and fishing (LOOT_FISHING) never take this path, matching C++.
+// finishLootOpen completes a successful loot open: after the response is on
+// the wire it sets the UNIT_FLAG_LOOTING bit (UnitDefines.h:134) — the
+// Player::SendLoot arm at Player.cpp:8906-8910, which fires only for
+// loot_type == LOOT_CORPSE && !guid.IsItem(). Creature corpse opens pass
+// LOOT_CORPSE; skinning (creature skinning and GO lock-opens, which arrive
+// as LOOT_SKINNING via Spell::EffectOpenLock, SpellEffects.cpp:2031) and
+// pickpocketing never set it. Item loot (items.go), fishing (LOOT_FISHING)
+// and bones (LOOT_SKINNING) never take this path, matching C++.
 // playerCorpseLootEntry mirrors PLAYER_CORPSE_LOOT_ENTRY
 // (SharedDefines.h:3143): the creature loot template entry the SendLoot
 // bones arm fills from in Alterac Valley and Wintergrasp
@@ -2487,7 +2507,7 @@ func (s *session) finishLootOpen(ctx context.Context, loot *activeLootState) boo
 	if s.sendLootResponse(ctx, loot) != nil {
 		return false
 	}
-	if s.player != nil && s.player.UnitFlags&unitFlagLooting == 0 {
+	if loot != nil && loot.LootType == lootTypeCorpse && s.player != nil && s.player.UnitFlags&unitFlagLooting == 0 {
 		s.player.UnitFlags |= unitFlagLooting
 		s.sendPlayerUpdate()
 	}
@@ -2900,8 +2920,9 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 	stdKey := creatureWorldGUID(guid, entry)
 	// Player::SendLoot head (Player.cpp:8526-8527): opening new loot releases
 	// the previously open window first — unconditionally, including a
-	// same-target re-open (C++ has no exemption); the skinning arm
-	// re-clears and re-fills below exactly like the C++ arm.
+	// same-target re-open (C++ has no exemption). A first skinning fill
+	// clears and re-fills below (Player.cpp:8842-8848); an existing
+	// skinning window is re-shown as-is instead (Player.cpp:8835-8841).
 	if prev := s.activeLoot; prev != nil {
 		s.doLootRelease(prev)
 	}
@@ -2920,6 +2941,26 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 			MaxDuplicates: s.server.lootMaxDuplicates(s.player.Map, s.player.RaidDifficulty)}
 		s.server.creatureLoot[key] = loot
 		s.server.creatureLoot[standardKey] = loot
+	}
+	// Player::SendLoot creature arm (Player.cpp:8835-8841): an existing
+	// LOOT_SKINNING window is shown as-is with OWNER/NONE permission by
+	// recipient — a second skinning cast must not re-roll the loot. The
+	// recipient is the skinner recorded at the first fill.
+	if loot.LootType == lootTypeSkinning {
+		skinOwner, skinOwnerOK := s.server.creatureLootOwners[key]
+		if !skinOwnerOK {
+			skinOwner, skinOwnerOK = s.server.creatureLootOwners[standardKey]
+		}
+		if !skinOwnerOK || skinOwner.PlayerGUID != s.playerGUID {
+			s.server.lootMu.Unlock()
+			s.interruptCurrentCast()
+			return s.sendLootError(targetGUID, 0) == nil
+		}
+		s.server.lootMu.Unlock()
+		loot.addViewer(s)
+		s.activeLoot = loot
+		s.interruptCurrentCast()
+		return s.finishLootOpen(ctx, loot)
 	}
 	// Loot::clear() + SendLoot's loot->loot_type = LOOT_SKINNING (Player.cpp:8894).
 	// Loot::clear (Loot.cpp:117-138) also drops the per-viewer FFA takes —
@@ -3056,8 +3097,8 @@ func (s *session) openPickpocketLoot(ctx context.Context, targetGUID uint64, ent
 		s.server.autoStoreLootCurrencyTokens(ctx, loot, s)
 	}
 	// Player.cpp:8781-8783: gold = 10 * (urand(0, creatureLvl/2) +
-	// urand(0, playerLvl/2)) * RATE_DROP_MONEY; the rate has no Go model.
-	loot.Money = uint32(10 * (rand.Intn(int(creatureLevel)/2+1) + rand.Intn(int(s.player.Level)/2+1)))
+	// urand(0, playerLvl/2)) * RATE_DROP_MONEY.
+	loot.Money = uint32(float64(10*(rand.Intn(int(creatureLevel)/2+1)+rand.Intn(int(s.player.Level)/2+1))) * s.server.Config.RateDropMoney)
 	loot.addViewer(s)
 	s.activeLoot = loot
 	s.interruptCurrentCast()
@@ -5229,15 +5270,19 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 		var disenchantID uint32
 		_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT DisenchantID FROM item_template WHERE entry = ?", roll.ItemEntry).Scan(&disenchantID)
 		if disenchantID > 0 {
-			rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT Item, MinCount, MaxCount, Chance FROM disenchant_loot_template WHERE Entry = ?", disenchantID)
+			rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT d.Item, d.MinCount, d.MaxCount, d.Chance, COALESCE(t.Quality, 0) FROM disenchant_loot_template d LEFT JOIN item_template t ON t.entry = d.Item WHERE d.Entry = ?", disenchantID)
 			if err == nil {
 				for rows.Next() {
 					var item, minCount, maxCount uint32
 					var chance float64
-					if err := rows.Scan(&item, &minCount, &maxCount, &chance); err != nil || item == 0 {
+					var quality uint32
+					if err := rows.Scan(&item, &minCount, &maxCount, &chance, &quality); err != nil || item == 0 {
 						continue
 					}
-					if rand.Float64()*100.0 >= chance {
+					// LootStoreItem::Roll (LootMgr.cpp:281-295): the flat
+					// chance is scaled by the quality rate, like the
+					// template-fill path (lootRowTakesChance).
+					if !lootRowTakesChance(chance, s.lootQualityDropRate(quality)) {
 						continue
 					}
 					count := minCount
@@ -5256,7 +5301,6 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 		}
 	}
 
-	storedAny := false
 	mailed := false
 	// Group::CountTheRoll (Group.cpp:1657-1669): the disenchant arm probes
 	// CanStoreNewItem for the ORIGINAL rolled item first. When it doesn't
@@ -5286,7 +5330,6 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 				winnerSess.sendEquipError(matGate, 0)
 				continue
 			}
-			storedAny = true
 			_ = winnerSess.sendInventoryItems(ctx)
 			winnerSess.sendPlayerUpdate()
 			slotForPush := uint32(res.Slot)
@@ -5297,23 +5340,11 @@ func (s *Server) deliverDisenchantMats(ctx context.Context, roll *activeGroupRol
 		}
 	}
 
-	if !mailed && (len(mats) == 0 || !storedAny) {
-		s.lootMu.Lock()
-		if cLoot := s.creatureLoot[rollLootObjectKey(roll)]; cLoot != nil {
-			if qi, qidx, ok := questRollSlot(cLoot, roll.Slot); ok {
-				qi.IsBlocked = false
-				qi.RollWinner = winnerGUID
-				cLoot.QuestItems[qidx] = qi
-			} else if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
-				li.IsBlocked = false
-				li.RollWinner = winnerGUID
-				cLoot.Items[uint8(roll.Slot)] = li
-			}
-		}
-		s.lootMu.Unlock()
-		return
-	}
-
+	// Group::CountTheRoll disenchant arm (Group.cpp:1635-1638): the row is
+	// marked looted before the material delivery runs, so the win consumes
+	// it even when the template rolls zero materials or every material
+	// fails to store — unblocking it here let the winner loot the item
+	// itself afterwards.
 	s.lootMu.Lock()
 	cLoot := s.creatureLoot[rollLootObjectKey(roll)]
 	if cLoot != nil {

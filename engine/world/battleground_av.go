@@ -336,6 +336,30 @@ func getAVNodeInitialOwner(nodeID uint32) uint8 {
 	}
 }
 
+// avMineActivatable mirrors BattlegroundAV::CanActivateGO
+// (BattlegroundAV.cpp:708): the two mine supply objects open only for the
+// team that owns the mine; any other entry is always activatable. A missing
+// AV state fails open (no battleground).
+func (s *Server) avMineActivatable(mapID, entry uint32, team uint8) bool {
+	if entry != AVObjectMineSupplyN && entry != AVObjectMineSupplyS {
+		return true
+	}
+	if s == nil {
+		return true
+	}
+	s.objectsMu.RLock()
+	av := s.avState[mapID]
+	s.objectsMu.RUnlock()
+	if av == nil {
+		return true
+	}
+	mineID := AVNorthMine
+	if entry == AVObjectMineSupplyS {
+		mineID = AVSouthMine
+	}
+	return av.Mines[mineID].Owner == team
+}
+
 func (s *Server) getOrCreateAVState(mapID uint32) *avBattlegroundState {
 	if s == nil {
 		return nil
