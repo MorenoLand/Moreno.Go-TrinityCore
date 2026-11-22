@@ -224,6 +224,7 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	s.motionMu.Unlock()
 	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil {
 		s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion), assigned)
+		s.smartPassengerBoarded(ctx, base, passengerGUID, assigned, true)
 		s.syncCreatureVehiclePassengers(base)
 		return
 	}
@@ -256,8 +257,9 @@ func (s *Server) luaVehicleRemovePassenger(ctx context.Context, ref *luaVehicleR
 	if motion == nil || motion.VehicleGUID != ref.baseGUID {
 		return
 	}
+	var seatID int8
 	if kit != nil {
-		kit.RemovePassenger(passengerGUID)
+		seatID, _, _, _ = kit.RemovePassenger(passengerGUID)
 	}
 	s.motionMu.Lock()
 	motion.VehicleGUID = 0
@@ -266,5 +268,6 @@ func (s *Server) luaVehicleRemovePassenger(ctx context.Context, ref *luaVehicleR
 	s.motionMu.Unlock()
 	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil {
 		s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion))
+		s.smartPassengerBoarded(ctx, base, passengerGUID, seatID, false)
 	}
 }

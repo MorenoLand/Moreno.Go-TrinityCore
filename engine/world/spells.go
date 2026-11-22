@@ -51243,6 +51243,10 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 	// (motion is nil on the pet arm), matching C++'s ToCreature gate.
 	if motion != nil {
 		s.server.fireCreatureSpellClick(ctx, motion, s.luaPlayer(), handled)
+		// SmartAI::OnSpellClick (SmartAI.cpp:879-884) fires
+		// SMART_EVENT_ON_SPELLCLICK (73) on the same hook, gated on
+		// handled inside the twin; TDB 26091: 4 rows (2 INVOKER_CAST).
+		s.server.smartSpellClick(ctx, motion, s.playerGUID, handled)
 	}
 	// Spell::PreprocessSpellHit (Spell.cpp:2726-2728): a player hit by a
 	// spell fires ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET with the caster

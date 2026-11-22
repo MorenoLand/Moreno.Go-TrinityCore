@@ -929,12 +929,13 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 	s.motionMu.Unlock()
 	if vehicleGUID != 0 {
 		if kit := s.getVehicleKit(mapID, instanceID, vehicleGUID); kit != nil {
-			if _, _, _, ok := kit.RemovePassenger(guid); ok {
+			if seatID, _, _, ok := kit.RemovePassenger(guid); ok {
 				// Vehicle::RemovePassenger (Vehicle.cpp:538-539) fires
 				// OnRemovePassenger for creature bases only; a player
 				// base stays silent per the C++ TYPEID_UNIT gate.
 				if base := s.findCreatureMotion(mapID, instanceID, vehicleGUID); base != nil {
 					s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion))
+					s.smartPassengerBoarded(ctx, base, guid, seatID, false)
 				}
 			}
 		}

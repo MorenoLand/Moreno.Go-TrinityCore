@@ -250,6 +250,13 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 			s.fireCreaturePetSummoned(ctx, summoned, player)
 		}
 	}
+	// SmartAI::IsSummonedBy (SmartAI.cpp:647-650): the summoned
+	// creature's own JUST_SUMMONED (54) event — TempSummon::InitSummon
+	// (TemporarySummon.cpp:231-247) fires it for every temp summon, so
+	// the fire rides the same funnel for creature, player, and GO
+	// summoners (origin.GUID carries all three); a zero GUID is a
+	// summoner-less world spawn and stays silent. TDB 26091: 719 rows.
+	s.smartJustSummoned(ctx, summoned, origin.GUID)
 	return summoned
 }
 

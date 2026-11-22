@@ -124,13 +124,20 @@ const (
 	smartEventGOLootStateChanged  uint32 = 70 // SMART_EVENT_GO_LOOT_STATE_CHANGED (SmartScriptMgr.h:169), var0 = loot state
 	smartEventCounterSet          uint32 = 77 // SMART_EVENT_COUNTER_SET (SmartScriptMgr.h:176), var0 = counter id
 	smartEventPhase12             uint32 = 12 // SMART_EVENT_PHASE_12 (SmartScriptMgr.h:55), the IncPhase clamp (SmartScript.cpp:3996-4000)
+	smartEventPassengerBoarded    uint32 = 27 // SMART_EVENT_PASSENGER_BOARDED (SmartScriptMgr.h:126), var0 = seat id
+	smartEventPassengerRemoved    uint32 = 28 // SMART_EVENT_PASSENGER_REMOVED (SmartScriptMgr.h:127), var0 = seat id
+	smartEventJustSummoned        uint32 = 54 // SMART_EVENT_JUST_SUMMONED (SmartScriptMgr.h:153)
+	smartEventOnSpellClick        uint32 = 73 // SMART_EVENT_ON_SPELLCLICK (SmartScriptMgr.h:172), invoker = clicker
 )
 
-// SMART_ACTION ids (SmartScriptMgr.h:457-600), ported set. The
-// remaining AGGRO-row action (146) hits the default arm: it has no enum
-// value in this C++ revision (SMART_ACTION_END = 140), so C++ log-and-skips
-// it too (SmartScript.cpp:2370-2372). The timed-event store (67/73/74/125
-// + mStoredEvents/mRemIDs) is ported below.
+// SMART_ACTION ids (SmartScriptMgr.h:457-600), ported set. Actions
+// >= SMART_ACTION_END (140) never reach dispatch: the C++ loader
+// rejects them (SmartScriptMgr::IsEventValid, SmartScriptMgr.cpp:682-686),
+// so their TDB rows (142:11 / 144:306 / 145:296 / 146:70 / 147:127)
+// are dropped at load by loadSmartScripts below — the old "hit the
+// dispatch default exactly as in C++" reading was wrong, the loader
+// rejects them before any event can fire. The timed-event store
+// (67/73/74/125 + mStoredEvents/mRemIDs) is ported below.
 // Full action census (TDB 26091, all 140 enum ids x Go consts x rows)
 // lives in hidden_files/smartai_action_census.py; 6 FAIL_QUEST (89
 // rows), 7 OFFER_QUEST (1 row, directAdd) and 9 ACTIVATE_GOBJECT (60
@@ -177,9 +184,9 @@ const (
 // DESPAWN_SPAWNGROUP (12) are ported below. The 134 INVOKER_CAST
 // (35) / 138 OVERRIDE_LIGHT (2) / 139 OVERRIDE_WEATHER (2) are
 // ported below; 119-126, 128-130, 135-137 and 140 have zero TDB
-// rows, and 141-146 have no enum value (SMART_ACTION_END = 140) so
-// their rows hit the dispatch default exactly as in C++ — with this
-// strip every enum action id is ported or zero-row.
+// rows, and 141-147 have no enum value (SMART_ACTION_END = 140) so
+// the loader rejects their rows — with this strip every enum action
+// id is ported or zero-row, and no out-of-enum action can fire.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -292,6 +299,7 @@ const (
 	smartActionInvokerCast                    uint32 = 134
 	smartActionOverrideLight                  uint32 = 138
 	smartActionOverrideWeather                uint32 = 139
+	smartActionEnd                            uint32 = 140 // SMART_ACTION_END (SmartScriptMgr.h:600)
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
 )
@@ -589,6 +597,17 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 			continue
 		}
 		if r.sourceType != 0 && r.sourceType != 9 {
+			continue
+		}
+		// SmartScriptMgr::IsEventValid (SmartScriptMgr.cpp:682-686):
+		// an action type of 0 or >= SMART_ACTION_END (140) is
+		// load-rejected — the row never reaches dispatch, and links
+		// into it never fire. TDB 26091: 810 such rows (142:11 /
+		// 144:306 / 145:296 / 146:70 / 147:127), 735 of them src 0/9;
+		// 528 of those fire on their own events and 208 src-0 link
+		// chains fire an invalid LINK row, where C++ fires nothing
+		// (105 of the 208 are LINK-to-LINK chains).
+		if r.actionType <= 0 || r.actionType >= smartActionEnd {
 			continue
 		}
 		r.targetX, r.targetY, r.targetZ, r.targetO = float32(tx), float32(ty), float32(tz), float32(to)
@@ -1008,11 +1027,25 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 			}
 		}
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventPassengerBoarded, smartEventPassengerRemoved:
+		// SMART_EVENT_PASSENGER_BOARDED/REMOVED
+		// (SmartScript.cpp:3294-3300): the event needs its passenger
+		// (unit), re-arms on the cooldown window (event_param1/2 —
+		// the minMax pair, SmartScriptMgr.h:235-238), then runs its
+		// action with NO var0/var1 — the seat id ProcessEventsFor
+		// carries is dropped by the case's ProcessAction(e, unit)
+		// call. TDB 26091: all 34 + 24 rows carry 0/0 cooldowns.
+		if invokerGUID == 0 {
+			return
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam1, ev.row.eventParam2)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
 		smartEventAIInit, smartEventJustCreated,
 		smartEventTextOver, smartEventPhaseChange,
-		smartEventFollowCompleted:
+		smartEventFollowCompleted,
+		smartEventJustSummoned, smartEventOnSpellClick:
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	default:
 		// Timed/conditioned types with no Go condition evaluation
@@ -1782,11 +1815,13 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		// (zone 3711, state 5 HEAVY_RAIN, intensity 1 / 0).
 		s.setZoneWeatherOverride(ev.row.actionParam1, ev.row.actionParam2, float32(ev.row.actionParam3))
 	default:
-		// Residual: the remaining AGGRO-row action (146) has no Go
-		// twin. 146 has no enum value in this C++ revision
-		// (SMART_ACTION_END = 140, SmartScriptMgr.h:600), so its 70
-		// TDB rows hit C++'s log-and-skip default exactly as they hit
-		// this one (SmartScript.cpp:2370-2372). The event still
+		// In-enum actions with no Go twin yet land here (the C++
+		// log-and-skip default, SmartScript.cpp:2370-2372). Rows
+		// with action_type >= SMART_ACTION_END (140) never reach
+		// this arm on either side: C++ load-rejects them
+		// (SmartScriptMgr.cpp:682-686) and loadSmartScripts does
+		// the same, so 146's 70 TDB rows (and 142/144/145/147)
+		// are dead at load, not at dispatch. The event still
 		// consumed its chance roll and link below.
 	}
 	if ev.row.link != 0 && ev.row.link != ev.row.id {
@@ -5196,6 +5231,46 @@ func (s *Server) smartActionJumpToPos(ctx context.Context, motion *creatureMotio
 		}
 		s.launchCreatureJumpSpline(tm, ev.row.targetX, ev.row.targetY, ev.row.targetZ, speedXY, speedZ, smartMoveJumpEventID)
 	}
+}
+
+// smartSpellClick is SmartAI::OnSpellClick (SmartAI.cpp:879-884):
+// the event fires only when a click row's cast ran
+// (spellClickHandled), with the clicker as invoker. No veto — the
+// return value is unused, unlike the gossip twins.
+func (s *Server) smartSpellClick(ctx context.Context, motion *creatureMotion, invokerGUID uint64, handled bool) {
+	if !handled {
+		return
+	}
+	s.smartProcessEvents(ctx, motion, smartEventOnSpellClick, invokerGUID, 0, 0)
+}
+
+// smartPassengerBoarded is SmartAI::PassengerBoarded
+// (SmartAI.cpp:667-670): apply boards (SMART_EVENT_PASSENGER_BOARDED,
+// 27) and unseats (SMART_EVENT_PASSENGER_REMOVED, 28), with the
+// passenger as invoker and the seat id as var0 (dropped by the event
+// case, SmartScript.cpp:3294-3300). Fires from every Go
+// AddPassenger/RemovePassenger site next to the Eluna vehicle event.
+func (s *Server) smartPassengerBoarded(ctx context.Context, base *creatureMotion, passengerGUID uint64, seatID int8, apply bool) {
+	if s == nil || base == nil || passengerGUID == 0 {
+		return
+	}
+	eventType := smartEventPassengerRemoved
+	if apply {
+		eventType = smartEventPassengerBoarded
+	}
+	s.smartProcessEvents(ctx, base, eventType, passengerGUID, uint32(seatID), 0)
+}
+
+// smartJustSummoned is SmartAI::IsSummonedBy (SmartAI.cpp:647-650):
+// the summoned creature's own JUST_SUMMONED (54) event fires with the
+// summoner as invoker. TempSummon::InitSummon (TemporarySummon.cpp:231-
+// 247) calls it for every temp summon; world spawns with no summoner
+// (origin GUID 0) never reach it.
+func (s *Server) smartJustSummoned(ctx context.Context, summoned *creatureMotion, summonerGUID uint64) {
+	if s == nil || summoned == nil || summonerGUID == 0 {
+		return
+	}
+	s.smartProcessEvents(ctx, summoned, smartEventJustSummoned, summonerGUID, 0, 0)
 }
 
 // smartGossipSelect is SmartAI::OnGossipSelect (SmartAI.cpp:765-770):
