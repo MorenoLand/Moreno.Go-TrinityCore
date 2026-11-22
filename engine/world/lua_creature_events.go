@@ -2396,28 +2396,6 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return nil, nil
 	}
-	// AttackStop is Unit::AttackStop (Unit.cpp:5763) for handler creatures:
-	// the current victim is dropped (TargetGUID=0), SMSG_ATTACK_STOP goes
-	// to the instance, and the no-call-assistance flag resets (the
-	// combat-stop-only reset). Threat is untouched — C++ keeps the threat
-	// list; re-engagement rides the normal assist/aggro paths. The melee
-	// interrupt arm is vacuous (creature swings are tick-driven, no melee
-	// spell slot). The thekal zealot feign-death arm.
-	methods["AttackStop"] = func(_ context.Context, _ []any) ([]any, error) {
-		s.motionMu.Lock()
-		victim := motion.TargetGUID
-		if victim == 0 {
-			s.motionMu.Unlock()
-			return []any{false}, nil
-		}
-		motion.TargetGUID = 0
-		motion.AlreadyCallAssistance = false
-		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
-		s.motionMu.Unlock()
-		stopPkt := buildAttackStop(guid, victim, false)
-		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
-		return []any{true}, nil
-	}
 	// Attack(target[, meleeAttack]) is the handler-creature twin of
 	// the player binding (UnitMethods.h:22-27, Unit.cpp:5650-5760):
 	// the shared luaUnitAttack gates and engage tail, over the live
@@ -3747,15 +3725,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return nil, nil
 	}
 	// AttackStop is Unit::AttackStop (Unit.cpp:5763-5787): when the
-	// creature has a current target it drops the attack — SMSG_ATTACK_STOP
+	// creature has a current target it drops the attack (TargetGUID = 0) — SMSG_ATTACK_STOP
 	// for the (attacker, victim) pair, the visual target
 	// (UNIT_FIELD_TARGET) cleared, and the no-call-assistance flag reset.
-	// Threat, TargetGUID and InCombat are untouched (that teardown is
+	// Threat and InCombat are untouched (that teardown is
 	// Unit::CombatStop, Unit.cpp:5809 — see CombatStop below). The
 	// InterruptSpell(CURRENT_MELEE_SPELL) leg is vacuous in Go (melee
 	// swings carry no cast state); the victim-side _removeAttacker leg
 	// rides the packet, matching the evade path's broadcast-only
-	// treatment. No-op when no target is set (the !m_attacking early-out).
+	// treatment. No-op when no target is set (the !m_attacking early-out). The thekal zealot feign-death arm.
 	methods["AttackStop"] = func(ctx context.Context, args []any) ([]any, error) {
 		s.motionMu.Lock()
 		target := motion.TargetGUID
@@ -3764,6 +3742,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, nil
 		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		motion.TargetGUID = 0
 		motion.AlreadyCallAssistance = false
 		s.motionMu.Unlock()
 		stopPkt := buildAttackStop(guid, target, false)

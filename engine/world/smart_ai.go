@@ -16,8 +16,10 @@
 // latter also serves 1108 CAST rows. 37 DIE (61 live rows), 38
 // SET_IN_COMBAT_WITH_ZONE (34) and 40 SET_SHEATH (31) are ported
 // below (the DEATH dispatch rides the insta-kill path, the zone
-// engage is the shared creatureDoZoneInCombat helper). The next
-// unported block starts at 44 SET_INGAME_PHASE_MASK (42 live rows).
+// engage is the shared creatureDoZoneInCombat helper). 44
+// SET_INGAME_PHASE_MASK (42 rows, 36 live), 46 ATTACK_STOP (8)
+// and 51 KILL_UNIT (47 rows, 35 live) are ported below. The next
+// unported block is 50 SUMMON_GO (226 rows, 174 live).
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -110,8 +112,10 @@ const (
 // latter also serves 1108 CAST rows. 37 DIE (61 live rows), 38
 // SET_IN_COMBAT_WITH_ZONE (34) and 40 SET_SHEATH (31) are ported
 // below; the DEATH dispatch rides the insta-kill path and the zone
-// engage is the shared creatureDoZoneInCombat helper.
-// The next unported block starts at 44 SET_INGAME_PHASE_MASK (42 live rows).
+// engage is the shared creatureDoZoneInCombat helper. 44
+// SET_INGAME_PHASE_MASK (42 rows, 36 live), 46 ATTACK_STOP (8)
+// and 51 KILL_UNIT (47 rows, 35 live) are ported below.
+// The next unported block is 50 SUMMON_GO (226 rows, 174 live).
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -152,10 +156,13 @@ const (
 	smartActionForceDespawn                   uint32 = 41
 	smartActionSetInvincibilityHPLevel        uint32 = 42
 	smartActionMountToEntryOrModel            uint32 = 43
+	smartActionSetIngamePhaseMask             uint32 = 44
 	smartActionSetData                        uint32 = 45
+	smartActionAttackStop                     uint32 = 46
 	smartActionSetVisibility                  uint32 = 47
 	smartActionSetActive                      uint32 = 48
 	smartActionAttackStart                    uint32 = 49
+	smartActionKillUnit                       uint32 = 51
 	smartActionStoreTargetList                uint32 = 64
 	smartActionCreateTimedEvent               uint32 = 67
 	smartActionTriggerTimedEvent              uint32 = 73
@@ -1231,6 +1238,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		if len(targets) > 0 {
 			s.triggerCreatureAggro(ctx, motion.GUID, targets[rand.Intn(len(targets))].guid, true)
 		}
+	case smartActionKillUnit:
+		s.smartActionKillUnit(ctx, motion, st, ev, invokerGUID)
 	case smartActionRemoveAurasFromSpell:
 		s.smartActionRemoveAuras(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetInstData:
@@ -1275,6 +1284,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 			motion.SheathStateKnown = true
 			s.motionMu.Unlock()
 		}
+	case smartActionSetIngamePhaseMask:
+		s.smartActionSetIngamePhaseMask(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetData:
 		s.smartActionSetData(ctx, motion, st, ev, invokerGUID)
 	case smartActionUpdateTemplate:
@@ -1285,6 +1296,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSetInvincibilityHPLevel(ctx, motion, st, ev, invokerGUID)
 	case smartActionMountToEntryOrModel:
 		s.smartActionMountToEntryOrModel(ctx, motion, st, ev, invokerGUID)
+	case smartActionAttackStop:
+		s.smartActionAttackStop(ctx, motion, st, ev, invokerGUID)
 	case smartActionMorphToEntryOrModel:
 		s.smartActionMorphToEntryOrModel(ctx, motion, st, ev, invokerGUID)
 	case smartActionRespawnBySpawnID:
@@ -2060,6 +2073,127 @@ func (s *Server) smartActionCombatStop(ctx context.Context, motion *creatureMoti
 	s.removeCreatureAttackers(mapID, instanceID, motion.GUID)
 	s.removeThreatVictimFromAllLists(mapID, instanceID, motion.GUID)
 	s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, motion.GUID, phase)
+}
+
+// smartActionSetIngamePhaseMask is SMART_ACTION_SET_INGAME_PHASE_MASK
+// (SmartScript.cpp:1122-1131): every target unit takes
+// Unit::SetPhaseMask(mask, true), every target gameobject
+// WorldObject::SetPhaseMask(mask, true) (Object.cpp:3480). The
+// creature leg is the motion PhaseMask + Known write (the Lua
+// SetPhaseMask bridge twin, lua_creature_events.go:4476); the
+// player leg is the .modify phase override slot (miscSetPhaseMask);
+// the GO leg is setGameObjectPhaseMask (the materialize-then-write
+// twin of setGameObjectLootState). Not carried, same as the Lua
+// bridge: the controlled-unit / summon-slot propagation
+// (Unit.cpp:12474-12485), the single-target-aura strip, and the
+// UpdateObjectVisibility fan-out (Go keeps no persistent per-player
+// visibility set to refresh; phase-filtered broadcasts read the
+// stored mask). TDB 26091: 42 rows, 36 live (src0+9); masks 1/2/3/
+// 8/64/256, ap2-6 all 0; targets SELF (35), CREATURE_RANGE (3),
+// CREATURE_GUID (2), CLOSEST_GAMEOBJECT (1, GO-sourced),
+// ACTION_INVOKER (1). The 6 src1 GO-source rows stay residual
+// (GO smart scripts do not attach); the ev54 JUST_SUMMONED rows
+// (2) and the ev28 PASSENGER_REMOVED row (1) never fire until
+// those dispatches exist (same family as the KILL / GOSSIP_SELECT
+// gaps).
+func (s *Server) smartActionSetIngamePhaseMask(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	mask := ev.row.actionParam1
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isGameObject {
+			s.setGameObjectPhaseMask(motion.Map, motion.InstanceID, tgt.guid, mask)
+			continue
+		}
+		if tgt.isPlayer {
+			if sess := s.findSessionByGUID(tgt.guid); sess != nil {
+				miscSetPhaseMask(sess, mask)
+			}
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tm.PhaseMask = mask
+		tm.PhaseMaskKnown = true
+		s.motionMu.Unlock()
+	}
+}
+
+// smartActionAttackStop is SMART_ACTION_ATTACK_STOP
+// (SmartScript.cpp:1196-1202): Unit::AttackStop() per target unit —
+// the Lua AttackStop bridge twin (lua_creature_events.go:3759):
+// the !m_attacking early-out (no target, no-op), else the victim
+// is dropped (TargetGUID = 0), AlreadyCallAssistance reset, and
+// SMSG_ATTACK_STOP + the visual-target clear broadcast. Threat,
+// InCombat and the attackers list are untouched — that teardown
+// is Unit::CombatStop (action 27), not AttackStop. The
+// InterruptSpell(CURRENT_MELEE_SPELL) leg is vacuous in Go (melee
+// swings carry no cast state). Player targets take the session
+// twin (attackTarget = 0 + sendAttackStop). TDB 26091: 8 rows, all
+// SELF, no params.
+func (s *Server) smartActionAttackStop(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isGameObject {
+			continue
+		}
+		if tgt.isPlayer {
+			if sess := s.findSessionByGUID(tgt.guid); sess != nil && sess.attackTarget != 0 {
+				victim := sess.attackTarget
+				sess.attackTarget = 0
+				_ = sess.sendAttackStop(victim, false)
+			}
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		victim := tm.TargetGUID
+		if victim == 0 {
+			s.motionMu.Unlock()
+			continue
+		}
+		tm.TargetGUID = 0
+		tm.AlreadyCallAssistance = false
+		mapID, instanceID, x, y, z, phase := tm.Map, tm.InstanceID, tm.X, tm.Y, tm.Z, tm.PhaseMask
+		s.motionMu.Unlock()
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(tm.GUID, victim, false), mapID, instanceID, x, y, z, phase)
+		s.clearCreatureVisualTarget(tm)
+	}
+}
+
+// smartActionKillUnit is SMART_ACTION_KILL_UNIT
+// (SmartScript.cpp:1297-1307): target->ToUnit()->KillSelf() —
+// Unit::Kill(this, this, durabilityLoss = true) (Unit.h:941).
+// The creature leg is creatureInstaKillVictim with the victim as
+// its own killer (the DIE 37 twin, same DEATH-dispatch position);
+// the player leg zeroes health then killPlayer with the victim
+// session as killer and durabilityLoss true. TDB 26091: 47 rows,
+// 35 live (src0+9); targets SELF (11), CREATURE_RANGE (4),
+// CREATURE_GUID (11), CREATURE_DISTANCE (1), CLOSEST_CREATURE
+// (18), ACTION_INVOKER (2); no params. The 6 src2 areatrigger
+// rows and 6 src1 GO rows stay residual (those sources do not
+// attach); the ev70/ev64 GO-event rows ride them.
+func (s *Server) smartActionKillUnit(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isGameObject {
+			continue
+		}
+		if tgt.isPlayer {
+			if sess := s.findSessionByGUID(tgt.guid); sess != nil && sess.player != nil {
+				sess.player.Health = 0
+				sess.killPlayer(ctx, sess, false, true)
+			}
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.creatureInstaKillVictim(ctx, tm, tgt.guid)
+	}
 }
 
 // smartActionFollow is SMART_ACTION_FOLLOW (SmartScript.cpp:915-936):

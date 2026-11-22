@@ -141,6 +141,28 @@ func (s *Server) setGameObjectLootState(mapID, instanceID uint32, guid uint64, v
 
 // setGameObjectRespawnDelay is the SetRespawnTime write half
 // (lua_objects.go): same materialization rule as setGameObjectLootState.
+// setGameObjectPhaseMask is the WorldObject::SetPhaseMask write half
+// (Object.cpp:3480): same materialization rule as
+// setGameObjectLootState — a static GO with no live state is
+// materialized from its DB row first, then the stored mask is
+// written (the spawn overlay phase-gates on it). The C++
+// UpdateObjectVisibility fan-out has no Go twin (no persistent
+// per-player visibility set); phase-filtered broadcasts read the
+// stored mask.
+func (s *Server) setGameObjectPhaseMask(mapID, instanceID uint32, guid uint64, mask uint32) {
+	if s == nil {
+		return
+	}
+	if s.gameObjectState(mapID, instanceID, guid) == nil && s.materializeStaticGameObjectState(mapID, instanceID, guid) == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	if object := s.gameObjectStateLocked(mapID, instanceID, guid); object != nil {
+		object.PhaseMask = mask
+	}
+	s.objectsMu.Unlock()
+}
+
 func (s *Server) setGameObjectRespawnDelay(mapID, instanceID uint32, guid uint64, delay int32) {
 	if s == nil {
 		return
