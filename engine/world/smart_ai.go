@@ -277,6 +277,8 @@ const (
 	smartActionThreatAllPct                   uint32 = 14
 	smartActionCallAreaExploredOrEventHappens uint32 = 15
 	smartActionSetEmoteState                  uint32 = 17
+	smartActionSetUnitFlag                    uint32 = 18
+	smartActionRemoveUnitFlag                 uint32 = 19
 	smartActionAutoAttack                     uint32 = 20
 	smartActionAllowCombatMovement            uint32 = 21
 	smartActionSetEventPhase                  uint32 = 22
@@ -349,6 +351,9 @@ const (
 	smartActionSetUnitFieldBytes1             uint32 = 90
 	smartActionRemoveUnitFieldBytes1          uint32 = 91
 	smartActionInterruptSpell                 uint32 = 92
+	smartActionSetDynamicFlag                 uint32 = 94
+	smartActionAddDynamicFlag                 uint32 = 95
+	smartActionRemoveDynamicFlag              uint32 = 96
 	smartActionJumpToPos                      uint32 = 97
 	smartActionSendGossipMenu                 uint32 = 98
 	smartActionGOSetLootState                 uint32 = 99
@@ -356,6 +361,9 @@ const (
 	smartActionSetHomePos                     uint32 = 101
 	smartActionSetHealthRegen                 uint32 = 102
 	smartActionSetRoot                        uint32 = 103
+	smartActionSetGOFlag                      uint32 = 104
+	smartActionAddGOFlag                      uint32 = 105
+	smartActionRemoveGOFlag                   uint32 = 106
 	smartActionSummonCreatureGroup            uint32 = 107
 	smartActionSetPower                       uint32 = 108
 	smartActionGameEventStop                  uint32 = 111
@@ -2755,12 +2763,16 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSetReactState(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetEmoteState:
 		s.smartActionSetEmoteState(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetUnitFlag, smartActionRemoveUnitFlag:
+		s.smartActionUnitFlag(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetVisibility:
 		s.smartActionSetVisibility(ctx, motion, st, ev, invokerGUID)
 	case smartActionInterruptSpell:
 		s.smartActionInterruptSpell(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetRoot:
 		s.smartActionSetRoot(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetGOFlag, smartActionAddGOFlag, smartActionRemoveGOFlag:
+		s.smartActionGOFlag(ctx, motion, st, ev, invokerGUID)
 	case smartActionCast:
 		s.smartActionCast(ctx, motion, st, ev, invokerGUID)
 	case smartActionSimpleTalk:
@@ -3043,6 +3055,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionRemoveUnitFieldBytes1(ctx, motion, st, ev, invokerGUID)
 	case smartActionJumpToPos:
 		s.smartActionJumpToPos(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetDynamicFlag, smartActionAddDynamicFlag, smartActionRemoveDynamicFlag:
+		s.smartActionDynamicFlag(ctx, motion, st, ev, invokerGUID)
 	case smartActionSendGossipMenu:
 		s.smartActionSendGossipMenu(ctx, motion, st, ev, invokerGUID)
 	case smartActionGOSetLootState:
@@ -3858,21 +3872,37 @@ func (s *Server) smartActionSetInstData(ctx context.Context, motion *creatureMot
 
 // smartActionSetData is SMART_ACTION_SET_DATA (SmartScript.cpp:1173-1195):
 // SmartAI targets fire their own SMART_EVENT_DATA_SET (SmartAI::SetData,
-// SmartAI.cpp:718-721); any other creature target latches the pair into
-// its ScriptData store (the map Lua creature SetData/GetData reads) —
-// a Go-side latch with no C++ twin, since base CreatureAI::SetData is a
-// no-op and only SmartAI overrides it. TDB 26091: 19 AGGRO rows, and none
-// of their (field, value) pairs matches a DATA_SET event in the table, so
-// the live effect is the latch.
+// SmartAI.cpp:718-721); gameobject targets fire the GO twin
+// (SmartGameObjectAI::SetData, SmartAI.cpp:1073-1076); any other creature
+// target latches the pair into its ScriptData store (the map Lua creature
+// SetData/GetData reads) — a Go-side latch with no C++ twin, since base
+// CreatureAI::SetData is a no-op and only SmartAI overrides it. The
+// invoker both SetData twins pass on is `me`, the script owner
+// (SmartScript.h:112; OnInitialize :3842-3844 sets it only for
+// TYPEID_UNIT, so a GO-base delivery passes none), not the event that
+// fired this action — a DATA_SET handler reading ACTION_INVOKER gets the
+// caller. TDB 26091: 2095 rows; 3 live creature SELF deliveries (17853
+// SET_DATA chain, 33235 SET_VISIBILITY x2) and 23 live GO deliveries
+// (11598 x6 phase/reset, 181714 reset, 187073/190555 timed lists, 191578
+// phase mask, 164911 GO-self phase, 6 timed-list rows); the 147-action
+// GO DATA_SET rows stay load-dead on both sides.
 func (s *Server) smartActionSetData(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
+	invoker := motion.GUID
+	if motion.BaseIsGameObject {
+		invoker = 0
+	}
 	for _, tgt := range targets {
+		if tgt.isGameObject {
+			s.smartProcessGOEvents(ctx, motion.Map, motion.InstanceID, tgt.guid, smartEventDataSet, invoker, ev.row.actionParam1, ev.row.actionParam2)
+			continue
+		}
 		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
 		if tm == nil {
 			continue
 		}
 		if tm.AIName == "SmartAI" {
-			s.smartProcessEvents(ctx, tm, smartEventDataSet, invokerGUID, ev.row.actionParam1, ev.row.actionParam2)
+			s.smartProcessEvents(ctx, tm, smartEventDataSet, invoker, ev.row.actionParam1, ev.row.actionParam2)
 			continue
 		}
 		s.motionMu.Lock()
@@ -7638,6 +7668,110 @@ func (s *Server) smartActionNPCFlag(ctx context.Context, motion *creatureMotion,
 		mapID, instanceID, guid := tm.Map, tm.InstanceID, tm.GUID
 		s.motionMu.Unlock()
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCFlags: flags})
+	}
+}
+
+// smartActionUnitFlag is SMART_ACTION_SET_UNIT_FLAG / REMOVE_UNIT_FLAG
+// (SmartScript.cpp:734-775): SetFlag / RemoveFlag on UNIT_FIELD_FLAGS
+// (param2 type 0) or UNIT_FIELD_FLAGS_2 (type != 0) for every unit
+// target, flag = param1. The creature leg is the Lua SetFlag bridge
+// twin (lua_creature_events.go:7280): motion UnitFlags / UnitFlags2
+// plus the UnitFlagsKnown latch and the values-update broadcast, so
+// the flag has real targeting effect (NOT_SELECTABLE /
+// NON_ATTACKABLE arms read motion.UnitFlags). Player targets stay out:
+// Go has no player-side flag mutation on this path (the SetVisibility
+// / NPCFlag precedent). TDB 26091: 0 rows.
+func (s *Server) smartActionUnitFlag(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	flag := ev.row.actionParam1
+	set := ev.row.actionType == smartActionSetUnitFlag
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer || tgt.isGameObject {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		var field int
+		var value uint32
+		if ev.row.actionParam2 == 0 {
+			if set {
+				tm.UnitFlags |= flag
+			} else {
+				tm.UnitFlags &^= flag
+			}
+			tm.UnitFlagsKnown = true
+			field, value = unitFieldFlags, tm.UnitFlags
+		} else {
+			if set {
+				tm.UnitFlags2 |= flag
+			} else {
+				tm.UnitFlags2 &^= flag
+			}
+			field, value = unitFieldFlags2, tm.UnitFlags2
+		}
+		mapID, instanceID, guid := tm.Map, tm.InstanceID, tm.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{field: value})
+	}
+}
+
+// smartActionDynamicFlag is SMART_ACTION_SET_DYNAMIC_FLAG /
+// ADD_DYNAMIC_FLAG / REMOVE_DYNAMIC_FLAG (SmartScript.cpp:1872-1894):
+// SetUInt32Value / SetFlag / RemoveFlag on UNIT_DYNAMIC_FLAGS for
+// every unit target, flag = param1. Creature leg only, same shape as
+// smartActionUnitFlag: motion.DynamicFlags plus the DynamicFlagsKnown
+// latch and the values-update broadcast (the lootable / tapped arms
+// read motion.DynamicFlags). Player targets stay out (same precedent).
+// TDB 26091: 0 rows.
+func (s *Server) smartActionDynamicFlag(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	flag := ev.row.actionParam1
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer || tgt.isGameObject {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		switch ev.row.actionType {
+		case smartActionSetDynamicFlag:
+			tm.DynamicFlags = flag
+		case smartActionAddDynamicFlag:
+			tm.DynamicFlags |= flag
+		default:
+			tm.DynamicFlags &^= flag
+		}
+		tm.DynamicFlagsKnown = true
+		value := tm.DynamicFlags
+		mapID, instanceID, guid := tm.Map, tm.InstanceID, tm.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldDynamicFlags: value})
+	}
+}
+
+// smartActionGOFlag is SMART_ACTION_SET_GO_FLAG / ADD_GO_FLAG /
+// REMOVE_GO_FLAG (SmartScript.cpp:2014-2038): SetUInt32Value / SetFlag
+// / RemoveFlag on GAMEOBJECT_FLAGS for every gameobject target, flag
+// = param1. The SET leg is the new setGameObjectFlagsValue whole-value
+// twin; ADD / REMOVE ride setGameObjectFlag / clearGameObjectFlag
+// (both materialize static spawns first and broadcast the flags
+// field). TDB 26091: 0 rows.
+func (s *Server) smartActionGOFlag(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isGameObject {
+			continue
+		}
+		switch ev.row.actionType {
+		case smartActionSetGOFlag:
+			s.setGameObjectFlagsValue(motion.Map, motion.InstanceID, tgt.guid, ev.row.actionParam1)
+		case smartActionAddGOFlag:
+			s.setGameObjectFlag(motion.Map, motion.InstanceID, tgt.guid, ev.row.actionParam1)
+		default:
+			s.clearGameObjectFlag(motion.Map, motion.InstanceID, tgt.guid, ev.row.actionParam1)
+		}
 	}
 }
 

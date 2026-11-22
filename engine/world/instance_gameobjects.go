@@ -584,6 +584,34 @@ func (s *Server) clearGameObjectFlag(mapID, instanceID uint32, guid uint64, flag
 	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})
 }
 
+// setGameObjectFlagsValue mirrors GameObject::SetUInt32Value(GAMEOBJECT_FLAGS, flags)
+// (GameObject.cpp SetUInt32Value path): replaces the whole flags field
+// on the live dynamic state and broadcasts it, the setGameObjectFlag
+// twin for the SMART_ACTION_SET_GO_FLAG whole-value leg, including
+// its static materialization.
+func (s *Server) setGameObjectFlagsValue(mapID, instanceID uint32, guid uint64, flags uint32) {
+	if s == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	st := s.gameObjectStateLocked(mapID, instanceID, guid)
+	if st == nil {
+		s.objectsMu.Unlock()
+		if s.materializeStaticGameObjectState(mapID, instanceID, guid) == nil {
+			return
+		}
+		s.objectsMu.Lock()
+		st = s.gameObjectStateLocked(mapID, instanceID, guid)
+		if st == nil {
+			s.objectsMu.Unlock()
+			return
+		}
+	}
+	st.Flags = flags
+	s.objectsMu.Unlock()
+	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})
+}
+
 // gameObjectHasFlag mirrors GameObject::HasFlag(GAMEOBJECT_FLAGS, flag):
 // the live dynamic flags field when one exists, else the spawn flags in
 // grid-stream precedence: the destructible-health override for damaged
