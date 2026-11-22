@@ -30,9 +30,13 @@
 // ported below with the COUNTER_SET (77) event dispatch. The next
 // 65 WP_RESUME (40 live rows) / 66 SET_ORIENTATION (1194) / 68 PLAYMOVIE
 // (3) / 69 MOVE_TO_POS (579) / 70 ENABLE_TEMP_GOBJ (57) / 71 EQUIP (124)
-// / 72 CLOSE_GOSSIP (557) are ported below. The next unported block is
-// 75 ADD_AURA / 76 OVERRIDE_SCRIPT_BASE_OBJECT / 77 RESET_SCRIPT_BASE_OBJECT
-// / 78 CALL_SCRIPT_RESET / 79 SET_RANGED_MOVEMENT.
+// / 72 CLOSE_GOSSIP (557) are ported below. The 75 ADD_AURA (0 rows)
+// / 76 OVERRIDE_SCRIPT_BASE_OBJECT (0 rows) / 77 RESET_SCRIPT_BASE_OBJECT
+// (0 rows) / 78 CALL_SCRIPT_RESET (50) / 79 SET_RANGED_MOVEMENT (9) are
+// ported below (the base-object override rebinds `me` for later actions,
+// the reset re-inits timers + fires RESET events, the ranged leg arms
+// the ScriptChase slot). The next unported block is 84 SIMPLE_TALK /
+// 85 SELF_CAST / 86 CROSS_CAST.
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -148,9 +152,11 @@ const (
 // ported below with the COUNTER_SET (77) event dispatch. The next
 // 65 WP_RESUME (40 live rows) / 66 SET_ORIENTATION (1194) / 68 PLAYMOVIE
 // (3) / 69 MOVE_TO_POS (579) / 70 ENABLE_TEMP_GOBJ (57) / 71 EQUIP (124)
-// / 72 CLOSE_GOSSIP (557) are ported below. The next unported block is
-// 75 ADD_AURA / 76 OVERRIDE_SCRIPT_BASE_OBJECT / 77 RESET_SCRIPT_BASE_OBJECT
-// / 78 CALL_SCRIPT_RESET / 79 SET_RANGED_MOVEMENT.
+// / 72 CLOSE_GOSSIP (557) are ported below. The 75 ADD_AURA (0 rows)
+// / 76 OVERRIDE_SCRIPT_BASE_OBJECT (0 rows) / 77 RESET_SCRIPT_BASE_OBJECT
+// (0 rows) / 78 CALL_SCRIPT_RESET (50) / 79 SET_RANGED_MOVEMENT (9) are
+// ported below. The next unported block is 84 SIMPLE_TALK / 85 SELF_CAST
+// / 86 CROSS_CAST.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -222,6 +228,11 @@ const (
 	smartActionCreateTimedEvent               uint32 = 67
 	smartActionTriggerTimedEvent              uint32 = 73
 	smartActionRemoveTimedEvent               uint32 = 74
+	smartActionAddAura                        uint32 = 75
+	smartActionOverrideScriptBaseObject       uint32 = 76
+	smartActionResetScriptBaseObject          uint32 = 77
+	smartActionCallScriptReset                uint32 = 78
+	smartActionSetRangedMovement              uint32 = 79
 	smartActionCallTimedActionList            uint32 = 80
 	smartActionSetNPCFlag                     uint32 = 81
 	smartActionAddNPCFlag                     uint32 = 82
@@ -406,6 +417,17 @@ type smartScriptState struct {
 	// synthetic events.
 	counters   map[uint32]uint32
 	templateID uint32
+	// SmartScript::meOrigGUID / goOrigGUID (SmartScript.h:113-115):
+	// OVERRIDE_SCRIPT_BASE_OBJECT (76) stashes the owner's GUID in
+	// baseOrigGUID on first override and rebinds the script's base
+	// object to the first creature target (baseOverrideGUID);
+	// RESET_SCRIPT_BASE_OBJECT (77) and OnReset restore the owner by
+	// clearing both. Go has no GO script state, so only the creature
+	// leg is modeled (the GO leg is a documented residual in the 76
+	// arm); the override resolves in smartProcessAction, so every
+	// later action reads the overridden creature as `me`.
+	baseOverrideGUID uint64
+	baseOrigGUID     uint64
 	// SmartAI follow state (SmartAI.h: _followGUID/_followDistance/
 	// _followAngle/_followCredit/_followArrivedEntry/_followCreditType,
 	// _followArrivedTimer): armed by SMART_ACTION_FOLLOW, ticked by
@@ -665,21 +687,27 @@ func (s *Server) smartRecalcTimer(ev *smartScriptEvent, min, max uint32) {
 	ev.active = ev.timer == 0
 }
 
-// smartReset is SmartScript::OnReset (SmartScript.cpp:170-189): every
+// smartReset is SmartScript::OnReset (SmartScript.cpp:170-189): the
+// base object restores first (ResetBaseObject, :191-220), then every
 // event without the DONT_RESET flag re-inits its timer and clears
 // runOnce, then the SMART_EVENT_RESET events fire, then the last
 // invoker clears. The priority reset has no Go twin (no per-event
-// priority field); ResetBaseObject is a no-op (targets resolve from
-// the motion on every call, there is no cached base object). Call
-// sites are the C++ OnReset callers in SmartAI.cpp: EnterEvadeMode
-// (:453, only when the EVADE state cleared — the owner-follow legs),
-// JustAppeared (:539, after the RESPAWN event) and JustReachedHome
-// (:544, before the REACHED_HOME event).
+// priority field). Call sites are the C++ OnReset callers in
+// SmartAI.cpp: EnterEvadeMode (:453, only when the EVADE state
+// cleared — the owner-follow legs), JustAppeared (:539, after the
+// RESPAWN event) and JustReachedHome (:544, before the REACHED_HOME
+// event); CALL_SCRIPT_RESET (78) also rides it.
 func (s *Server) smartReset(ctx context.Context, motion *creatureMotion) {
 	st := s.smartStateFor(ctx, motion)
 	if st == nil {
 		return
 	}
+	// ResetBaseObject (SmartScript.cpp:191-220): the stashed original
+	// GUIDs restore `me`/`go`; the owner motion is always the dispatch
+	// parameter in Go, so restoring is clearing both stash fields —
+	// the next action resolves the owner again.
+	st.baseOverrideGUID = 0
+	st.baseOrigGUID = 0
 	for _, ev := range st.events {
 		if ev.row.eventFlags&smartEventFlagDontReset == 0 {
 			s.smartInitTimer(ev)
@@ -1229,6 +1257,21 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 	if invokerGUID != 0 {
 		st.lastInvoker = invokerGUID
 	}
+	// SMART_ACTION_OVERRIDE_SCRIPT_BASE_OBJECT (76) rebinds the
+	// script's base object: once a row overrides it, every later
+	// action in this script reads the overridden creature as `me`
+	// (SmartScript.cpp:1625-1651), until a RESET_SCRIPT_BASE_OBJECT
+	// (77) row or OnReset restores the owner. Resolve it here so the
+	// whole dispatch below — targets and helpers alike — sees the
+	// overridden base. A despawned override falls back to the owner
+	// instead of dangling (C++ keeps the raw pointer, hence the "CAN
+	// CRASH CORE" warning on the enum); event-level gates above this
+	// point (phase, range) still read the owner.
+	if st.baseOverrideGUID != 0 {
+		if om := s.findCreatureMotion(motion.Map, motion.InstanceID, st.baseOverrideGUID); om != nil {
+			motion = om
+		}
+	}
 	switch ev.row.actionType {
 	case smartActionTalk:
 		s.smartActionTalk(ctx, motion, st, ev, invokerGUID)
@@ -1437,6 +1480,16 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionEquip(ctx, motion, st, ev, invokerGUID)
 	case smartActionCloseGossip:
 		s.smartActionCloseGossip(ctx, motion, st, ev, invokerGUID)
+	case smartActionAddAura:
+		s.smartActionAddAura(ctx, motion, st, ev, invokerGUID)
+	case smartActionOverrideScriptBaseObject:
+		s.smartActionOverrideScriptBaseObject(ctx, motion, st, ev, invokerGUID)
+	case smartActionResetScriptBaseObject:
+		s.smartActionResetScriptBaseObject(ctx, motion, st, ev, invokerGUID)
+	case smartActionCallScriptReset:
+		s.smartActionCallScriptReset(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetRangedMovement:
+		s.smartActionSetRangedMovement(ctx, motion, st, ev, invokerGUID)
 	case smartActionRemoveAurasFromSpell:
 		s.smartActionRemoveAuras(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetInstData:
@@ -3973,6 +4026,159 @@ func (s *Server) smartActionCloseGossip(ctx context.Context, motion *creatureMot
 		if sess := s.findSessionByGUID(tgt.guid); sess != nil {
 			sess.sendGossipComplete()
 		}
+	}
+}
+
+// smartActionAddAura is SMART_ACTION_ADD_AURA (SmartScript.cpp:680-692):
+// every unit target takes AddAura(spell, self) — the aura is applied
+// with the target as its own caster, no cast bar and no SMSG_SPELL_GO.
+// The Go twin is the Lua creature:AddAura bridge's presence store
+// (lua_creature_events.go:3447): the spell id lands in creatureAuras,
+// which is what HasAura / AURA_NOT_PRESENT read; the full effect
+// application (amounts, periodics) rides the cast path only, so an
+// AddAura'd aura has no stat/periodic legs yet. Player targets ride
+// the session applyAura instead (the .aura command's self-cast leg),
+// which applies the full aura at a fixed 30-minute duration rather
+// than the spell's DBC duration. TDB 26091: 0 rows.
+func (s *Server) smartActionAddAura(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	spell := ev.row.actionParam1
+	if spell == 0 {
+		return
+	}
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isGameObject {
+			continue
+		}
+		if tgt.isPlayer {
+			if sess := s.findSessionByGUID(tgt.guid); sess != nil && sess.player != nil {
+				sess.applyAura(spell)
+			}
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		key := creatureAuraKeyForMotion(tm)
+		s.auraMu.Lock()
+		if s.creatureAuras == nil {
+			s.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
+		}
+		if s.creatureAuras[key] == nil {
+			s.creatureAuras[key] = make(map[uint32]struct{})
+		}
+		s.creatureAuras[key][spell] = struct{}{}
+		s.auraMu.Unlock()
+	}
+}
+
+// smartActionOverrideScriptBaseObject is
+// SMART_ACTION_OVERRIDE_SCRIPT_BASE_OBJECT (SmartScript.cpp:1625-1651):
+// the first creature (or GO) target becomes the script's base object —
+// later actions read it as `me` — and the owner's GUID is stashed on
+// first override so RESET_SCRIPT_BASE_OBJECT (77) / OnReset can
+// restore it. The stash is first-only: a nested override keeps the
+// original owner, like C++'s `if (!meOrigGUID && me)` guard. The GO
+// leg has no Go twin (Go loads no GO-source scripts and a GO carries
+// no smartScriptState), so a GO first-target stops the scan with the
+// owner base kept, mirroring C++'s break; player targets fall through
+// to the next target, like C++'s loop. TDB 26091: 0 rows.
+func (s *Server) smartActionOverrideScriptBaseObject(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if st == nil || motion == nil {
+		return
+	}
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isGameObject {
+			return
+		}
+		if tgt.isPlayer {
+			continue
+		}
+		if s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid) == nil {
+			continue
+		}
+		if st.baseOrigGUID == 0 {
+			st.baseOrigGUID = motion.GUID
+		}
+		st.baseOverrideGUID = tgt.guid
+		return
+	}
+}
+
+// smartActionResetScriptBaseObject is
+// SMART_ACTION_RESET_SCRIPT_BASE_OBJECT (SmartScript.cpp:1652-1654):
+// ResetBaseObject restores `me`/`go` from the stashed original GUIDs
+// and clears the stash. In Go the owner motion is always the dispatch
+// parameter, so restoring is clearing both fields — the next action
+// resolves the owner again. A lookup miss in C++ leaves the
+// overridden base in place; Go never dangles, it just clears.
+// TDB 26091: 0 rows.
+func (s *Server) smartActionResetScriptBaseObject(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if st == nil {
+		return
+	}
+	st.baseOverrideGUID = 0
+	st.baseOrigGUID = 0
+}
+
+// smartActionCallScriptReset is SMART_ACTION_CALL_SCRIPT_RESET
+// (SmartScript.cpp:1655-1658): SetPhase(0), then OnReset — timers
+// re-init, runOnce clears, the SMART_EVENT_RESET events fire, the last
+// invoker clears, and the base object restores (ResetBaseObject is
+// OnReset's first step). The Go twin is smartSetEventPhase(0) — which
+// fires PHASE_CHANGE only on a real change, like C++ SetPhase
+// (SmartScript.cpp:4010-4018) — then smartReset, which clears the
+// base-object override. The re-entrant RESET dispatch rides the
+// smartMaxNestedEvents cap. C++'s loader rejects RESET-event rows
+// carrying this action (SmartScriptMgr.cpp:1024-1028); TDB 26091
+// carries none, so the rule is unexercised. TDB 26091: 50 rows, all
+// target SELF, all params 0 — 34 src0 + 11 src9 + 5 GO-source (the GO
+// rows stay residual: Go loads no GO-source scripts).
+func (s *Server) smartActionCallScriptReset(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if st == nil || motion == nil {
+		return
+	}
+	s.smartSetEventPhase(ctx, motion, st, 0, invokerGUID)
+	s.smartReset(ctx, motion)
+}
+
+// smartActionSetRangedMovement is SMART_ACTION_SET_RANGED_MOVEMENT
+// (SmartScript.cpp:1659-1680): for each target creature that IsSmart
+// (AI is SmartAI) and has a victim, if CanCombatMove, MoveChase the
+// victim at (distance, angle) — angle in degrees, converted to
+// radians like C++'s /180*PI. The Go twin arms the ScriptChase slot
+// (the Lua MoveChase bridge's shape, lua_creature_events.go:6451):
+// the combat tick honors it only while the chase target is the
+// victim, which holds here since the victim is passed; MoveChase
+// clears the follow slot (same ACTIVE slot). The CanCombatMove gate
+// is the inverted NoCombatMovement flag (the ALLOW_COMBAT_MOVEMENT
+// twin) and is checked before arming, so a disabled creature never
+// holds a latent chase. TDB 26091: 9 rows, all src0 SELF —
+// Ravenclaw Regent (2283, 15y/0deg), Shadowmoon Acolyte (16594,
+// 15y), Dawnblade Reservist (25087, 35y), Sunblade Slayer (25368,
+// 60y/45deg), Captain Hartford (29490, 30y).
+func (s *Server) smartActionSetRangedMovement(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	dist := float32(ev.row.actionParam1)
+	angle := float32(ev.row.actionParam2) / 180.0 * float32(math.Pi)
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isGameObject || tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil || tm.AIName != "SmartAI" {
+			continue
+		}
+		s.motionMu.Lock()
+		victimGUID := tm.TargetGUID
+		if victimGUID != 0 && !tm.NoCombatMovement {
+			tm.ScriptFollowTargetGUID = 0
+			tm.ScriptFollowDist = 0
+			tm.ScriptFollowAngle = 0
+			tm.ScriptChaseTargetGUID = victimGUID
+			tm.ScriptChaseDist = dist
+			tm.ScriptChaseAngle = angle
+		}
+		s.motionMu.Unlock()
 	}
 }
 
