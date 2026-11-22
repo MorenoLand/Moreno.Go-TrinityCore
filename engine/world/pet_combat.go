@@ -2011,6 +2011,10 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			// dispatches with the pet (Unit.cpp pet arm + 11359-11361).
 			s.fireCreatureTargetDied(ctx, motion, targetSess.luaPlayer())
 			s.fireCreatureTargetDied(ctx, motion, targetSess.luaPlayer())
+			// SmartAI::KilledUnit, same double dispatch (Unit.cpp pet arm
+			// + 11359-11361): the pet takes both arms on itself.
+			s.smartKilledUnit(ctx, motion, targetSess.playerGUID)
+			s.smartKilledUnit(ctx, motion, targetSess.playerGUID)
 		} else {
 			targetSess.player.Health -= damage
 			// Unit::DealDamage (Unit.cpp:896-897): pet melee lands as
@@ -9820,6 +9824,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// dispatches with the pet (Unit.cpp pet arm + 11359-11361).
 			s.server.fireCreatureTargetDied(ctx, caster, victim.luaPlayer())
 			s.server.fireCreatureTargetDied(ctx, caster, victim.luaPlayer())
+			// SmartAI::KilledUnit, same double dispatch (Unit.cpp pet arm
+			// + 11359-11361): the pet takes both arms on itself.
+			s.server.smartKilledUnit(ctx, caster, victim.playerGUID)
+			s.server.smartKilledUnit(ctx, caster, victim.playerGUID)
 		} else {
 			victim.player.Health -= damage
 			// Unit::DealDamage (Unit.cpp:896-897): pet spells land as

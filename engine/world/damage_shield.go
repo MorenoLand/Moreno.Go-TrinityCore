@@ -324,6 +324,10 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 		} else if motion := s.findCreatureMotion(ts.player.Map, ts.player.InstanceID, attackerGUID); motion != nil {
 			// Holder is a creature: PLAYER_EVENT_ON_KILLED_BY_CREATURE (8).
 			s.fireKilledByCreatureHook(ctx, motion, ts)
+			// SmartAI::KilledUnit (SmartAI.cpp:578-581): the player-victim
+			// branch arm (Unit.cpp:11359-11361), pet double dispatch
+			// included — a pet killer takes the pet arm on itself too.
+			s.smartKilledUnitPlayerVictim(ctx, motion, ts.playerGUID)
 		}
 		return
 	}

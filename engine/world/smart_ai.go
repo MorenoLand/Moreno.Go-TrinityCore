@@ -2101,13 +2101,39 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		s.smartRecalcTimer(ev, ev.row.eventParam3, ev.row.eventParam4)
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
-	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
+	case smartEventAggro, smartEventDeath, smartEventEvade,
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
 		smartEventAIInit, smartEventJustCreated,
 		smartEventTextOver, smartEventPhaseChange,
 		smartEventFollowCompleted, smartEventCorpseRemoved,
 		smartEventJustSummoned, smartEventOnSpellClick:
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventKill:
+		// SMART_EVENT_KILL (SmartScript.cpp:3113-3121): the event fires
+		// only when the victim matches — event_param3 (playerOnly) skips
+		// non-player victims (a player victim carries entry 0,
+		// Object::GetEntry reads OBJECT_FIELD_ENTRY, Object.h:84) and
+		// event_param4 (creature) skips victims of another entry — then
+		// re-arms on the cooldown window (event_param1/2) and runs its
+		// action with the victim as invoker and var0/var1 zeroed. The
+		// fire is smartKilledUnit, beside the Eluna KilledUnit arms.
+		// TDB 26091: 102 src-0 rows (75 TALK, 11 CAST, 11 SET_DATA,
+		// 4 PLAY_SOUND, 2 FAIL_QUEST); 23 playerOnly, 4 entry-filtered,
+		// 26 carry a cooldown (21 at 60000/60000).
+		if ev.row.eventParam3 != 0 && s.findSessionByGUID(invokerGUID) == nil {
+			return
+		}
+		if ev.row.eventParam4 != 0 {
+			if s.findSessionByGUID(invokerGUID) != nil {
+				return
+			}
+			tm := s.findCreatureMotion(motion.Map, motion.InstanceID, invokerGUID)
+			if tm == nil || tm.Entry != ev.row.eventParam4 {
+				return
+			}
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam1, ev.row.eventParam2)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
 	default:
 		// Timed/conditioned types with no Go condition evaluation
 		// (FRIENDLY_HEALTH 14 and IS_BEHIND_TARGET 67 — both 0 TDB
@@ -2142,11 +2168,26 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 	if st == nil {
 		return
 	}
+	diff := uint32(0)
+	if !st.lastTick.IsZero() {
+		d := now.Sub(st.lastTick)
+		if d > 0 {
+			diff = uint32(d.Milliseconds())
+			if diff > 60000 {
+				diff = 60000
+			}
+		}
+	}
+	st.lastTick = now
 	if motion.Evading {
 		// SmartScript::OnUpdate's evade branch (SmartScript.cpp:3685-3696):
 		// a finished list (no enabled event left) clears so a later
 		// CALL_TIMED_ACTIONLIST can install; a running list survives the
-		// evade and resumes on return.
+		// evade and resumes on return. OnUpdate alone early-returns here —
+		// but SmartAI::UpdateAI (SmartAI.cpp:297-301) runs UpdatePath,
+		// UpdateFollow and UpdateDespawn after OnUpdate regardless of
+		// evade, so the escort/follow/despawn ticks run on the same diff
+		// instead of pausing for the evade-home walk.
 		if len(st.timedList) > 0 {
 			running := false
 			for _, ev := range st.timedList {
@@ -2159,19 +2200,11 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 				st.timedList = nil
 			}
 		}
+		s.smartUpdatePath(ctx, motion, st, diff)
+		s.smartUpdateFollow(ctx, motion, st, diff)
+		s.smartUpdateDespawn(ctx, motion, st, diff)
 		return
 	}
-	diff := uint32(0)
-	if !st.lastTick.IsZero() {
-		d := now.Sub(st.lastTick)
-		if d > 0 {
-			diff = uint32(d.Milliseconds())
-			if diff > 60000 {
-				diff = 60000
-			}
-		}
-	}
-	st.lastTick = now
 	if st.useTextTimer {
 		if st.textTimer < diff {
 			textID, entry := st.lastTextID, st.talkerEntry
@@ -4309,9 +4342,8 @@ func (s *Server) smartStopFollow(ctx context.Context, motion *creatureMotion, st
 // match (GridNotifiers.h:1337) — so the scan is skipped then, which
 // is the 108 zero-entry rows' behavior. The scan itself is the
 // CLOSEST_CREATURE twin (alive-only, self excluded, same map and
-// instance). Deviation: C++ ticks UpdateFollow through evade;
-// Go's smartUpdateTimers returns early while Evading, so the
-// arrival check pauses during an evade-home walk.
+// instance). UpdateFollow ticks through evade (SmartAI::UpdateAI
+// runs it after OnUpdate regardless, SmartAI.cpp:297-301).
 // loadSmartWaypoints is the SmartWaypointMgr::LoadSmartWaypoints twin
 // (SmartScriptMgr.cpp): the `waypoints`-table rows for one path id,
 // ordered by pointid — the WORLD_SEL_SMARTAI_WP statement's rows
@@ -4590,8 +4622,8 @@ func (s *Server) smartStopPath(ctx context.Context, motion *creatureMotion, st *
 // smartResumePath is SmartAI::ResumePath (SmartAI.cpp:260-273): the
 // WAYPOINT_RESUMED event fires, the PAUSED state clears, the pause
 // latch and timer clear, the run flag refreshes and the motion
-// resumes. No SMART_ACTION_WP_RESUME (65) dispatch yet — this is the
-// pause-timer tick's resume arm.
+// resumes. SMART_ACTION_WP_RESUME (65) dispatches through
+// smartActionWPResume; this is the pause-timer tick's resume arm.
 func (s *Server) smartResumePath(ctx context.Context, motion *creatureMotion, st *smartScriptState) {
 	if motion == nil || st == nil {
 		return
@@ -4985,9 +5017,9 @@ func (s *Server) smartActionWPStop(ctx context.Context, motion *creatureMotion, 
 // smartActionWPResume is SMART_ACTION_WP_RESUME (SmartScript.cpp:1456-1465):
 // no params. CanResumePath (SmartAI.cpp:138-146) is escorting AND paused;
 // the 1ms pause timer resumes on the next UpdatePath tick through
-// smartResumePath (SmartAI.cpp:941-948). The evade-pause delta carries:
-// smartUpdateTimers returns early while Evading, so the resume waits out
-// the evade-home walk. TDB 26091: 40 live rows, all target SELF.
+// smartResumePath (SmartAI.cpp:941-948) — UpdatePath ticks through evade
+// (SmartAI::UpdateAI, SmartAI.cpp:297-301), so the resume does not wait
+// out the evade-home walk. TDB 26091: 40 live rows, all target SELF.
 // (Targets are ignored by C++.)
 func (s *Server) smartActionWPResume(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	if st == nil || st.escortState&smartEscortEscorting == 0 || st.escortState&smartEscortPaused == 0 {
@@ -6435,6 +6467,40 @@ func (s *Server) smartSummonedUnitDies(ctx context.Context, dead *creatureMotion
 		return
 	}
 	s.smartProcessEvents(ctx, summoner, smartEventSummonedUnitDies, dead.GUID, 0, 0)
+}
+
+// smartKilledUnit is SmartAI::KilledUnit (SmartAI.cpp:578-581):
+// ProcessEventsFor(SMART_EVENT_KILL, victim) on the killer's AI — the
+// victim is the invoker, var0/var1 zeroed. Fire sites are the Unit::Kill
+// arms (Unit.cpp:11324-11335 pet arm, 11359-11361 player-victim branch,
+// 11385-11387 creature-victim branch), called before the DEATH dispatch
+// like C++ (KilledUnit precedes JustDied). A pet killer takes the pet
+// arm and the branch arm both on itself — the double dispatch the Eluna
+// TargetDied twin already reproduces — so player-victim sites use
+// smartKilledUnitPlayerVictim; a player attacker contributes only the
+// pet arm, on its live pet.
+func (s *Server) smartKilledUnit(ctx context.Context, killer *creatureMotion, victimGUID uint64) {
+	if s == nil || killer == nil || victimGUID == 0 {
+		return
+	}
+	s.smartProcessEvents(ctx, killer, smartEventKill, victimGUID, 0, 0)
+}
+
+// smartKilledUnitPlayerVictim is the player-victim KilledUnit arm
+// (Unit.cpp:11359-11361) with the pet-arm double dispatch: a pet killer
+// takes the pet arm on itself as well as the branch arm
+// (Unit.cpp:11324-11335 — the owner's pet is the attacker itself), a
+// wild creature takes the branch arm alone. The guardian case (a
+// non-pet minion killer with a different live pet) is simplified to
+// the double fire on the killer, the onCreatureKilled convention.
+func (s *Server) smartKilledUnitPlayerVictim(ctx context.Context, killer *creatureMotion, victimGUID uint64) {
+	if s == nil || killer == nil || victimGUID == 0 {
+		return
+	}
+	s.smartKilledUnit(ctx, killer, victimGUID)
+	if killer.OwnerGUID != 0 {
+		s.smartKilledUnit(ctx, killer, victimGUID)
+	}
 }
 
 // smartSummonDespawned is SmartAI::SummonedCreatureDespawn

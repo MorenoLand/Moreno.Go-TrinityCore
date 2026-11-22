@@ -4903,6 +4903,10 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 			}
 			vs.killPlayer(ctx, creatureKiller, false, false)
 			s.fireKilledByCreatureHook(ctx, m, vs)
+			// SmartAI::KilledUnit (SmartAI.cpp:578-581): the player-victim
+			// branch arm (Unit.cpp:11359-11361), pet double dispatch
+			// included — a pet killer takes the pet arm on itself too.
+			s.smartKilledUnitPlayerVictim(ctx, m, vs.playerGUID)
 			if m.BossAI != nil {
 				m.BossAI.OnKillPlayer(ctx, s, m, guid)
 			}
@@ -11261,6 +11265,10 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 				vs.killPlayer(ctx, creatureKiller, false, true)
 				s.fireCreatureTargetDied(ctx, m, vs.luaPlayer())
 				s.fireKilledByCreatureHook(ctx, m, vs)
+				// SmartAI::KilledUnit (SmartAI.cpp:578-581): the player-victim
+				// branch arm (Unit.cpp:11359-11361), pet double dispatch
+				// included — a pet killer takes the pet arm on itself too.
+				s.smartKilledUnitPlayerVictim(ctx, m, vs.playerGUID)
 				if m.BossAI != nil {
 					m.BossAI.OnKillPlayer(ctx, s, m, guid)
 				}
@@ -11864,8 +11872,10 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	s.clearCreatureDeathState(tm)
 	// Unit::Kill's KilledUnit branch arm (Unit.cpp:11385-11387): a
 	// non-pet creature attacker fires only the branch arm — the pet-arm
-	// double dispatch is pet-specific.
+	// double dispatch is pet-specific. The SmartAI KILL (5) fire rides
+	// the same arm, ahead of the DEATH dispatch below like C++.
 	s.fireCreatureTargetDied(ctx, m, s.luaMotionCreature(tm))
+	s.smartKilledUnit(ctx, m, tm.GUID)
 	// SmartAI::JustDied (SmartAI.cpp:570-575): ProcessEventsFor
 	// (SMART_EVENT_DEATH, killer) — Unit::Kill's JustDied leg
 	// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
@@ -13451,6 +13461,10 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 			// Eluna PLAYER_EVENT_ON_KILLED_BY_CREATURE (8): Unit::Kill tail
 			// (Unit.cpp:11466-11480), attacker is the creature.
 			s.fireKilledByCreatureHook(ctx, m, vs)
+			// SmartAI::KilledUnit (SmartAI.cpp:578-581): the player-victim
+			// branch arm (Unit.cpp:11359-11361), pet double dispatch
+			// included — a pet killer takes the pet arm on itself too.
+			s.smartKilledUnitPlayerVictim(ctx, m, vs.playerGUID)
 			if m.BossAI != nil {
 				m.BossAI.OnKillPlayer(ctx, s, m, victimGUID)
 			}

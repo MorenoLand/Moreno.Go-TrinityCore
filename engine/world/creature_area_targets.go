@@ -2136,6 +2136,10 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 			// Eluna PLAYER_EVENT_ON_KILLED_BY_CREATURE (8): Unit::Kill tail
 			// (Unit.cpp:11466-11480), attacker is the creature.
 			s.fireKilledByCreatureHook(ctx, motion, p.Sess)
+			// SmartAI::KilledUnit (SmartAI.cpp:578-581): the player-victim
+			// branch arm (Unit.cpp:11359-11361), pet double dispatch
+			// included — a pet killer takes the pet arm on itself too.
+			s.smartKilledUnitPlayerVictim(ctx, motion, p.GUID)
 			if motion.BossAI != nil {
 				motion.BossAI.OnKillPlayer(ctx, s, motion, p.GUID)
 			}

@@ -1640,6 +1640,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					// KilledUnit(victim) (Unit.cpp:11324-11335).
 					if pet := s.livePetMotion(); pet != nil {
 						s.server.fireCreatureTargetDied(ctx, pet, playerSess.luaPlayer())
+						// SmartAI::KilledUnit pet arm (Unit.cpp:11324-11335):
+						// the attacker is the player, so only its live pet
+						// takes KilledUnit(victim).
+						s.server.smartKilledUnit(ctx, pet, playerSess.playerGUID)
 					}
 					_ = s.sendAttackStop(target.GUID, true)
 					s.attackTarget = 0
@@ -2485,6 +2489,10 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					// (Unit.cpp:11324-11335).
 					if pet := s.livePetMotion(); pet != nil {
 						s.server.fireCreatureTargetDied(ctx, pet, vicSess.luaPlayer())
+						// SmartAI::KilledUnit pet arm (Unit.cpp:11324-11335):
+						// the attacker is the player, so only its live pet
+						// takes KilledUnit(victim).
+						s.server.smartKilledUnit(ctx, pet, vicSess.playerGUID)
 					}
 					s.server.handleWGPlayerDeath(vicSess, s)
 					s.autoRepeatSpell = 0

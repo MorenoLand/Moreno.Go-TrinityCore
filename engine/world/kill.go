@@ -1107,14 +1107,17 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 					// the killer itself — on top of the branch arm, i.e.
 					// C++'s double pet->AI()->KilledUnit(victim) dispatch.
 					s.server.fireCreatureTargetDied(ctx, killer, victim)
+					s.server.smartKilledUnit(ctx, killer, target.GUID)
 				}
 				// Branch arm: attacker->AI()->KilledUnit(victim), after the
 				// lootable flag the caller already set (Unit.cpp:11385-11387).
 				s.server.fireCreatureTargetDied(ctx, killer, victim)
+				s.server.smartKilledUnit(ctx, killer, target.GUID)
 			} else if pet := s.livePetMotion(); pet != nil {
 				// Player attacker: only the pet arm fires (Unit::Kill pet
 				// arm — player = attacker itself).
 				s.server.fireCreatureTargetDied(ctx, pet, victim)
+				s.server.smartKilledUnit(ctx, pet, target.GUID)
 			}
 			s.fireCreatureDied(ctx, motion)
 			// Death clears the assistance state with the engagement: the

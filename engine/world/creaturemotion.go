@@ -7181,6 +7181,10 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 			// tail (Unit.cpp:11466-11480), attacker is the creature
 			// (for pet kills C++ pushes the pet itself).
 			s.fireKilledByCreatureHook(ctx, motion, target.Sess)
+			// SmartAI::KilledUnit (SmartAI.cpp:578-581): the player-victim
+			// branch arm (Unit.cpp:11359-11361), pet double dispatch
+			// included — a pet killer takes the pet arm on itself too.
+			s.smartKilledUnitPlayerVictim(ctx, motion, target.GUID)
 			if motion.BossAI != nil {
 				motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
 			}
