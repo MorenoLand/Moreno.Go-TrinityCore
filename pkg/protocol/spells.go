@@ -20,6 +20,7 @@ const (
 	SpellCastFlagNoGCD            uint32 = 0x00040000
 	SpellCastFlagAdjustMissile    uint32 = 0x00020000 // CAST_FLAG_ADJUST_MISSILE (Spell.h:92)
 	SpellCastFlagRuneList         uint32 = 0x00200000 // CAST_FLAG_RUNE_LIST (Spell.h:96)
+	SpellCastFlagImmunity         uint32 = 0x04000000 // CAST_FLAG_IMMUNITY (Spell.h:101)
 
 	SpellMissNone    uint8 = 0
 	SpellMissMiss    uint8 = 1
@@ -211,17 +212,25 @@ func readSpellTargetLocation(reader *Buffer) (SpellTargetLocation, error) {
 }
 
 func BuildSpellStart(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, target SpellTargetData) []byte {
-	return BuildSpellStartWithPower(casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime, target, nil, nil)
+	return BuildSpellStartWithPower(casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime, target, nil, nil, nil)
+}
+
+// SpellStartImmunities carries the Immunities block of Spell::SendSpellStart
+// (Spell.cpp:4271-4276): the caster's school immunity mask (School) and
+// mechanic immunity mask (Value), written when CAST_FLAG_IMMUNITY is set.
+type SpellStartImmunities struct {
+	School   uint32
+	Mechanic uint32
 }
 
 // BuildSpellStartWithPower mirrors BuildSpellGoWithPower for SMSG_SPELL_START:
 // Spell::SendSpellStart (Spell.cpp:4260-4265) writes RemainingPower after the
 // target data when CAST_FLAG_POWER_LEFT_SELF is set, then the 8-byte Ammo
-// block when CAST_FLAG_AMMO is set (SpellPackets.cpp SpellCastData writer
-// order: RemainingPower, Ammo, Immunities). A block is written only when its
-// flag is set and its data is present. The Immunities block has no Go bridge
-// (no caster immunity-mask model — ApplySpellImmune is unbridged).
-func BuildSpellStartWithPower(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, target SpellTargetData, remainingPower *uint32, ammo *SpellGoAmmo) []byte {
+// block when CAST_FLAG_AMMO is set, then the 8-byte Immunities block
+// (School + mechanic Value) when CAST_FLAG_IMMUNITY is set (SpellPackets.cpp
+// SpellCastData writer order: RemainingPower, Ammo, Immunities). A block is
+// written only when its flag is set and its data is present.
+func BuildSpellStartWithPower(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, target SpellTargetData, remainingPower *uint32, ammo *SpellGoAmmo, immunities *SpellStartImmunities) []byte {
 	packet := NewBuffer(64)
 	writeSpellCastHeader(packet, casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime)
 	writeSpellTargetData(packet, target)
@@ -231,6 +240,10 @@ func BuildSpellStartWithPower(casterGUID, casterUnitGUID uint64, castID uint8, s
 	if ammo != nil && castFlags&SpellCastFlagAmmo != 0 {
 		packet.WriteU32(ammo.DisplayID)
 		packet.WriteU32(ammo.InventoryType)
+	}
+	if immunities != nil && castFlags&SpellCastFlagImmunity != 0 {
+		packet.WriteU32(immunities.School)
+		packet.WriteU32(immunities.Mechanic)
 	}
 	writeSpellCastTrailer(packet, castFlags, target.Flags)
 	return packet.Bytes()

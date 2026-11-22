@@ -582,17 +582,22 @@ func (s *Server) castCreatureSpellTriggered(ctx context.Context, m *creatureMoti
 // for rune spells (RuneCostID + POWER_RUNE, no caster gate on that arm),
 // plus CAST_FLAG_AMMO for SPELL_ATTR0_REQ_AMMO /
 // SPELL_ATTR0_CU_NEEDS_AMMO_DATA (Spell.cpp:4237-4239) — the ammo block
-// itself rides creatureSpellAmmoData below.
+// itself rides creatureSpellAmmoData below — plus CAST_FLAG_IMMUNITY
+// (Spell.cpp:4224-4234) when the caster carries any school or mechanic
+// immunity mask (creatureSpellImmunityMasks); the Immunities block rides
+// spellStartImmunities at the call sites.
 // CAST_FLAG_PENDING is vacuous (non-triggered only), CAST_FLAG_POWER_LEFT_SELF
-// needs a player or pet caster (twin GO precedent: off), CAST_FLAG_IMMUNITY
-// needs the caster immunity masks (no m_spellImmune model).
-func creatureStartCastFlags(spell wotlk.Spell) uint32 {
+// needs a player or pet caster (twin GO precedent: off).
+func creatureStartCastFlags(spell wotlk.Spell, schoolMask, mechanicMask uint32) uint32 {
 	flags := spellCastFlagStart
 	if spell.RuneCostID != 0 && spell.PowerType == powerRune {
 		flags |= protocol.SpellCastFlagNoGCD
 	}
 	if spell.Attributes&spellAttr0ReqAmmo != 0 || spell.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
 		flags |= protocol.SpellCastFlagAmmo
+	}
+	if schoolMask != 0 || mechanicMask != 0 {
+		flags |= protocol.SpellCastFlagImmunity
 	}
 	return flags
 }
@@ -2421,7 +2426,8 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		if !triggered && !deferredFire {
 			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); castMs > 0 {
 				if startTargetKnown {
-					s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStartWithPower(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo), castMs, startTarget, nil, s.creatureSpellAmmoData(ctx, m)))
+					schoolMask, mechanicMask := s.creatureSpellImmunityMasks(creatureAuraKeyForMotion(m))
+					s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStartWithPower(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo, schoolMask, mechanicMask), castMs, startTarget, nil, s.creatureSpellAmmoData(ctx, m), spellStartImmunities(schoolMask, mechanicMask)))
 				}
 				m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 				s.cancelPendingCreatureCast(m)
@@ -3489,7 +3495,8 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			s.cancelPendingCreatureCast(m)
 		}
 		if startTargetKnown {
-			s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStartWithPower(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo), 0, startTarget, nil, s.creatureSpellAmmoData(ctx, m)))
+			schoolMask, mechanicMask := s.creatureSpellImmunityMasks(creatureAuraKeyForMotion(m))
+			s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStartWithPower(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo, schoolMask, mechanicMask), 0, startTarget, nil, s.creatureSpellAmmoData(ctx, m), spellStartImmunities(schoolMask, mechanicMask)))
 		}
 		goPkt := protocol.BuildSpellGoWithPower(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, goTarget, nil, protocol.SpellGoTrailerExtras{Ammo: s.creatureSpellAmmoData(ctx, m)})
 

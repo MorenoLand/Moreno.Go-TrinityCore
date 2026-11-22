@@ -4610,7 +4610,8 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 	if !triggered && !deferredFire {
 		if castMs := s.server.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), spell); castMs > 0 {
 			startTarget := finalizeSessionSrcTarget(spell, spellGoPacketTarget(spell, target), target.Flags&protocol.SpellTargetFlagSourceLocation != 0, motion.X, motion.Y, motion.Z)
-			s.server.sendCreatureSpellStart(motion, targetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castCount, spell.ID, creatureStartCastFlags(spell), castMs, startTarget, nil, s.server.creatureSpellAmmoData(ctx, motion)))
+			schoolMask, mechanicMask := s.server.creatureSpellImmunityMasks(creatureAuraKeyForMotion(motion))
+			s.server.sendCreatureSpellStart(motion, targetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castCount, spell.ID, creatureStartCastFlags(spell, schoolMask, mechanicMask), castMs, startTarget, nil, s.server.creatureSpellAmmoData(ctx, motion), spellStartImmunities(schoolMask, mechanicMask)))
 			now := time.Now()
 			motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 			s.server.triggerPetGlobalCooldown(motion, spell, now)

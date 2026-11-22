@@ -8868,7 +8868,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if !firingPendingInline {
 						if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); castMs > 0 {
 							if inlineStartKnown {
-								s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castID, castSpellID, creatureStartCastFlags(inlineSpell), castMs, inlineStartTarget, nil, s.creatureSpellAmmoData(ctx, motion)))
+								schoolMask, mechanicMask := s.creatureSpellImmunityMasks(creatureAuraKeyForMotion(motion))
+								s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castID, castSpellID, creatureStartCastFlags(inlineSpell, schoolMask, mechanicMask), castMs, inlineStartTarget, nil, s.creatureSpellAmmoData(ctx, motion), spellStartImmunities(schoolMask, mechanicMask)))
 							}
 							s.cancelPendingCreatureCast(motion)
 							motion.PendingInlineSpellID = spellID
@@ -10253,7 +10254,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// cast-time casts already sent START at the deferral point and
 			// reach GO only on the firing run, whose snapshot is suppressed.
 			if inlineStartKnown {
-				s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castID, spellID, creatureStartCastFlags(inlineSpell), 0, inlineStartTarget, nil, s.creatureSpellAmmoData(ctx, motion)))
+				schoolMask, mechanicMask := s.creatureSpellImmunityMasks(creatureAuraKeyForMotion(motion))
+				s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castID, spellID, creatureStartCastFlags(inlineSpell, schoolMask, mechanicMask), 0, inlineStartTarget, nil, s.creatureSpellAmmoData(ctx, motion), spellStartImmunities(schoolMask, mechanicMask)))
 			}
 			// Spell::SendSpellGo (Spell.cpp:4294-4296): CAST_FLAG_AMMO for
 			// REQ_AMMO / CU_NEEDS_AMMO_DATA, the block from

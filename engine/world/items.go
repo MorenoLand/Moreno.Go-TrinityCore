@@ -5053,8 +5053,9 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		// castItemGUID is the raw instance guid) with the player as
 		// CasterUnit; flags/powers follow the same arms as the client path.
 		itemGUID := rawItemGUID | (uint64(0x4000) << 48)
-		startFlags := spellStartCastFlags(spell)
-		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, s.startDestTarget(ctx, spell, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), packetHasDst, wireObjectGUID), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+		schoolMask, mechanicMask := s.playerSpellImmunityMasks()
+		startFlags := spellStartCastFlags(spell, schoolMask, mechanicMask)
+		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(itemGUID, s.playerGUID, castCount, spellID, startFlags, castTime, s.startDestTarget(ctx, spell, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), packetHasDst, wireObjectGUID), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags), spellStartImmunities(schoolMask, mechanicMask))); err != nil {
 			s.endSpellModTaking() // close the prepare-time registry (opened above)
 			return false
 		}

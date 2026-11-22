@@ -813,10 +813,10 @@ func summonPropertiesMasks(props wotlk.SummonProperties) (guardian, minion bool)
 // CAST_FLAG_AMMO for SPELL_ATTR0_REQ_AMMO / SPELL_ATTR0_CU_NEEDS_AMMO_DATA
 // (Spell.cpp:4237-4239) — the trailing 8-byte Ammo block rides
 // spellGoAmmoData (UpdateSpellCastDataAmmo parity) via spellStartAmmoData.
-// CAST_FLAG_IMMUNITY needs the caster's school/mechanic immunity masks (Go
-// has no m_spellImmune model — ApplySpellImmune is unbridged) and stays
-// unbridged. CAST_FLAG_PENDING is vacuous: every START site serves client
-// casts, never triggered ones.
+// CAST_FLAG_IMMUNITY (Spell.cpp:4224-4234) rides the caster's school /
+// mechanic immunity masks (playerSpellImmunityMasks); the Immunities block
+// rides spellStartImmunities below. CAST_FLAG_PENDING is vacuous: every
+// START site serves client casts, never triggered ones.
 // sendSpellStart mirrors the delivery tail of Spell::SendSpellStart
 // (Spell.cpp:4283): m_caster->SendMessageToSet(packet.Write(), true) puts
 // the cast-start packet in front of everyone in range, self included —
@@ -836,7 +836,7 @@ func (s *session) sendSpellStart(packet []byte) error {
 	return nil
 }
 
-func spellStartCastFlags(spell wotlk.Spell) uint32 {
+func spellStartCastFlags(spell wotlk.Spell, schoolMask, mechanicMask uint32) uint32 {
 	flags := spellCastFlagStart
 	if spell.RuneCostID != 0 && spell.PowerType == powerRune {
 		flags |= protocol.SpellCastFlagNoGCD
@@ -849,7 +849,23 @@ func spellStartCastFlags(spell wotlk.Spell) uint32 {
 	if spell.Attributes&spellAttr0ReqAmmo != 0 || spell.AttributesCu&spellAttr0CUNeedsAmmoData != 0 {
 		flags |= protocol.SpellCastFlagAmmo
 	}
+	// Spell::SendSpellStart (Spell.cpp:4224-4234): CAST_FLAG_IMMUNITY when
+	// the caster carries any school or mechanic immunity mask.
+	if schoolMask != 0 || mechanicMask != 0 {
+		flags |= protocol.SpellCastFlagImmunity
+	}
 	return flags
+}
+
+// spellStartImmunities mirrors the Immunities block write in
+// Spell::SendSpellStart (Spell.cpp:4271-4276): School + mechanic Value,
+// written only when CAST_FLAG_IMMUNITY is set; nil when both masks are 0,
+// so the packet builder writes nothing.
+func spellStartImmunities(schoolMask, mechanicMask uint32) *protocol.SpellStartImmunities {
+	if schoolMask == 0 && mechanicMask == 0 {
+		return nil
+	}
+	return &protocol.SpellStartImmunities{School: schoolMask, Mechanic: mechanicMask}
 }
 
 // spellStartRemainingPower mirrors the RemainingPower write in
@@ -4481,8 +4497,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// time. Replacing the queued spell cancels the old one with the
 		// Spell::cancel PREPARING arm inside queueNextSwingSpell.
 		s.queueNextSwingSpell(ctx, castID, spellID, spell, target, wireObjectGUID, packetHasDst, packetHasSrc, 0, 0)
-		startFlags := spellStartCastFlags(spell)
-		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, s.startDestTarget(ctx, spell, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), packetHasDst, wireObjectGUID), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+		schoolMask, mechanicMask := s.playerSpellImmunityMasks()
+		startFlags := spellStartCastFlags(spell, schoolMask, mechanicMask)
+		if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, s.startDestTarget(ctx, spell, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), packetHasDst, wireObjectGUID), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags), spellStartImmunities(schoolMask, mechanicMask))); err != nil {
 			s.endSpellModTaking() // close the prepare-time registry (opened above)
 			return false
 		}
@@ -4491,8 +4508,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell queued for next swing", "account", s.accountName, "spell", spellID, "cast_id", castID)
 		return true
 	}
-	startFlags := spellStartCastFlags(spell)
-	if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, s.startDestTarget(ctx, spell, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), packetHasDst, wireObjectGUID), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags))); err != nil {
+	schoolMask, mechanicMask := s.playerSpellImmunityMasks()
+	startFlags := spellStartCastFlags(spell, schoolMask, mechanicMask)
+	if err := s.sendSpellStart(protocol.BuildSpellStartWithPower(s.playerGUID, s.playerGUID, castID, spellID, startFlags, castTime, s.startDestTarget(ctx, spell, startSrcTarget(spell, target, packetHasSrc, s.player.X, s.player.Y, s.player.Z), packetHasDst, wireObjectGUID), s.spellStartRemainingPower(spell, startFlags), s.spellStartAmmoData(ctx, startFlags), spellStartImmunities(schoolMask, mechanicMask))); err != nil {
 		s.endSpellModTaking() // close the prepare-time registry (opened above)
 		return false
 	}

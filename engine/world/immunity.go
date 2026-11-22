@@ -1885,6 +1885,87 @@ func scriptImmuneHas(rows map[uint64][]uint32, op, immType uint32) bool {
 	return len(rows[uint64(op)<<32|uint64(immType)]) > 0
 }
 
+// playerSpellImmunityMasks mirrors Unit::GetSchoolImmunityMask /
+// GetMechanicImmunityMask (Unit.cpp:7922-7955) for the player caster: the
+// raw OR of the m_spellImmune[IMMUNITY_SCHOOL] keys and the (1<<mechanic)
+// bits of the IMMUNITY_MECHANIC keys — the values Spell::SendSpellStart
+// writes into the CAST_FLAG_IMMUNITY block (Spell.cpp:4224-4234,
+// :4271-4276). Script rows (spellImmuneRows) carry the ApplySpellImmune
+// writes; live aura 39/96/97 effects carry the ApplyAllSpellImmunitiesTo
+// writes (SpellInfo.cpp:2860-2891), which Go never funnels into rows, so
+// both sources fold in. IMMUNITY_DAMAGE stays out: C++'s school getter
+// reads only the SCHOOL slot.
+func (s *session) playerSpellImmunityMasks() (schoolMask, mechanicMask uint32) {
+	if s == nil || s.player == nil {
+		return 0, 0
+	}
+	s.spellImmuneMu.Lock()
+	rows := make(map[uint64][]uint32, len(s.spellImmuneRows))
+	for k, ids := range s.spellImmuneRows {
+		rows[k] = ids
+	}
+	s.spellImmuneMu.Unlock()
+	for k := range rows {
+		switch uint32(k >> 32) {
+		case immunityOpSchool:
+			schoolMask |= uint32(k)
+		case immunityOpMechanic:
+			if m := uint32(k); m < 32 {
+				mechanicMask |= 1 << m
+			}
+		}
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	for _, aura := range s.activeAuras {
+		if aura == nil {
+			continue
+		}
+		spell, found := wotlk.Spell{}, false
+		if s.server != nil && s.server.Data != nil {
+			if sp, f, err := s.server.Data.Spell(aura.SpellID); err == nil && f {
+				spell, found = sp, true
+			}
+		}
+		schoolMask |= auraEffectMiscMask(aura, spell, found, spellAuraSchoolImmunity)
+		mechanicMask |= auraMechanicImmuneMask(aura, spell, found)
+	}
+	return schoolMask, mechanicMask
+}
+
+// creatureSpellImmunityMasks is the creature-caster twin of
+// playerSpellImmunityMasks (Unit.cpp:7922-7955): script rows
+// (motion.ScriptSpellImmune), template school rows
+// (cachedTemplateSchoolImmuneMask, Creature.cpp:2303-2312), and the
+// live-aura folds — school via creatureAuraDamageImmunityMasks with a zero
+// spell (canSpellPierceImmuneAura never pierces on a zero spell, so the
+// fold is the raw OR the C++ getter returns) and mechanic via
+// creatureLiveMechanicImmunityMasks. Lock order follows
+// creatureImmuneToDamageSpell: motionMu-derived reads first, then auraMu.
+func (srv *Server) creatureSpellImmunityMasks(key creatureAuraKey) (schoolMask, mechanicMask uint32) {
+	if srv == nil || key.GUID == 0 {
+		return 0, 0
+	}
+	if rows := scriptSpellImmuneRows(srv, key); len(rows) > 0 {
+		for k := range rows {
+			switch uint32(k >> 32) {
+			case immunityOpSchool:
+				schoolMask |= uint32(k)
+			case immunityOpMechanic:
+				if m := uint32(k); m < 32 {
+					mechanicMask |= 1 << m
+				}
+			}
+		}
+	}
+	schoolMask |= srv.cachedTemplateSchoolImmuneMask(key)
+	schoolMask, _ = creatureAuraDamageImmunityMasks(srv, key, wotlk.Spell{}, 0x7F, schoolMask, 0)
+	if mech, _ := creatureLiveMechanicImmunityMasks(srv, key); mech != 0 {
+		mechanicMask |= mech
+	}
+	return schoolMask, mechanicMask
+}
+
 // addCreatureSpellImmuneRow is the non-script twin of the Lua
 // creature:ApplySpellImmune bridge (Unit::ApplySpellImmune, Unit.cpp:8268):
 // it appends grantingSpellID under key (op<<32|immType) unless already
