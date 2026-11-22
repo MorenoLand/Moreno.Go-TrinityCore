@@ -549,23 +549,25 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		}
 	}
 
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+	// Player::SaveToDB (Player.cpp:19515-19518): a save while a far
+	// teleport is pending writes nothing — it schedules DELAYED_SAVE_PLAYER,
+	// replayed once the transfer completes — so a crash mid-transfer
+	// leaves the last good origin row. The initiation write below runs
+	// only for near teleports (same map, save-time instance 0/bgData): a
+	// far teleport must not persist the destination map/coords here,
+	// because saveTimeInstanceID() still returns the live origin
+	// instance at initiation (InstanceID is assigned only at the ack),
+	// pairing dest coords with the origin instance — on a crash the
+	// login resolve then recovers to homebind instead of the
+	// destination. The ack persists the completed triple instead
+	// (persistAckPosition). The transport-clear arm rides the same
+	// gate: a crash mid-transfer leaves the origin row with its
+	// transport state intact, and login re-attaches to the transport
+	// at the origin, exactly like C++. Login recomputes zone from
+	// map+coords, so the zone column is freshness only.
+	if sameMap && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, instance_id = ?, zone = ? WHERE guid = ?",
 			mapID, x, y, z, orientation, s.saveTimeInstanceID(), s.player.Zone, s.playerGUID)
-		// The initiation write persists the destination; when the
-		// teleport detached a transport, the origin transport row must
-		// not survive it, or a crash mid-pending would respawn the
-		// player back on the transport at stale offsets instead of at
-		// the destination. The row is also the anchor a logout
-		// double-failure leaves behind (full save and fallback both
-		// failed), so it carries the save-time instance and the live
-		// zone rather than whatever the last good save wrote: near,
-		// the save-time rule value (0/bgData, set above before this
-		// write); far, the live instance at initiation — which, for
-		// a homebind fallback initiated after an ack assignment, is
-		// the assigned instance, so the double-failure row matches
-		// the row the full save would have written. Login recomputes
-		// zone from map+coords, so the zone column is freshness only.
 		if hadTransport && s.player.TransportGUID == 0 {
 			_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET trans_x = 0, trans_y = 0, trans_z = 0, trans_o = 0, transguid = 0 WHERE guid = ?",
 				s.playerGUID)

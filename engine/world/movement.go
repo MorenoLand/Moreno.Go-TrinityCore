@@ -485,15 +485,24 @@ func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
 	// The copied flags come from the sanitizing ReadMovementInfo in C++, so
 	// the ack runs the same anti-cheat pass before the copy.
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
-	// A possessing player's ack belongs to the creature mover, which has no Go
-	// movement-info store — the player-scoped copies below skip it like
-	// the vehicle-mover copies do.
-	possessedMover := s.possessedCreatureGUID() != 0
 	// MiscHandler.cpp:1398 copies to GetUnitBeingMoved()->m_movementInfo.flags,
-	// so while driving the acked flags belong to the vehicle, not the player:
-	// the player-scoped copy and falling sync below run only when the mover
-	// is the player.
-	if !s.controlsVehicle() && !possessedMover {
+	// so while driving the acked flags belong to the vehicle's kit store and
+	// while possessing to the creature motion's store — never the player
+	// store. The falling sync below stays player-gated: s.isFalling is the
+	// player's own state, and the mover's falling state rides its store.
+	possessedGUID := s.possessedCreatureGUID()
+	possessedMover := possessedGUID != 0
+	if s.controlsVehicle() {
+		if s.server != nil {
+			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+				kit.setMovementFlags(info.Flags)
+			}
+		}
+	} else if possessedMover {
+		if s.server != nil {
+			s.server.setCreatureMovementFlags(s.player.Map, s.player.InstanceID, possessedGUID, info.Flags)
+		}
+	} else {
 		s.movementMu.Lock()
 		s.lastMovementInfo.Flags = info.Flags
 		s.movementMu.Unlock()
@@ -1109,14 +1118,25 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		broadcastInfo.Time = uint32(moveTime)
 	}
 	// MovementHandler.cpp:389 — the generic path stores the packet on the
-	// MOVER's m_movementInfo, so a driven vehicle's packet belongs to the
-	// vehicle, not the player: the session store stands in for the player's
-	// own info (knockback/not-active/dismiss all assign _player), and the
-	// player-scoped readers (KillPlayer flying check, player:IsFlying,
-	// archer victim flying, movementInfoForCreate) must keep reading the
-	// frozen pre-boarding flags. The broadcast below still carries the
-	// vehicle packet to the set.
-	if !vehicleMover && !possessedMover {
+	// MOVER's m_movementInfo: a driven vehicle's packet belongs to the
+	// vehicle kit's store, a possessed creature's to its motion's store,
+	// and only a player mover's to the session store (knockback /
+	// not-active / dismiss all assign _player). The player-scoped
+	// readers (KillPlayer flying check, player:IsFlying, archer victim
+	// flying, movementInfoForCreate) keep reading the frozen
+	// pre-boarding flags. The broadcast below still carries the vehicle
+	// packet to the set.
+	if vehicleMover {
+		if s.server != nil {
+			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+				kit.setMovementInfo(broadcastInfo)
+			}
+		}
+	} else if possessedMover {
+		if s.server != nil {
+			s.server.setCreatureMovementInfo(s.player.Map, s.player.InstanceID, possessedGUID, broadcastInfo)
+		}
+	} else {
 		s.setLastMovementInfo(broadcastInfo)
 	}
 	packet := protocol.NewBuffer(len(payload))
@@ -2517,12 +2537,22 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	if err != nil {
 		return true
 	}
-	// MovementHandler.cpp:651 — mover->m_movementInfo.time += timeSkipped,
-	// so while driving the skipped time belongs to the vehicle's info, not
-	// the player-scoped store (same gate as the set-can-fly flag copy);
-	// a possessed mover's time belongs to the creature, which has no Go
-	// movement-info store, so it skips the player store too.
-	if !s.controlsVehicle() && possessedGUID == 0 {
+	// MovementHandler.cpp:651 — mover->m_movementInfo.time += timeSkipped:
+	// while driving the skipped time belongs to the vehicle's kit store,
+	// while possessing to the possessed creature motion's store, and only
+	// a player mover's to the session store (same routing as the
+	// set-can-fly flag copy).
+	if s.controlsVehicle() {
+		if s.server != nil {
+			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+				kit.addMovementInfoTime(timeSkipped)
+			}
+		}
+	} else if possessedGUID != 0 {
+		if s.server != nil {
+			s.server.addCreatureMovementInfoTime(s.player.Map, s.player.InstanceID, possessedGUID, timeSkipped)
+		}
+	} else {
 		s.movementMu.Lock()
 		s.lastMovementInfo.Time += timeSkipped
 		s.movementMu.Unlock()

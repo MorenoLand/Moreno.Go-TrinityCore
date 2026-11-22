@@ -154,6 +154,8 @@ type creatureMotion struct {
 	Hovering              bool                // MOVEMENTFLAG_HOVER live value: Lua CreatureMethods::SetHover (Creature::SetHover twin, Creature.cpp:3105); zero value = not hovering (the C++ default), broadcast leg only
 	Flying                bool                // MOVEMENTFLAG_CAN_FLY live value: Lua CreatureMethods::SetCanFly (Creature::SetCanFly twin, Creature.cpp:3060); zero value = cannot fly (the C++ default), broadcast leg only
 	Swimming              bool                // MOVEMENTFLAG_SWIMMING live value: Lua CreatureMethods::SetSwim (Unit::SetSwim twin, Unit.cpp:13728) plus the per-tick auto-set (Creature::UpdateMovementFlags swim leg); zero value = not swimming (the C++ default). Drives the swim branch of creatureSplineVelocity and the START/STOP_SWIM broadcast
+	MovementInfo          movementInfo        // m_movementInfo twin (MovementHandler.cpp:389, MiscHandler.cpp:1398): acked flags / time / wholesale packet when this creature is the mover (possessed creature, driven vehicle base), kept off any session store
+	MovementInfoSet       bool                // a stored packet exists; written under the server motionMu at the ack sites
 	FeatherFalling        bool                // MOVEMENTFLAG_FALLING_SLOW live value: .debug moveflags SetFeatherFall twin (Unit.cpp:13767); zero value = normal fall (the C++ default), broadcast leg only
 	MoveFlagsRaw          uint32              // unhandled movement-flag bits stored by .debug moveflags (cs_debug.cpp:1251): the SetUnitMovementFlags word minus the handled set; folded into the moveflags display, never read by engine gates
 	MoveFlagsExtra        uint32              // MovementFlags2 extra flags stored by .debug moveflags (SetExtraUnitMovementFlags twin); display only
@@ -1082,10 +1084,16 @@ func creatureSplinePosition(motion *creatureMotion, now time.Time) (x, y, z floa
 // MOD_DECREASE_SPEED (33), MOD_INCREASE_SWIM_SPEED (58),
 // MOD_SPEED_ALWAYS (129), MOD_SPEED_NOT_STACK (171), or
 // MOD_MINIMUM_SPEED (305).
+// spellHasSpeedAura reports whether a spell carries any aura type the
+// creature speed folds read: the unmounted run/swim arms (31/33/58/129/
+// 171/305) and the mounted MOVE_RUN arms (78/32/130/172, Unit::UpdateSpeed
+// Unit.cpp:8683-8688) — a mount aura landing or leaving flips the fold
+// branch, so it must trigger the same recompute.
 func spellHasSpeedAura(spell wotlk.Spell) bool {
 	for _, effect := range spell.Effects {
 		switch effect.Aura {
-		case spellAuraIncreaseSpeed, spellAuraDecreaseSpeed, spellAuraIncreaseSwimSpeed, spellAuraModSpeedAlways, spellAuraModSpeedNotStack, spellAuraMinimumSpeed:
+		case spellAuraIncreaseSpeed, spellAuraDecreaseSpeed, spellAuraIncreaseSwimSpeed, spellAuraModSpeedAlways, spellAuraModSpeedNotStack, spellAuraMinimumSpeed,
+			spellAuraMounted, spellAuraIncreaseMountedSpeed, spellAuraMountedSpeedAlways, spellAuraMountedSpeedNotStack:
 			return true
 		}
 	}
@@ -1134,6 +1142,13 @@ func (s *Server) creatureAuraAmountsByType(key creatureAuraKey, auraType uint32)
 // as C++ asserts, and ties resolve to the earliest-applied record
 // (Slot order), matching C++'s first-wins replace rule.
 func (s *Server) creatureSpeedAlwaysMultiplier(key creatureAuraKey) float32 {
+	return s.creatureSpeedAlwaysMultiplierFor(key, spellAuraModSpeedAlways)
+}
+
+// creatureSpeedAlwaysMultiplierFor is creatureSpeedAlwaysMultiplier for one
+// always-multiplier aura type: 129 unmounted, 130 mounted (Unit.cpp:8686,
+// same GetTotalAuraMultiplier leg, same same-effect-group gate).
+func (s *Server) creatureSpeedAlwaysMultiplierFor(key creatureAuraKey, auraType uint32) float32 {
 	if s == nil || key.GUID == 0 || s.Data == nil {
 		return 1
 	}
@@ -1160,7 +1175,7 @@ func (s *Server) creatureSpeedAlwaysMultiplier(key creatureAuraKey) float32 {
 			continue
 		}
 		for index, effect := range spell.Effects {
-			if effect.Aura != spellAuraModSpeedAlways {
+			if effect.Aura != auraType {
 				continue
 			}
 			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
@@ -1176,13 +1191,33 @@ func (s *Server) creatureSpeedAlwaysMultiplier(key creatureAuraKey) float32 {
 	return mult
 }
 
+// creatureIsMounted mirrors the IsMounted() gate of Unit::UpdateSpeed's
+// MOVE_RUN mounted branch (Unit.cpp:8683, Unit.h:932 UNIT_FLAG_MOUNT):
+// the live flag mirror on the motion (set by the Lua Mount bridge and the
+// SetFlag twin, read by the IsMounted bridge), or a live 207 mounted
+// aura — C++ HandleAuraMounted sets the flag on apply, and the aura
+// fallback covers the creature apply path if it has not mirrored it
+// yet. A template mount display alone does not count: C++ sets the
+// display at spawn without the flag.
+func (s *Server) creatureIsMounted(key creatureAuraKey, motion *creatureMotion) bool {
+	if motion != nil && motion.UnitFlags&0x08000000 != 0 {
+		return true
+	}
+	return len(s.creatureAuraAmountsByType(key, spellAuraMounted)) > 0
+}
+
 // creatureRunSpeedRate mirrors the MOVE_RUN arm of Unit::UpdateSpeed
 // (Unit.cpp:8666-8809) for AI-driven creatures: main_speed_mod is the
 // strongest MOD_INCREASE_SPEED (31); the rate starts at
 // max(1+strongest MOD_SPEED_NOT_STACK (171), product MOD_SPEED_ALWAYS
 // (129), same-effect-group gated); the strongest MOD_DECREASE_SPEED (33)
 // applies after; the
-// MOD_MINIMUM_SPEED (305) floor rides the template base rate. The creature
+// MOD_MINIMUM_SPEED (305) floor rides the template base rate. Mounted
+// creatures take the mounted branch instead (Unit.cpp:8683-8688):
+// strongest MOD_INCREASE_MOUNTED_SPEED (32), product
+// MOD_MOUNTED_SPEED_ALWAYS (130, same-effect-group gated), strongest
+// MOD_MOUNTED_SPEED_NOT_STACK (172) — the 191 cap, minion borrow, 33
+// slow and 305 floor below stay shared. The creature
 // template speed_run (banked on BaseRunRate) multiplies the rate, matching
 // the `speed *= ToCreature()->GetCreatureTemplate()->speed_run` leg.
 // MOVE_WALK returns early in C++ so walk is untouched; MOVE_SWIM folds
@@ -1204,7 +1239,11 @@ func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotio
 		base = motion.BaseRunRate
 	}
 	var mainMod int32
-	for _, a := range s.creatureAuraAmountsByType(key, spellAuraIncreaseSpeed) {
+	mainAura, stackAura, nonStackAura := spellAuraIncreaseSpeed, spellAuraModSpeedAlways, spellAuraModSpeedNotStack
+	if s.creatureIsMounted(key, motion) {
+		mainAura, stackAura, nonStackAura = spellAuraIncreaseMountedSpeed, spellAuraMountedSpeedAlways, spellAuraMountedSpeedNotStack
+	}
+	for _, a := range s.creatureAuraAmountsByType(key, mainAura) {
 		if a > mainMod {
 			mainMod = a
 		}
@@ -1212,9 +1251,9 @@ func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotio
 	// GetTotalAuraMultiplier (Unit.cpp:4858-4889): AddPct per aura, a
 	// product — not a sum — with the same-effect-group highest-only arm
 	// folded in by creatureSpeedAlwaysMultiplier.
-	stack := s.creatureSpeedAlwaysMultiplier(key)
+	stack := s.creatureSpeedAlwaysMultiplierFor(key, stackAura)
 	nonStack := float32(1.0)
-	for _, a := range s.creatureAuraAmountsByType(key, spellAuraModSpeedNotStack) {
+	for _, a := range s.creatureAuraAmountsByType(key, nonStackAura) {
 		if v := float32(1.0) + float32(a)/100; v > nonStack {
 			nonStack = v
 		}
@@ -1851,6 +1890,52 @@ func (s *Server) findCreatureMotion(mapID, instanceID uint32, guid uint64) *crea
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 	return s.findCreatureMotionLocked(mapID, instanceID, guid)
+}
+
+// setCreatureMovementInfo stores a wholesale movement packet on a creature
+// motion (MovementHandler.cpp:389: mover->m_movementInfo = movementInfo).
+func (s *Server) setCreatureMovementInfo(mapID, instanceID uint32, guid uint64, info movementInfo) {
+	if s == nil || guid == 0 {
+		return
+	}
+	if info.Transport != nil {
+		transport := *info.Transport
+		info.Transport = &transport
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, guid); motion != nil {
+		motion.MovementInfo, motion.MovementInfoSet = info, true
+	}
+}
+
+// setCreatureMovementFlags replaces only the flags of a creature motion's
+// stored movement info (MiscHandler.cpp:1398 copies flags, not the whole
+// packet).
+func (s *Server) setCreatureMovementFlags(mapID, instanceID uint32, guid uint64, flags uint32) {
+	if s == nil || guid == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, guid); motion != nil {
+		motion.MovementInfo.Flags = flags
+		motion.MovementInfoSet = true
+	}
+}
+
+// addCreatureMovementInfoTime advances a creature motion's stored movement
+// time (MovementHandler.cpp:651: mover->m_movementInfo.time += timeSkipped).
+func (s *Server) addCreatureMovementInfoTime(mapID, instanceID uint32, guid uint64, delta uint32) {
+	if s == nil || guid == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if motion := s.findCreatureMotionLocked(mapID, instanceID, guid); motion != nil {
+		motion.MovementInfo.Time += delta
+		motion.MovementInfoSet = true
+	}
 }
 
 func (s *session) findCreatureMotion(guid uint64) *creatureMotion {

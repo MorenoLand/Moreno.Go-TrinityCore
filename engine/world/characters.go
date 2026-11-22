@@ -1644,20 +1644,32 @@ func (s *session) hasPvPForcingQuest(ctx context.Context) bool {
 	return err == nil && found != 0
 }
 
-// persistAckInstanceID writes the ack-assigned instance over the initiation
-// row's origin instance. The initiation write carries the origin instance
-// for a far teleport, and a crash after a successful ack but before the
-// next full save otherwise reloads it: dungeon destinations re-derive from
-// bind rows and continents are zeroed at load, but a battleground/arena
-// login trusts the saved row and never repairs player.InstanceID from
-// bgData, so the relogger lands in the origin instance bucket, invisible
-// to the battleground's members. Best-effort like the initiation write: a
-// failure leaves the old row, no worse than before, and never fails the ack.
-func (s *session) persistAckInstanceID() {
+// persistAckPosition writes the ack-completed position triple over the row:
+// map, coords, orientation, instance and zone as they stand after the ack
+// assigned the destination instance. Player::SaveToDB (Player.cpp:19515-
+// 19518) defers saves while a far teleport is pending, so the initiation
+// write is skipped for far teleports (commands.go) and the row still
+// carries the last good origin row until this ack lands it: a crash
+// mid-transfer logs the player back in at the origin, and a crash after
+// the ack finds the completed destination. The transport columns ride
+// the live state too — a detached transport clears them (a crash after
+// the ack must not respawn the player on it at stale offsets), while a
+// stay-on-transport teleport keeps the live offsets. Best-effort: a
+// failure leaves the old row, no worse than before, and never fails the
+// ack. Dungeon destinations re-derive from bind rows and continents are
+// zeroed at load, but a battleground/arena login trusts the saved row
+// and never repairs player.InstanceID from bgData, so the ack-assigned
+// instance must be persisted here.
+func (s *session) persistAckPosition() {
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.player == nil {
 		return
 	}
-	_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET instance_id = ? WHERE guid = ?", s.player.InstanceID, s.playerGUID)
+	transportLow := uint64(0)
+	if s.player.TransportGUID != 0 {
+		transportLow = s.player.TransportGUID & 0xFFFFFFFF
+	}
+	_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, instance_id = ?, zone = ?, trans_x = ?, trans_y = ?, trans_z = ?, trans_o = ?, transguid = ? WHERE guid = ?",
+		s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.InstanceID, s.player.Zone, s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO, transportLow, s.playerGUID)
 }
 
 func (s *session) completeWorldPort(ctx context.Context) bool {
@@ -1909,7 +1921,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 			s.initialLoginPending = false
 			s.server.autoBalanceTransferInstance(s, s.farTeleportOriginMap, s.farTeleportOriginInstanceID, s.player.Map, s.player.InstanceID)
 			s.farTeleportOriginMap, s.farTeleportOriginInstanceID = 0, 0
-			s.persistAckInstanceID()
+			s.persistAckPosition()
 			return true
 		}
 		s.finishTaxiFlight()
@@ -2067,7 +2079,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.server.autoBalanceTransferInstance(s, s.farTeleportOriginMap, s.farTeleportOriginInstanceID, s.player.Map, s.player.InstanceID)
 	s.farTeleportOriginMap, s.farTeleportOriginInstanceID = 0, 0
 	s.lfgOnMapChanged(ctx, true)
-	s.persistAckInstanceID()
+	s.persistAckPosition()
 	return true
 }
 

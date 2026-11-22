@@ -77,6 +77,13 @@ type VehicleKit struct {
 	InstallEventFired    bool // install latch: VEHICLE_EVENT_ON_INSTALL fired once per kit, on the first passenger sync (Creature::AddToWorld Install twin)
 	LastShootPos         [3]float32
 	X, Y, Z, Orientation float32
+	// movementInfo is the driven vehicle's m_movementInfo
+	// (MovementHandler.cpp:389, MiscHandler.cpp:1398): the acked flags /
+	// time / wholesale packet of the vehicle mover, kept off the driver's
+	// session store so player-scoped readers keep the frozen pre-boarding
+	// flags. Guarded by mu.
+	movementInfo    movementInfo
+	movementInfoSet bool
 }
 
 // setPosition records the vehicle base's canonical world position.
@@ -89,6 +96,60 @@ func (v *VehicleKit) setPosition(x, y, z, o float32) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.X, v.Y, v.Z, v.Orientation = x, y, z, o
+}
+
+// setMovementInfo stores a wholesale movement packet on the vehicle kit
+// (MovementHandler.cpp:389: mover->m_movementInfo = movementInfo).
+func (v *VehicleKit) setMovementInfo(info movementInfo) {
+	if v == nil {
+		return
+	}
+	if info.Transport != nil {
+		transport := *info.Transport
+		info.Transport = &transport
+	}
+	v.mu.Lock()
+	v.movementInfo, v.movementInfoSet = info, true
+	v.mu.Unlock()
+}
+
+// movementInfoSnapshot returns the kit's stored movement info, if any.
+func (v *VehicleKit) movementInfoSnapshot() (movementInfo, bool) {
+	if v == nil {
+		return movementInfo{}, false
+	}
+	v.mu.RLock()
+	info, exists := v.movementInfo, v.movementInfoSet
+	v.mu.RUnlock()
+	if info.Transport != nil {
+		transport := *info.Transport
+		info.Transport = &transport
+	}
+	return info, exists
+}
+
+// setMovementFlags replaces only the flags of the stored movement info
+// (MiscHandler.cpp:1398 copies flags, not the whole packet).
+func (v *VehicleKit) setMovementFlags(flags uint32) {
+	if v == nil {
+		return
+	}
+	v.mu.Lock()
+	v.movementInfo.Flags = flags
+	v.movementInfoSet = true
+	v.mu.Unlock()
+}
+
+// addMovementInfoTime advances the stored movement time
+// (MovementHandler.cpp:651: mover->m_movementInfo.time += timeSkipped).
+func (v *VehicleKit) addMovementInfoTime(delta uint32) {
+	if v == nil {
+		return
+	}
+	v.mu.Lock()
+	v.movementInfo.Time += delta
+	v.movementInfoSet = true
+	v.mu.Unlock()
 }
 
 type vehicleKitKey struct {
