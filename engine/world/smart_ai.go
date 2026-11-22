@@ -89,8 +89,11 @@ const (
 // lives in hidden_files/smartai_action_census.py; 6 FAIL_QUEST (89
 // rows), 7 OFFER_QUEST (1 row, directAdd) and 9 ACTIVATE_GOBJECT (60
 // live rows) are ported below with the GO/player/owner target arms
-// (13/14/15/17/18/20/23). The next unported block starts at 15
-// CALL_AREAEXPLOREDOREVENTHAPPENS (187 live rows).
+// (13/14/15/17/18/20/23). 15 CALL_AREAEXPLOREDOREVENTHAPPENS (187
+// live rows), 26 CALL_GROUPEVENTHAPPENS (15) and 27 COMBAT_STOP (13)
+// are ported below with the THREAT_LIST (24) and LOOT_RECIPIENTS (27)
+// target arms. The next unported block starts at 29 FOLLOW (114
+// live rows).
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -106,6 +109,7 @@ const (
 	smartActionSummonCreature                 uint32 = 12
 	smartActionThreatSinglePct                uint32 = 13
 	smartActionThreatAllPct                   uint32 = 14
+	smartActionCallAreaExploredOrEventHappens uint32 = 15
 	smartActionSetEmoteState                  uint32 = 17
 	smartActionAutoAttack                     uint32 = 20
 	smartActionAllowCombatMovement            uint32 = 21
@@ -113,6 +117,8 @@ const (
 	smartActionIncEventPhase                  uint32 = 23
 	smartActionEvade                          uint32 = 24
 	smartActionFleeForAssist                  uint32 = 25
+	smartActionCallGroupEventHappens          uint32 = 26
+	smartActionCombatStop                     uint32 = 27
 	smartActionRemoveAurasFromSpell           uint32 = 28
 	smartActionRandomPhase                    uint32 = 30
 	smartActionRandomPhaseRange               uint32 = 31
@@ -168,6 +174,8 @@ const (
 	smartTargetClosestCreature   uint32 = 19
 	smartTargetClosestGameObject uint32 = 20
 	smartTargetOwnerOrSummoner   uint32 = 23
+	smartTargetThreatList        uint32 = 24
+	smartTargetLootRecipients    uint32 = 27
 )
 
 // SMART_EVENT_FLAG bits (SmartScriptMgr.h:1522-1531).
@@ -1062,6 +1070,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionFailQuest(ctx, motion, st, ev, invokerGUID)
 	case smartActionOfferQuest:
 		s.smartActionOfferQuest(ctx, motion, st, ev, invokerGUID)
+	case smartActionCallAreaExploredOrEventHappens:
+		s.smartActionCallAreaExploredOrEventHappens(ctx, motion, st, ev, invokerGUID)
+	case smartActionCallGroupEventHappens:
+		s.smartActionCallGroupEventHappens(ctx, motion, st, ev, invokerGUID)
+	case smartActionCombatStop:
+		s.smartActionCombatStop(ctx, motion, st, ev, invokerGUID)
 	case smartActionActivateGObject:
 		s.smartActionActivateGObject(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetReactState:
@@ -1747,6 +1761,187 @@ func (s *Server) smartActionOfferQuest(ctx context.Context, motion *creatureMoti
 	}
 }
 
+// smartVehicleKitForTarget resolves the vehicle kit on a target unit,
+// the luaVehicleRef.resolve twin (lua_vehicle.go): the same-map key
+// first, then the GUID scan for a base whose kit is keyed on a stale
+// map/instance (a player base that far-teleported).
+func (s *Server) smartVehicleKitForTarget(motion *creatureMotion, guid uint64) *VehicleKit {
+	if motion == nil || guid == 0 {
+		return nil
+	}
+	if kit := s.getVehicleKit(motion.Map, motion.InstanceID, guid); kit != nil {
+		return kit
+	}
+	for _, loc := range s.findVehicleKits(guid) {
+		return loc.kit
+	}
+	return nil
+}
+
+// smartActionCallAreaExploredOrEventHappens is
+// SMART_ACTION_CALL_AREAEXPLOREDOREVENTHAPPENS (SmartScript.cpp:522-542):
+// every player target takes the AreaExploredOrEventHappens credit
+// (param1) via the session twin (quests.go); a unit target that IS a
+// vehicle credits each seated player passenger instead (GetVehicleKit
+// + seat scan, :527-531) — both arms fire for a player vehicle base.
+// Gameobject targets take neither arm (C++'s IsUnit gate). TDB 26091:
+// 187 live rows.
+func (s *Server) smartActionCallAreaExploredOrEventHappens(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	questID := ev.row.actionParam1
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isGameObject {
+			if kit := s.smartVehicleKitForTarget(motion, tgt.guid); kit != nil {
+				for _, passengerGUID := range kit.seatedPassengerGUIDs() {
+					if sess := s.findSessionByGUID(passengerGUID); sess != nil {
+						sess.areaExploredOrEventHappens(ctx, questID)
+					}
+				}
+			}
+		}
+		if !tgt.isPlayer {
+			continue
+		}
+		if sess := s.findSessionByGUID(tgt.guid); sess != nil {
+			sess.areaExploredOrEventHappens(ctx, questID)
+		}
+	}
+}
+
+// smartInvokerPlayerSession is
+// WorldObject::GetCharmerOrOwnerPlayerOrPlayerItself (Object.cpp:2226-2233)
+// for a SmartScript invoker: the invoker itself when it is a player
+// session, else the charmer-or-owner player of an invoker creature (one
+// level — GetCharmerOrOwnerGUID, Unit.h:1170), else nil.
+func (s *Server) smartInvokerPlayerSession(motion *creatureMotion, invokerGUID uint64) *session {
+	if sess := s.findSessionByGUID(invokerGUID); sess != nil {
+		return sess
+	}
+	if motion == nil {
+		return nil
+	}
+	tm := s.findCreatureMotion(motion.Map, motion.InstanceID, invokerGUID)
+	if tm == nil {
+		return nil
+	}
+	if ownerGUID := creatureCharmerOrOwnerGUID(tm); ownerGUID != 0 {
+		return s.findSessionByGUID(ownerGUID)
+	}
+	return nil
+}
+
+// smartActionCallGroupEventHappens is SMART_ACTION_CALL_GROUPEVENTHAPPENS
+// (SmartScript.cpp:852-872): the invoker's controlling player takes the
+// group credit (param1) via the session groupEventHappens twin
+// (quests.go) — GetCharmerOrOwnerPlayerOrPlayerItself, so a pet/charm
+// invoker credits its owner — anchored on the base object (the motion)
+// for the group reward distance test; a vehicle-riding invoker credits
+// each seated passenger the same way (:864-867). The C++ `unit` is the
+// invoker; a missing invoker no-ops (:854-855). TDB 26091: 15 rows.
+func (s *Server) smartActionCallGroupEventHappens(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	invoker := invokerGUID
+	if invoker == 0 {
+		invoker = st.lastInvoker
+	}
+	if invoker == 0 {
+		return
+	}
+	questID := ev.row.actionParam1
+	base := s.luaMotionCreature(motion)
+	credit := func(sess *session) {
+		if sess != nil {
+			sess.groupEventHappens(ctx, questID, base)
+		}
+	}
+	credit(s.smartInvokerPlayerSession(motion, invoker))
+	if kit := s.smartVehicleKitForTarget(motion, invoker); kit != nil {
+		for _, passengerGUID := range kit.seatedPassengerGUIDs() {
+			credit(s.findSessionByGUID(passengerGUID))
+		}
+	}
+}
+
+// smartRemoveAllAttackers is the Unit::RemoveAllAttackers half of
+// CombatStop (Unit.cpp:5867-5876): every current attacker AttackStops —
+// creatures whose target is me take the Lua AttackStop twin (visual
+// target clear, stop packet, assistance latch reset, threat untouched),
+// players attacking me clear their attack target and take the
+// SMSG_ATTACK_STOP packet. Attackers keep their combat state: C++
+// AttackStop ends no combat, only the m_attacking link.
+func (s *Server) smartRemoveAllAttackers(ctx context.Context, motion *creatureMotion) {
+	s.motionMu.Lock()
+	var attackers []*creatureMotion
+	for _, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+		if m == nil || m.GUID == motion.GUID || m.TargetGUID != motion.GUID {
+			continue
+		}
+		attackers = append(attackers, m)
+	}
+	s.motionMu.Unlock()
+	for _, m := range attackers {
+		s.motionMu.Lock()
+		victim := m.TargetGUID
+		if victim != motion.GUID {
+			s.motionMu.Unlock()
+			continue
+		}
+		m.TargetGUID = 0
+		m.AlreadyCallAssistance = false
+		mapID, instanceID, x, y, z, phase := m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask
+		guid := m.GUID
+		s.motionMu.Unlock()
+		s.clearCreatureVisualTarget(m)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(guid, victim, false), mapID, instanceID, x, y, z, phase)
+	}
+	s.sessionsMu.RLock()
+	var sessions []*session
+	for sess := range s.sessions {
+		if sess != nil && sess.attackTarget == motion.GUID {
+			sessions = append(sessions, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		if sess.attackTarget != motion.GUID {
+			continue
+		}
+		sess.attackTarget = 0
+		_ = sess.sendAttackStop(motion.GUID, false)
+	}
+}
+
+// smartActionCombatStop is SMART_ACTION_COMBAT_STOP
+// (SmartScript.cpp:873-881): me->CombatStop(true) (Unit.cpp:5809-5826) —
+// interrupt the non-melee cast, AttackStop (visual target clear, stop
+// packet, assistance latch reset), RemoveAllAttackers, then end PvE
+// combat (InCombat=false; the mutualPvP=false leg — EndAllPvECombat /
+// SuppressPvPCombat, no ClearInCombat). Threat is untouched: C++ keeps
+// the threat list and re-engagement rides the normal aggro paths.
+// TDB 26091: 13 rows, all SELF-targeted.
+func (s *Server) smartActionCombatStop(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	interrupted := s.interruptCreatureNonMeleeCasts(motion)
+	if len(interrupted) == 0 {
+		motion.CastingUntil = time.Time{}
+		s.cancelPendingCreatureCast(motion)
+	}
+	for _, arm := range interrupted {
+		s.sendCreatureInterruptPackets(motion, arm)
+	}
+	s.motionMu.Lock()
+	victim := motion.TargetGUID
+	motion.InCombat = false
+	if victim != 0 {
+		motion.TargetGUID = 0
+		motion.AlreadyCallAssistance = false
+	}
+	mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+	s.motionMu.Unlock()
+	if victim != 0 {
+		s.clearCreatureVisualTarget(motion)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, victim, false), mapID, instanceID, x, y, z, phase)
+	}
+	s.smartRemoveAllAttackers(ctx, motion)
+}
+
 // smartActionActivateGObject is SMART_ACTION_ACTIVATE_GOBJECT
 // (SmartScript.cpp:693-706): every gameobject target is re-armed to
 // GO_READY (loot state 1) and used via the UseDoorOrButton twin
@@ -2346,6 +2541,10 @@ func (s *Server) smartTargets(ctx context.Context, motion *creatureMotion, st *s
 		return s.smartClosestGameObjectTarget(ctx, motion, ev.row.targetParam1, float32(ev.row.targetParam2))
 	case smartTargetOwnerOrSummoner:
 		return s.smartOwnerOrSummonerTarget(motion, ev.row.targetParam1)
+	case smartTargetThreatList:
+		return s.smartThreatListTargets(motion, float32(ev.row.targetParam1))
+	case smartTargetLootRecipients:
+		return s.smartLootRecipientTargets(motion)
 	default:
 		return nil
 	}
@@ -2716,6 +2915,76 @@ func (s *Server) smartOwnerOrSummonerTarget(motion *creatureMotion, useCharmerOr
 	}
 	if s.findCreatureMotion(motion.Map, motion.InstanceID, guid) != nil {
 		return []smartTarget{{guid: guid}}
+	}
+	return nil
+}
+
+// smartThreatListTargets is SMART_TARGET_THREAT_LIST
+// (SmartScript.cpp:2808-2815): every unit on the owner's threat list
+// within maxDist (target_param1 = hostilRandom.maxDist, Mgr.h:1274-1279;
+// 0 = no limit). CanHaveThreatList's Go twin is a live threat manager;
+// distances are plain 3D, like the other smart target range arms.
+// Unresolvable victims (no live motion or session to measure from)
+// are skipped.
+func (s *Server) smartThreatListTargets(motion *creatureMotion, maxDist float32) []smartTarget {
+	if motion == nil || motion.ThreatMgr == nil {
+		return nil
+	}
+	var out []smartTarget
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		if maxDist > 0 {
+			var x, y, z float32
+			if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); tm != nil {
+				x, y, z = tm.X, tm.Y, tm.Z
+			} else if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+				x, y, z = sess.player.X, sess.player.Y, sess.player.Z
+			} else {
+				continue
+			}
+			if distance3D(motion.X, motion.Y, motion.Z, x, y, z) > float64(maxDist) {
+				continue
+			}
+		}
+		out = append(out, smartTarget{guid: guid, isPlayer: s.smartIsPlayerGUID(guid)})
+	}
+	return out
+}
+
+// smartLootRecipientTargets is SMART_TARGET_LOOT_RECIPIENTS
+// (SmartScript.cpp:2830-2845): the tap group's members on the same map
+// and instance when the creature was tapped by a group
+// (GetLootRecipientGroup, Creature.cpp:1321-1326 — the m_lootRecipientGroup
+// twin is motion.TapGroupID), else the single tap player
+// (GetLootRecipient). The single-recipient leg carries no IsInMap gate
+// in C++; the tap player is returned whenever the session resolves.
+func (s *Server) smartLootRecipientTargets(motion *creatureMotion) []smartTarget {
+	if motion == nil {
+		return nil
+	}
+	s.motionMu.Lock()
+	tapPlayer, tapGroup := motion.TapPlayerGUID, motion.TapGroupID
+	mapID, instanceID := motion.Map, motion.InstanceID
+	s.motionMu.Unlock()
+	if tapGroup != 0 {
+		if grp := s.findGroupByID(tapGroup); grp != nil {
+			var out []smartTarget
+			for _, member := range grp.Members {
+				sess := s.findSessionByGUID(member.GUID)
+				if sess == nil || sess.player == nil {
+					continue
+				}
+				if sess.player.Map != mapID || sess.player.InstanceID != instanceID {
+					continue
+				}
+				out = append(out, smartTarget{guid: member.GUID, isPlayer: true})
+			}
+			return out
+		}
+	}
+	if tapPlayer != 0 {
+		if sess := s.findSessionByGUID(tapPlayer); sess != nil {
+			return []smartTarget{{guid: tapPlayer, isPlayer: true}}
+		}
 	}
 	return nil
 }
