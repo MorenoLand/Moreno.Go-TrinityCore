@@ -5646,6 +5646,33 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			}
 		}
 		if !followOwner {
+			// SmartAI::EnterEvadeMode (SmartAI.cpp:444-449): after the
+			// owner leg, a following creature re-arms MoveFollow to its
+			// follow target and clears UNIT_STATE_EVADE, so OnReset runs
+			// here instead of at home arrival. The escort leg between
+			// them (HasEscortState SMART_ESCORT_ESCORTING) is Lua-owned
+			// and stays out. A follow target that left the world does
+			// not resolve, so the home arm below runs instead — the
+			// C++ null-target arm.
+			if st := s.smartStateFor(ctx, motion); st != nil && st.followGUID != 0 {
+				if _, _, _, ok := s.unitPositionByGUID(motion.Map, motion.InstanceID, st.followGUID); ok {
+					// A self target takes the branch (Evading clears,
+					// OnReset runs) but arms no slot: MoveFollow
+					// no-ops on self (MotionMaster.cpp:584-592).
+					if st.followGUID != motion.GUID {
+						motion.ScriptFollowTargetGUID = st.followGUID
+						motion.ScriptFollowDist = st.followDist
+						motion.ScriptFollowAngle = st.followAngle
+						motion.ScriptFollowInformed = false
+					}
+					motion.Moving = false
+					motion.Evading = false
+					followOwner = true
+					s.smartReset(ctx, motion)
+				}
+			}
+		}
+		if !followOwner {
 			if homeDist > 0.5 {
 				speed := creatureSplineVelocityExplicit(motion, false)
 				if speed < 0.001 {

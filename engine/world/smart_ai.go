@@ -9,6 +9,12 @@
 // ATTACK_START, SET_REACT_STATE, the NPC-flag family,
 // ALLOW_COMBAT_MOVEMENT, SET_ROOT, SET_VISIBILITY and INTERRUPT_SPELL
 // are ported; SET_ACTIVE stays residual.
+// 29 FOLLOW (114 live rows), 32 RESET_GOBJECT (30) and 33
+// CALL_KILLEDMONSTER (410) are ported below with the
+// FOLLOW_COMPLETED event (65), the group kill-credit fan-out, and
+// the CLOSEST_PLAYER (21) + HOSTILE_RANDOM (5) target arms — the
+// latter also serves 1108 CAST rows. The next unported block
+// starts at 37 DIE (61 live rows).
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -47,6 +53,7 @@ package world
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"time"
 
@@ -73,6 +80,7 @@ const (
 	smartEventAIInit              uint32 = 37
 	smartEventTextOver            uint32 = 52
 	smartEventTimedEventTriggered uint32 = 59 // SMART_EVENT_TIMED_EVENT_TRIGGERED (SmartScriptMgr.h:158), event_param1 = timed-event id
+	smartEventFollowCompleted     uint32 = 65 // SMART_EVENT_FOLLOW_COMPLETED (SmartScriptMgr.h:164)
 	smartEventUpdate              uint32 = 60
 	smartEventLink                uint32 = 61
 	smartEventJustCreated         uint32 = 63
@@ -92,8 +100,12 @@ const (
 // (13/14/15/17/18/20/23). 15 CALL_AREAEXPLOREDOREVENTHAPPENS (187
 // live rows), 26 CALL_GROUPEVENTHAPPENS (15) and 27 COMBAT_STOP (13)
 // are ported below with the THREAT_LIST (24) and LOOT_RECIPIENTS (27)
-// target arms. The next unported block starts at 29 FOLLOW (114
-// live rows).
+// target arms. 29 FOLLOW (114 live rows), 32 RESET_GOBJECT (30) and
+// 33 CALL_KILLEDMONSTER (410) are ported below with the
+// FOLLOW_COMPLETED event (65), the group kill-credit fan-out, and
+// the CLOSEST_PLAYER (21) + HOSTILE_RANDOM (5) target arms — the
+// latter also serves 1108 CAST rows.
+// The next unported block starts at 37 DIE (61 live rows).
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -120,8 +132,11 @@ const (
 	smartActionCallGroupEventHappens          uint32 = 26
 	smartActionCombatStop                     uint32 = 27
 	smartActionRemoveAurasFromSpell           uint32 = 28
+	smartActionFollow                         uint32 = 29
 	smartActionRandomPhase                    uint32 = 30
 	smartActionRandomPhaseRange               uint32 = 31
+	smartActionResetGObject                   uint32 = 32
+	smartActionCallKilledMonster              uint32 = 33
 	smartActionSetInstData                    uint32 = 34
 	smartActionUpdateTemplate                 uint32 = 36
 	smartActionCallForHelp                    uint32 = 39
@@ -159,6 +174,7 @@ const (
 	smartTargetNone              uint32 = 0
 	smartTargetSelf              uint32 = 1
 	smartTargetVictim            uint32 = 2
+	smartTargetHostileRandom     uint32 = 5
 	smartTargetActionInvoker     uint32 = 7
 	smartTargetPosition          uint32 = 8
 	smartTargetCreatureRange     uint32 = 9
@@ -173,6 +189,7 @@ const (
 	smartTargetPlayerDist        uint32 = 18
 	smartTargetClosestCreature   uint32 = 19
 	smartTargetClosestGameObject uint32 = 20
+	smartTargetClosestPlayer     uint32 = 21
 	smartTargetOwnerOrSummoner   uint32 = 23
 	smartTargetThreatList        uint32 = 24
 	smartTargetLootRecipients    uint32 = 27
@@ -291,6 +308,19 @@ type smartScriptState struct {
 	invincibilityHPLevel uint32
 	storedEvents         []*smartScriptEvent // mStoredEvents (SmartScript.h:122): CREATE_TIMED_EVENT holders, ticked in smartUpdateTimers
 	remTimedEventIDs     []uint32            // mRemIDs (SmartScript.h:123): stored-event ids queued for removal, drained after the timed-list leg
+	// SmartAI follow state (SmartAI.h: _followGUID/_followDistance/
+	// _followAngle/_followCredit/_followArrivedEntry/_followCreditType,
+	// _followArrivedTimer): armed by SMART_ACTION_FOLLOW, ticked by
+	// smartUpdateFollow (SmartAI::UpdateFollow), cleared by
+	// smartStopFollow. The motion's ScriptFollow* slot is the
+	// MoveFollow generator it drives.
+	followGUID         uint64
+	followDist         float32
+	followAngle        float32
+	followCredit       uint32
+	followArrivedEntry uint32
+	followCreditType   uint32
+	followArrivedTimer uint32
 }
 
 // loadSmartScripts loads the creature-source smart_scripts rows into the
@@ -690,7 +720,8 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
 		smartEventAIInit, smartEventJustCreated,
-		smartEventTextOver, smartEventPhaseChange:
+		smartEventTextOver, smartEventPhaseChange,
+		smartEventFollowCompleted:
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	default:
 		// Timed/conditioned types with no Go condition evaluation
@@ -800,6 +831,9 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 		}
 		st.remTimedEventIDs = nil
 	}
+	// SmartAI::UpdateAI (SmartAI.cpp:300) runs UpdateFollow after
+	// OnUpdate: the arrival check ticks here, on the same diff.
+	s.smartUpdateFollow(ctx, motion, st, diff)
 }
 
 // smartCreateTimedEvent is the SMART_ACTION_CREATE_TIMED_EVENT arm
@@ -1076,6 +1110,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionCallGroupEventHappens(ctx, motion, st, ev, invokerGUID)
 	case smartActionCombatStop:
 		s.smartActionCombatStop(ctx, motion, st, ev, invokerGUID)
+	case smartActionFollow:
+		s.smartActionFollow(ctx, motion, st, ev, invokerGUID)
 	case smartActionActivateGObject:
 		s.smartActionActivateGObject(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetReactState:
@@ -1170,6 +1206,10 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 			phaseMax = phaseMin
 		}
 		s.smartSetEventPhase(ctx, motion, st, phaseMin+uint32(rand.Intn(int(phaseMax-phaseMin+1))), invokerGUID)
+	case smartActionResetGObject:
+		s.smartActionResetGObject(ctx, motion, st, ev, invokerGUID)
+	case smartActionCallKilledMonster:
+		s.smartActionCallKilledMonster(ctx, motion, st, ev, invokerGUID)
 	case smartActionAttackStart:
 		// SMART_ACTION_ATTACK_START (SmartScript.cpp:1238-1249): engage a
 		// random target. The engage runs the AttackStart funnel
@@ -1907,6 +1947,265 @@ func (s *Server) smartActionCombatStop(ctx context.Context, motion *creatureMoti
 	s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, motion.GUID, phase)
 }
 
+// smartActionFollow is SMART_ACTION_FOLLOW (SmartScript.cpp:915-936):
+// empty targets stop the follow without completing; otherwise the
+// first unit target is followed at dist + 0.1 (param1, 0 = default)
+// with angle param2 — above 6 it is degrees, converted to radians
+// (:928-929) — arrival entry param3, credit param4, creditType
+// param5 (0 monsterkill, 1 event). The IsSmart gate is structural:
+// the dispatch only runs for smart-script creatures. Targets that
+// no longer resolve drop out of the list first (the GetTargets /
+// ObjectGuidVector::UpdateObjects sanitize, SmartScriptMgr.h:1592);
+// an all-dropped list stops the follow, while a resolvable list with
+// no unit in it (GO-only) falls through without stopping, exactly
+// like the C++ loop. TDB 26091: 114 live rows; angles 315/45/90/180/
+// 270/360 exercise the degrees leg, 6 rows carry a nonzero arrival
+// entry, 2 a credit, 4 a creditType of 1.
+func (s *Server) smartActionFollow(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	var targets []smartTarget
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if s.smartTargetResolvesInWorld(motion, tgt) {
+			targets = append(targets, tgt)
+		}
+	}
+	if len(targets) == 0 {
+		s.smartStopFollow(ctx, motion, st, false)
+		return
+	}
+	for _, tgt := range targets {
+		if tgt.isGameObject {
+			continue
+		}
+		dist := float32(ev.row.actionParam1) + 0.1
+		angle := float32(ev.row.actionParam2)
+		if angle > 6 {
+			angle = angle * float32(math.Pi) / 180
+		}
+		s.smartSetFollow(ctx, motion, st, tgt.guid, dist, angle, ev.row.actionParam4, ev.row.actionParam3, ev.row.actionParam5)
+		return
+	}
+}
+
+// smartTargetResolvesInWorld is the GetTargets sanitize for a
+// resolved target (SmartScript.cpp GetTargets + ObjectGuidVector::
+// UpdateObjects, SmartScriptMgr.h:1592): a target counts only when
+// it resolves to an object in the world. A dead-but-present creature
+// still resolves — C++ has no alive gate here (FindCreatureNear
+// tests guid and entry only; FollowMovementGenerator only requires
+// the target IsInWorld). GO targets always resolve: Go's GO arms
+// only return existing gameobjects.
+func (s *Server) smartTargetResolvesInWorld(motion *creatureMotion, tgt smartTarget) bool {
+	if tgt.isGameObject {
+		return true
+	}
+	if tgt.isPlayer {
+		sess := s.findSessionByGUID(tgt.guid)
+		return sess != nil && sess.player != nil
+	}
+	return s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid) != nil
+}
+
+// smartSetFollow is SmartAI::SetFollow (SmartAI.cpp:822-840): the
+// follow fields latch (arrival timer 1000ms) and MoveFollow arms
+// the motion's follow slot, clearing the chase slot first — the
+// Lua MoveFollow bridge's twin. A zero target stops without
+// completing, like the C++ null-target arm. A self target latches
+// the fields but arms no slot: MotionMaster::MoveFollow no-ops on
+// self (MotionMaster.cpp:584-592). SetRun(_run) is vacuous:
+// _run defaults true (SmartAI.cpp:34) and the Go follow step always
+// runs (creatureSplineVelocityExplicit with walk=false); SET_RUN
+// (59) is unported, so _run can never be false here.
+func (s *Server) smartSetFollow(ctx context.Context, motion *creatureMotion, st *smartScriptState, targetGUID uint64, dist, angle float32, credit, entry, creditType uint32) {
+	if targetGUID == 0 {
+		s.smartStopFollow(ctx, motion, st, false)
+		return
+	}
+	st.followGUID = targetGUID
+	st.followDist = dist
+	st.followAngle = angle
+	st.followArrivedTimer = 1000
+	st.followCredit = credit
+	st.followArrivedEntry = entry
+	st.followCreditType = creditType
+	if targetGUID == motion.GUID {
+		return
+	}
+	s.motionMu.Lock()
+	motion.ScriptChaseTargetGUID = 0
+	motion.ScriptChaseDist = 0
+	motion.ScriptChaseAngle = 0
+	motion.ScriptFollowTargetGUID = targetGUID
+	motion.ScriptFollowDist = dist
+	motion.ScriptFollowAngle = angle
+	motion.ScriptFollowInformed = false
+	s.motionMu.Unlock()
+}
+
+// smartStopFollow is SmartAI::StopFollow (SmartAI.cpp:841-870): the
+// follow fields clear and the follow slot drops (the MoveIdle twin).
+// On completion the despawn tail runs — SetDespawnTime(5000) +
+// StartDespawn (SmartAI.h:205-213, UpdateDespawn :989-1004):
+// invisible at +5s, removed at +10s — then FOLLOW_COMPLETED fires
+// with a null invoker. The credit legs never run in this C++
+// revision: _followGUID is cleared at the top of StopFollow, before
+// the GetPlayer lookup, so the player is always null — ported
+// verbatim, no credit is granted here.
+func (s *Server) smartStopFollow(ctx context.Context, motion *creatureMotion, st *smartScriptState, complete bool) {
+	st.followGUID = 0
+	st.followDist = 0
+	st.followAngle = 0
+	st.followCredit = 0
+	st.followArrivedTimer = 1000
+	st.followArrivedEntry = 0
+	st.followCreditType = 0
+	s.motionMu.Lock()
+	motion.ScriptFollowTargetGUID = 0
+	motion.ScriptFollowDist = 0
+	motion.ScriptFollowAngle = 0
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	s.motionMu.Unlock()
+	if !complete {
+		return
+	}
+	time.AfterFunc(5*time.Second, func() {
+		if tm := s.findCreatureMotion(mapID, instanceID, guid); tm != nil {
+			s.motionMu.Lock()
+			tm.ScriptHidden = true
+			s.motionMu.Unlock()
+			s.broadcastCreatureDestroyToPlayers(mapID, instanceID, guid)
+		}
+		time.AfterFunc(5*time.Second, func() {
+			s.despawnCreatureMotion(context.Background(), mapID, instanceID, guid)
+		})
+	})
+	s.smartProcessEvents(ctx, motion, smartEventFollowCompleted, 0, 0, 0)
+}
+
+// smartUpdateFollow is SmartAI::UpdateFollow (SmartAI.cpp:967-981),
+// ticked from smartUpdateTimers: every 1000ms, a live creature of
+// the arrival entry within INTERACTION_DISTANCE (5.0) completes the
+// follow. Entry 0 can never match — C++ requires an exact entry
+// match (GridNotifiers.h:1337) — so the scan is skipped then, which
+// is the 108 zero-entry rows' behavior. The scan itself is the
+// CLOSEST_CREATURE twin (alive-only, self excluded, same map and
+// instance). Deviation: C++ ticks UpdateFollow through evade;
+// Go's smartUpdateTimers returns early while Evading, so the
+// arrival check pauses during an evade-home walk.
+func (s *Server) smartUpdateFollow(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
+	if st.followGUID == 0 {
+		return
+	}
+	if st.followArrivedTimer < diff {
+		if st.followArrivedEntry != 0 && len(s.smartClosestCreatureTarget(motion, st.followArrivedEntry, 5, 0)) > 0 {
+			s.smartStopFollow(ctx, motion, st, true)
+			return
+		}
+		st.followArrivedTimer = 1000
+	} else {
+		st.followArrivedTimer -= diff
+	}
+}
+
+// smartActionResetGObject is SMART_ACTION_RESET_GOBJECT
+// (SmartScript.cpp:708-719): every gameobject target takes
+// ResetDoorOrButton. Non-GO targets are skipped, like C++'s
+// IsGameObject check. TDB 26091: 30 live rows (src 0/9; the 8
+// GO-source rows stay residual — Go loads no GO-source scripts).
+func (s *Server) smartActionResetGObject(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isGameObject {
+			continue
+		}
+		s.resetDoorOrButton(motion.Map, motion.InstanceID, tgt.guid)
+	}
+}
+
+// smartActionCallKilledMonster is SMART_ACTION_CALL_KILLEDMONSTER
+// (SmartScript.cpp:965-991): on a NONE/SELF target the creature's
+// loot recipient takes the group credit (RewardPlayerAndGroupAtEvent,
+// Player.cpp:24132-24158); otherwise every player target takes the
+// single credit, and every unit target's vehicle seats take it too
+// (the C++ IsUnit vehicle leg). The single-credit call passes no
+// creature GUID (C++ calls KilledMonsterCredit with the default
+// empty guid, so real_entry stays the row's entry); the group leg
+// passes the recipient PLAYER as pRewardSource (SmartScript.cpp:975),
+// so creature_guid is Empty too (Player.cpp:24134-24136: only a
+// TYPEID_UNIT source carries a guid) and the group distance is
+// measured from the recipient player, not the creature. TDB 26091:
+// 410 live rows (src 0/9; 18 areatrigger + 3 GO-source rows stay
+// residual).
+func (s *Server) smartActionCallKilledMonster(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	entry := ev.row.actionParam1
+	if ev.row.targetType == smartTargetNone || ev.row.targetType == smartTargetSelf {
+		s.motionMu.Lock()
+		tapPlayer := motion.TapPlayerGUID
+		s.motionMu.Unlock()
+		sess := s.findSessionByGUID(tapPlayer)
+		if sess == nil {
+			return
+		}
+		s.smartRewardPlayerAndGroupAtEvent(ctx, sess, entry)
+		return
+	}
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			if sess := s.findSessionByGUID(tgt.guid); sess != nil {
+				sess.grantKillCreditMonster(ctx, entry, 0)
+			}
+			continue
+		}
+		if tgt.isGameObject {
+			continue
+		}
+		if kit := s.smartVehicleKitForTarget(motion, tgt.guid); kit != nil {
+			for _, passengerGUID := range kit.seatedPassengerGUIDs() {
+				if sess := s.findSessionByGUID(passengerGUID); sess != nil {
+					sess.grantKillCreditMonster(ctx, entry, 0)
+				}
+			}
+		}
+	}
+}
+
+// smartRewardPlayerAndGroupAtEvent is Player::RewardPlayerAndGroupAtEvent
+// (Player.cpp:24132-24158) for a smart-script kill credit: solo, the
+// recipient takes the credit directly; grouped, every member at
+// IsAtGroupRewardDistance of the recipient player — the pRewardSource
+// (SmartScript.cpp:975) — takes it (same map and instance,
+// dungeon-always, else within MaxGroupXPDistance, dead members anchored
+// on their corpse via groupRewardAnchorPos), but only while alive or
+// not yet released (:24152). The credit carries no creature GUID
+// (Player.cpp:24134-24136: only a TYPEID_UNIT source carries one),
+// so real_entry stays the row's entry.
+func (s *Server) smartRewardPlayerAndGroupAtEvent(ctx context.Context, sess *session, entry uint32) {
+	if sess == nil || sess.player == nil {
+		return
+	}
+	if sess.groupID == 0 || sess.server == nil {
+		sess.grantKillCreditMonster(ctx, entry, 0)
+		return
+	}
+	mapID, instanceID := sess.player.Map, sess.player.InstanceID
+	cx, cy, cz := sess.player.X, sess.player.Y, sess.player.Z
+	dungeon := sess.isDungeonMap(mapID)
+	for _, m := range sess.server.getGroupSessions(sess.groupID) {
+		if m == nil || m.player == nil {
+			continue
+		}
+		if m.player.Map != mapID || m.player.InstanceID != instanceID {
+			continue
+		}
+		mx, my, mz := groupRewardAnchorPos(m)
+		if !dungeon && distance3D(mx, my, mz, cx, cy, cz) > sess.server.Config.MaxGroupXPDistance {
+			continue
+		}
+		if m.isDeadOrGhost() && m.player.hasCorpse {
+			continue
+		}
+		m.grantKillCreditMonster(ctx, entry, 0)
+	}
+}
+
 // smartActionActivateGObject is SMART_ACTION_ACTIVATE_GOBJECT
 // (SmartScript.cpp:693-706): every gameobject target is re-armed to
 // GO_READY (loot state 1) and used via the UseDoorOrButton twin
@@ -2468,6 +2767,8 @@ func (s *Server) smartTargets(ctx context.Context, motion *creatureMotion, st *s
 			return nil
 		}
 		return []smartTarget{{guid: motion.TargetGUID, isPlayer: s.smartIsPlayerGUID(motion.TargetGUID)}}
+	case smartTargetHostileRandom:
+		return s.smartHostileRandomTarget(motion, float32(ev.row.targetParam1), ev.row.targetParam2 != 0, ev.row.targetParam3)
 	case smartTargetActionInvoker:
 		if trigger == 0 {
 			return nil
@@ -2504,6 +2805,8 @@ func (s *Server) smartTargets(ctx context.Context, motion *creatureMotion, st *s
 		return s.smartClosestCreatureTarget(motion, ev.row.targetParam1, ev.row.targetParam2, ev.row.targetParam3)
 	case smartTargetClosestGameObject:
 		return s.smartClosestGameObjectTarget(ctx, motion, ev.row.targetParam1, float32(ev.row.targetParam2))
+	case smartTargetClosestPlayer:
+		return s.smartClosestPlayerTarget(motion, float32(ev.row.targetParam1))
 	case smartTargetOwnerOrSummoner:
 		return s.smartOwnerOrSummonerTarget(motion, ev.row.targetParam1)
 	case smartTargetThreatList:
@@ -2838,6 +3141,109 @@ func (s *Server) smartPlayerRangeTargets(motion *creatureMotion, minDist, maxDis
 		out = append(out, smartTarget{guid: sess.player.GUID, isPlayer: true})
 	}
 	return out
+}
+
+// smartClosestPlayerTarget is SMART_TARGET_CLOSEST_PLAYER
+// (SmartScript.cpp:2767-2772): WorldObject::SelectNearestPlayer(dist),
+// alive-only (NearestPlayerInObjectRangeCheck, GridNotifiers.h:1398-1412:
+// IsAlive + IsWithinDistInMap, shrinking to the nearest). Dist is
+// target_param1; 0 means only a player at the exact spot matches.
+// TDB 26091: 11 rows ride this strip (29 x7, 33 x4; dist 5/10/50/200).
+func (s *Server) smartClosestPlayerTarget(motion *creatureMotion, dist float32) []smartTarget {
+	s.sessionsMu.RLock()
+	var found []*session
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil {
+			continue
+		}
+		if sess.player.Map != motion.Map || sess.player.InstanceID != motion.InstanceID {
+			continue
+		}
+		found = append(found, sess)
+	}
+	s.sessionsMu.RUnlock()
+	var best *session
+	bestDist := float64(dist)
+	for _, sess := range found {
+		if sess.isDeadOrGhost() {
+			continue
+		}
+		d := distance3D(motion.X, motion.Y, motion.Z, sess.player.X, sess.player.Y, sess.player.Z)
+		if d <= bestDist {
+			bestDist, best = d, sess
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	return []smartTarget{{guid: best.player.GUID, isPlayer: true}}
+}
+
+// smartHostileRandomTarget is SMART_TARGET_HOSTILE_RANDOM
+// (SmartScript.cpp:2554-2565): UnitAI::SelectTarget(Random, 0,
+// maxDist, playerOnly) over the creature's threat list
+// (DefaultTargetSelector, UnitAI.cpp:254-278: maxDist 0 = no limit,
+// playerOnly gates on TYPEID_PLAYER, the combat-range leg is a 3D
+// distance strictly under maxDist + both combat reaches). The
+// powerType leg (PowerUsersSelector) has no Go twin — exactly one
+// TDB row carries a nonzero powerType (40, out of the Powers enum,
+// matching nothing in C++ either), so it resolves to no target.
+// Candidates must resolve to a live unit (the threat-selection
+// precedent in threat.go); at DEATH time the list is already empty
+// in both engines (Unit::setDeathState runs CombatStop, which clears
+// own threat, before AI()->JustDied), so the single DEATH row
+// (31411) credits nobody either way. TDB 26091: 1113 rows ride the
+// arm (CAST 1108, ATTACK_START 4, CALL_KILLEDMONSTER 1).
+func (s *Server) smartHostileRandomTarget(motion *creatureMotion, maxDist float32, playerOnly bool, powerType uint32) []smartTarget {
+	if motion == nil || motion.ThreatMgr == nil || powerType != 0 {
+		return nil
+	}
+	myReach := motion.CombatReach
+	if myReach <= 0 {
+		myReach = 1.5
+	}
+	resolve := func(guid uint64) (x, y, z, reach float32, alive bool, ok bool) {
+		if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+			if sess.player.Map != motion.Map || sess.player.InstanceID != motion.InstanceID {
+				return 0, 0, 0, 0, false, false
+			}
+			reach = sess.player.CombatReach
+			if reach <= 0 {
+				reach = 1.5
+			}
+			return sess.player.X, sess.player.Y, sess.player.Z, reach, !sess.isDeadOrGhost(), true
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid)
+		if tm == nil {
+			return 0, 0, 0, 0, false, false
+		}
+		s.motionMu.Lock()
+		x, y, z, reach, health := tm.X, tm.Y, tm.Z, tm.CombatReach, tm.Health
+		s.motionMu.Unlock()
+		if reach <= 0 {
+			reach = 1.5
+		}
+		return x, y, z, reach, health > 0, true
+	}
+	var candidates []uint64
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		if playerOnly && s.findSessionByGUID(guid) == nil {
+			continue
+		}
+		x, y, z, reach, alive, ok := resolve(guid)
+		if !ok || !alive {
+			continue
+		}
+		if maxDist > 0 && distance3D(motion.X, motion.Y, motion.Z, x, y, z) >= float64(maxDist+myReach+reach) {
+			continue
+		}
+		candidates = append(candidates, guid)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	pick := candidates[rand.Intn(len(candidates))]
+	return []smartTarget{{guid: pick, isPlayer: s.smartIsPlayerGUID(pick)}}
 }
 
 // smartOwnerOrSummonerTarget is SMART_TARGET_OWNER_OR_SUMMONER
