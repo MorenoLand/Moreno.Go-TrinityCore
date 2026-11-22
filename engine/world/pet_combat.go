@@ -10052,7 +10052,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// (ThreatManager.cpp:311-317) — without this guard the tail
 		// aggro call would re-engage a victim C++ leaves unengaged.
 		if !threatGated {
-			s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
+			s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID, true)
 			s.server.engageAttackedTargetOwner(ctx, targetMotion.GUID, caster.GUID)
 		}
 	}

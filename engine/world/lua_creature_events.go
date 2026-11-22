@@ -1733,7 +1733,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if s.findSessionByGUID(targetGUID) == nil && s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID) == nil {
 			return nil, nil
 		}
-		s.triggerCreatureAggro(ctx, motion.GUID, targetGUID)
+		// EngageWithTarget is the direct C++ engage call (Unit.cpp:
+		// 8429-8438) with no react-state gate: a script explicitly
+		// engaging a passive creature engages it.
+		s.triggerCreatureAggro(ctx, motion.GUID, targetGUID, true)
 		return nil, nil
 	}
 	auraKey := func() creatureAuraKey {

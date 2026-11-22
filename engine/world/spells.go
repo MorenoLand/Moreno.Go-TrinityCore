@@ -9369,7 +9369,7 @@ func (s *session) engageLaunchTarget(ctx context.Context, spell wotlk.Spell, tar
 		return
 	}
 	if uint16(targetGUID>>48) == 0xF130 {
-		s.server.triggerCreatureAggro(ctx, targetGUID, s.playerGUID)
+		s.server.triggerCreatureAggro(ctx, targetGUID, s.playerGUID, true)
 		s.server.engageAttackedTargetOwner(ctx, targetGUID, s.playerGUID)
 		return
 	}
@@ -15489,7 +15489,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if miss.Reason == protocol.SpellMissResist && uint16(miss.TargetGUID>>48) == 0xF130 {
 					s.removeAurasWithInterruptFlags(auraInterruptFlagTalk)
 					if s.server != nil {
-						s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID)
+						s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID, true)
 						s.server.engageAttackedTargetOwner(effCtx, miss.TargetGUID, s.playerGUID)
 					}
 				}
@@ -21174,7 +21174,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						if !spellHasInitialThreat(spell) && !s.isTargetEngaged(effectTarget) {
 							continue
 						}
-						s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
+						s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID, true)
 						s.server.engageAttackedTargetOwner(effCtx, effectTarget, s.playerGUID)
 					}
 				}
@@ -21210,7 +21210,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if !spellHasInitialThreat(spell) && !s.isTargetEngaged(miss.TargetGUID) {
 						continue
 					}
-					s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID)
+					s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID, true)
 					s.server.engageAttackedTargetOwner(effCtx, miss.TargetGUID, s.playerGUID)
 				}
 			}
@@ -26233,7 +26233,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		// (ThreatManager.cpp:311-317) — without this guard the tail
 		// aggro call would re-engage a victim C++ leaves unengaged.
 		if !threatGated {
-			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID, true)
 		}
 		s.server.triggerPetDefensive(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID, scripting.CreatureEventOnOwnerAttacked)
 	}
@@ -49299,7 +49299,7 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 			if s.player == nil {
 				threatGUID = aura.CasterGUID
 			}
-			s.server.triggerCreatureAggro(ctx, target.GUID, threatGUID)
+			s.server.triggerCreatureAggro(ctx, target.GUID, threatGUID, true)
 		}
 	}
 	return dmg, true

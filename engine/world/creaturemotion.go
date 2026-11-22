@@ -1755,7 +1755,7 @@ func atEngageSetHomePosition(motion *creatureMotion) {
 	motion.HomeO = motion.Orientation
 }
 
-func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerGUID uint64) {
+func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerGUID uint64, fromAttack bool) {
 	playerSess := s.findSessionByGUID(playerGUID)
 	mapID, instanceID := uint32(0), uint32(0)
 	if playerSess != nil && playerSess.player != nil {
@@ -1864,7 +1864,16 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		}
 	}
 	if motion != nil && motion.Health > 0 {
-		if isCreaturePassive(motion) {
+		// DealDamage -> AddThreat -> SetInCombatWith succeeds for
+		// REACT_PASSIVE (nothing in CanBeginCombat excludes it), so a
+		// damaged passive creature enters combat; PassiveAI::UpdateAI
+		// then does nothing and CreatureAI::UpdateVictim (CreatureAI.cpp:
+		// 240-264) holds combat without attacking — the motion tick's
+		// passive arm below is that twin. Sight/assist engages stay
+		// out: the MoveInLOS scan and the assist funnel already exclude
+		// passive creatures, and fromAttack=false keeps this gate as
+		// their backstop.
+		if isCreaturePassive(motion) && !fromAttack {
 			s.motionMu.Unlock()
 			return
 		}
@@ -2039,7 +2048,7 @@ func (s *Server) engageAttackedTargetOwner(ctx context.Context, creatureGUID, at
 		markPlayerInCombat(ctx, sess, attackerGUID)
 		return
 	}
-	s.triggerCreatureAggro(ctx, ownerGUID, attackerGUID)
+	s.triggerCreatureAggro(ctx, ownerGUID, attackerGUID, true)
 }
 
 // callCreatureAssistance mirrors Creature::CallAssistance
@@ -2936,7 +2945,7 @@ func (s *Server) callCreatureForHelp(ctx context.Context, caller *creatureMotion
 	}
 	s.motionMu.Unlock()
 	for _, guid := range helpers {
-		s.triggerCreatureAggro(ctx, guid, victimGUID)
+		s.triggerCreatureAggro(ctx, guid, victimGUID, false)
 	}
 }
 
@@ -3100,7 +3109,7 @@ func (s *Server) fireCreatureAssistance(ctx context.Context, motion *creatureMot
 	}
 	s.motionMu.Unlock()
 	for _, guid := range qualified {
-		s.triggerCreatureAggro(ctx, guid, victimGUID)
+		s.triggerCreatureAggro(ctx, guid, victimGUID, false)
 	}
 }
 
@@ -6175,7 +6184,11 @@ func (s *Server) stepCreatureCombatPulse(ctx context.Context, motion *creatureMo
 		if !s.isHostileFaction(faction, p) {
 			continue
 		}
-		s.triggerCreatureAggro(ctx, motion.GUID, p.GUID)
+		// The pulse only runs while InCombat, so a passive creature
+		// reaching it was already damage-engaged; C++ engages every
+		// hostile player here regardless of react state (Creature.cpp:
+		// 842-868), so the attack leg carries it.
+		s.triggerCreatureAggro(ctx, motion.GUID, p.GUID, true)
 	}
 }
 
