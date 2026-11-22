@@ -769,7 +769,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 				continue
 			}
 			entry := uint32(aura.MiscValue)
-			if aura.SpellID == 62061 {
+			if s.hasAura(62061) {
 				if hasMountedFlight {
 					entry = 24906
 				} else {
@@ -1040,6 +1040,13 @@ func (s *session) loadMountDisplay(ctx context.Context, state *playerState) {
 			break
 		}
 	}
+	hasFestive := false
+	for _, aura := range auras {
+		if aura != nil && aura.SpellID == 62061 {
+			hasFestive = true
+			break
+		}
+	}
 	for _, aura := range auras {
 		if aura == nil || aura.AuraType != 78 {
 			continue
@@ -1049,11 +1056,29 @@ func (s *session) loadMountDisplay(ctx context.Context, state *playerState) {
 			continue
 		}
 		entry := uint32(aura.MiscValue)
-		if aura.SpellID == 62061 {
+		if hasFestive {
 			if hasMountedFlight {
 				entry = 24906
 			} else {
 				entry = 15665
+			}
+		}
+		// HandleAuraMounted's summon-vehicle leg
+		// (SpellAuraEffects.cpp:2605-2611): a mount spell whose own
+		// SPELL_EFFECT_SUMMON misc equals the mount misc shows no model
+		// at login either — the flag above still sets.
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, _ := s.server.Data.Spell(aura.SpellID); found {
+				summonVehicle := false
+				for _, eff := range sp.Effects {
+					if eff.Effect == spellEffectSummon && eff.MiscValue == aura.MiscValue {
+						summonVehicle = true
+						break
+					}
+				}
+				if summonVehicle {
+					continue
+				}
 			}
 		}
 		var displayID int64
@@ -4946,12 +4971,15 @@ func (s *session) sendPlayerQuestLogUpdate(slot int) {
 }
 
 // sendPlayerMountUpdate pushes UNIT_FIELD_MOUNTDISPLAYID as a values update.
+// C++ IsMounted() is flag-only (Unit.h:932): the flag follows the mounted
+// aura, never the display id — taxi and .modify-mount displays ride
+// SendDoFlight / the display field without setting it.
 func (s *session) sendPlayerMountUpdate() {
 	if s.player == nil {
 		return
 	}
 	flags := s.player.UnitFlags
-	if s.player.MountDisplayID != 0 || s.hasAuraType(spellAuraMounted) {
+	if s.hasAuraType(spellAuraMounted) {
 		flags |= unitFlagMount
 	} else {
 		flags &^= unitFlagMount

@@ -47,6 +47,8 @@ const (
 	immunityOpDispel   uint32 = 4 // IMMUNITY_DISPEL: DispelType
 	immunityOpMechanic uint32 = 5 // IMMUNITY_MECHANIC: Mechanics
 	immunityOpID       uint32 = 6 // IMMUNITY_ID: spell id
+
+	mechanicPolymorph uint32 = 17 // MECHANIC_POLYMORPH (SharedDefines.h:1374)
 )
 
 // isTotalImmune mirrors Player::isTotalImmune (Player.cpp:24785-24798): any

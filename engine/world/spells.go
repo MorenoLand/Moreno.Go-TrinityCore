@@ -38343,7 +38343,6 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	}
 	mounted := auraType == spellAuraMounted
 	if mounted {
-		s.clearOtherMountedAuras(spellID)
 		durationMs = 0
 		stackCount = 1
 		procCharges = 0
@@ -38593,6 +38592,22 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	}
 	if mounted {
 		s.applyMountedDisplay(context.Background(), aura)
+	}
+	// AuraEffect::HandleAuraAllowFlight REAL arm
+	// (SpellAuraEffects.cpp:3047-3050): a live 207 effect grants
+	// polymorph-mechanic immunity, and the Dragonmaw Illusion leg
+	// (:3053-3055) overrides the mount display while 42016 is up.
+	// The grant is keyed by this spell, so a second live 207 aura's
+	// rows survive this aura's removal.
+	if s.activeAuraHasEffect(aura, spellAuraModIncreaseMountedFlightSpeed) {
+		s.addPlayerSpellImmuneRow(immunityOpMechanic, mechanicPolymorph, spellID)
+		s.applyDragonmawMountOverride(context.Background())
+	}
+	// AuraEffect::HandleAuraDummy case 62061 apply arm
+	// (SpellAuraEffects.cpp:4626-4644): the festive aura swaps a live
+	// mount's display to the reindeer while it is up.
+	if spellID == 62061 {
+		s.applyFestiveMountDisplay(context.Background())
 	}
 	if auraType == spellAuraSpiritOfRedemption {
 		// AuraEffect::HandleSpiritOfRedemption apply leg
@@ -39135,6 +39150,19 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			}
 		}
 	}
+	// AuraEffect::HandleAuraDummy case 62061 remove arm
+	// (SpellAuraEffects.cpp:4626-4644): dropping the festive aura while
+	// mounted restores the mounted aura's own display.
+	if spellID == 62061 && s.hasAuraType(spellAuraMounted) {
+		s.restoreMountDisplayFromMountedAura(context.Background())
+	}
+	// AuraEffect::HandleAuraTransform remove leg, Dragonmaw Illusion arm
+	// (SpellAuraEffects.cpp:2117-2127): dropping 42016 while the mount
+	// display is the illusion's 16314 restores the mounted aura's own
+	// display.
+	if spellID == 42016 && s.player != nil && s.player.MountDisplayID == 16314 {
+		s.restoreMountDisplayFromMountedAura(context.Background())
+	}
 	if (wasTransform || wasShapeshift) && s.player != nil {
 		s.refreshTransformDisplay(context.Background())
 	}
@@ -39598,6 +39626,13 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	if wasMountedFlight {
 		s.sendRuntimeMovementUpdates(spellAuraMountedFlightSpeed)
 	}
+	// AuraEffect::HandleAuraAllowFlight REAL arm, !apply
+	// (SpellAuraEffects.cpp:3047-3050): dropping the last 207 effect
+	// of this spell clears the polymorph-mechanic immunity it granted;
+	// rows granted by another live 207 spell are untouched.
+	if wasMountedFlight || removedAuraType == spellAuraMountedFlightSpeed {
+		s.removePlayerSpellImmuneRows(immunityOpMechanic, mechanicPolymorph, spellID)
+	}
 	// AuraEffect::HandleAuraModTotalThreat on removal (the
 	// AURA_EFFECT_HANDLE_CHANGE_AMOUNT_MASK arm, SpellAuraEffects.cpp:2748):
 	// the aura is already off the unit (Unit::_UnapplyAura erases before the
@@ -39842,6 +39877,93 @@ func (s *session) clearOtherMountedAuras(spellID uint32) {
 	}
 }
 
+// mountTemplateDisplayAndVehicle reads a creature template's first
+// nonzero model id plus its VehicleId — ObjectMgr::ChooseDisplayId's
+// deterministic Go proxy (first valid model; the random pick + 50%
+// other-gender swap have no bridge) alongside the vehicle leg's id.
+func (s *session) mountTemplateDisplayAndVehicle(ctx context.Context, entry uint32) (displayID int64, vehicleID uint32, ok bool) {
+	if s == nil || entry == 0 || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0, 0, false
+	}
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0), COALESCE(VehicleId, 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID, &vehicleID); err != nil {
+		return 0, 0, false
+	}
+	return displayID, vehicleID, true
+}
+
+// setMountDisplayFromEntry sets the mount display from a creature entry
+// (the display half of Unit::Mount), pushing the values update.
+func (s *session) setMountDisplayFromEntry(ctx context.Context, entry uint32) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	displayID, _, ok := s.mountTemplateDisplayAndVehicle(ctx, entry)
+	if !ok || displayID <= 0 {
+		return false
+	}
+	s.player.MountDisplayID = uint32(displayID)
+	s.sendPlayerMountUpdate()
+	return true
+}
+
+// hasAuraEffectIndex reports whether the aura spell is live with the
+// effect index active — the Go twin of Unit::HasAuraEffect(spell, effIndex).
+func (s *session) hasAuraEffectIndex(spellID uint32, index int) bool {
+	if s == nil || index < 0 || index > 2 {
+		return false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura != nil && !aura.Stopped && aura.SpellID == spellID && aura.EffectMask&(1<<uint(index)) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// applyDragonmawMountOverride is the 207 REAL arm's Dragonmaw Illusion leg
+// (SpellAuraEffects.cpp:3053-3055): while the 42016 transform is live, a
+// mounted player's display is the illusion's 16314.
+func (s *session) applyDragonmawMountOverride(ctx context.Context) {
+	if s == nil || s.player == nil || s.player.MountDisplayID == 0 {
+		return
+	}
+	if !s.hasAuraEffectIndex(42016, 0) {
+		return
+	}
+	s.player.MountDisplayID = 16314
+	s.sendPlayerMountUpdate()
+}
+
+// applyFestiveMountDisplay is HandleAuraDummy case 62061's apply arm
+// (SpellAuraEffects.cpp:4626-4644): while mounted, the festive aura swaps
+// the display to the reindeer (15665) or flying reindeer (24906).
+func (s *session) applyFestiveMountDisplay(ctx context.Context) {
+	if s == nil || s.player == nil || !s.hasAuraType(spellAuraMounted) {
+		return
+	}
+	entry := uint32(15665)
+	if s.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) {
+		entry = 24906
+	}
+	s.setMountDisplayFromEntry(ctx, entry)
+}
+
+// restoreMountDisplayFromMountedAura restores the first live mounted aura's
+// own display — the shared tail of the 62061 remove arm
+// (SpellAuraEffects.cpp:4626-4644) and the 42016 transform remove leg
+// (:2117-2127).
+func (s *session) restoreMountDisplayFromMountedAura(ctx context.Context) {
+	if s == nil || s.player == nil {
+		return
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura != nil && !aura.Stopped && aura.AuraType == spellAuraMounted && aura.MiscValue > 0 {
+			s.setMountDisplayFromEntry(ctx, uint32(aura.MiscValue))
+			return
+		}
+	}
+}
+
 // applyMountedDisplay mirrors Unit::Mount (Unit.cpp:8310-8361) as reached from
 // AuraEffect::HandleAuraMounted's apply leg (SpellAuraEffects.cpp:2579-2611):
 // mount display id from the aura MiscValue (creature entry), UNIT_FLAG_MOUNT,
@@ -39854,9 +39976,11 @@ func (s *session) clearOtherMountedAuras(spellID uint32) {
 // display selection uses the first nonzero modelid1..4, where C++ takes
 // ObjectMgr::GetRandomValidModelId (random among valid model ids) plus a 50%
 // GetCreatureModelRandomGender other-gender swap; the charmed-NPC stun has
-// no bridge; the festive Holiday Mount 62061 check reads the applied
-// aura's own spell id, which is outcome-equivalent to C++'s
-// target->HasAura(62061) during 62061's apply. A kit already present
+// no bridge; the festive Holiday Mount 62061 check reads the TARGET's live
+// aura set (target->HasAura(62061)), not the applied aura's own spell id —
+// the old self-id check was outcome-wrong for mount-while-62061-up, and
+// the 62061 dummy swap/restore arms live in applyFestiveMountDisplay /
+// restoreMountDisplayFromMountedAura. A kit already present
 // (a 296 kit, or a re-apply of the same mount) is left untouched rather
 // than replaced: recreating it would strand seated players, where C++
 // replaces the kit object outright.
@@ -39865,18 +39989,38 @@ func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
 		return
 	}
 	entry := uint32(aura.MiscValue)
-	if aura.SpellID == 62061 {
+	if s.hasAura(62061) {
 		if s.activeAuraHasEffect(aura, wotlk.MountedFlightSpeedAura) {
 			entry = 24906
 		} else {
 			entry = 15665
 		}
 	}
-	var displayID int64
+	// HandleAuraMounted's summon-vehicle leg (SpellAuraEffects.cpp:2605-2611):
+	// a mount spell whose own SPELL_EFFECT_SUMMON misc equals the mount
+	// misc shows no model (display 0, flag still set); the vehicle leg
+	// below still runs off the template's VehicleId.
+	summonVehicle := false
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(aura.SpellID); found {
+			for _, eff := range sp.Effects {
+				if eff.Effect == spellEffectSummon && eff.MiscValue == aura.MiscValue {
+					summonVehicle = true
+					break
+				}
+			}
+		}
+	}
 	var vehicleID uint32
-	if entry > 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0), COALESCE(VehicleId, 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID, &vehicleID); err == nil && displayID > 0 {
+	if summonVehicle {
+		s.player.MountDisplayID = 0
+		if _, v, ok := s.mountTemplateDisplayAndVehicle(ctx, entry); ok {
+			vehicleID = v
+		}
+	} else if entry > 0 {
+		if displayID, v, ok := s.mountTemplateDisplayAndVehicle(ctx, entry); ok && displayID > 0 {
 			s.player.MountDisplayID = uint32(displayID)
+			vehicleID = v
 		}
 	}
 	s.sendPlayerMountUpdate()
@@ -42095,7 +42239,6 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 		}
 		if eff.Aura == spellAuraMounted || mountedFlight {
-			targetSess.clearOtherMountedAuras(spell.ID)
 			durationMs = 0
 			periodMs = 0
 		}
@@ -43287,6 +43430,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if movementSpeedAura(eff.Aura) {
 			targetSess.sendRuntimeMovementUpdates(eff.Aura)
+		}
+		// AuraEffect::HandleAuraAllowFlight REAL arm, target side
+		// (SpellAuraEffects.cpp:3047-3055): a 207 effect on another
+		// player grants the same polymorph-mechanic immunity and
+		// Dragonmaw display override as the self path; removal flows
+		// through the target session's removeAura.
+		if eff.Aura == spellAuraModIncreaseMountedFlightSpeed || mountedFlight {
+			targetSess.addPlayerSpellImmuneRow(immunityOpMechanic, mechanicPolymorph, spell.ID)
+			targetSess.applyDragonmawMountOverride(ctx)
 		}
 		if affectsPlayerVisibility(eff.Aura) && targetSess.server != nil {
 			targetSess.server.refreshPlayerVisibility()
