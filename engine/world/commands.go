@@ -274,6 +274,22 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 	s.exitVehicle(context.Background())
 	oldMap := s.player.Map
 	sameMap := oldMap == mapID
+	// Player::TeleportTo (Player.cpp:1721-1724): a cross-map teleport
+	// with the duel arbiter on the origin map forfeits the duel
+	// (DuelComplete(DUEL_FLED)) before the map switch — the ObjectAccessor
+	// lookup only works pre-teleport. Go has no GO-by-GUID lookup; the
+	// live duel state (DuelArbiter + duelPartner, both cleared by
+	// clearDuelState) is the arbiter-exists proxy.
+	if !sameMap && s.player.DuelArbiter != 0 && s.duelPartner != 0 {
+		s.endDuel(false, s.duelPartner, true)
+	}
+	// Player::TeleportTo far branch (Player.cpp:1781-1782): a death
+	// knight leaving Acherus (609) without Death Gate (50977) cannot
+	// far-teleport — checked before PlayerCannotEnter, with no
+	// transfer-aborted packet, so this is a bare false.
+	if !sameMap && s.player.Class == classDeathKnight && oldMap == 609 && !sessionIsGameMaster(s) && !playerHasSpell(s.player, 50977) {
+		return false
+	}
 	if !sameMap && s.server != nil && !s.canStartMapTeleport(context.Background(), mapID) {
 		return false
 	}
