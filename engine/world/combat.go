@@ -1680,6 +1680,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if damage == 0 {
 		if s.server != nil && (isPlayerVictim || !s.server.isCreatureEvadingInInstance(s.player.Map, s.player.InstanceID, target.GUID)) {
 			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+			s.server.engageAttackedTargetOwner(ctx, target.GUID, s.playerGUID)
 		}
 		return
 	}
@@ -1875,6 +1876,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 		s.server.procCreatureDirectDamageAuras(creatureAuraKeyForTarget(target), 0, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+		s.server.engageAttackedTargetOwner(ctx, target.GUID, s.playerGUID)
 		// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the creature victim's
 		// SPELL_AURA_DAMAGE_SHIELD (15) effects strike the attacker after a
 		// damaging melee hit (post-absorb damage; no god arm on this path).
@@ -2704,6 +2706,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			})
 		}
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+		s.server.engageAttackedTargetOwner(ctx, target.GUID, s.playerGUID)
 	}
 }
 

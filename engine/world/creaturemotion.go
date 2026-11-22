@@ -1983,6 +1983,50 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	s.callCreatureAssistance(ctx, fireMotion)
 }
 
+// engageAttackedTargetOwner is Unit::AtTargetAttacked's owner leg
+// (Unit.cpp:8971-8973): when a unit is attacked, its charmer-or-owner
+// also engages the attacker. GetCharmerOrOwner() is the charmer when
+// charmed, else the owner (Unit.h:1175). The target's own engage rides
+// the triggerCreatureAggro call at the same attack site; this leg only
+// adds the owner, so it is called at the AtTargetAttacked sites (player
+// melee/ranged swings, spell hit/reflect/launch, pet spell damage) and
+// never from the assist / MoveInLOS / Lua-AttackStart funnels, which
+// engage via EngageWithTarget alone in C++. A player owner enters combat
+// with the attacker (markPlayerInCombat); a creature owner engages via
+// triggerCreatureAggro. The cascade is one level in practice — a pet's
+// owner is a player, a charmed creature's charmer carries no owner of
+// its own — and the self-guard below stops a self-owned loop. A dead
+// target engages nobody, matching triggerCreatureAggro's Health>0 gate.
+func (s *Server) engageAttackedTargetOwner(ctx context.Context, creatureGUID, attackerGUID uint64) {
+	if s == nil || creatureGUID == 0 || attackerGUID == 0 {
+		return
+	}
+	var ownerGUID uint64
+	s.motionMu.Lock()
+	for key := range s.instanceCreatureMotion {
+		if m := s.findCreatureMotionLocked(key.MapID, key.InstanceID, creatureGUID); m != nil {
+			if m.Health == 0 {
+				break
+			}
+			if m.CharmerGUID != 0 {
+				ownerGUID = m.CharmerGUID
+			} else {
+				ownerGUID = m.OwnerGUID
+			}
+			break
+		}
+	}
+	s.motionMu.Unlock()
+	if ownerGUID == 0 || ownerGUID == attackerGUID || ownerGUID == creatureGUID {
+		return
+	}
+	if sess := s.findSessionByGUID(ownerGUID); sess != nil {
+		markPlayerInCombat(ctx, sess, attackerGUID)
+		return
+	}
+	s.triggerCreatureAggro(ctx, ownerGUID, attackerGUID)
+}
+
 // callCreatureAssistance mirrors Creature::CallAssistance
 // (Creature.cpp:2402-2425): once per engagement (m_AlreadyCallAssistance,
 // gated here; reset on combat stop and death), same-faction, aggressive,

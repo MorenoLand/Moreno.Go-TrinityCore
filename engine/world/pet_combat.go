@@ -10053,6 +10053,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// aggro call would re-engage a victim C++ leaves unengaged.
 		if !threatGated {
 			s.server.triggerCreatureAggro(ctx, targetMotion.GUID, caster.OwnerGUID)
+			s.server.engageAttackedTargetOwner(ctx, targetMotion.GUID, caster.GUID)
 		}
 	}
 	// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)

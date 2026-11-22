@@ -9370,6 +9370,7 @@ func (s *session) engageLaunchTarget(ctx context.Context, spell wotlk.Spell, tar
 	}
 	if uint16(targetGUID>>48) == 0xF130 {
 		s.server.triggerCreatureAggro(ctx, targetGUID, s.playerGUID)
+		s.server.engageAttackedTargetOwner(ctx, targetGUID, s.playerGUID)
 		return
 	}
 	// Unit::SetInCombatWith (Unit.h:1051) runs on the caster: the caster
@@ -15489,6 +15490,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.removeAurasWithInterruptFlags(auraInterruptFlagTalk)
 					if s.server != nil {
 						s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID)
+						s.server.engageAttackedTargetOwner(effCtx, miss.TargetGUID, s.playerGUID)
 					}
 				}
 			}
@@ -21173,6 +21175,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							continue
 						}
 						s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
+						s.server.engageAttackedTargetOwner(effCtx, effectTarget, s.playerGUID)
 					}
 				}
 			}
@@ -21208,6 +21211,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						continue
 					}
 					s.server.triggerCreatureAggro(effCtx, miss.TargetGUID, s.playerGUID)
+					s.server.engageAttackedTargetOwner(effCtx, miss.TargetGUID, s.playerGUID)
 				}
 			}
 		}
