@@ -5720,12 +5720,39 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			}
 		}
 		if !followOwner {
-			// SmartAI::EnterEvadeMode (SmartAI.cpp:444-449): after the
-			// owner leg, a following creature re-arms MoveFollow to its
-			// follow target and clears UNIT_STATE_EVADE, so OnReset runs
-			// here instead of at home arrival. The escort leg between
-			// them (HasEscortState SMART_ESCORT_ESCORTING) is Lua-owned
-			// and stays out. A follow target that left the world does
+			// SmartAI::EnterEvadeMode (SmartAI.cpp:444-447): after the
+			// owner leg, an escorting creature sets RETURNING and walks
+			// back to its last out-of-combat position — the home
+			// position, re-stamped at every paused waypoint
+			// (smartWaypointReached) — as a POINT move with id
+			// SMART_ESCORT_LAST_OOC_POINT (ReturnToLastOOCPos,
+			// SmartAI.cpp:275-281: SetWalk(false) + MovePoint home).
+			// Arrival fires MovementInform (smartMovementInform),
+			// which clears the evade state and latches _OOCReached,
+			// and UpdatePath's RETURNING leg resumes the escort
+			// (smartUpdatePath) — which is also what makes the pause
+			// leg's RETURNING gate live during an evade return. The
+			// evade state stays set here, so OnReset does NOT run at
+			// evade start (SmartAI.cpp:452-453). followOwner doubles
+			// as the else-if chain guard: exactly one arm runs.
+			if st := s.smartStateFor(ctx, motion); st != nil && st.escortState&smartEscortEscorting != 0 {
+				st.escortState |= smartEscortReturning
+				if !s.launchCreatureScriptSpline(motion, motion.HomeX, motion.HomeY, motion.HomeZ, false, movementGeneratorPoint, smartEscortLastOOCPoint, false) {
+					// MoveSplineInit::Launch validation failed (speed
+					// below 0.001): no spline, and the point generator
+					// finalizes immediately — MovementInform fires
+					// here, like the home arm's sub-0.001 branch.
+					s.smartMovementInform(ctx, motion, movementGeneratorPoint, smartEscortLastOOCPoint)
+				}
+				followOwner = true
+			}
+		}
+		if !followOwner {
+			// SmartAI::EnterEvadeMode (SmartAI.cpp:448-449): after the
+			// owner and escort legs, a following creature re-arms
+			// MoveFollow to its follow target and clears
+			// UNIT_STATE_EVADE, so OnReset runs here instead of at
+			// home arrival. A follow target that left the world does
 			// not resolve, so the home arm below runs instead — the
 			// C++ null-target arm.
 			if st := s.smartStateFor(ctx, motion); st != nil && st.followGUID != 0 {

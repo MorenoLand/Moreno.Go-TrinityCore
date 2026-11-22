@@ -841,6 +841,17 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	if s.fireGameObjectGossipHelloHook(ctx, guid) {
 		return true
 	}
+	// SmartGameObjectAI::OnGossipHello (SmartAI.cpp:1027-1032) runs after
+	// the Eluna hook at the head of GameObject::Use (GameObject.cpp:1500-1506):
+	// it fires SMART_EVENT_GOSSIP_HELLO (64) with the player as invoker
+	// and returns _gossipReturn, set by a SEND_GOSSIP_MENU (98) action.
+	// A set value skips the rest of Use (the cooldown gate and the type
+	// arms below). The attach fires AI_INIT/JUST_CREATED/RESPAWN on first
+	// sight (smartStateForGO); a GO with no src-1 rows has no state and
+	// this is a no-op. TDB 26091: 22 src-1 rows over 20 entries.
+	if s.server != nil && s.player != nil && s.server.smartGossipHelloGO(ctx, s.player.Map, s.player.InstanceID, guid, s.player.GUID) {
+		return true
+	}
 
 	if !s.admitGameObjectUse(entry, goState) {
 		return true
@@ -1110,6 +1121,13 @@ func (s *session) activateGameObjectUse(ctx context.Context, guid uint64) {
 	}
 	s.gossip = nil
 	if s.fireGameObjectGossipHelloHook(ctx, guid) {
+		return
+	}
+	// SmartGameObjectAI::OnGossipHello (SmartAI.cpp:1027-1032) — see the
+	// packet path above; the spell-effect Use runs the same head arms
+	// (GameObject.cpp:1500-1506), so a set _gossipReturn skips the
+	// cooldown gate and the type arms below.
+	if s.server.smartGossipHelloGO(ctx, mapID, instanceID, guid, s.player.GUID) {
 		return
 	}
 	if !s.admitGameObjectUse(entry, goState) {

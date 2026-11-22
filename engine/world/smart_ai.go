@@ -5020,9 +5020,9 @@ func (s *Server) smartWaypointReached(ctx context.Context, motion *creatureMotio
 // stepCreatureMotion, next to the Lua MovementInform fire — the
 // POINT_MOTION_TYPE rows the waypoint arrival used to call out as
 // missing. The UpdatePath RETURNING leg that consumes _OOCReached
-// (SmartAI.cpp:955-963) is ported in smartUpdatePath; the
+// (SmartAI.cpp:955-963) is ported in smartUpdatePath, and the
 // ReturnToLastOOCPos launch that sets RETURNING (SmartAI.cpp:281)
-// has no twin yet.
+// lives in triggerCreatureEvade's escort arm.
 func (s *Server) smartMovementInform(ctx context.Context, motion *creatureMotion, moveType, pointID uint32) {
 	if motion == nil {
 		return
@@ -5063,9 +5063,12 @@ func (s *Server) smartWaypointPathEnded(ctx context.Context, motion *creatureMot
 // — then the pause leg (resume only off a set timer, out of combat,
 // not returning) and the path-ended leg (StopPath with defaults), then
 // the RETURNING / _OOCReached leg (clear RETURNING, resume unless
-// paused). The vehicle-conditions leg and the ReturnToLastOOCPos
-// launch stay out: no Go vehicle-conditions engine, and nothing sets
-// RETURNING yet (the launch is SmartAI.cpp:281).
+// paused). The vehicle-conditions leg stays out: no Go
+// vehicle-conditions engine. RETURNING is set by the
+// ReturnToLastOOCPos launch in triggerCreatureEvade's escort arm
+// (SmartAI.cpp:281), which is what keeps the pause leg's RETURNING
+// gate live while an escorting creature walks back to its last
+// out-of-combat position.
 func (s *Server) smartUpdatePath(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
 	if st == nil || motion == nil || st.escortState&smartEscortEscorting == 0 {
 		return
@@ -6899,6 +6902,24 @@ func (s *Server) smartGossipSelect(ctx context.Context, motion *creatureMotion, 
 	}
 	st.gossipReturn = false
 	s.smartProcessEvents(ctx, motion, smartEventGossipSelect, invokerGUID, menuID, listID)
+	return st.gossipReturn
+}
+
+// smartGossipHelloGO is SmartGameObjectAI::OnGossipHello (SmartAI.cpp:1027-1032):
+// reset _gossipReturn, fire SMART_EVENT_GOSSIP_HELLO (64) with the
+// player as invoker, return _gossipReturn. A SEND_GOSSIP_MENU (98)
+// action sets it while the event runs, vetoing the rest of
+// GameObject::Use (GameObject.cpp:1505-1506). The dispatch case is
+// shared with the creature leg (param1 filter: 0 always, 1 plain hello
+// only, 2 report-use only); the GO hello passes var0 = 0, so the 19
+// p1=1 rows fire and the 2 p1=2 rows stay out. TDB 26091: 22 src-1 rows.
+func (s *Server) smartGossipHelloGO(ctx context.Context, mapID, instanceID uint32, guid uint64, invokerGUID uint64) bool {
+	motion, st := s.smartStateForGO(ctx, mapID, instanceID, guid)
+	if motion == nil || st == nil {
+		return false
+	}
+	st.gossipReturn = false
+	s.smartProcessEvents(ctx, motion, smartEventGossipHello, invokerGUID, 0, 0)
 	return st.gossipReturn
 }
 

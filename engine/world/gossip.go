@@ -769,6 +769,26 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 	if s.fireGameObjectGossipSelectHook(ctx, guid, item.Sender, item.Action, code, listID) {
 		return true
 	}
+	// SmartGameObjectAI::OnGossipSelect (SmartAI.cpp:1035-1040) runs after
+	// the Eluna hook and before the native Player::OnGossipSelect arms
+	// (MiscHandler.cpp:198-201): it fires SMART_EVENT_GOSSIP_SELECT (62)
+	// with the player as invoker and the packet (menuID, listID) pair —
+	// not the option's sender/action — and returns _gossipReturn, set by
+	// a SEND_GOSSIP_MENU (98) action. A set value vetoes the native arms
+	// below, exactly like the Lua veto above; the stale-menu gate is part
+	// of Player::OnGossipSelect (Player.cpp:14565-14570), so it runs after
+	// the AI here as in C++. OnGossipSelectCode returns false
+	// (SmartAI.cpp:1043-1046), so a coded select never fires the script —
+	// the creature path fires regardless, a pre-existing deviation. The
+	// attach fires AI_INIT/JUST_CREATED/RESPAWN on first sight
+	// (smartStateForGO); a GO with no src-1 rows has no state and this
+	// is a no-op. TDB 26091: 94 src-1 rows over 68 entries, incl. 25
+	// CALL_TIMED_ACTIONLIST installs across 24 lists, now live.
+	if code == "" && s.server != nil && s.player != nil {
+		if motion, _ := s.server.smartStateForGO(ctx, s.player.Map, s.player.InstanceID, guid); motion != nil && s.server.smartGossipSelect(ctx, motion, s.player.GUID, menuID, listID) {
+			return true
+		}
+	}
 	// Player::OnGossipSelect (Player.cpp:14565-14569): for gameobject
 	// sources the menuId gate runs after the hook — a stale select fires
 	// the hook but never reaches the native arms, and the live menu stays
