@@ -7566,17 +7566,31 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, newVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		} else if !passive && switched && newVictim == 0 && motion.ThreatMgr.IsOffline(oldTarget) {
 			// Every entry is offline (ReselectVictim null): C++
-			// CreatureAI::UpdateVictim leaves GetVictim() null and the
-			// creature idles — no ATTACK_STOP packet on this path.
-			// Clearing TargetGUID keeps the combat head below from
-			// swinging at the offline victim; the TargetGUID==0 arm
-			// re-acquires on the next tick when a victim comes back
-			// online. Gated on the old target itself being offline:
-			// reselect returns 0 only when every entry is offline —
-			// suppressed victims are picked, per CompareReferencesLT.
+			// CreatureAI::UpdateVictim (CreatureAI.cpp:240-264) calls
+			// SelectVictim, whose tail evades when no acceptable
+			// victim remains (Creature.cpp:1240-1256) — the creature
+			// does NOT idle. The no-target arm below cannot rescue
+			// this path: the threat list is non-empty (offline refs),
+			// so it takes the switch-to-next-victim branch with
+			// victim 0 and returns without evading. A creature
+			// carrying only temporary invisibility auras hangs
+			// victimless instead (the non-empty list returns nullptr
+			// without an evade), as does a vehicle passenger
+			// (GetVehicle arm, :1236-1237); both keep TargetGUID == 0
+			// so the TargetGUID==0 arm re-acquires on the next tick
+			// when a victim comes back online. Gated on the old
+			// target itself being offline: reselect returns 0 only
+			// when every entry is offline — suppressed victims are
+			// picked, per CompareReferencesLT.
 			motion.TargetGUID = 0
 			if dirty {
 				s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, motion.ThreatMgr.SortedEntriesAvailable(), motion.PhaseMask)
+			}
+			if motion.VehicleGUID == 0 {
+				if anyInvis, permanentInvis := s.creatureInvisibilityAuraState(creatureAuraKeyForMotion(motion)); !anyInvis || permanentInvis {
+					s.triggerCreatureEvade(ctx, motion, now)
+					return
+				}
 			}
 		} else if !passive && motion.TargetGUID == 0 {
 			if victim := motion.ThreatMgr.GetCurrentVictim(); victim != 0 {
@@ -11036,7 +11050,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if p.Sess != nil && p.Sess.player != nil && p.Sess.player.CombatReach > 0 {
 			victimReach = p.Sess.player.CombatReach
 		}
-		if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && s.turretCanAIAttack(motion, p, dist) && s.creatureSightAccessiblePlaceOK(motion, p.X, p.Y, p.Z) && s.creatureSightHomeDistanceOK(motion, p.X, p.Y, p.Z, victimReach) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
+		if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && s.turretCanAIAttack(motion, p, dist) && s.creatureSightAccessiblePlaceOK(motion, p.X, p.Y, p.Z) && s.creatureSightHomeDistanceOK(motion, p.X, p.Y, p.Z, victimReach) && creatureBossBoundaryOK(motion, p.X, p.Y, p.Z) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			// Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27): a boolean true vetoes
 			// the default aggro engage, mirroring ElunaCreatureAI::
@@ -11299,7 +11313,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if victim.CombatReach > 0 {
 				victimReach = victim.CombatReach
 			}
-			if !canCreatureStartAttack(motion, victimPos, dist, aggroDist, zAttackRange) || !s.turretCanAIAttack(motion, victimPos, dist) || !s.creatureSightAccessiblePlaceOK(motion, victim.X, victim.Y, victim.Z) || !s.creatureSightHomeDistanceOK(motion, victim.X, victim.Y, victim.Z, victimReach) || noGrayAggroBlocked(uint32(victim.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) || !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, victim.X, victim.Y, victim.Z) {
+			if !canCreatureStartAttack(motion, victimPos, dist, aggroDist, zAttackRange) || !s.turretCanAIAttack(motion, victimPos, dist) || !s.creatureSightAccessiblePlaceOK(motion, victim.X, victim.Y, victim.Z) || !s.creatureSightHomeDistanceOK(motion, victim.X, victim.Y, victim.Z, victimReach) || !creatureBossBoundaryOK(motion, victim.X, victim.Y, victim.Z) || noGrayAggroBlocked(uint32(victim.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) || !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, victim.X, victim.Y, victim.Z) {
 				continue
 			}
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "victim_guid", victim.GUID, "victim_entry", victim.Entry)

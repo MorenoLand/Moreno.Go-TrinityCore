@@ -1631,6 +1631,13 @@ func (s *Server) threatVictimOffline(motion *creatureMotion, victimGUID uint64, 
 		if !s.creatureSightHomeDistanceOK(motion, sess.player.X, sess.player.Y, sess.player.Z, victimReach) {
 			return true
 		}
+		// BossAI boundary (CanCreatureAttack, Creature.cpp:2571-2574
+		// via BossAI::CanAIAttack, ScriptedCreature.cpp:591-594):
+		// the ThreatManager victim-validity check
+		// (ThreatManager.cpp:105) runs the same CanCreatureAttack.
+		if !creatureBossBoundaryOK(motion, sess.player.X, sess.player.Y, sess.player.Z) {
+			return true
+		}
 		// Flags arms (ThreatManager.cpp:84-99), both directions.
 		victimFlags := sess.player.UnitFlags
 		victimPC := victimFlags&unitFlagPlayerControlled != 0
@@ -1726,6 +1733,13 @@ func (s *Server) threatVictimOffline(motion *creatureMotion, victimGUID uint64, 
 		return true
 	}
 	if !s.creatureSightHomeDistanceOK(motion, vm.X, vm.Y, vm.Z, vm.CombatReach) {
+		return true
+	}
+	// BossAI boundary (CanCreatureAttack, Creature.cpp:2571-2574
+	// via BossAI::CanAIAttack, ScriptedCreature.cpp:591-594):
+	// the ThreatManager victim-validity check
+	// (ThreatManager.cpp:105) runs the same CanCreatureAttack.
+	if !creatureBossBoundaryOK(motion, vm.X, vm.Y, vm.Z) {
 		return true
 	}
 	// Flags arms (ThreatManager.cpp:84-99), both directions.
