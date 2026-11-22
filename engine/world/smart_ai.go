@@ -28,8 +28,11 @@
 // (0 rows) / 59 SET_RUN (266) / 60 SET_DISABLE_GRAVITY (50) / 61
 // SET_SWIM (0 rows) / 62 TELEPORT (11) / 63 SET_COUNTER (40) are
 // ported below with the COUNTER_SET (77) event dispatch. The next
-// unported block is 65 WP_RESUME / 66 SET_ORIENTATION / 68 PLAYMOVIE
-// / 69 MOVE_TO_POS / 70 ENABLE_TEMP_GOBJ / 71 EQUIP / 72 CLOSE_GOSSIP.
+// 65 WP_RESUME (40 live rows) / 66 SET_ORIENTATION (1194) / 68 PLAYMOVIE
+// (3) / 69 MOVE_TO_POS (579) / 70 ENABLE_TEMP_GOBJ (57) / 71 EQUIP (124)
+// / 72 CLOSE_GOSSIP (557) are ported below. The next unported block is
+// 75 ADD_AURA / 76 OVERRIDE_SCRIPT_BASE_OBJECT / 77 RESET_SCRIPT_BASE_OBJECT
+// / 78 CALL_SCRIPT_RESET / 79 SET_RANGED_MOVEMENT.
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -143,8 +146,11 @@ const (
 // (0 rows) / 59 SET_RUN (266) / 60 SET_DISABLE_GRAVITY (50) / 61
 // SET_SWIM (0 rows) / 62 TELEPORT (11) / 63 SET_COUNTER (40) are
 // ported below with the COUNTER_SET (77) event dispatch. The next
-// unported block is 65 WP_RESUME / 66 SET_ORIENTATION / 68 PLAYMOVIE
-// / 69 MOVE_TO_POS / 70 ENABLE_TEMP_GOBJ / 71 EQUIP / 72 CLOSE_GOSSIP.
+// 65 WP_RESUME (40 live rows) / 66 SET_ORIENTATION (1194) / 68 PLAYMOVIE
+// (3) / 69 MOVE_TO_POS (579) / 70 ENABLE_TEMP_GOBJ (57) / 71 EQUIP (124)
+// / 72 CLOSE_GOSSIP (557) are ported below. The next unported block is
+// 75 ADD_AURA / 76 OVERRIDE_SCRIPT_BASE_OBJECT / 77 RESET_SCRIPT_BASE_OBJECT
+// / 78 CALL_SCRIPT_RESET / 79 SET_RANGED_MOVEMENT.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -206,6 +212,13 @@ const (
 	smartActionTeleport                       uint32 = 62
 	smartActionSetCounter                     uint32 = 63
 	smartActionStoreTargetList                uint32 = 64
+	smartActionWPResume                       uint32 = 65
+	smartActionSetOrientation                 uint32 = 66
+	smartActionPlayMovie                      uint32 = 68
+	smartActionMoveToPos                      uint32 = 69
+	smartActionEnableTempGObj                 uint32 = 70
+	smartActionEquip                          uint32 = 71
+	smartActionCloseGossip                    uint32 = 72
 	smartActionCreateTimedEvent               uint32 = 67
 	smartActionTriggerTimedEvent              uint32 = 73
 	smartActionRemoveTimedEvent               uint32 = 74
@@ -234,6 +247,11 @@ const (
 )
 
 const smartEscortTargets uint32 = 0xFFFFFF
+
+// SMART_ESCORT_LAST_OOC_POINT (SmartScriptMgr.h:36): the point id an
+// escort's return-to-OOC MovePoint carries; its arrival clears the
+// evade state (SmartAI::MovementInform, SmartAI.cpp:396-410).
+const smartEscortLastOOCPoint uint32 = 0xFFFFFF
 
 const smartEscortMaxPlayerDist float32 = 60
 
@@ -427,6 +445,7 @@ type smartScriptState struct {
 	escortPauseForced       bool
 	escortWaypointReached   bool
 	escortPathEnded         bool
+	escortOOCReached        bool   // _OOCReached (SmartAI.h): latched by smartMovementInform on a POINT + LAST_OOC_POINT arrival while escorting; the UpdatePath RETURNING consumer is ported in smartUpdatePath
 	escortDespawnTime       uint32 // ms (SmartAI.h _despawnTime)
 	escortDespawnState      uint32
 	escortQuestID           uint32
@@ -1404,6 +1423,20 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionTeleport(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetCounter:
 		s.smartActionSetCounter(ctx, motion, st, ev, invokerGUID)
+	case smartActionWPResume:
+		s.smartActionWPResume(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetOrientation:
+		s.smartActionSetOrientation(ctx, motion, st, ev, invokerGUID)
+	case smartActionPlayMovie:
+		s.smartActionPlayMovie(ctx, motion, st, ev, invokerGUID)
+	case smartActionMoveToPos:
+		s.smartActionMoveToPos(ctx, motion, st, ev, invokerGUID)
+	case smartActionEnableTempGObj:
+		s.smartActionEnableTempGObj(ctx, motion, st, ev, invokerGUID)
+	case smartActionEquip:
+		s.smartActionEquip(ctx, motion, st, ev, invokerGUID)
+	case smartActionCloseGossip:
+		s.smartActionCloseGossip(ctx, motion, st, ev, invokerGUID)
 	case smartActionRemoveAurasFromSpell:
 		s.smartActionRemoveAuras(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetInstData:
@@ -3090,8 +3123,8 @@ func (s *Server) smartWaypointReached(ctx context.Context, motion *creatureMotio
 	}
 	// WaypointMovementGenerator::OnArrived (WaypointMovementGenerator.cpp:256-260)
 	// informs the AI before the reached hook. POINT_MOTION_TYPE rows
-	// (script MovePoint landings) stay out — no Go twin fires them
-	// from the script-move finalize site yet.
+	// (script MovePoint landings) fire from the script-move finalize
+	// site instead (smartMovementInform).
 	s.smartProcessEvents(ctx, motion, smartEventMovementInform, 0, waypointMotionType, nodeIndex)
 	s.smartProcessEvents(ctx, motion, smartEventWaypointReached, 0, nodeID, pathID)
 	if !escorting {
@@ -3111,6 +3144,34 @@ func (s *Server) smartWaypointReached(ctx context.Context, motion *creatureMotio
 		s.motionMu.Lock()
 		motion.EscortPaused = true
 		s.motionMu.Unlock()
+	}
+}
+
+// smartMovementInform is SmartAI::MovementInform (SmartAI.cpp:396-410):
+// a POINT + SMART_ESCORT_LAST_OOC_POINT (0xFFFFFF) arrival clears the
+// evade state and, while escorting, latches _OOCReached; every arrival
+// fires SMART_EVENT_MOVEMENTINFORM (34) with (type, id) through the
+// (type, id) gate. Called from the script-spline finalize site in
+// stepCreatureMotion, next to the Lua MovementInform fire — the
+// POINT_MOTION_TYPE rows the waypoint arrival used to call out as
+// missing. The UpdatePath RETURNING leg that consumes _OOCReached
+// (SmartAI.cpp:955-963) is ported in smartUpdatePath; the
+// ReturnToLastOOCPos launch that sets RETURNING (SmartAI.cpp:281)
+// has no twin yet.
+func (s *Server) smartMovementInform(ctx context.Context, motion *creatureMotion, moveType, pointID uint32) {
+	if motion == nil {
+		return
+	}
+	if moveType == movementGeneratorPoint && pointID == smartEscortLastOOCPoint {
+		s.motionMu.Lock()
+		motion.Evading = false
+		s.motionMu.Unlock()
+	}
+	s.smartProcessEvents(ctx, motion, smartEventMovementInform, 0, moveType, pointID)
+	if moveType == movementGeneratorPoint && pointID == smartEscortLastOOCPoint {
+		if st := s.smartStateFor(ctx, motion); st != nil && st.escortState&smartEscortEscorting != 0 {
+			st.escortOOCReached = true
+		}
 	}
 }
 
@@ -3135,9 +3196,11 @@ func (s *Server) smartWaypointPathEnded(ctx context.Context, motion *creatureMot
 // invoker range check runs every second — out of range stops the path
 // as failed, fires DEATH (the out-of-range despawn hook) and despawns
 // — then the pause leg (resume only off a set timer, out of combat,
-// not returning) and the path-ended leg (StopPath with defaults). The
-// vehicle-conditions leg and the RETURNING / ReturnToLastOOCPos leg
-// stay out: no Go vehicle-conditions engine, no OOC-return machine.
+// not returning) and the path-ended leg (StopPath with defaults), then
+// the RETURNING / _OOCReached leg (clear RETURNING, resume unless
+// paused). The vehicle-conditions leg and the ReturnToLastOOCPos
+// launch stay out: no Go vehicle-conditions engine, and nothing sets
+// RETURNING yet (the launch is SmartAI.cpp:281).
 func (s *Server) smartUpdatePath(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
 	if st == nil || motion == nil || st.escortState&smartEscortEscorting == 0 {
 		return
@@ -3165,6 +3228,13 @@ func (s *Server) smartUpdatePath(ctx context.Context, motion *creatureMotion, st
 		st.escortPathEnded = false
 		s.smartStopPath(ctx, motion, st, 0, 0, false)
 		return
+	}
+	if st.escortState&smartEscortReturning != 0 && st.escortOOCReached {
+		st.escortOOCReached = false
+		st.escortState &^= smartEscortReturning
+		if st.escortState&smartEscortPaused == 0 {
+			s.smartResumePath(ctx, motion, st)
+		}
 	}
 }
 
@@ -3235,6 +3305,20 @@ func (s *Server) smartActionWPPause(ctx context.Context, motion *creatureMotion,
 // rows.
 func (s *Server) smartActionWPStop(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	s.smartStopPath(ctx, motion, st, ev.row.actionParam1, ev.row.actionParam2, ev.row.actionParam3 != 0)
+}
+
+// smartActionWPResume is SMART_ACTION_WP_RESUME (SmartScript.cpp:1456-1465):
+// no params. CanResumePath (SmartAI.cpp:138-146) is escorting AND paused;
+// the 1ms pause timer resumes on the next UpdatePath tick through
+// smartResumePath (SmartAI.cpp:941-948). The evade-pause delta carries:
+// smartUpdateTimers returns early while Evading, so the resume waits out
+// the evade-home walk. TDB 26091: 40 live rows, all target SELF.
+// (Targets are ignored by C++.)
+func (s *Server) smartActionWPResume(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if st == nil || st.escortState&smartEscortEscorting == 0 || st.escortState&smartEscortPaused == 0 {
+		return
+	}
+	st.escortPauseTimer = 1
 }
 
 func (s *Server) smartUpdateFollow(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
@@ -3602,6 +3686,293 @@ func (s *Server) smartActionSetCounter(ctx context.Context, motion *creatureMoti
 			continue
 		}
 		s.smartStoreCounter(ctx, tm, tst, id, value, reset)
+	}
+}
+
+// smartSetFacing is the SetFacingTo half of the Lua bridge
+// (lua_creature_events.go:5930): Unit::SetFacingTo (Unit.cpp:13669), an
+// in-place turn — the logical orientation slot plus the in-place
+// broadcastMonsterMove with the Final_Angle arm. Same mid-spline race
+// delta as the Lua bridge (C++ skips the turn when the unit is moving).
+func (s *Server) smartSetFacing(motion *creatureMotion, ori float32) {
+	if motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	motion.Orientation = ori
+	guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
+	phase := motion.PhaseMask
+	transportGUID := motion.TransportGUID
+	x, y, z := motion.X, motion.Y, motion.Z
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true, phase, transportGUID)
+}
+
+// smartContactPoint is WorldObject::GetContactPoint (Object.cpp:3334-3338)
+// + GetNearPoint2D (:3243-3270): the point at targetReach + meReach +
+// dist from the target along the target-to-me angle, z pinned to the
+// target's z. A creature target reads its live combat reach, a player
+// target the 1.5 UNIT_FIELD_COMBATREACH default, a GO target 0
+// (Object.h:313). The hover-offset correction, UpdateAllowedPositionZ
+// and the LoS sweep stay out, the Lua GetContactPoint deltas.
+func (s *Server) smartContactPoint(motion *creatureMotion, tgt smartTarget, tx, ty, tz float32, dist float32) (float32, float32, float32) {
+	targetReach := float32(1.5)
+	if tgt.isGameObject {
+		targetReach = 0
+	} else if !tgt.isPlayer {
+		if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid); tm != nil {
+			s.motionMu.Lock()
+			targetReach = tm.combatReachOrDefault()
+			s.motionMu.Unlock()
+		}
+	}
+	s.motionMu.Lock()
+	meReach := motion.combatReachOrDefault()
+	mx, my := motion.X, motion.Y
+	s.motionMu.Unlock()
+	angle := math.Atan2(float64(my-ty), float64(mx-tx))
+	d := float64(targetReach + meReach + dist)
+	return tx + float32(d*math.Cos(angle)), ty + float32(d*math.Sin(angle)), tz
+}
+
+// smartActionSetOrientation is SMART_ACTION_SET_ORIENTATION
+// (SmartScript.cpp:1466-1478): me-only facing. SELF faces the home
+// orientation (the on-transport leg reads the transport home position,
+// which Go does not store — a transported creature faces its spawn
+// home instead), POSITION faces the row's target_o, any other target
+// type faces the first resolved target (SetFacingToObject: the
+// GetAbsoluteAngle twin, atan2 normalized to [0, 2pi)). TDB 26091:
+// 1194 live rows.
+func (s *Server) smartActionSetOrientation(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if motion == nil {
+		return
+	}
+	if ev.row.targetType == smartTargetSelf {
+		s.motionMu.Lock()
+		homeO := motion.HomeO
+		s.motionMu.Unlock()
+		s.smartSetFacing(motion, homeO)
+		return
+	}
+	if ev.row.targetType == smartTargetPosition {
+		s.smartSetFacing(motion, ev.row.targetO)
+		return
+	}
+	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
+	if len(targets) == 0 {
+		return
+	}
+	x, y, _, _, ok := s.smartTargetPosition(ctx, motion, targets[0])
+	if !ok {
+		return
+	}
+	s.motionMu.Lock()
+	mx, my := motion.X, motion.Y
+	s.motionMu.Unlock()
+	angle := float32(math.Atan2(float64(y-my), float64(x-mx)))
+	if angle < 0 {
+		angle += 2 * math.Pi
+	}
+	s.smartSetFacing(motion, angle)
+}
+
+// smartActionPlayMovie is SMART_ACTION_PLAYMOVIE (SmartScript.cpp:1479-1489):
+// every player target takes SendMovieStart(entry) (Player.cpp:6529-6535):
+// SetMovie plus SMSG_TRIGGER_MOVIE, the Lua SendMovieStart twin
+// (lua_player.go:8159). TDB 26091: 3 live rows, movies 14 and 16.
+func (s *Server) smartActionPlayMovie(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	id := ev.row.actionParam1
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isPlayer {
+			continue
+		}
+		sess := s.findSessionByGUID(tgt.guid)
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		sess.player.Movie = id
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(id)
+		_ = sess.write(uint16(protocol.OpcodeSMSG_TRIGGER_MOVIE), packet.Bytes(), true)
+	}
+}
+
+// smartActionMoveToPos is SMART_ACTION_MOVE_TO_POS (SmartScript.cpp:1490-1528):
+// pointId / transport / disablePathfinding / ContactDistance are action
+// params 1-4. The commented-out target-type gate means every target type
+// goes through the random pick; with no targets the row's target_x/y/z
+// is the absolute destination. A picked target contributes its position
+// (plus the row's target_x/y/z offsets); ContactDistance > 0 routes it
+// through GetContactPoint first. The launch is the Lua MoveTo twin
+// (movementGeneratorPoint, walk false so the persistent Walking flag
+// applies, allowDead true — point splines move a corpse). The transport
+// leg (param 2, CalculatePassengerPosition) has no bridge and is 0 in
+// all 579 rows; disablePathfinding (param 3, 3 rows) is a no-op — Go
+// has no PathGenerator, every script spline is straight-line. A
+// MovePoint during an escort does not clear the escort path state (no
+// MotionMaster slot replacement in Go); the arrival fires
+// MovementInform(POINT_MOTION_TYPE, pointId) through the spline
+// finalize leg. TDB 26091: 579 live rows.
+func (s *Server) smartActionMoveToPos(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	pointID := ev.row.actionParam1
+	contactDist := float32(ev.row.actionParam4)
+	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
+	var destX, destY, destZ float32
+	if len(targets) == 0 {
+		destX, destY, destZ = ev.row.targetX, ev.row.targetY, ev.row.targetZ
+	} else {
+		tgt := targets[rand.Intn(len(targets))]
+		x, y, z, _, ok := s.smartTargetPosition(ctx, motion, tgt)
+		if !ok {
+			return
+		}
+		if contactDist > 0 {
+			x, y, z = s.smartContactPoint(motion, tgt, x, y, z, contactDist)
+		}
+		destX, destY, destZ = x+ev.row.targetX, y+ev.row.targetY, z+ev.row.targetZ
+	}
+	s.launchCreatureScriptSpline(motion, destX, destY, destZ, false, movementGeneratorPoint, pointID, true)
+}
+
+// smartGameObjectSpawnedByDefault is GameObject::isSpawnedByDefault
+// (GameObject.cpp:1081-1110): the DB spawntimesecs sign — >= 0 means
+// spawned by default. A live runtime spawn reads as not spawned by
+// default first (SummonGameObject sets SetSpawnedByDefault(false),
+// Object.cpp:2089); a static GO with no readable row reads as spawned
+// by default, matching Create's default (GameObject.cpp:127).
+func (s *Server) smartGameObjectSpawnedByDefault(ctx context.Context, mapID, instanceID uint32, guid uint64) bool {
+	if s == nil {
+		return true
+	}
+	if st := s.gameObjectState(mapID, instanceID, guid); st != nil && st.IsRuntimeSpawn {
+		return false
+	}
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return true
+	}
+	low := uint32(guid & 0xFFFFFF)
+	entry := uint32(guid>>24) & 0xFFFFFF
+	var secs int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(spawntimesecs, 0) FROM gameobject WHERE guid = ? AND id = ? LIMIT 1", low, entry).Scan(&secs); err != nil {
+		return true
+	}
+	return secs >= 0
+}
+
+// smartActionEnableTempGObj is SMART_ACTION_ENABLE_TEMP_GOBJ
+// (SmartScript.cpp:1529-1544): every gameobject target takes
+// SetRespawnTime(duration) (GameObject.cpp:1330-1336), the
+// setGameObjectRespawnDelay write half. Creature targets and
+// spawned-by-default GOs only earn a C++ sql.sql warning — there is
+// no log channel on the smart-action path, so both legs are skips.
+// The !spawnedByDefault visibility arm is a no-op for a visible
+// runtime GO, the Lua SetRespawnTime delta. TDB 26091: 57 live rows.
+func (s *Server) smartActionEnableTempGObj(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	duration := ev.row.actionParam1
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isGameObject {
+			continue
+		}
+		if s.smartGameObjectSpawnedByDefault(ctx, motion.Map, motion.InstanceID, tgt.guid) {
+			continue
+		}
+		s.setGameObjectRespawnDelay(motion.Map, motion.InstanceID, tgt.guid, int32(duration))
+	}
+}
+
+// smartActionEquip is SMART_ACTION_EQUIP (SmartScript.cpp:1552-1588):
+// entry / mask / slot1-3 are action params 1-5. A nonzero entry id
+// loads that creature_equip_template row for the target's entry
+// (GetEquipmentInfo, ObjectMgr.cpp:1430-1450 — id -1 picks a random
+// row); a missing row logs in C++ and breaks the whole target loop.
+// A zero entry id uses the slot params directly. The mask gates
+// per-slot writes (mask 0 writes all three); each written slot is a
+// SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID + i) — the live virtual
+// items plus the values-update broadcast, the Lua SetEquipmentSlots
+// twin. SetCurrentEquipmentId has no Go reader (creature SaveToDB /
+// game-event restore / the SpellAuraEffects equipment check do not
+// exist on this path), so only the slot writes land. TDB 26091: 124
+// live rows.
+func (s *Server) smartActionEquip(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	equipID := int8(ev.row.actionParam1)
+	mask := ev.row.actionParam2
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		var slots [3]uint32
+		if equipID != 0 {
+			items, ok := s.smartEquipmentInfo(ctx, tm.Entry, equipID)
+			if !ok {
+				break
+			}
+			slots = items
+		} else {
+			slots = [3]uint32{ev.row.actionParam3, ev.row.actionParam4, ev.row.actionParam5}
+		}
+		updates := map[int]uint32{}
+		s.motionMu.Lock()
+		for i := 0; i < 3; i++ {
+			if mask == 0 || mask&(1<<uint(i)) != 0 {
+				tm.VirtualItems[i] = slots[i]
+				updates[unitVirtualItemSlotID+i] = slots[i]
+			}
+		}
+		tm.VirtualItemsKnown = true
+		mapID, instanceID, guid := tm.Map, tm.InstanceID, tm.GUID
+		s.motionMu.Unlock()
+		if len(updates) > 0 {
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, updates)
+		}
+	}
+}
+
+// smartEquipmentInfo is ObjectMgr::GetEquipmentInfo (ObjectMgr.cpp:1430-1450):
+// the creature_equip_template row for (entry, id); id -1 picks a random
+// row for the entry. Missing entry or id reads as no info.
+func (s *Server) smartEquipmentInfo(ctx context.Context, entry uint32, id int8) ([3]uint32, bool) {
+	var items [3]uint32
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return items, false
+	}
+	if id == -1 {
+		rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT ItemID1, ItemID2, ItemID3 FROM creature_equip_template WHERE CreatureID = ?", entry)
+		if err != nil {
+			return items, false
+		}
+		defer rows.Close()
+		var all [][3]uint32
+		for rows.Next() {
+			var row [3]uint32
+			if err := rows.Scan(&row[0], &row[1], &row[2]); err != nil {
+				continue
+			}
+			all = append(all, row)
+		}
+		if len(all) == 0 {
+			return items, false
+		}
+		return all[rand.Intn(len(all))], true
+	}
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT ItemID1, ItemID2, ItemID3 FROM creature_equip_template WHERE CreatureID = ? AND ID = ?", entry, id).Scan(&items[0], &items[1], &items[2]); err != nil {
+		return items, false
+	}
+	return items, true
+}
+
+// smartActionCloseGossip is SMART_ACTION_CLOSE_GOSSIP (SmartScript.cpp:1545-1551):
+// every player target takes PlayerTalkClass::SendCloseGossip —
+// SMSG_GOSSIP_COMPLETE, the sendGossipComplete twin. TDB 26091: 557
+// live rows.
+func (s *Server) smartActionCloseGossip(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isPlayer {
+			continue
+		}
+		if sess := s.findSessionByGUID(tgt.guid); sess != nil {
+			sess.sendGossipComplete()
+		}
 	}
 }
 

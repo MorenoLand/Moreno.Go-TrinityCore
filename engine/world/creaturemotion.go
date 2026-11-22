@@ -7743,6 +7743,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		case movementGeneratorPoint, movementGeneratorEffect:
 			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ {
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, motion.ScriptMoveType, motion.ScriptMovePointID)
+				s.smartMovementInform(ctx, motion, motion.ScriptMoveType, motion.ScriptMovePointID)
 			}
 		case movementGeneratorHome:
 			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ {
