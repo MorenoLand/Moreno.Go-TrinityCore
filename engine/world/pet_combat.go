@@ -294,7 +294,8 @@ func (s *Server) onPetCommandAttack(ctx context.Context, mapID, instanceID uint3
 }
 
 // onPetCommandFollow handles recalling the pet back to follow the owner.
-// Mirrors TrinityCore PetAI::DoRecall (PetAI.cpp:215).
+// HandlePetActionHelper COMMAND_FOLLOW (PetHandler.cpp:165-176):
+// AttackStop + MoveFollow + IsReturning(true).
 func (s *Server) onPetCommandFollow(ctx context.Context, mapID, instanceID uint32, petGUID uint64) {
 	if s == nil || petGUID == 0 {
 		return
@@ -307,14 +308,14 @@ func (s *Server) onPetCommandFollow(ctx context.Context, mapID, instanceID uint3
 		}
 		motion.TargetGUID = 0
 		motion.InCombat = false
-		// PetAI::HandleReturnMovement COMMAND_FOLLOW arm
-		// (PetAI.cpp:392-402): a follow click starts a return unless
-		// the pet is already following (command follow, not
-		// returning) or already returning; the arrival
-		// MovementInform arm clears it (updatePetMotion §4).
-		if motion.PetCommand != PetCommandFollow || motion.PetReturning {
-			motion.PetReturning = true
-		}
+		// HandlePetActionHelper COMMAND_FOLLOW (PetHandler.cpp:165-176)
+		// sets IsReturning(true) on every follow click,
+		// unconditionally — the HandleReturnMovement guard
+		// (PetAI.cpp:392-402, only when !IsFollowing() &&
+		// !IsReturning()) is the UpdateAI no-victim path, not the
+		// click path. The arrival MovementInform arm clears it
+		// (updatePetMotion §4).
+		motion.PetReturning = true
 		motion.PetCommand = PetCommandFollow
 		motion.Moving = false
 		if motion.ThreatMgr != nil {
@@ -1144,9 +1145,17 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 		// (FollowMovementGenerator.cpp:96-104: PositionOkay with
 		// the _angle arg); the re-path check (:117-119) passes NO
 		// angle, so it is distance-only — in range at a bad angle
-		// C++ stands still, it does not re-path. The standing
-		// branch below is the spline-finalize inform twin
-		// (:110-116), which fires on landing regardless of angle.
+		// C++ stands still, it does not re-path. The arrival
+		// clear in the standing branch below waits for the angle:
+		// the spline-finalize inform (:110-116) fires on landing
+		// regardless of angle, but a pet standing in range at a
+		// bad angle with no spline in flight gets no inform in
+		// C++ until the angle resolves.
+		followAngleDiff := math.Abs(relAngle - math.Pi/2)
+		if followAngleDiff > math.Pi {
+			followAngleDiff = 2*math.Pi - followAngleDiff
+		}
+		followAngleOkay := followAngleDiff <= math.Pi/4
 		if dist > 45.0 {
 			// Teleport directly to owner if too far
 			motion.X = owner.X + 1.5
@@ -1237,17 +1246,21 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 			}
 		} else {
-			// In range: the pet stands. This is the
-			// FollowMovementGenerator arrival — the spline-finalize
-			// inform (FollowMovementGenerator.cpp:110-116) lands the
-			// pet at the near point inside this same band, so the
-			// PetAI::MovementInform FOLLOW arm (PetAI.cpp:465-475)
-			// twin fires here: clear the return flags, the pet is
-			// following now. No Lua event fires for it: charmed
+			// In range: the pet stands. The arrival clear is the
+			// PetAI::MovementInform FOLLOW arm twin (PetAI.cpp:465-475):
+			// it fires on the check-timer inform
+			// (FollowMovementGenerator.cpp:96-104, distance AND
+			// angle) or the spline-finalize inform (:110-116, on
+			// landing regardless of angle — a re-path always lands
+			// inside the band, so the next tick clears). In range
+			// at a bad angle with no spline in flight C++ informs
+			// nothing yet, so the clear waits for the angle here. No Lua event fires for it: charmed
 			// creatures get PetAI, not ElunaCreatureAI
 			// (Unit.cpp:9884), so C++ Eluna never sees a pet inform.
 			motion.Moving = false
-			motion.PetReturning = false
+			if followAngleOkay {
+				motion.PetReturning = false
+			}
 		}
 	}
 }
@@ -1519,6 +1532,14 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		if motion.PetCommand == PetCommandAttack {
 			motion.PetCommand = PetCommandFollow
 		}
+		if motion.PetCommand == PetCommandFollow {
+			// KilledUnit with no next target returns via
+			// HandleReturnMovement (PetAI.cpp:392-402): the follow
+			// arm sets IsReturning (DoAttack cleared IsFollowing,
+			// :420-421), so the pet walks back before the
+			// aggressive arm may re-engage it (:351).
+			motion.PetReturning = true
+		}
 		stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		return
@@ -1552,6 +1573,14 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			}
 			if motion.PetCommand == PetCommandAttack {
 				motion.PetCommand = PetCommandFollow
+			}
+			if motion.PetCommand == PetCommandFollow {
+				// StopAttack with no next target returns via
+				// HandleReturnMovement (PetAI.cpp:392-402): the follow
+				// arm sets IsReturning (DoAttack cleared IsFollowing,
+				// :420-421), so the pet walks back before the
+				// aggressive arm may re-engage it (:351).
+				motion.PetReturning = true
 			}
 			stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
 			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
