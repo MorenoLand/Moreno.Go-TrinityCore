@@ -1516,12 +1516,18 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			motion.Moving = false
 			return
 		}
-		// Run towards target
+		// Run towards target. ChaseMovementGenerator with no _range
+		// (ChaseMovementGenerator.cpp:119-122, 180-211): the path is
+		// shortened to maxTarget = CONTACT_DISTANCE (0.5,
+		// ObjectDefines.h:23) + hitboxSum along the path, and the spline
+		// duration derives from that shortened length (MoveSpline.cpp
+		// minimal 1 ms) — no 200 ms floor exists in C++.
 		dx := targetX - motion.X
 		dy := targetY - motion.Y
 		angle := float32(math.Atan2(float64(dy), float64(dx)))
-		destX := targetX - 1.5*float32(math.Cos(float64(angle)))
-		destY := targetY - 1.5*float32(math.Sin(float64(angle)))
+		stopDist := float32(0.5) + motion.CombatReach + victimReach
+		destX := targetX - stopDist*float32(math.Cos(float64(angle)))
+		destY := targetY - stopDist*float32(math.Sin(float64(angle)))
 		destZ := targetZ
 		speed := motion.RunSpeed
 		if speed < 0.001 {
@@ -1533,10 +1539,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			motion.Moving = false
 		} else {
 			motion.Orientation = angle
-			duration := uint32(float64(dist) / float64(speed) * 1000.0)
-			if duration < 200 {
-				duration = 200
-			}
+			duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)), speed)
 			motion.X = destX
 			motion.Y = destY
 			motion.Z = destZ

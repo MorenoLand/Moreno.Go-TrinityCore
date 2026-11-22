@@ -29,6 +29,7 @@ const (
 	movementPlayerStatusMask        = movementDisableGravity | movementRoot | movementCanFly | movementWaterWalking | movementFallingSlow | movementHover
 	movementForward          uint32 = 0x00000001
 	movementBackward         uint32 = 0x00000002
+	movementWalking          uint32 = 0x00000100 // MOVEMENTFLAG_WALKING (UnitDefines.h:226)
 	movementStrafeLeft       uint32 = 0x00000004
 	movementStrafeRight      uint32 = 0x00000008
 	movementTurnLeft         uint32 = 0x00000010

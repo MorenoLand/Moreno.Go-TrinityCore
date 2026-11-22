@@ -70,6 +70,13 @@ type creatureMotion struct {
 	Orientation            float32
 	Speed                  float32 // yd/s walk speed used for wander
 	RunSpeed               float32 // yd/s run speed used for pursuit
+	// SwimSpeed is the yd/s swim speed banked by refreshCreatureRunSpeed:
+	// the MOVE_SWIM fold of Unit::UpdateSpeed (Unit.cpp:8694-8700,
+	// 8744-8772) — strongest MOD_INCREASE_SWIM_SPEED (58), the template
+	// speed_run, the 191 normalization cap, the 33 slow, the 305 floor.
+	// Zero means unbanked; the velocity legs fall back to the unfolded
+	// BaseRunRate * 4.722222 until the first refresh runs.
+	SwimSpeed float32
 	// BaseRunRate banks the creature_template speed_run rate feeding
 	// refreshCreatureRunSpeed (the Unit::UpdateSpeed twin): the aura fold
 	// multiplies this DB rate, so it must survive aura changes. Walk has
@@ -875,9 +882,11 @@ const creatureTypeFlagBossMob = 0x4
 // motion.RunSpeed via SetSpeedRate. The WALKING leg selects MOVE_WALK.
 // The SWIMMING leg selects MOVE_SWIM: Unit::UpdateSpeed (Unit.cpp:8694)
 // folds only MOD_INCREASE_SWIM_SPEED (58) into the swim rate and then
-// multiplies by the template speed_run (banked on BaseRunRate), so the
-// swim speed is BaseRunRate * 4.722222 — the aura-58 fold has no Go
-// creature model (residual). Waypoint LAND/TAKEOFF set only
+// multiplies by the template speed_run (banked on BaseRunRate); the 191
+// normalization cap, the 33 slow, and the 305 floor ride the same tail
+// as RUN. The full fold lives in creatureSwimSpeedRate and is banked on
+// motion.SwimSpeed by refreshCreatureRunSpeedMotion; the velocity legs
+// below read the bank when it is set.
 // AnimationTier (WaypointMovementGenerator.cpp:353-359), which rides
 // the wire via broadcastMonsterMoveFlagsInInstance.
 // The 0.66 searched-assistance multiplier (MoveSplineInit.cpp:118) is
@@ -886,11 +895,18 @@ const creatureTypeFlagBossMob = 0x4
 func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
 	var speed float32
 	if motion != nil && motion.Swimming {
-		base := float32(1.0)
-		if motion.BaseRunRate > 0 {
-			base = motion.BaseRunRate
+		// Banked SwimSpeed carries the MOVE_SWIM aura fold
+		// (creatureSwimSpeedRate); zero means no refresh has run yet,
+		// so fall back to the unfolded template rate.
+		if motion.SwimSpeed > 0 {
+			speed = motion.SwimSpeed
+		} else {
+			base := float32(1.0)
+			if motion.BaseRunRate > 0 {
+				base = motion.BaseRunRate
+			}
+			speed = base * creatureBaseSwimSpeed
 		}
-		speed = base * creatureBaseSwimSpeed
 	} else if walk || (motion != nil && motion.Walking) {
 		speed = motion.Speed
 	} else {
@@ -913,11 +929,15 @@ func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
 func creatureSplineVelocityExplicit(motion *creatureMotion, walk bool) float32 {
 	var speed float32
 	if motion != nil && motion.Swimming {
-		base := float32(1.0)
-		if motion.BaseRunRate > 0 {
-			base = motion.BaseRunRate
+		if motion.SwimSpeed > 0 {
+			speed = motion.SwimSpeed
+		} else {
+			base := float32(1.0)
+			if motion.BaseRunRate > 0 {
+				base = motion.BaseRunRate
+			}
+			speed = base * creatureBaseSwimSpeed
 		}
-		speed = base * creatureBaseSwimSpeed
 	} else if walk {
 		speed = motion.Speed
 	} else {
@@ -1059,12 +1079,13 @@ func creatureSplinePosition(motion *creatureMotion, now time.Time) (x, y, z floa
 
 // spellHasSpeedAura reports whether the spell carries any effect feeding
 // Unit::UpdateSpeed (Unit.cpp:8666) for creatures: MOD_INCREASE_SPEED (31),
-// MOD_DECREASE_SPEED (33), MOD_SPEED_ALWAYS (129), MOD_SPEED_NOT_STACK
-// (171), or MOD_MINIMUM_SPEED (305).
+// MOD_DECREASE_SPEED (33), MOD_INCREASE_SWIM_SPEED (58),
+// MOD_SPEED_ALWAYS (129), MOD_SPEED_NOT_STACK (171), or
+// MOD_MINIMUM_SPEED (305).
 func spellHasSpeedAura(spell wotlk.Spell) bool {
 	for _, effect := range spell.Effects {
 		switch effect.Aura {
-		case spellAuraIncreaseSpeed, spellAuraDecreaseSpeed, spellAuraModSpeedAlways, spellAuraModSpeedNotStack, spellAuraMinimumSpeed:
+		case spellAuraIncreaseSpeed, spellAuraDecreaseSpeed, spellAuraIncreaseSwimSpeed, spellAuraModSpeedAlways, spellAuraModSpeedNotStack, spellAuraMinimumSpeed:
 			return true
 		}
 	}
@@ -1103,17 +1124,71 @@ func (s *Server) creatureAuraAmountsByType(key creatureAuraKey, auraType uint32)
 	return out
 }
 
+// creatureSpeedAlwaysMultiplier mirrors the SPELL_AURA_MOD_SPEED_ALWAYS
+// (129) leg of Unit::GetTotalAuraMultiplier (Unit.cpp:4858-4889): AddPct
+// per aura — a product — with the same-effect-group highest-only arm
+// (SpellMgr::AddSameEffectStackRuleSpellGroups, SpellMgr.cpp:404-435):
+// among auras sharing an EXCLUSIVE_SAME_EFFECT group only the highest
+// |amount| folds in. The gate reuses the statWinners precedent
+// (aura_stats.go): a spell sits in at most one such group per aura type,
+// as C++ asserts, and ties resolve to the earliest-applied record
+// (Slot order), matching C++'s first-wins replace rule.
+func (s *Server) creatureSpeedAlwaysMultiplier(key creatureAuraKey) float32 {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return 1
+	}
+	s.auraMu.Lock()
+	auras := s.activeCreatureAuras[key]
+	copies := make([]*activeAura, 0, len(auras))
+	for _, aura := range auras {
+		copies = append(copies, aura)
+	}
+	s.auraMu.Unlock()
+	sort.Slice(copies, func(i, j int) bool {
+		if copies[i] == nil || copies[j] == nil {
+			return copies[j] == nil
+		}
+		return copies[i].Slot < copies[j].Slot
+	})
+	var cands []statCandidate
+	for order, aura := range copies {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		for index, effect := range spell.Effects {
+			if effect.Aura != spellAuraModSpeedAlways {
+				continue
+			}
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			cands = append(cands, statCandidate{order: order, spellID: aura.SpellID, effectIndex: index, amount: aura.Amounts[index], firstRank: s.spellFirstRank(aura.SpellID)})
+		}
+	}
+	mult := float32(1.0)
+	for _, w := range statWinners(cands, s.petAuraStackGroups()) {
+		mult *= 1 + float32(w.amount)/100
+	}
+	return mult
+}
+
 // creatureRunSpeedRate mirrors the MOVE_RUN arm of Unit::UpdateSpeed
 // (Unit.cpp:8666-8809) for AI-driven creatures: main_speed_mod is the
 // strongest MOD_INCREASE_SPEED (31); the rate starts at
-// max(1+strongest MOD_SPEED_NOT_STACK (171), 1+total MOD_SPEED_ALWAYS
-// (129)); the strongest MOD_DECREASE_SPEED (33) applies after; the
+// max(1+strongest MOD_SPEED_NOT_STACK (171), product MOD_SPEED_ALWAYS
+// (129), same-effect-group gated); the strongest MOD_DECREASE_SPEED (33)
+// applies after; the
 // MOD_MINIMUM_SPEED (305) floor rides the template base rate. The creature
 // template speed_run (banked on BaseRunRate) multiplies the rate, matching
 // the `speed *= ToCreature()->GetCreatureTemplate()->speed_run` leg.
-// MOVE_WALK returns early in C++ so walk is untouched; MOVE_SWIM/FLIGHT
-// have no Go creature model; the minion follow catch-up arm has no Go pet-follow-speed
-// model (documented no-bridge).
+// MOVE_WALK returns early in C++ so walk is untouched; MOVE_SWIM folds
+// in creatureSwimSpeedRate (banked on motion.SwimSpeed); MOVE_FLIGHT has
+// no Go creature model; the minion follow catch-up arm rides
+// minionFollowBorrow below.
 func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
 	// A script-set rate replaces the aura fold outright: C++ keeps a
 	// single m_speed_rate[MOVE_RUN] slot that SetSpeedRate writes raw and
@@ -1134,10 +1209,10 @@ func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotio
 			mainMod = a
 		}
 	}
-	stack := float32(1.0)
-	for _, a := range s.creatureAuraAmountsByType(key, spellAuraModSpeedAlways) {
-		stack += float32(a) / 100
-	}
+	// GetTotalAuraMultiplier (Unit.cpp:4858-4889): AddPct per aura, a
+	// product — not a sum — with the same-effect-group highest-only arm
+	// folded in by creatureSpeedAlwaysMultiplier.
+	stack := s.creatureSpeedAlwaysMultiplier(key)
 	nonStack := float32(1.0)
 	for _, a := range s.creatureAuraAmountsByType(key, spellAuraModSpeedNotStack) {
 		if v := float32(1.0) + float32(a)/100; v > nonStack {
@@ -1171,6 +1246,7 @@ func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotio
 		}
 	}
 	var slow int32
+	rate = s.minionFollowBorrow(rate, motion, false)
 	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
 		if a < slow {
 			slow = a
@@ -1194,6 +1270,144 @@ func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotio
 		rate = 0
 	}
 	return rate
+}
+
+// creatureSwimSpeedRate mirrors the MOVE_SWIM arm of Unit::UpdateSpeed
+// (Unit.cpp:8694-8700, 8744-8772, 8795-8810) for AI-driven creatures:
+// strongest MOD_INCREASE_SWIM_SPEED (58) as the main mod, the template
+// speed_run (BaseRunRate) multiplier, the 191 normalization cap against
+// baseMoveSpeed[MOVE_SWIM] (4.722222) unless the template is SNARE/DAZE
+// immune, then the shared tail — strongest MOD_DECREASE_SPEED (33) and
+// the MOD_MINIMUM_SPEED (305) floor. The result is a rate; multiply by
+// creatureBaseSwimSpeed for yd/s, as refreshCreatureRunSpeedMotion does.
+func (s *Server) creatureSwimSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
+	base := float32(1.0)
+	if motion != nil && motion.BaseRunRate > 0 {
+		base = motion.BaseRunRate
+	}
+	var mainMod int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraIncreaseSwimSpeed) {
+		if a > mainMod {
+			mainMod = a
+		}
+	}
+	rate := float32(1.0)
+	if mainMod > 0 {
+		rate *= 1 + float32(mainMod)/100
+	}
+	rate *= base
+	if motion != nil && motion.MechanicImmuneMask&(1<<10|1<<26) == 0 {
+		var norm int32
+		for _, a := range s.creatureAuraAmountsByType(key, spellAuraUseNormalMovementSpeed) {
+			if a > norm {
+				norm = a
+			}
+		}
+		if norm > 0 {
+			if maxRate := float32(norm) / creatureBaseSwimSpeed; rate > maxRate {
+				rate = maxRate
+			}
+		}
+	}
+	rate = s.minionFollowBorrow(rate, motion, true)
+	var slow int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
+		if a < slow {
+			slow = a
+		}
+	}
+	if slow < 0 {
+		rate *= 1 + float32(slow)/100
+	}
+	var minMod int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraMinimumSpeed) {
+		if a > minMod {
+			minMod = a
+		}
+	}
+	if minMod > 0 {
+		if minSpeed := base * float32(minMod) / 100; rate < minSpeed {
+			rate = minSpeed
+		}
+	}
+	if rate < 0 {
+		rate = 0
+	}
+	return rate
+}
+
+// minionFollowBorrow is the Unit::UpdateSpeed minion follow arm
+// (Unit.cpp:8774-8788), shared by the RUN and SWIM folds: an out-of-combat
+// minion in FOLLOW whose followed target is its owner (also out of
+// combat) borrows the owner's rate for the move type when its own rate is
+// lower or it is within 10 yd, scaled by
+// clamp(0.75+(dist-PET_FOLLOW_DIST)*0.05, 1, 1.3). The FOLLOW slot in Go
+// is ScriptFollowTargetGUID (stepScriptFollow / pet follow). The arm sits
+// after the 191 cap and before the slow/min tail in C++, and so it does
+// here — callers pass the post-cap rate.
+func (s *Server) minionFollowBorrow(rate float32, motion *creatureMotion, swim bool) float32 {
+	// The FOLLOW slot is ScriptFollowTargetGUID (stepScriptFollow, armed
+	// by .npc follow / DB followGUID spawns) or, for pets, PetCommandFollow
+	// (updatePetMotion follows the owner under that command with no
+	// ScriptFollowTargetGUID armed).
+	if motion == nil || !motion.IsMinion || motion.InCombat || motion.OwnerGUID == 0 || (motion.ScriptFollowTargetGUID != motion.OwnerGUID && motion.PetCommand != PetCommandFollow) {
+		return rate
+	}
+	ownerRate, ownerDist, ownerInCombat, ok := s.minionFollowOwnerRate(motion, swim)
+	if !ok || ownerInCombat {
+		return rate
+	}
+	// Unit::UpdateSpeed (Unit.cpp:8784-8787): the raise-if only decides
+	// whether the owner's rate replaces the minion's; the distance
+	// factor multiplies after it either way.
+	if rate < ownerRate || ownerDist <= 10.0 {
+		rate = ownerRate
+	}
+	factor := float32(0.75 + (ownerDist-petFollowDistanceDBC)*0.05)
+	if factor < 1 {
+		factor = 1
+	}
+	if factor > 1.3 {
+		factor = 1.3
+	}
+	return rate * factor
+}
+
+// minionFollowOwnerRate resolves the followed owner's speed rate, distance,
+// and combat state for the UpdateSpeed borrow: a player owner reads the
+// session's live speed and UNIT_FLAG_IN_COMBAT, a creature owner its
+// banked RunSpeed/SwimSpeed and motion.InCombat. Rates are GetSpeedRate
+// values — yd/s divided by the move type's base speed.
+func (s *Server) minionFollowOwnerRate(motion *creatureMotion, swim bool) (rate, dist float32, inCombat, ok bool) {
+	if s == nil || motion == nil || motion.OwnerGUID == 0 {
+		return 0, 0, false, false
+	}
+	if sess := s.findSessionByGUID(motion.OwnerGUID); sess != nil && sess.player != nil {
+		speeds := sess.movementSpeeds()
+		if swim {
+			rate = speeds[moveTypeSwim] / creatureBaseSwimSpeed
+		} else {
+			rate = speeds[moveTypeRun] / creatureBaseRunSpeed
+		}
+		return rate, float32(distance3D(motion.X, motion.Y, motion.Z, sess.player.X, sess.player.Y, sess.player.Z)), sess.player.UnitFlags&unitFlagInCombat != 0, true
+	}
+	if cm := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.OwnerGUID); cm != nil {
+		if swim {
+			speed := cm.SwimSpeed
+			if speed <= 0 {
+				base := float32(1.0)
+				if cm.BaseRunRate > 0 {
+					base = cm.BaseRunRate
+				}
+				speed = base * creatureBaseSwimSpeed
+			}
+			rate = speed / creatureBaseSwimSpeed
+		} else {
+			rate = cm.RunSpeed / creatureBaseRunSpeed
+		}
+		return rate, float32(distance3D(motion.X, motion.Y, motion.Z, cm.X, cm.Y, cm.Z)), cm.InCombat, true
+	}
+	return 0, 0, false, false
 }
 
 // refreshCreatureRunSpeed mirrors Unit::SetSpeedRate (Unit.cpp:8825-8880)
@@ -1223,14 +1437,18 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 	}
 	key := creatureAuraKeyForMotion(motion)
 	newSpeed := creatureBaseRunSpeed * s.creatureRunSpeedRate(key, motion)
+	newSwimSpeed := creatureBaseSwimSpeed * s.creatureSwimSpeedRate(key, motion)
 	now := time.Now()
 	s.motionMu.Lock()
-	if motion.RunSpeed == newSpeed {
+	oldSpeed := motion.RunSpeed
+	oldSwimSpeed := motion.SwimSpeed
+	if oldSpeed == newSpeed && oldSwimSpeed == newSwimSpeed {
 		s.motionMu.Unlock()
 		return
 	}
 	oldVel := motion.MoveVelocity
 	motion.RunSpeed = newSpeed
+	motion.SwimSpeed = newSwimSpeed
 	// A fall spline's duration derives from its drop (computeFallTime),
 	// not run speed, so a speed change must not rescale its MoveEnds.
 	if motion.Moving && oldVel > 0 && newSpeed > 0 && !motion.ScriptMoveFalling {
@@ -1240,10 +1458,21 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 		}
 	}
 	s.motionMu.Unlock()
-	packet := protocol.NewBuffer(16)
-	packet.WritePackedGUID(motion.GUID)
-	packet.WriteF32(newSpeed)
-	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPLINE_SET_RUN_SPEED), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+	if newSpeed != oldSpeed {
+		packet := protocol.NewBuffer(16)
+		packet.WritePackedGUID(motion.GUID)
+		packet.WriteF32(newSpeed)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPLINE_SET_RUN_SPEED), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+	}
+	if newSwimSpeed != oldSwimSpeed {
+		// Unit::SetSpeedRate (Unit.cpp:8821-8880) sends
+		// SMSG_SPLINE_SET_SWIM_SPEED on a swim-rate change, the MOVE_SWIM
+		// twin of the run-speed broadcast above.
+		packet := protocol.NewBuffer(16)
+		packet.WritePackedGUID(motion.GUID)
+		packet.WriteF32(newSwimSpeed)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPLINE_SET_SWIM_SPEED), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+	}
 }
 
 const (
@@ -5420,6 +5649,31 @@ func (s *Server) scriptFollowTarget(motion *creatureMotion, players []playerPos,
 	return 0, 0, 0, 0, 0, false
 }
 
+// scriptFollowTargetWalking is the FollowMovementGenerator walk leg
+// (FollowMovementGenerator.cpp:165, init.SetWalk(target->IsWalking())):
+// a player target's WALKING bit from its last movement packet, a creature
+// target's persistent motion.Walking. Unknown targets read as running.
+func (s *Server) scriptFollowTargetWalking(motion *creatureMotion, players []playerPos, guid uint64) bool {
+	for i := range players {
+		if players[i].GUID == guid && players[i].Sess != nil {
+			if mi, ok := players[i].Sess.lastMovementInfoSnapshot(); ok {
+				return mi.Flags&movementWalking != 0
+			}
+			return false
+		}
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil {
+		if mi, ok := sess.lastMovementInfoSnapshot(); ok {
+			return mi.Flags&movementWalking != 0
+		}
+		return false
+	}
+	if cm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); cm != nil {
+		return cm.Walking
+	}
+	return false
+}
+
 // stepScriptFollow is the FollowMovementGenerator::DoUpdate leg
 // (FollowMovementGenerator.cpp:47-177) for the wander section: while
 // the slot is armed the creature stands inside range + both reaches,
@@ -5430,9 +5684,7 @@ func (s *Server) scriptFollowTarget(motion *creatureMotion, players []playerPos,
 // range/tolerance, or failed launch) and false only when the slot was
 // cleared, letting the tick fall through to wander/formation. DELTAS:
 // no PathGenerator (straight-line like every script spline, LOS and
-// collision re-checks unmodeled); walk follows the target's walk state
-// in C++ (SetWalk(target.IsWalking())) but Go has no target-walk
-// signal, so follow runs at run speed; the in-range MovementInform
+// collision re-checks unmodeled); the in-range MovementInform
 // (FOLLOW_MOTION_TYPE, event 28) fires once per follow assignment
 // (ScriptFollowInformed latch) in the standing branch below.
 func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) bool {
@@ -5476,13 +5728,16 @@ func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, p
 	radius := reachSum + motion.ScriptFollowDist
 	destX := tx + radius*float32(math.Cos(float64(absAngle)))
 	destY := ty + radius*float32(math.Sin(float64(absAngle)))
-	speed := creatureSplineVelocityExplicit(motion, false)
+	// FollowMovementGenerator.cpp:165: SetWalk(target->IsWalking()) —
+	// the follow spline runs at walk speed when the target walks.
+	targetWalking := s.scriptFollowTargetWalking(motion, players, targetGUID)
+	speed := creatureSplineVelocityExplicit(motion, targetWalking)
 	if speed < 0.001 {
 		return true
 	}
 	moveDist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, tz)
 	duration := splineDurationMs(float64(moveDist), speed)
-	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, tz, duration, false, tOrient, true, motion.PhaseMask, motion.TransportGUID)
+	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, tz, duration, targetWalking, tOrient, true, motion.PhaseMask, motion.TransportGUID)
 	motion.X, motion.Y, motion.Z = destX, destY, tz
 	motion.Moving = true
 	motion.ScriptMoveFromKnown = false

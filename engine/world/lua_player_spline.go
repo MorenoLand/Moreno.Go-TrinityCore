@@ -29,11 +29,21 @@ func (s *session) launchPlayerScriptSpline(destX, destY, destZ float32, walk boo
 	if s.player.Health == 0 {
 		return false
 	}
+	// MoveSplineInit::Launch (MoveSplineInit.cpp:106-123) selects the speed
+	// by SelectSpeedType (MoveSplineInit.cpp:30-56): FLYING, then SWIMMING,
+	// then WALKING, then BACKWARD, else RUN — and caps the velocity at
+	// max(28, run*4) the way the client does. The walk flag only rides
+	// the wire when the spline is not a swim spline.
+	speeds := s.movementSpeeds()
 	mt := moveTypeRun
-	if walk {
+	walkFlag := walk
+	if s.isSwimming {
+		mt = moveTypeSwim
+		walkFlag = false
+	} else if walk {
 		mt = moveTypeWalk
 	}
-	speed := s.movementSpeeds()[mt]
+	speed := capSplineVelocity(speeds[mt], speeds[moveTypeRun])
 	if speed < 0.001 {
 		return false
 	}
@@ -45,7 +55,7 @@ func (s *session) launchPlayerScriptSpline(destX, destY, destZ float32, walk boo
 	s.player.X, s.player.Y, s.player.Z = destX, destY, destZ
 	s.playerScriptMoveType = moveType
 	s.playerScriptMoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
-	s.server.broadcastMonsterMoveInInstance(mapID, instanceID, guid, fromX, fromY, fromZ, destX, destY, destZ, duration, walk, 0, false, phase, 0)
+	s.server.broadcastMonsterMoveInInstance(mapID, instanceID, guid, fromX, fromY, fromZ, destX, destY, destZ, duration, walkFlag, 0, false, phase, 0)
 	return true
 }
 
