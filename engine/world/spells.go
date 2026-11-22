@@ -59108,6 +59108,11 @@ func (s *session) handleEffectForceCast(ctx context.Context, spell wotlk.Spell, 
 // collision position when the destination is not in line of sight
 // (SpellEffects.cpp:4537-4542); Go has a LOS query (hasLineOfSight) but no
 // vmap raycast to compute that collision point, so the arm stays unbridged.
+// The MoveCharge spline itself is stamped like EffectCharge: the mover's
+// spline is unfinalized for dist/42 (MotionMaster.cpp:698-720), so
+// MovementHandler.cpp:294-298 drops the player's movement packets until
+// it lands; the stamp is armed before the teleport so a delay-window
+// deferral (nearTeleportMove) cannot skip it.
 func (s *session) handleEffectChargeDest(ctx context.Context, target protocol.SpellTargetData) {
 	if s == nil || s.player == nil {
 		return
@@ -59115,6 +59120,9 @@ func (s *session) handleEffectChargeDest(ctx context.Context, target protocol.Sp
 	if target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
 		return
 	}
+	chargeDist := distance3D(s.player.X, s.player.Y, s.player.Z, target.Destination.X, target.Destination.Y, target.Destination.Z)
+	s.playerScriptMoveType = movementGeneratorPoint
+	s.playerScriptMoveEnds = time.Now().Add(time.Duration(splineDurationMs(chargeDist, 42)) * time.Millisecond)
 	s.nearTeleportMove(target.Destination.X, target.Destination.Y, target.Destination.Z, s.player.Orientation, true)
 }
 
