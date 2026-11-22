@@ -148,12 +148,12 @@ const (
 	smartEventCorpseRemoved       uint32 = 36 // SMART_EVENT_CORPSE_REMOVED (SmartScriptMgr.h:135), no params
 	smartEventAreatrigger         uint32 = 46 // SMART_EVENT_AREATRIGGER_ONTRIGGER (SmartScriptMgr.h:145), Param1 = TriggerId (0 = any); all 139 TDB rows are src-2 areatrigger — Go loads creature sources only and has no areatrigger script engine, so no dispatch arm and no fire site
 	smartEventReceiveHeal         uint32 = 53 // SMART_EVENT_RECEIVE_HEAL (SmartScriptMgr.h:152), Param1/2 = MinHeal/MaxHeal, Param3/4 RepeatMin/Max
-	smartEventFriendlyIsCC        uint32 = 15 // SMART_EVENT_FRIENDLY_IS_CC (SmartScriptMgr.h:114), loader missing-repeat rule only, no dispatch arm
-	smartEventVictimCasting       uint32 = 13 // SMART_EVENT_VICTIM_CASTING (SmartScriptMgr.h:112), loader missing-repeat rule only, no dispatch arm
-	smartEventFriendlyHealth      uint32 = 14 // SMART_EVENT_FRIENDLY_HEALTH (SmartScriptMgr.h:113), loader missing-repeat rule only, no dispatch arm
-	smartEventFriendlyMissingBuff uint32 = 16 // SMART_EVENT_FRIENDLY_MISSING_BUFF (SmartScriptMgr.h:115), loader missing-repeat rule only, no dispatch arm
-	smartEventIsBehindTarget      uint32 = 67 // SMART_EVENT_IS_BEHIND_TARGET (SmartScriptMgr.h:166), loader missing-repeat rule only, no dispatch arm
-	smartEventFriendlyHealthPct   uint32 = 74 // SMART_EVENT_FRIENDLY_HEALTH_PCT (SmartScriptMgr.h:173), loader missing-repeat rule only, no dispatch arm
+	smartEventFriendlyIsCC        uint32 = 15 // SMART_EVENT_FRIENDLY_IS_CC (SmartScriptMgr.h:114), Param1 = radius, Param2/3 = RepeatMin/Max; timed-condition event, polled from smartUpdateTimers
+	smartEventVictimCasting       uint32 = 13 // SMART_EVENT_VICTIM_CASTING (SmartScriptMgr.h:112), Param1/2 = RepeatMin/Max, Param3 = SpellID (0 = any); timed-condition event, polled from smartUpdateTimers
+	smartEventFriendlyHealth      uint32 = 14 // SMART_EVENT_FRIENDLY_HEALTH (SmartScriptMgr.h:113), Param1 = HpDeficit, Param2 = radius, Param3/4 = RepeatMin/Max; 0 TDB rows — dead, no dispatch arm
+	smartEventFriendlyMissingBuff uint32 = 16 // SMART_EVENT_FRIENDLY_MISSING_BUFF (SmartScriptMgr.h:115), Param1 = SpellID, Param2 = radius, Param3/4 = RepeatMin/Max; timed-condition event, polled from smartUpdateTimers
+	smartEventIsBehindTarget      uint32 = 67 // SMART_EVENT_IS_BEHIND_TARGET (SmartScriptMgr.h:166), Param1/2 = CooldownMin/Max; 0 TDB rows — dead, no dispatch arm (no positional-facing bridge for handler creatures)
+	smartEventFriendlyHealthPct   uint32 = 74 // SMART_EVENT_FRIENDLY_HEALTH_PCT (SmartScriptMgr.h:173), Param1/2 = Min/MaxHpPct, Param3/4 = RepeatMin/Max, Param5 = radius; timed-condition event, polled from smartUpdateTimers
 	smartEventEnd                 uint32 = 83 // SMART_EVENT_END (SmartScriptMgr.h:183), loader rejects event types >= this
 )
 
@@ -167,13 +167,17 @@ const (
 // the dispatch switch and the type-mask tables, with no
 // ProcessEventsFor caller. 78-81 are 0 rows and "don't use on
 // 3.3.5a" (SmartScriptMgr.h:177-180). 68/69 are live (9 + 7 src-0
-// rows) and dispatched; 70/71 are GO-source only (285 + 48 rows)
-// with no Go GO SmartAI state, so they are dispatch-only; 72 is 1
-// src-0 row (Michael Belfast 30571, DoAction 100) whose fire site
-// (the CoS intro machine, culling_of_stratholme.cpp:119) has no Go
-// twin, so it is dispatch-only; 75/76 are 31 + 1 src-0 rows fired
-// by the OnUpdate distance scan (SmartScript.cpp:3400-3456), ported
-// in smartProcessEvent + smartInitTimer + smartUpdateTimers.
+// rows) and dispatched; 70 is GO-source (285 rows) with its GO script
+// state + loot-state fire site ported (smartStateForGO,
+// setGameObjectLootState); 71 is GO-source (48 rows, 18 live after
+// the action-147 load rejection) with its dispatch + GO state ported
+// but no fire site (goober/camera Use + building EventInform have no
+// Go twin); 72 is 1 src-0 row (Michael Belfast 30571, DoAction 100)
+// whose fire site (the CoS intro machine,
+// culling_of_stratholme.cpp:119) has no Go twin, so it is
+// dispatch-only; 75/76 are 31 + 1 src-0 rows fired by the OnUpdate
+// distance scan (SmartScript.cpp:3400-3456), ported in
+// smartProcessEvent + smartInitTimer + smartUpdateTimers.
 const (
 	smartEventTransportAddPlayer    uint32 = 41 // SMART_EVENT_TRANSPORT_ADDPLAYER (SmartScriptMgr.h:140), no params; dead, no dispatch arm
 	smartEventTransportAddCreature  uint32 = 42 // SMART_EVENT_TRANSPORT_ADDCREATURE (SmartScriptMgr.h:141), Param1 = Entry (0 = any); dead, no dispatch arm
@@ -187,7 +191,7 @@ const (
 	smartEventQuestFail             uint32 = 51 // SMART_EVENT_QUEST_FAIL (SmartScriptMgr.h:150), no params; dead, no dispatch arm
 	smartEventGameEventStart        uint32 = 68 // SMART_EVENT_GAME_EVENT_START (SmartScriptMgr.h:167), Param1 = game_event.Entry
 	smartEventGameEventEnd          uint32 = 69 // SMART_EVENT_GAME_EVENT_END (SmartScriptMgr.h:168), Param1 = game_event.Entry
-	smartEventGOEventInform         uint32 = 71 // SMART_EVENT_GO_EVENT_INFORM (SmartScriptMgr.h:170), Param1 = eventId; GO-source only (48 rows), dispatch arm only — no Go GO SmartAI state, no fire site
+	smartEventGOEventInform         uint32 = 71 // SMART_EVENT_GO_EVENT_INFORM (SmartScriptMgr.h:170), Param1 = eventId; GO-source only (48 rows, 18 live after the action-147 load rejection), dispatch + GO state ported, no fire site yet (goober/camera Use + building EventInform have no Go twin)
 	smartEventActionDone            uint32 = 72 // SMART_EVENT_ACTION_DONE (SmartScriptMgr.h:171), Param1 = eventId; 1 src-0 row (Michael Belfast 30571, DoAction 100, EVENT_BELFAST_MOVE); dispatch arm only — the sole C++ caller is the CoS intro machine (culling_of_stratholme.cpp:119), no Go twin
 	smartEventDistanceCreature      uint32 = 75 // SMART_EVENT_DISTANCE_CREATURE (SmartScriptMgr.h:174), Param1 = guid, Param2 = entry, Param3 = distance, Param4 = repeat; 31 src-0 rows, fired by the OnUpdate distance scan
 	smartEventDistanceGameObject    uint32 = 76 // SMART_EVENT_DISTANCE_GAMEOBJECT (SmartScriptMgr.h:175), same params as DISTANCE_CREATURE; 1 src-0 row (Plump Turkey 32818), fired by the OnUpdate distance scan
@@ -568,10 +572,10 @@ type smartScriptState struct {
 	// baseOrigGUID on first override and rebinds the script's base
 	// object to the first creature target (baseOverrideGUID);
 	// RESET_SCRIPT_BASE_OBJECT (77) and OnReset restore the owner by
-	// clearing both. Go has no GO script state, so only the creature
-	// leg is modeled (the GO leg is a documented residual in the 76
-	// arm); the override resolves in smartProcessAction, so every
-	// later action reads the overridden creature as `me`.
+	// clearing both. Only the creature leg is modeled (the GO leg is
+	// a documented residual in the 76 arm); the override resolves in
+	// smartProcessAction, so every later action reads the overridden
+	// creature as `me`.
 	baseOverrideGUID uint64
 	baseOrigGUID     uint64
 	// SmartAI follow state (SmartAI.h: _followGUID/_followDistance/
@@ -656,6 +660,7 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 	}
 	defer rows.Close()
 	byEntry := make(map[int32][]*smartScriptRow)
+	byGO := make(map[int32][]*smartScriptRow)
 	byList := make(map[int32][]*smartScriptRow)
 	for rows.Next() {
 		var r smartScriptRow
@@ -663,7 +668,7 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 		if err := rows.Scan(&r.entryOrGUID, &r.sourceType, &r.id, &r.link, &r.eventType, &r.eventPhaseMask, &r.eventChance, &r.eventFlags, &r.eventParam1, &r.eventParam2, &r.eventParam3, &r.eventParam4, &r.eventParam5, &r.actionType, &r.actionParam1, &r.actionParam2, &r.actionParam3, &r.actionParam4, &r.actionParam5, &r.actionParam6, &r.targetType, &r.targetParam1, &r.targetParam2, &r.targetParam3, &r.targetParam4, &tx, &ty, &tz, &to); err != nil {
 			continue
 		}
-		if r.sourceType != 0 && r.sourceType != 9 {
+		if r.sourceType != 0 && r.sourceType != 1 && r.sourceType != 9 {
 			continue
 		}
 		// SmartScriptMgr::IsEventValid (SmartScriptMgr.cpp:682-686):
@@ -679,7 +684,8 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 		// same way — the row never reaches dispatch, and links into it
 		// never fire. TDB 26091: 12 such rows (83:5 / 86:1 / 89:1 /
 		// 90:5), all src 0. The type-mask and phase-mask checks below
-		// it stay out (Go loads creature + timed-list sources only).
+		// it stay out (Go loads creature, gameobject and timed-list
+		// sources; areatrigger rows stay out).
 		if r.eventType >= smartEventEnd {
 			continue
 		}
@@ -723,10 +729,15 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 			byList[row.entryOrGUID] = append(byList[row.entryOrGUID], &row)
 			continue
 		}
+		if row.sourceType == 1 {
+			byGO[row.entryOrGUID] = append(byGO[row.entryOrGUID], &row)
+			continue
+		}
 		byEntry[row.entryOrGUID] = append(byEntry[row.entryOrGUID], &row)
 	}
 	s.smartScriptsMu.Lock()
 	s.smartScripts = byEntry
+	s.smartGOScripts = byGO
 	s.smartTimedActionLists = byList
 	s.smartScriptsMu.Unlock()
 	s.loadSmartConditions(ctx)
@@ -809,6 +820,99 @@ func (s *Server) smartRowsFor(entry int32) []*smartScriptRow {
 	s.smartScriptsMu.RLock()
 	defer s.smartScriptsMu.RUnlock()
 	return s.smartScripts[entry]
+}
+
+// smartRowsForGO is smartRowsFor for SMART_SCRIPT_TYPE_GAMEOBJECT
+// (source_type 1) rows, keyed by gameobject_template entry.
+func (s *Server) smartRowsForGO(entry int32) []*smartScriptRow {
+	if s == nil {
+		return nil
+	}
+	s.smartScriptsMu.RLock()
+	defer s.smartScriptsMu.RUnlock()
+	return s.smartGOScripts[entry]
+}
+
+// smartStateForGO returns the gameobject's SmartScript state plus a
+// synthetic motion carrying the GO as the script base, attaching the
+// state on first use when the GO entry has src-1 script rows
+// (SmartGameObjectAI ctor + SmartScript::OnInitialize, SmartAI.cpp:
+// 1012-1014 / SmartScript.cpp:3836-3884: AI_INIT fires, then
+// JUST_CREATED). The motion's position, phase and faction come from
+// the live GO record, so range scans and target resolution read the
+// GO's own spot; BaseIsGameObject marks the base so SELF resolves as
+// a gameobject and GO-base-only legs stay out. The state lives on the
+// GO record itself, so timers, phase, counters and the nested guard
+// persist across fires; the attach write rides objectsMu so two
+// concurrent fires cannot attach twice, and only the attaching call
+// fires the init events. No GO tick exists in Go (no UpdateAI twin),
+// so timed lists installed on the state and UPDATE-type GO rows stay
+// dormant until one lands — the dispatch and install legs are live,
+// the tick leg is the documented residual.
+func (s *Server) smartStateForGO(ctx context.Context, mapID, instanceID uint32, guid uint64) (*creatureMotion, *smartScriptState) {
+	if s == nil || guid == 0 {
+		return nil, nil
+	}
+	goState := s.gameObjectState(mapID, instanceID, guid)
+	if goState == nil || goState.Entry == 0 {
+		return nil, nil
+	}
+	motion := &creatureMotion{
+		GUID: goState.GUID, Entry: goState.Entry, Map: mapID, InstanceID: instanceID,
+		X: goState.X, Y: goState.Y, Z: goState.Z, Orientation: goState.Orientation,
+		PhaseMask: goState.PhaseMask, AIName: "SmartAI", BaseIsGameObject: true,
+	}
+	s.objectsMu.RLock()
+	existing := goState.smart
+	s.objectsMu.RUnlock()
+	if existing != nil {
+		motion.smart = existing
+		return motion, existing
+	}
+	rows := s.smartRowsForGO(int32(goState.Entry))
+	// Spawn-GUID-specific rows (SmartScriptMgr convention: a negative
+	// entryorguid is -spawnGUID) ride after the entry rows, like the
+	// creature leg in smartStateFor.
+	if guidRows := s.smartRowsForGO(-int32(goState.LowGUID)); len(guidRows) > 0 {
+		rows = append(append([]*smartScriptRow{}, rows...), guidRows...)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	st := &smartScriptState{phase: 0, defaultFaction: goState.Faction}
+	for _, row := range rows {
+		ev := &smartScriptEvent{row: row}
+		s.smartInitTimer(ev)
+		st.events = append(st.events, ev)
+	}
+	attached := false
+	s.objectsMu.Lock()
+	if goState.smart != nil {
+		st = goState.smart
+	} else {
+		goState.smart = st
+		attached = true
+	}
+	s.objectsMu.Unlock()
+	motion.smart = st
+	if attached {
+		st.firedInit = true
+		s.smartProcessEvents(ctx, motion, smartEventAIInit, 0, 0, 0)
+		s.smartProcessEvents(ctx, motion, smartEventJustCreated, 0, 0, 0)
+	}
+	return motion, st
+}
+
+// smartProcessGOEvents is the SmartGameObjectAI dispatch entry
+// (SmartAI.cpp:1088-1095): the GO script's ProcessEventsFor for one
+// event type. A GO with no src-1 rows (or no live record) no-ops,
+// like smartProcessEvents on a creature with no SmartAI state.
+func (s *Server) smartProcessGOEvents(ctx context.Context, mapID, instanceID uint32, guid uint64, eventType uint32, invokerGUID uint64, var0, var1 uint32) {
+	motion, st := s.smartStateForGO(ctx, mapID, instanceID, guid)
+	if motion == nil || st == nil {
+		return
+	}
+	s.smartProcessEvents(ctx, motion, eventType, invokerGUID, var0, var1)
 }
 
 // smartTimedActionListRows is SmartAIMgr::GetScript (SmartScriptMgr.cpp:
@@ -1115,6 +1219,173 @@ func (s *Server) smartDistanceGameObject(ctx context.Context, motion *creatureMo
 	return len(s.smartGameObjectNear(ctx, motion, ev.row.eventParam2, float32(ev.row.eventParam3))) > 0
 }
 
+// smartFriendlyUnit is one candidate for the FRIENDLY_* scans: the
+// GridNotifiers checkers (MostHPMissingInRange /
+// MostHPPercentMissingInRange / FriendlyCCedInRange /
+// FriendlyMissingBuffInRange, GridNotifiers.h:813-911) all visit
+// creatures AND players, so the snapshot covers both — creatures from
+// the motion registry, players from the session table. cc is the
+// FriendlyCCedInRange leg (feared / charmed / rooted / stunned /
+// confused): the motion bools for creatures, the live aura types for
+// players (whose charm state has no Go mirror — residual).
+type smartFriendlyUnit struct {
+	guid      uint64
+	health    uint32
+	maxHealth uint32
+	inCombat  bool
+	cc        bool
+}
+
+// smartFriendlyUnitsInRange snapshots the friendly units within radius
+// yards of the motion (3D, IsWithinDistInMap): alive, in combat, and
+// friendly per creatureFriendlyToTarget — the shared terms of the four
+// FRIENDLY_* checkers. Self qualifies (C++ does not exclude me).
+// Snapshots are taken under motionMu / sessionsMu and evaluated after,
+// the stepCreatureMoveInLOSProximity pattern.
+func (s *Server) smartFriendlyUnitsInRange(motion *creatureMotion, radius float32) []smartFriendlyUnit {
+	if s == nil || motion == nil {
+		return nil
+	}
+	s.motionMu.Lock()
+	var motions []*creatureMotion
+	for _, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+		if m != nil {
+			motions = append(motions, m)
+		}
+	}
+	s.motionMu.Unlock()
+	s.sessionsMu.RLock()
+	var sessions []*session
+	for sess := range s.sessions {
+		if sess != nil && sess.player != nil && sess.player.Map == motion.Map && sess.player.InstanceID == motion.InstanceID {
+			sessions = append(sessions, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	var out []smartFriendlyUnit
+	for _, m := range motions {
+		if m.Health == 0 || !m.InCombat || !s.creatureFriendlyToTarget(motion, m.GUID) {
+			continue
+		}
+		if distance3D(motion.X, motion.Y, motion.Z, m.X, m.Y, m.Z) > float64(radius) {
+			continue
+		}
+		key := creatureAuraKeyForMotion(m)
+		cc := m.Fleeing || m.Charmed || m.ScriptRooted || m.ScriptStunned || m.Confused ||
+			s.creatureHasLiveAuraEffectType(key, spellAuraModFear) ||
+			s.creatureHasLiveAuraEffectType(key, spellAuraModRoot) ||
+			s.creatureHasLiveAuraEffectType(key, spellAuraModStun) ||
+			s.creatureHasLiveAuraEffectType(key, spellAuraModConfuse)
+		out = append(out, smartFriendlyUnit{guid: m.GUID, health: m.Health, maxHealth: m.MaxHealth, inCombat: m.InCombat, cc: cc})
+	}
+	for _, sess := range sessions {
+		p := sess.player
+		if p == nil || p.Health == 0 || p.UnitFlags&unitFlagInCombat == 0 || !s.creatureFriendlyToTarget(motion, p.GUID) {
+			continue
+		}
+		if distance3D(motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) > float64(radius) {
+			continue
+		}
+		cc := sess.hasLiveAuraEffectType(spellAuraModFear) ||
+			sess.hasLiveAuraEffectType(spellAuraModRoot) ||
+			sess.hasLiveAuraEffectType(spellAuraModStun) ||
+			sess.hasLiveAuraEffectType(spellAuraModConfuse)
+		out = append(out, smartFriendlyUnit{guid: p.GUID, health: p.Health, maxHealth: p.MaxHealth, inCombat: true, cc: cc})
+	}
+	return out
+}
+
+// smartLowestHpPctFriendly is DoSelectLowestHpPercentFriendly
+// (SmartScript.cpp:3906-3917): the MostHPPercentMissingInRange
+// checker (GridNotifiers.h:834-856) — the lowest-health-pct friendly
+// unit in range whose pct sits in [minHpPct, maxHpPct]; 0 when none
+// qualifies. C++ takes the grid search's last improvement, Go the
+// strict minimum; ties resolve to the first snapshot entry either way.
+func (s *Server) smartLowestHpPctFriendly(motion *creatureMotion, radius float32, minPct, maxPct uint32) uint64 {
+	var bestGUID uint64
+	bestPct := uint32(101)
+	for _, u := range s.smartFriendlyUnitsInRange(motion, radius) {
+		if u.maxHealth == 0 {
+			continue
+		}
+		pct := uint32(100 * uint64(u.health) / uint64(u.maxHealth))
+		if pct < minPct || pct > maxPct || pct >= bestPct {
+			continue
+		}
+		bestPct, bestGUID = pct, u.guid
+	}
+	return bestGUID
+}
+
+// smartFriendlyHealthPctMatch is the per-target leg of the
+// FRIENDLY_HEALTH_PCT dispatch (SmartScript.cpp:3354-3395) for the
+// row's own target list: friendly, alive, in combat, pct in window.
+func (s *Server) smartFriendlyHealthPctMatch(motion *creatureMotion, guid uint64, minPct, maxPct uint32) bool {
+	if s == nil || motion == nil || guid == 0 {
+		return false
+	}
+	if m := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); m != nil {
+		if m.Health == 0 || !m.InCombat || m.MaxHealth == 0 || !s.creatureFriendlyToTarget(motion, guid) {
+			return false
+		}
+		pct := uint32(100 * uint64(m.Health) / uint64(m.MaxHealth))
+		return pct >= minPct && pct <= maxPct
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		p := sess.player
+		if p.Health == 0 || p.UnitFlags&unitFlagInCombat == 0 || p.MaxHealth == 0 || !s.creatureFriendlyToTarget(motion, guid) {
+			return false
+		}
+		pct := uint32(100 * uint64(p.Health) / uint64(p.MaxHealth))
+		return pct >= minPct && pct <= maxPct
+	}
+	return false
+}
+
+// smartVictimCasting is Unit::IsNonMeleeSpellCast(false, false, true)
+// (Unit.cpp:3182-3210) for VICTIM_CASTING: withDelayed=false,
+// skipChanneled=false, skipAutorepeat=true, skipInstant=true — true
+// while the victim casts a non-instant generic spell or channels one.
+// Returns the current spell id for the spellId filter. Creature
+// generic casts ride the pending-spell window (PendingCastSpellID /
+// PendingInlineSpellID inside CastingUntil — an instant leaves no
+// window, matching skipInstant) and channels ride ChannelSpellID;
+// player casts ride the session cast state, which covers generic and
+// channeled casts alike (instant casts never build one).
+func (s *Server) smartVictimCasting(motion *creatureMotion, victimGUID uint64) (uint32, bool) {
+	if s == nil || motion == nil || victimGUID == 0 {
+		return 0, false
+	}
+	if m := s.findCreatureMotion(motion.Map, motion.InstanceID, victimGUID); m != nil {
+		if s.creatureChannelLive(m) {
+			return m.ChannelSpellID, true
+		}
+		if time.Now().Before(m.CastingUntil) {
+			if m.PendingCastSpellID != 0 {
+				return m.PendingCastSpellID, true
+			}
+			if m.PendingInlineSpellID != 0 {
+				return m.PendingInlineSpellID, true
+			}
+		}
+		return 0, false
+	}
+	sess := s.findSessionByGUID(victimGUID)
+	if sess == nil || sess.player == nil {
+		return 0, false
+	}
+	sess.castMu.Lock()
+	cast := sess.activeCast
+	sess.castMu.Unlock()
+	if cast == nil || cast.Cancelled || cast.CastTimeMs == 0 {
+		return 0, false
+	}
+	if time.Now().After(cast.StartAt.Add(time.Duration(cast.CastTimeMs) * time.Millisecond)) {
+		return 0, false
+	}
+	return cast.SpellID, true
+}
+
 // smartProcessEvent is SmartScript::ProcessEvent (:2882-...): the active,
 // phase-mask, NOT_REPEATABLE, WHILE_CHARMED and difficulty gates, then the
 // per-type dispatch — direct events run their action, timed events run
@@ -1169,13 +1440,13 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		// the event fires only for its loot state (event_param1 ==
 		// var0 — GO_NOT_READY 0 / GO_READY 1 / GO_ACTIVATED 2 /
 		// GO_JUST_DEACTIVATED 3), then runs its action with the GO
-		// user as invoker and the state as var0. No Go fire site:
-		// C++ fires it from SmartGameObjectAI::OnLootStateChanged
-		// (SmartAI.cpp:1090) and all 285 TDB rows are GO-source —
-		// Go has no GO SmartAI state and loads creature sources
-		// only, so the dispatch arm stands ready for a future GO
-		// script state. TDB 26091: 70 = 285 src-1 rows (p1: 2 x264,
-		// 1 x13, 3 x7, 0 x1).
+		// user as invoker and the state as var0. The fire is
+		// setGameObjectLootState (GameObject::SetLootState,
+		// GameObject.cpp:2371-2382, via SmartGameObjectAI::
+		// OnLootStateChanged, SmartAI.cpp:1090); all 285 TDB rows
+		// are GO-source and load into the GO script state.
+		// TDB 26091: 70 = 285 src-1 rows (p1: 2 x264, 1 x13,
+		// 3 x7, 0 x1).
 		if ev.row.eventParam1 != var0 {
 			return
 		}
@@ -1184,10 +1455,13 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		// SMART_EVENT_GO_EVENT_INFORM (SmartScript.cpp:3340-3345): the
 		// event fires only for its event id (event_param1 == var0),
 		// then runs its action with no invoker and the id as var0.
-		// No Go fire site: C++ fires it from
-		// SmartGameObjectAI::EventInform (SmartAI.cpp:1094) and all
-		// 48 TDB rows are GO-source — Go has no GO SmartAI state.
-		// TDB 26091: 71 = 48 src-1 rows (30 action 147, load-rejected).
+		// No Go fire site yet: C++ fires it from
+		// SmartGameObjectAI::EventInform (SmartAI.cpp:1094), reached
+		// from goober/camera Use (GameObject.cpp:1655/:1714) and
+		// building damage states (:2296/:2324/:2350) — none has a Go
+		// twin. All 48 TDB rows are GO-source and load into the GO
+		// script state; 30 carry action 147 (load-rejected), leaving
+		// 18 live (10 timed-list, 8 TALK).
 		if ev.row.eventParam1 != var0 {
 			return
 		}
@@ -1350,6 +1624,111 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 			return
 		}
 		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam4, ev.row.eventParam4, 0, 0, 0)
+	case smartEventVictimCasting:
+		// SMART_EVENT_VICTIM_CASTING (SmartScript.cpp:2963-2980):
+		// timed-condition event, polled from UpdateTimer — the
+		// engaged owner's victim must be casting a non-melee spell
+		// (IsNonMeleeSpellCast(false, false, true)); event_param3 is
+		// the spell filter (0 = any), the repeat window is param1/2.
+		// On a miss it returns WITHOUT re-arming, so the expired
+		// timer re-checks every tick, exactly like C++ UpdateTimer.
+		// TDB 26091: 69 src-0 rows, all spellId 0, actions 11 CAST
+		// x68 + 25 x1; targets 2 VICTIM x36 / 7 ACTION_INVOKER x27
+		// (both resolve to the victim, passed as invoker below).
+		if motion == nil || !motion.InCombat || motion.TargetGUID == 0 {
+			return
+		}
+		spellID, casting := s.smartVictimCasting(motion, motion.TargetGUID)
+		if !casting {
+			return
+		}
+		if ev.row.eventParam3 != 0 && spellID != ev.row.eventParam3 {
+			return
+		}
+		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam1, ev.row.eventParam2, motion.TargetGUID, 0, 0)
+	case smartEventFriendlyIsCC:
+		// SMART_EVENT_FRIENDLY_IS_CC (SmartScript.cpp:2997-3011):
+		// timed-condition event, polled from UpdateTimer — the
+		// engaged owner looks for a CC'd friendly creature or player
+		// within param1 yards (DoFindFriendlyCC, FriendlyCCedInRange:
+		// feared / charmed / rooted / stunned / confused); empty
+		// re-arms 1000-3000ms, a hit runs the timed action on the
+		// repeat window (param2/3) with a random CC'd friendly as
+		// invoker. TDB 26091: 6 src-0 rows, all target ACTION_INVOKER.
+		if motion == nil || !motion.InCombat {
+			return
+		}
+		cced := make([]uint64, 0)
+		for _, u := range s.smartFriendlyUnitsInRange(motion, float32(ev.row.eventParam1)) {
+			if u.cc {
+				cced = append(cced, u.guid)
+			}
+		}
+		if len(cced) == 0 {
+			s.smartRecalcTimer(ev, 1000, 3000)
+			return
+		}
+		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam2, ev.row.eventParam3, cced[rand.Intn(len(cced))], 0, 0)
+	case smartEventFriendlyMissingBuff:
+		// SMART_EVENT_FRIENDLY_MISSING_BUFF (SmartScript.cpp:3013-
+		// 3023): timed-condition event, polled from UpdateTimer — NO
+		// engaged gate — a friendly creature or player within param2
+		// yards missing the param1 buff (DoFindFriendlyMissingBuff);
+		// empty returns WITHOUT re-arming, so the expired timer
+		// re-checks every tick; a hit runs the timed action on the
+		// repeat window (param3/4) with a random buff-less friendly
+		// as invoker. TDB 26091: 31 src-0 rows (targets SELF x19 /
+		// ACTION_INVOKER x12).
+		if motion == nil {
+			return
+		}
+		var missing []uint64
+		for _, u := range s.smartFriendlyUnitsInRange(motion, float32(ev.row.eventParam2)) {
+			if s.smartUnitAuraCount(motion, u.guid, ev.row.eventParam1) == 0 {
+				missing = append(missing, u.guid)
+			}
+		}
+		if len(missing) == 0 {
+			return
+		}
+		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam3, ev.row.eventParam4, missing[rand.Intn(len(missing))], 0, 0)
+	case smartEventFriendlyHealthPct:
+		// SMART_EVENT_FRIENDLY_HEALTH_PCT (SmartScript.cpp:3354-3395):
+		// timed-condition event, polled from UpdateTimer — the engaged
+		// owner finds a friendly unit in the [minHpPct, maxHpPct]
+		// window (param1/2) inside param5 yards: ACTION_INVOKER rows
+		// take the lowest-pct friendly (DoSelectLowestHpPercentFriendly),
+		// range/closest rows take the first target-list match, other
+		// target types never fire. Runs the timed action on the repeat
+		// window (param3/4) with the found unit as invoker; a miss
+		// returns WITHOUT re-arming. TDB 26091: 261 src-0 rows, all
+		// target ACTION_INVOKER, all minHpPct 0.
+		if motion == nil || !motion.InCombat {
+			return
+		}
+		var targetGUID uint64
+		switch ev.row.targetType {
+		case smartTargetActionInvoker:
+			targetGUID = s.smartLowestHpPctFriendly(motion, float32(ev.row.eventParam5), ev.row.eventParam1, ev.row.eventParam2)
+		case smartTargetCreatureRange, smartTargetCreatureGUID, smartTargetCreatureDist,
+			smartTargetClosestCreature, smartTargetClosestPlayer,
+			smartTargetPlayerRange, smartTargetPlayerDist:
+			for _, t := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+				if t.isGameObject {
+					continue
+				}
+				if s.smartFriendlyHealthPctMatch(motion, t.guid, ev.row.eventParam1, ev.row.eventParam2) {
+					targetGUID = t.guid
+					break
+				}
+			}
+		default:
+			return
+		}
+		if targetGUID == 0 {
+			return
+		}
+		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam3, ev.row.eventParam4, targetGUID, 0, 0)
 	case smartEventTimedEventTriggered:
 		// SMART_EVENT_TIMED_EVENT_TRIGGERED (SmartScript.cpp:3303-3307):
 		// the event fires only for its timed-event id, then runs its
@@ -1632,8 +2011,9 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	default:
 		// Timed/conditioned types with no Go condition evaluation
-		// (FRIENDLY_*, VICTIM_CASTING, ...) never fire from the
-		// direct path; their timer arm re-arms in smartUpdateTimers.
+		// (FRIENDLY_HEALTH 14 and IS_BEHIND_TARGET 67 — both 0 TDB
+		// rows, dead) never fire from the direct path; their timer
+		// arm re-arms in smartUpdateTimers.
 		return
 	}
 }
@@ -1722,6 +2102,8 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 				smartEventHealthPct, smartEventTargetHealthPc, smartEventManaPct,
 				smartEventTargetManaPct, smartEventRange,
 				smartEventHasAura, smartEventTargetBuffed,
+				smartEventVictimCasting, smartEventFriendlyIsCC,
+				smartEventFriendlyMissingBuff, smartEventFriendlyHealthPct,
 				smartEventDistanceCreature, smartEventDistanceGameObject:
 				s.smartProcessEvent(ctx, motion, st, ev, 0, 0, 0)
 			}
@@ -1925,6 +2307,45 @@ func (s *Server) smartStateForTimedList(ctx context.Context, motion *creatureMot
 // repeat window (param3/4) re-arms on fire.
 func (s *Server) smartSetTimedActionList(ctx context.Context, motion *creatureMotion, listID, timerType uint32, allowOverride bool, invokerGUID uint64) {
 	st := s.smartStateForTimedList(ctx, motion)
+	if st == nil {
+		return
+	}
+	if st.processingTimedList {
+		return
+	}
+	if !allowOverride && len(st.timedList) > 0 {
+		return
+	}
+	rows := s.smartTimedActionListRows(int32(listID))
+	st.timedList = nil
+	if len(rows) == 0 {
+		return
+	}
+	st.timedListInvoker = invokerGUID
+	forced := smartEventUpdate
+	switch timerType {
+	case 0:
+		forced = smartEventUpdateOOC
+	case 1:
+		forced = smartEventUpdateIC
+	}
+	for i, row := range rows {
+		rc := *row
+		rc.eventType = forced
+		ev := &smartScriptEvent{row: &rc, enableTimed: i == 0}
+		s.smartInitTimer(ev)
+		st.timedList = append(st.timedList, ev)
+	}
+}
+
+// smartSetTimedActionListGO is smartSetTimedActionList for a
+// gameobject target (SmartScript.cpp:1692-1696: the GO leg installs
+// the list on the GO's SmartGameObjectAI script). The install rides
+// the GO state's timed list; like every GO timed leg it never ticks
+// until a GO UpdateAI lands, so the list waits dormant — the install
+// itself is the C++ action.
+func (s *Server) smartSetTimedActionListGO(ctx context.Context, mapID, instanceID uint32, guid uint64, listID, timerType uint32, allowOverride bool, invokerGUID uint64) {
+	_, st := s.smartStateForGO(ctx, mapID, instanceID, guid)
 	if st == nil {
 		return
 	}
@@ -2524,6 +2945,12 @@ func (s *Server) smartActionCast(ctx context.Context, motion *creatureMotion, st
 	if len(targets) == 0 {
 		return
 	}
+	// A GO base casts from the gameobject itself (go->CastSpell,
+	// SmartScript.cpp:551-556); Go has no gameobject spell-cast twin,
+	// so the cast stays out rather than casting as a creature.
+	if motion.BaseIsGameObject {
+		return
+	}
 	if limit := ev.row.actionParam4; limit > 0 && uint32(len(targets)) > limit {
 		rand.Shuffle(len(targets), func(i, j int) { targets[i], targets[j] = targets[j], targets[i] })
 		targets = targets[:limit]
@@ -2644,13 +3071,19 @@ func (s *Server) smartActionTalk(ctx context.Context, motion *creatureMotion, st
 	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
 	talker := (*creatureMotion)(nil)
 	talkTargetGUID := uint64(0)
-	if ev.row.targetType == smartTargetNone {
+	// A GO base never talks itself: C++ me is null for gameobject
+	// scripts (SmartScript.cpp:268), so the NONE, player-target and
+	// useTalkTarget legs all leave talker null and the action no-ops
+	// — only a creature target can carry the line.
+	if ev.row.targetType == smartTargetNone && !motion.BaseIsGameObject {
 		talker = motion
 	}
 	for _, tgt := range targets {
 		if tgt.isPlayer {
-			talker = motion
-			talkTargetGUID = tgt.guid
+			if !motion.BaseIsGameObject {
+				talker = motion
+				talkTargetGUID = tgt.guid
+			}
 			break
 		}
 		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
@@ -2658,8 +3091,10 @@ func (s *Server) smartActionTalk(ctx context.Context, motion *creatureMotion, st
 			continue
 		}
 		if ev.row.actionParam3 != 0 {
-			talker = motion
-			talkTargetGUID = tgt.guid
+			if !motion.BaseIsGameObject {
+				talker = motion
+				talkTargetGUID = tgt.guid
+			}
 		} else {
 			talker = tm
 		}
@@ -5381,13 +5816,13 @@ func (s *Server) smartActionActivateGObject(ctx context.Context, motion *creatur
 		if !tgt.isGameObject {
 			continue
 		}
-		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, 1)
+		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, 1, invokerGUID)
 		s.useDoorOrButton(motion.Map, motion.InstanceID, tgt.guid, false, 0)
 		// GameObject::UseDoorOrButton (GameObject.cpp:1443) leaves the
 		// GO GO_ACTIVATED (loot state 2); the Go twin tracks state via
 		// the GO_STATE/flag broadcast only, so the loot-state tail is
 		// written here to match the C++ end state.
-		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, 2)
+		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, 2, invokerGUID)
 	}
 }
 
@@ -5488,6 +5923,16 @@ func (s *Server) smartActionForceDespawn(ctx context.Context, motion *creatureMo
 			continue
 		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, tgt.guid
+		if tgt.isGameObject {
+			// GameObject targets despawn through the GO twin
+			// (SmartScript.cpp:1117-1118: DespawnOrUnsummon on the
+			// GO); the forceRespawnTimer half has no GO respawn
+			// override twin and stays out.
+			time.AfterFunc(time.Duration(delay)*time.Millisecond, func() {
+				s.despawnDynamicGameObjectInInstance(mapID, instanceID, guid)
+			})
+			continue
+		}
 		time.AfterFunc(time.Duration(delay)*time.Millisecond, func() {
 			s.despawnCreatureMotion(context.Background(), mapID, instanceID, guid)
 			if timer > 0 {
@@ -6219,7 +6664,7 @@ func (s *Server) smartActionGOSetLootState(ctx context.Context, motion *creature
 		if !tgt.isGameObject {
 			continue
 		}
-		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, uint8(state))
+		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, uint8(state), invokerGUID)
 		s.triggerGameObjectEvent(ctx, tgt.guid, scripting.GameObjectEventOnLootState, state)
 	}
 }
@@ -6955,6 +7400,10 @@ func (s *Server) smartActionCallTimedActionList(ctx context.Context, motion *cre
 		if tgt.isPlayer {
 			continue
 		}
+		if tgt.isGameObject {
+			s.smartSetTimedActionListGO(ctx, motion.Map, motion.InstanceID, tgt.guid, listID, ev.row.actionParam2, ev.row.actionParam3 != 0, invoker)
+			continue
+		}
 		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
 		if tm == nil || tm.AIName != "SmartAI" {
 			continue
@@ -6991,7 +7440,7 @@ func (s *Server) smartTargets(ctx context.Context, motion *creatureMotion, st *s
 	case smartTargetNone:
 		return nil
 	case smartTargetSelf:
-		return []smartTarget{{guid: motion.GUID}}
+		return []smartTarget{{guid: motion.GUID, isGameObject: motion.BaseIsGameObject}}
 	case smartTargetVictim:
 		if motion.TargetGUID == 0 {
 			return nil

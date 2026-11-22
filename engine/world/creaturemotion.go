@@ -167,6 +167,12 @@ type creatureMotion struct {
 	// smart is the per-creature SmartAI runtime state (smart_ai.go); nil
 	// unless AIName is SmartAI and the entry has smart_scripts rows.
 	smart *smartScriptState
+	// BaseIsGameObject marks a synthetic motion built for a gameobject
+	// SmartAI (smartStateForGO): the base object is a GO, so SELF
+	// targets resolve as gameobjects and GO-base-only legs (TALK's
+	// me-as-talker, CAST from me) stay out, matching C++ where me is
+	// null and go is the base (SmartScript.cpp:255-260).
+	BaseIsGameObject bool
 	// VehicleCondKnown / VehicleHasConditions cache VehicleAI::LoadConditions
 	// (CombatAI.cpp:308-311: HasConditionsForNotGroupedEntry for
 	// CONDITION_SOURCE_TYPE_CREATURE_TEMPLATE_VEHICLE, entry): resolved once

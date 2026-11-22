@@ -4658,7 +4658,7 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 			return nil, err
 		}
 		state.LootState = value
-		srv.setGameObjectLootState(state.Map, state.InstanceID, state.GUID, uint8(value))
+		srv.setGameObjectLootState(state.Map, state.InstanceID, state.GUID, uint8(value), 0)
 		srv.triggerGameObjectEvent(context.Background(), state.GUID, scripting.GameObjectEventOnLootState, value)
 		return nil, nil
 	}

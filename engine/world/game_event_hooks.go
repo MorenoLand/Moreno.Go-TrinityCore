@@ -103,7 +103,9 @@ const langEventMessage = 4
 // every gameobject AI. Go motions in instanceCreatureMotion are
 // in-world by construction, and smartProcessEvents no-ops for a
 // motion with no SmartAI state, so the snapshot covers the creature
-// leg exactly; the GO leg stays out (Go has no GO SmartAI state).
+// leg exactly; the GO leg stays out (the GO script state exists now,
+// but this fan-out still visits creature motions only — and all 16
+// TDB 68/69 rows are creature-source, so no GO row could fire yet).
 // The motions snapshot rides the pet-sweep pattern (pet_runtime.go):
 // collect under motionMu, fire after releasing it — the SmartAI
 // actions take motionMu, so firing under the lock deadlocks (the

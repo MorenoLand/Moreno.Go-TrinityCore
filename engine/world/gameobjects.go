@@ -109,7 +109,8 @@ type dynamicGameObjectState struct {
 	SpawnState      uint8
 	LootState       uint8 // m_lootState twin (GameObject.cpp:126); valid only when LootStateSet, else the spawn snapshot (GO_READY) stands
 	LootStateSet    bool
-	RespawnDelaySec int32 // m_respawnDelayTime twin (GameObject.cpp:1330-1336); valid only when RespawnDelaySet
+	smart           *smartScriptState // the GO's SmartScript state (SmartGameObjectAI twin), attached on first use by smartStateForGO
+	RespawnDelaySec int32             // m_respawnDelayTime twin (GameObject.cpp:1330-1336); valid only when RespawnDelaySet
 	RespawnDelaySet bool
 	Active          bool                // m_isActive twin (Object.h:501); C++ sets it for GOs only in Battlefield::AddGameObject, which Go does not model, so it stays false
 	UseCount        uint32              // m_usetimes twin (GameObject.h:320); AddUse increments, GetUseCount reads

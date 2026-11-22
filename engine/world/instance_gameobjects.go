@@ -123,20 +123,33 @@ func (s *Server) setGameObjectStateInInstance(mapID, instanceID uint32, guid uin
 // setGameObjectLootState is the SetLootState write half (lua_objects.go):
 // the live record wins, materializing a static spawn exactly like
 // setGameObjectStateInInstance; without a live record the caller's
-// closure copy is the only store and this is a no-op.
-func (s *Server) setGameObjectLootState(mapID, instanceID uint32, guid uint64, value uint8) {
+// closure copy is the only store and this is a no-op. GameObject::
+// SetLootState (GameObject.cpp:2371-2382) fires OnLootStateChanged
+// unconditionally after the write, so a landed write dispatches the
+// GO's SMART_EVENT_GO_LOOT_STATE_CHANGED (70) rows with the user as
+// invoker — after objectsMu is released, like the GO-state hook
+// above, since the SmartAI actions take motionMu. A write that lands
+// on no record fires nothing: the GO script state lives on the
+// record, so there is no script to run.
+func (s *Server) setGameObjectLootState(mapID, instanceID uint32, guid uint64, value uint8, invokerGUID uint64) {
 	if s == nil {
 		return
 	}
 	if s.gameObjectState(mapID, instanceID, guid) == nil && s.materializeStaticGameObjectState(mapID, instanceID, guid) == nil {
 		return
 	}
+	wrote := false
 	s.objectsMu.Lock()
 	if object := s.gameObjectStateLocked(mapID, instanceID, guid); object != nil {
 		object.LootState = value
 		object.LootStateSet = true
+		wrote = true
 	}
 	s.objectsMu.Unlock()
+	if !wrote {
+		return
+	}
+	s.smartProcessGOEvents(context.Background(), mapID, instanceID, guid, smartEventGOLootStateChanged, invokerGUID, uint32(value), 0)
 }
 
 // setGameObjectRespawnDelay is the SetRespawnTime write half
