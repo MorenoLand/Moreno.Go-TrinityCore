@@ -86,10 +86,19 @@ type tempSummonOrigin struct {
 
 // summonOriginFromMotion snapshots a creature summoner under motionMu.
 // Callers must not hold motionMu: summonTempCreature itself locked it
-// for the same read before this refactor.
+// for the same read before this refactor. An areatrigger base is a
+// player summoner, not a creature one (SmartScript::GetBaseObjectOrPlayerTrigger,
+// SmartScript.cpp:3636-3643: the summoner is atPlayer), so the origin
+// carries no SummonerMotion and summonTempCreature resolves the player
+// session from the GUID instead — the creature-summoner faction/level
+// copy and phase legs stay out, and the player-summoner
+// ControlledByPlayer / faction / level legs run.
 func (s *Server) summonOriginFromMotion(m *creatureMotion) tempSummonOrigin {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
+	if m.BaseIsAreaTrigger {
+		return tempSummonOrigin{Map: m.Map, InstanceID: m.InstanceID, GUID: m.GUID, X: m.X, Y: m.Y, Z: m.Z, O: m.Orientation, Reach: float64(m.CombatReach)}
+	}
 	return tempSummonOrigin{Map: m.Map, InstanceID: m.InstanceID, GUID: m.GUID, X: m.X, Y: m.Y, Z: m.Z, O: m.Orientation, Reach: float64(m.CombatReach), SummonerMotion: m}
 }
 

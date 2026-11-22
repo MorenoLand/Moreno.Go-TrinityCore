@@ -173,6 +173,16 @@ type creatureMotion struct {
 	// me-as-talker, CAST from me) stay out, matching C++ where me is
 	// null and go is the base (SmartScript.cpp:255-260).
 	BaseIsGameObject bool
+	// BaseIsAreaTrigger marks a synthetic motion built for an
+	// areatrigger SmartTrigger script (smartFireAreaTrigger): the base
+	// object is the triggering player
+	// (SmartScript::GetBaseObjectOrPlayerTrigger, SmartScript.cpp:
+	// 3636-3643), so SELF targets resolve as the player and
+	// null-me legs (TALK's me-as-talker, CAST from me, SET_DATA's
+	// me invoker, the creature-summoner faction/level copy) stay
+	// out, matching C++ where me and go are both null for an
+	// areatrigger script (SmartScript.cpp:3836-3864).
+	BaseIsAreaTrigger bool
 	// VehicleCondKnown / VehicleHasConditions cache VehicleAI::LoadConditions
 	// (CombatAI.cpp:308-311: HasConditionsForNotGroupedEntry for
 	// CONDITION_SOURCE_TYPE_CREATURE_TEMPLATE_VEHICLE, entry): resolved once

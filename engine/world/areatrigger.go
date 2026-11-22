@@ -55,13 +55,27 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	}
 
 	// 2c. Script hook arm
-	// Reference: ScriptMgr::OnAreaTrigger (ScriptMgr.cpp:1702-1713): an
-	// Eluna true return makes ScriptMgr return false, so the quest/tavern/
-	// BG/teleport arms below CONTINUE — only a native AreaTriggerScript
-	// true vetoes them. Go has no native AreaTrigger scripts, so the Lua
-	// hook fires but never vetoes (the old code had this inverted).
+	// Reference: ScriptMgr::OnAreaTrigger (ScriptMgr.cpp:1702-1713) +
+	// MiscHandler.cpp:677-679: Eluna runs first, and a Lua true return
+	// makes ScriptMgr return false — the native script is skipped and
+	// the quest/tavern/BG arms below CONTINUE (CallAllFunctionsBool,
+	// ServerHooks.cpp:115-125, ORs handler returns). Otherwise the
+	// trigger's native AreaTriggerScript runs: SmartTrigger
+	// (SmartAI.cpp:1118-1138) fires its SMART_EVENT_AREATRIGGER
+	// rows and returns true, vetoing the arms below; an unbound
+	// trigger or a dead player returns false and the arms run.
+	luaTrue := false
 	if s.server != nil && s.server.Features != nil && s.server.Features.Scripts != nil {
-		_, _ = s.server.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventAreaTrigger, s.luaPlayer(), triggerID)
+		values, _ := s.server.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventAreaTrigger, s.luaPlayer(), triggerID)
+		for _, value := range values {
+			if veto, ok := value.(bool); ok && veto {
+				luaTrue = true
+				break
+			}
+		}
+	}
+	if !luaTrue && s.server.smartFireAreaTrigger(ctx, s, triggerID) {
+		return true
 	}
 
 	wdb := s.server.WorldStore.DB

@@ -146,7 +146,7 @@ const (
 	smartEventDamagedTarget       uint32 = 33 // SMART_EVENT_DAMAGED_TARGET (SmartScriptMgr.h:132), same params as DAMAGED
 	smartEventSummonDespawned     uint32 = 35 // SMART_EVENT_SUMMON_DESPAWNED (SmartScriptMgr.h:134), Param1 = Entry (0 = any), Param2/3 CooldownMin/Max
 	smartEventCorpseRemoved       uint32 = 36 // SMART_EVENT_CORPSE_REMOVED (SmartScriptMgr.h:135), no params
-	smartEventAreatrigger         uint32 = 46 // SMART_EVENT_AREATRIGGER_ONTRIGGER (SmartScriptMgr.h:145), Param1 = TriggerId (0 = any); all 139 TDB rows are src-2 areatrigger — Go loads creature sources only and has no areatrigger script engine, so no dispatch arm and no fire site
+	smartEventAreatrigger         uint32 = 46 // SMART_EVENT_AREATRIGGER_ONTRIGGER (SmartScriptMgr.h:145), Param1 = TriggerId (0 = any); dispatched by smartProcessEvent, fired by smartFireAreaTrigger (SmartTrigger twin)
 	smartEventReceiveHeal         uint32 = 53 // SMART_EVENT_RECEIVE_HEAL (SmartScriptMgr.h:152), Param1/2 = MinHeal/MaxHeal, Param3/4 RepeatMin/Max
 	smartEventFriendlyIsCC        uint32 = 15 // SMART_EVENT_FRIENDLY_IS_CC (SmartScriptMgr.h:114), Param1 = radius, Param2/3 = RepeatMin/Max; timed-condition event, polled from smartUpdateTimers
 	smartEventVictimCasting       uint32 = 13 // SMART_EVENT_VICTIM_CASTING (SmartScriptMgr.h:112), Param1/2 = RepeatMin/Max, Param3 = SpellID (0 = any); timed-condition event, polled from smartUpdateTimers
@@ -647,10 +647,14 @@ type smartScriptState struct {
 // loadSmartScripts loads the creature-source smart_scripts rows into the
 // server store (SmartScriptMgr::LoadSmartScripts), plus the source_type-9
 // timed-action-list rows into their own map (SmartAIMgr::GetScript,
-// SmartScriptMgr.cpp:380-391: lists are keyed by entryOrGuid alone).
-// The repo placeholder world.db carries zero rows, so this is a no-op
-// there; a populated world DB fills the maps. GO/instance/area-trigger
-// sources are out of scope. The
+// SmartScriptMgr.cpp:380-391: lists are keyed by entryOrGuid alone) and
+// the source_type-2 areatrigger rows into theirs (keyed by trigger id,
+// SmartScriptMgr.cpp:179-184: a row whose trigger is not in the
+// AreaTrigger DBC is load-skipped — Go skips that check, since the fire
+// site only runs for triggers that passed the DBC lookup in
+// handleAreaTrigger, so such rows can never fire). The repo placeholder
+// world.db carries zero rows, so this is a no-op there; a populated
+// world DB fills the maps. Instance sources are out of scope. The
 // conditions table is loaded alongside as a skip-set: TDB 26091 carries
 // 1,205 SourceType-22 (smart event) condition rows, 69 of them on AGGRO
 // events (18 distinct events), and Go has no conditions engine, so an event
@@ -677,13 +681,14 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 	byEntry := make(map[int32][]*smartScriptRow)
 	byGO := make(map[int32][]*smartScriptRow)
 	byList := make(map[int32][]*smartScriptRow)
+	byAT := make(map[int32][]*smartScriptRow)
 	for rows.Next() {
 		var r smartScriptRow
 		var tx, ty, tz, to float64
 		if err := rows.Scan(&r.entryOrGUID, &r.sourceType, &r.id, &r.link, &r.eventType, &r.eventPhaseMask, &r.eventChance, &r.eventFlags, &r.eventParam1, &r.eventParam2, &r.eventParam3, &r.eventParam4, &r.eventParam5, &r.actionType, &r.actionParam1, &r.actionParam2, &r.actionParam3, &r.actionParam4, &r.actionParam5, &r.actionParam6, &r.targetType, &r.targetParam1, &r.targetParam2, &r.targetParam3, &r.targetParam4, &tx, &ty, &tz, &to); err != nil {
 			continue
 		}
-		if r.sourceType != 0 && r.sourceType != 1 && r.sourceType != 9 {
+		if r.sourceType != 0 && r.sourceType != 1 && r.sourceType != 2 && r.sourceType != 9 {
 			continue
 		}
 		// SmartScriptMgr::IsEventValid (SmartScriptMgr.cpp:682-686):
@@ -699,8 +704,8 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 		// same way — the row never reaches dispatch, and links into it
 		// never fire. TDB 26091: 12 such rows (83:5 / 86:1 / 89:1 /
 		// 90:5), all src 0. The type-mask and phase-mask checks below
-		// it stay out (Go loads creature, gameobject and timed-list
-		// sources; areatrigger rows stay out).
+		// it stay out (Go loads creature, gameobject, areatrigger and
+		// timed-list sources).
 		if r.eventType >= smartEventEnd {
 			continue
 		}
@@ -748,13 +753,19 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 			byGO[row.entryOrGUID] = append(byGO[row.entryOrGUID], &row)
 			continue
 		}
+		if row.sourceType == 2 {
+			byAT[row.entryOrGUID] = append(byAT[row.entryOrGUID], &row)
+			continue
+		}
 		byEntry[row.entryOrGUID] = append(byEntry[row.entryOrGUID], &row)
 	}
 	s.smartScriptsMu.Lock()
 	s.smartScripts = byEntry
 	s.smartGOScripts = byGO
+	s.smartATScripts = byAT
 	s.smartTimedActionLists = byList
 	s.smartScriptsMu.Unlock()
+	s.loadSmartAreaTriggerBindings(ctx)
 	s.loadSmartConditions(ctx)
 }
 
@@ -846,6 +857,114 @@ func (s *Server) smartRowsForGO(entry int32) []*smartScriptRow {
 	s.smartScriptsMu.RLock()
 	defer s.smartScriptsMu.RUnlock()
 	return s.smartGOScripts[entry]
+}
+
+// smartRowsForAT is smartRowsFor for SMART_SCRIPT_TYPE_AREATRIGGER
+// (source_type 2) rows, keyed by areatrigger id.
+func (s *Server) smartRowsForAT(entry int32) []*smartScriptRow {
+	if s == nil {
+		return nil
+	}
+	s.smartScriptsMu.RLock()
+	defer s.smartScriptsMu.RUnlock()
+	return s.smartATScripts[entry]
+}
+
+// loadSmartAreaTriggerBindings loads the areatrigger_scripts rows bound
+// to SmartTrigger (ScriptMgr::OnAreaTrigger, ScriptMgr.cpp:1711: the
+// script id for the trigger id; SmartTrigger registers as
+// "SmartTrigger", SmartAI.cpp:1122). Only a bound trigger runs the
+// SmartTrigger twin — a src-2 row without a binding never fires in
+// C++ (GET_SCRIPT_RET returns false with no script). TDB 26091: 130
+// SmartTrigger bindings, exactly the 130 src-2 entryOrGuids, so the
+// gate is a no-op on this data; it guards custom DB rows. A missing
+// table leaves the set empty, like the conditions skip-set.
+func (s *Server) loadSmartAreaTriggerBindings(ctx context.Context) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT id FROM areatrigger_scripts WHERE ScriptName = 'SmartTrigger'`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	bound := make(map[uint32]struct{})
+	for rows.Next() {
+		var id uint32
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		bound[id] = struct{}{}
+	}
+	s.smartScriptsMu.Lock()
+	s.smartATScriptBound = bound
+	s.smartScriptsMu.Unlock()
+}
+
+// smartAreaTriggerBound is sObjectMgr->GetAreaTriggerScriptId
+// (ScriptMgr.cpp:1711) for the SmartTrigger twin: whether the trigger
+// id is bound to the SmartTrigger script in areatrigger_scripts.
+func (s *Server) smartAreaTriggerBound(triggerID uint32) bool {
+	if s == nil {
+		return false
+	}
+	s.smartScriptsMu.RLock()
+	defer s.smartScriptsMu.RUnlock()
+	_, ok := s.smartATScriptBound[triggerID]
+	return ok
+}
+
+// smartFireAreaTrigger is the SmartTrigger twin (SmartAI.cpp:1118-1138):
+// a fresh SmartScript per trigger, initialized on the triggering player
+// (SmartScript::OnInitialize, SmartScript.cpp:3836-3864: mScriptType
+// AREATRIGGER, trigger set, atPlayer the player) and fired for
+// SMART_EVENT_AREATRIGGER_ONTRIGGER with the trigger id. It returns
+// true when the script ran — SmartTrigger::OnTrigger returns true (a
+// dead player returns false) — and the caller vetoes the quest/tavern/
+// battleground arms below, exactly like MiscHandler.cpp:677-679
+// (`if (sScriptMgr->OnAreaTrigger(player, atEntry)) return;`).
+// The script is a fresh stack object in C++ and dies when OnTrigger
+// returns, so the Go state is built fresh per fire and discarded: no
+// timers tick, no phase/counter persists, and a NOT_REPEATABLE row
+// fires again on the next trigger — matching C++ on both counts.
+// The synthetic base motion carries the player's GUID, position, map
+// and phase, so GetBaseObjectOrPlayerTrigger (the player) resolves
+// through the shared dispatch: SELF is the player, CLOSEST_CREATURE /
+// CREATURE_RANGE scan from the player, and ACTION_INVOKER is the
+// player. An unbound trigger or a dead player returns false; a
+// bound-and-alive trigger vetoes even with zero rows (C++ fires
+// nothing but still returns true).
+func (s *Server) smartFireAreaTrigger(ctx context.Context, sess *session, triggerID uint32) bool {
+	if s == nil || sess == nil || sess.player == nil {
+		return false
+	}
+	if sess.isDeadOrGhost() {
+		return false
+	}
+	if !s.smartAreaTriggerBound(triggerID) {
+		return false
+	}
+	rows := s.smartRowsForAT(int32(triggerID))
+	motion := &creatureMotion{
+		GUID: sess.playerGUID, Entry: triggerID, Map: sess.player.Map, InstanceID: sess.player.InstanceID,
+		X: sess.player.X, Y: sess.player.Y, Z: sess.player.Z, Orientation: sess.player.Orientation,
+		PhaseMask: sess.currentPlayerPhaseMask(), AIName: "SmartAI", BaseIsAreaTrigger: true,
+	}
+	st := &smartScriptState{phase: 0}
+	for _, row := range rows {
+		ev := &smartScriptEvent{row: row}
+		s.smartInitTimer(ev)
+		st.events = append(st.events, ev)
+	}
+	motion.smart = st
+	st.firedInit = true
+	// SmartScript::OnInitialize fires AI_INIT only (SmartScript.cpp:
+	// 3872-3874); JUST_CREATED is a SmartAI/SmartGameObjectAI attach
+	// leg, not an OnInitialize one. No src-2 row carries either event
+	// (TDB 26091: 46 + 61 only), so both fires are no-ops today.
+	s.smartProcessEvents(ctx, motion, smartEventAIInit, 0, 0, 0)
+	s.smartProcessEvents(ctx, motion, smartEventAreatrigger, sess.playerGUID, triggerID, 0)
+	return true
 }
 
 // smartStateForGO returns the gameobject's SmartScript state plus a
@@ -1863,6 +1982,18 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 			return
 		}
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventAreatrigger:
+		// SMART_EVENT_AREATRIGGER_ONTRIGGER (SmartScript.cpp:3272-3277):
+		// the event fires only for its trigger id (event_param1, 0 =
+		// any, var0 = the trigger id), then runs its action with the
+		// player as invoker and the trigger id as var0. The fire is
+		// smartFireAreaTrigger (SmartTrigger twin, SmartAI.cpp:
+		// 1118-1138). TDB 26091: 139 src-2 rows (122 self-filtered,
+		// 17 any-trigger).
+		if ev.row.eventParam1 != 0 && ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, 0)
 	case smartEventMovementInform:
 		// SMART_EVENT_MOVEMENTINFORM (SmartScript.cpp:3214-3219): the
 		// event fires only for its (movement type, point id) pair,
@@ -2253,8 +2384,9 @@ func (s *Server) smartUpdateScriptOnUpdate(ctx context.Context, motion *creature
 	// `mUseTextTimer && me`) — me is null for GO scripts, so a GO TALK
 	// never yields TEXT_OVER even though the TALK arm sets the timer.
 	// Vacuous on TDB 26091 (132 TEXT_OVER rows, all src-0, 0 src-1),
-	// but the guard keeps the GO tick C++-exact.
-	if st.useTextTimer && !motion.BaseIsGameObject {
+	// but the guard keeps the GO tick C++-exact. The same null-me gate
+	// holds for areatrigger scripts (their state never ticks anyway).
+	if st.useTextTimer && !motion.BaseIsGameObject && !motion.BaseIsAreaTrigger {
 		if st.textTimer < diff {
 			textID, entry := st.lastTextID, st.talkerEntry
 			st.lastTextID, st.talkerEntry, st.textTimer, st.useTextTimer = 0, 0, 0, false
@@ -3271,6 +3403,12 @@ func (s *Server) smartActionCast(ctx context.Context, motion *creatureMotion, st
 		s.smartActionCastGO(ctx, motion, ev, targets, castFlags)
 		return
 	}
+	// An areatrigger base casts nothing: C++ CAST needs me or go as
+	// the caster (SmartScript.cpp:543-599) and both are null for an
+	// areatrigger script, so the cast legs never run.
+	if motion.BaseIsAreaTrigger {
+		return
+	}
 	if castFlags&smartCastInterruptPrevious != 0 {
 		for _, arm := range s.interruptCreatureNonMeleeCasts(motion) {
 			s.sendCreatureInterruptPackets(motion, arm)
@@ -3433,13 +3571,14 @@ func (s *Server) smartActionTalk(ctx context.Context, motion *creatureMotion, st
 	// A GO base never talks itself: C++ me is null for gameobject
 	// scripts (SmartScript.cpp:268), so the NONE, player-target and
 	// useTalkTarget legs all leave talker null and the action no-ops
-	// — only a creature target can carry the line.
-	if ev.row.targetType == smartTargetNone && !motion.BaseIsGameObject {
+	// — only a creature target can carry the line. The same holds for
+	// an areatrigger base (me null there too).
+	if ev.row.targetType == smartTargetNone && !motion.BaseIsGameObject && !motion.BaseIsAreaTrigger {
 		talker = motion
 	}
 	for _, tgt := range targets {
 		if tgt.isPlayer {
-			if !motion.BaseIsGameObject {
+			if !motion.BaseIsGameObject && !motion.BaseIsAreaTrigger {
 				talker = motion
 				talkTargetGUID = tgt.guid
 			}
@@ -3450,7 +3589,7 @@ func (s *Server) smartActionTalk(ctx context.Context, motion *creatureMotion, st
 			continue
 		}
 		if ev.row.actionParam3 != 0 {
-			if !motion.BaseIsGameObject {
+			if !motion.BaseIsGameObject && !motion.BaseIsAreaTrigger {
 				talker = motion
 				talkTargetGUID = tgt.guid
 			}
@@ -3931,7 +4070,7 @@ func (s *Server) smartActionSetInstData(ctx context.Context, motion *creatureMot
 func (s *Server) smartActionSetData(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
 	invoker := motion.GUID
-	if motion.BaseIsGameObject {
+	if motion.BaseIsGameObject || motion.BaseIsAreaTrigger {
 		invoker = 0
 	}
 	for _, tgt := range targets {

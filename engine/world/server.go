@@ -253,6 +253,8 @@ type Server struct {
 	smartScriptsMu            sync.RWMutex
 	smartScripts              map[int32][]*smartScriptRow    // smart_scripts creature-source rows by entryOrGuid, guarded by smartScriptsMu (smart_ai.go)
 	smartGOScripts            map[int32][]*smartScriptRow    // smart_scripts gameobject-source (1) rows by entryOrGuid, guarded by smartScriptsMu (smart_ai.go)
+	smartATScripts            map[int32][]*smartScriptRow    // smart_scripts areatrigger-source (2) rows by trigger id, guarded by smartScriptsMu (smart_ai.go)
+	smartATScriptBound        map[uint32]struct{}            // areatrigger_scripts SmartTrigger bindings by trigger id, guarded by smartScriptsMu (smart_ai.go)
 	smartTimedActionLists     map[int32][]*smartScriptRow    // smart_scripts source_type-9 rows by list id, guarded by smartScriptsMu (smart_ai.go)
 	smartConditions           map[smartConditionKey]struct{} // conditions SourceType-22 (entry, id) skip-set, guarded by smartScriptsMu (smart_ai.go)
 	smartScriptsLoaded        bool
