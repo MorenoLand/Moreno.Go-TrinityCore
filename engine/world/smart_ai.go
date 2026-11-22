@@ -5,8 +5,8 @@
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
 // loader (the WORLD_SEL_SMART_SCRIPTS statement existed unused, the .reload
-// arm was a stub), so every SmartAI creature's on-aggro script was silently
-// dead. This file loads the creature-source rows (source_type 0), keeps
+// arm was a probe-only stub), so every SmartAI creature's on-aggro script was
+// silently dead. This file loads the creature-source rows (source_type 0), keeps
 // per-creature runtime state on the motion, and dispatches the direct events
 // (AGGRO, DEATH, DATA_SET, AI_INIT, JUST_CREATED, TEXT_OVER,
 // EVENT_PHASE_CHANGE) plus the timer events (UPDATE, UPDATE_IC, UPDATE_OOC,
@@ -15,13 +15,13 @@
 // source_type-0 AGGRO rows over 1,426 entries): TALK, CAST, SET_FACTION,
 // PLAY_EMOTE, AUTO_ATTACK, SET_EVENT_PHASE, SET_INST_DATA (type 1),
 // CALL_FOR_HELP, SET_DATA, SOUND, STORE_TARGET_LIST, REMOVEAURASFROMSPELL,
-// REMOVE_UNIT_FIELD_BYTES_1 (byte 0 only). RESET wiring landed with
-// smartReset / smartJustReachedHome (evade-follow legs, home arrival,
-// spawn): the EVADE event fires from triggerCreatureEvade, RESPAWN +
-// OnReset from fireCreatureSpawned. Everything else (SUMMON_CREATURE,
-// timed-action lists, GO/instance/area-trigger sources, .reload refresh)
-// is a documented residual in smartProcessAction / the call sites below,
-// not a silent gap.
+// REMOVE_UNIT_FIELD_BYTES_1 (byte 0 only), SUMMON_CREATURE. RESET wiring
+// landed with smartReset / smartJustReachedHome (evade-follow legs, home
+// arrival, spawn): the EVADE event fires from triggerCreatureEvade, RESPAWN +
+// OnReset from fireCreatureSpawned. `.reload smart_scripts` re-runs the
+// loader (reloadSmartScripts). Everything else (timed-action lists,
+// GO/instance/area-trigger sources) is a documented residual in
+// smartProcessAction / the call sites below, not a silent gap.
 //
 // Locking: every entry point assumes motionMu is NOT held (the Nov-17
 // motionMu self-deadlock). The three hook sites run after their local unlock:
@@ -65,16 +65,17 @@ const (
 
 // SMART_ACTION ids (SmartScriptMgr.h:457-600), AGGRO-used set. The
 // remaining AGGRO-row actions (80, 31, 21, 83, 8, 88, 43, 42, 146, 103,
-// 23, 49, 36, 41, 87, 25, 47, 5, 12, 74, 92, 133, 30 — 71 rows) hit the
-// default arm, matching C++'s "Unhandled Action type" log-and-skip
-// (SmartScript.cpp:2370-2372): no timed-actionlist, summon, react-state,
-// or template machinery exists in Go to run them on.
+// 23, 49, 36, 41, 87, 25, 47, 5, 74, 92, 133, 30) hit the default arm,
+// matching C++'s "Unhandled Action type" log-and-skip
+// (SmartScript.cpp:2370-2372): no timed-actionlist, react-state, or
+// template machinery exists in Go to run them on.
 const (
 	smartActionTalk                  uint32 = 1
 	smartActionSetFaction            uint32 = 2
 	smartActionSound                 uint32 = 4
 	smartActionPlayEmote             uint32 = 5
 	smartActionCast                  uint32 = 11
+	smartActionSummonCreature        uint32 = 12
 	smartActionAutoAttack            uint32 = 20
 	smartActionSetEventPhase         uint32 = 22
 	smartActionRemoveAurasFromSpell  uint32 = 28
@@ -86,9 +87,11 @@ const (
 )
 
 // SMART_TARGET ids (SmartScriptMgr.h:1221-1253), AGGRO-used set. Target 8
-// (POSITION) resolves to no unit — its only AGGRO row drives the unhandled
-// SUMMON_CREATURE action, so it stays empty; target 13 (GAMEOBJECT_RANGE)
-// and 21 (CLOSEST_PLAYER) have zero AGGRO rows in TDB 26091.
+// (POSITION) resolves to no unit — GetTargets returns nothing for it
+// (SmartScript.cpp:2864-2867) — and the SUMMON_CREATURE action reads the
+// row's absolute target_x/y/z/o itself for that leg; target 13
+// (GAMEOBJECT_RANGE) and 21 (CLOSEST_PLAYER) have zero AGGRO rows in
+// TDB 26091.
 const (
 	smartTargetNone            uint32 = 0
 	smartTargetSelf            uint32 = 1
@@ -270,6 +273,34 @@ func (s *Server) loadSmartConditions(ctx context.Context) {
 	s.smartScriptsMu.Lock()
 	s.smartConditions = conds
 	s.smartScriptsMu.Unlock()
+}
+
+// reloadSmartScripts is the `.reload smart_scripts` twin of C++
+// HandleReloadSmartScripts (cs_reload.cpp:1156-1163), which re-runs
+// SmartAIMgr::LoadSmartAIFromDB: the load-once guard drops so the
+// loader re-reads the table (and the conditions skip-set with it).
+// Attached motions keep their loaded events, matching C++ — live
+// SmartScripts hold their own mEvents copies (SmartScript.h:107), so
+// only creatures spawned or attached after the reload see new rows.
+// A failed reload keeps the previous rows (the loader returns early
+// on query error); C++ clears first and ends up empty instead.
+func (s *Server) reloadSmartScripts(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	s.smartScriptsMu.Lock()
+	s.smartScriptsLoaded = false
+	s.smartScriptsMu.Unlock()
+	s.loadSmartScripts(ctx)
+}
+
+// reloadSmartConditions re-reads the smart-event condition skip-set:
+// the `.reload conditions` leg for SmartAI. C++ reloads the whole
+// conditions store (sConditionMgr->LoadConditions) and SmartScript
+// checks it live per event; Go snapshots the SourceType-22 rows, so
+// the snapshot refreshes here.
+func (s *Server) reloadSmartConditions(ctx context.Context) {
+	s.loadSmartConditions(ctx)
 }
 
 // smartConditionKey is one conditions row for a smart event: SourceType 22,
@@ -663,6 +694,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 	case smartActionCast:
 		s.smartActionCast(ctx, motion, st, ev, invokerGUID)
+	case smartActionSummonCreature:
+		s.smartActionSummonCreature(ctx, motion, st, ev, invokerGUID)
 	case smartActionAutoAttack:
 		motion.NoMeleeAttack = ev.row.actionParam1 == 0
 	case smartActionSetEventPhase:
@@ -697,10 +730,10 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionRemoveUnitFieldBytes1(motion, st, ev, invokerGUID)
 	default:
 		// Residual: the remaining AGGRO-row actions (80, 31, 21, 83, 8,
-		// 88, 43, 42, 146, 103, 23, 49, 36, 41, 87, 25, 47, 5, 12, 74,
-		// 92, 133, 30) have no Go twin — timed-action lists, summons,
-		// react state, mounts, invincibility HP, visibility — and the
-		// event still consumed its chance roll and link below, matching
+		// 88, 43, 42, 146, 103, 23, 49, 36, 41, 87, 25, 47, 5, 74,
+		// 92, 133, 30) have no Go twin — timed-action lists, react
+		// state, mounts, invincibility HP, visibility — and the event
+		// still consumed its chance roll and link below, matching
 		// C++'s log-and-skip default (SmartScript.cpp:2370-2372).
 	}
 	if ev.row.link != 0 && ev.row.link != ev.row.id {
@@ -756,6 +789,74 @@ func (s *Server) smartActionCast(ctx context.Context, motion *creatureMotion, st
 			s.castCreatureSpell(ctx, motion, ev.row.actionParam1, tgt.guid)
 		}
 	}
+}
+
+// smartActionSummonCreature is SMART_ACTION_SUMMON_CREATURE
+// (SmartScript.cpp:1251-1277). Param mapping (SmartScriptMgr.h:471:
+// CreatureID, summonType, duration in ms, attackInvoker): param1
+// entry, param2 C++ TempSummonType (1-8), param3 duration ms, param4
+// attackInvoker. The type translates down by one into the bridge's
+// 0-based scheme (the SummonCreatureGroup precedent,
+// lua_creature_events.go:4841); rows outside 1..8 are skipped, the
+// C++ `> TEMPSUMMON_MANUAL_DESPAWN` skip twin — C++ itself would
+// summon then instantly UnSummon on the Update default arm
+// (TemporarySummon.cpp:168-170), so the skip loses at most one tick
+// of a creature no faithful row produces. For each target the summon
+// lands at the target position plus the row's target_x/y/z/o offset;
+// a POSITION target resolves to no unit (GetTargets returns nothing,
+// SmartScript.cpp:2864-2867), so that leg summons once at the row's
+// absolute target position. attackInvoker runs the EngageWithTarget
+// funnel (triggerCreatureAggro) — the C++ AttackStart twin — on the
+// target unit, or on the invoker (falling back to the last invoker,
+// the smartTargets convention) for the POSITION leg; the funnel's
+// evading/passive skip is the documented EngageWithTarget deviation,
+// C++ AttackStart has no such gate.
+func (s *Server) smartActionSummonCreature(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	summonType := ev.row.actionParam2
+	if summonType < 1 || summonType > 8 {
+		return
+	}
+	origin := s.summonOriginFromMotion(motion)
+	attackInvoker := ev.row.actionParam4 != 0
+	summonAt := func(x, y, z, o float32, attackGUID uint64) {
+		summoned := s.summonTempCreature(ctx, origin, ev.row.actionParam1, x, y, z, o, uint8(summonType-1), ev.row.actionParam3)
+		if summoned == nil || !attackInvoker || attackGUID == 0 {
+			return
+		}
+		s.triggerCreatureAggro(ctx, summoned.GUID, attackGUID, true)
+	}
+	if ev.row.targetType == smartTargetPosition {
+		invoker := invokerGUID
+		if invoker == 0 {
+			invoker = st.lastInvoker
+		}
+		summonAt(ev.row.targetX, ev.row.targetY, ev.row.targetZ, ev.row.targetO, invoker)
+		return
+	}
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		x, y, z, o, ok := s.smartTargetPosition(motion, tgt)
+		if !ok {
+			continue
+		}
+		summonAt(x+ev.row.targetX, y+ev.row.targetY, z+ev.row.targetZ, o+ev.row.targetO, tgt.guid)
+	}
+}
+
+// smartTargetPosition resolves one SmartAI target to its world position:
+// a player reads the session state, a creature its motion.
+func (s *Server) smartTargetPosition(motion *creatureMotion, tgt smartTarget) (x, y, z, o float32, ok bool) {
+	if tgt.isPlayer {
+		sess := s.findSessionByGUID(tgt.guid)
+		if sess == nil || sess.player == nil {
+			return 0, 0, 0, 0, false
+		}
+		return sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation, true
+	}
+	tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+	if tm == nil {
+		return 0, 0, 0, 0, false
+	}
+	return tm.X, tm.Y, tm.Z, tm.Orientation, true
 }
 
 // smartActionTalk is SMART_ACTION_TALK (SmartScript.cpp:260-294): the

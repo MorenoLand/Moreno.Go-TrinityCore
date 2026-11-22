@@ -231,6 +231,19 @@ func (s *session) runReloadArm(ctx context.Context, arm reloadArm, quiet bool) b
 	if arm.table == "disables" {
 		s.server.invalidateVMapDisableFlags()
 	}
+	// The smart_scripts store is load-once (loadSmartScripts), so the
+	// reload arm must drop it or the next lookup would keep serving
+	// pre-reload rows — the probe alone would make the "reloaded"
+	// message a lie. C++ re-runs LoadSmartAIFromDB here
+	// (cs_reload.cpp:1156-1163); the conditions arm likewise refreshes
+	// the smart-event condition skip-set, the one conditions cache Go
+	// holds (every other conditions read is on demand).
+	if arm.table == "smart_scripts" {
+		s.server.reloadSmartScripts(ctx)
+	}
+	if arm.table == "conditions" {
+		s.server.reloadSmartConditions(ctx)
+	}
 	if !quiet && arm.msg != "" {
 		if arm.global {
 			s.server.sendGlobalSysMessage(ctx, arm.msg)

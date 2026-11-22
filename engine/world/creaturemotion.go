@@ -1180,13 +1180,17 @@ func isCreaturePassive(motion *creatureMotion) bool {
 // !REACT_PASSIVE leg) but never sight-aggro or assist. Only the Lua
 // SetReactState bridge can produce a defensive motion (init never assigns
 // it; the civilian arm is commented out in C++ too), so an unset motion
-// keeps the old behavior and reads aggressive here.
+// keeps the old behavior and reads aggressive here. The known-state leg is
+// exact HasReactState equality (Creature.h:119: m_reactState == state), so
+// an out-of-enum state (unreachable from faithful ports; only a raw Lua
+// SetReactState could stamp one) reads non-aggressive instead of falling
+// through to true.
 func creatureIsSightAggressive(motion *creatureMotion) bool {
-	if motion == nil || isCreaturePassive(motion) {
+	if motion == nil {
 		return false
 	}
-	if motion.ReactStateKnown && motion.ReactState == creatureReactDefensive {
-		return false
+	if motion.ReactStateKnown {
+		return motion.ReactState == creatureReactAggressive
 	}
 	return true
 }
