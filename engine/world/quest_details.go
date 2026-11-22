@@ -632,33 +632,6 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	// QuestHandler.cpp:176-177 — the quest's source spell is cast triggered.
 	s.castQuestSourceSpell(ctx, questID)
 
-	// Deliberate UX push (not C++: Player::AddQuest only sends SendQuestUpdate) —
-	// refresh the questgiver's overhead icon immediately so the "!" clears or
-	// updates without waiting for the client's next status query.
-	if guid != 0 {
-		var entry uint32
-		if creature := s.luaCreature(ctx, guid); creature != nil {
-			entry = objectUint32OrZero(creature, "Entry")
-		}
-		if entry == 0 {
-			entry = uint32((guid >> 24) & 0x00FFFFFF)
-		}
-		if entry == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-			rawGUID := guid & 0x00000000FFFFFFFF
-			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", rawGUID).Scan(&entry)
-		}
-		status := uint8(questDialogNone)
-		if entry != 0 {
-			if st, err := s.questDialogStatus(ctx, entry); err == nil {
-				status = st
-			}
-		}
-		packet := protocol.NewBuffer(9)
-		packet.WriteU64(guid)
-		packet.WriteU8(status)
-		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS), packet.Bytes(), true)
-	}
-
 	return s.sendGossipComplete()
 }
 

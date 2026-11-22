@@ -162,7 +162,8 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	}
 	grants, destroyedGUIDs, err := s.commitQuestReward(ctx, view, reward)
 	if errors.Is(err, errQuestInventoryFull) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_FAILED), buildQuestFailed(view.Detail.ID, questInventoryFull), true)
+		// QuestHandler.cpp:308: the inner CanRewardQuest failure sends
+		// nothing; the client closes the gossip window on its own.
 		return true
 	}
 	if errors.Is(err, errQuestAlreadyRewarded) {

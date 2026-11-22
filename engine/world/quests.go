@@ -958,12 +958,8 @@ func (s *session) questDialogStatusFromRelations(ctx context.Context, entry uint
 		if err != nil {
 			return questDialogNone, err
 		}
-		if status == questStatusIncomplete {
-			if s.canCompleteQuest(ctx, questID) {
-				s.completeQuest(ctx, questID)
-				status = questStatusComplete
-			}
-		}
+		// Player.cpp:16306-16324: the ender loop reports INCOMPLETE as-is;
+		// GetQuestDialogStatus never changes quest state.
 		result2 := uint8(questDialogNone)
 		if status == questStatusComplete && !s.getQuestRewardStatus(ctx, questID) {
 			result2 = questDialogReward
@@ -1151,12 +1147,8 @@ func (s *session) buildQuestMenu(ctx context.Context, starterIDs, enderIDs []uin
 		if err != nil {
 			return nil, err
 		}
-		if status == questStatusIncomplete {
-			if s.canCompleteQuest(ctx, questID) {
-				s.completeQuest(ctx, questID)
-				status = questStatusComplete
-			}
-		}
+		// Player.cpp:16306-16324: the ender loop reports INCOMPLETE as-is;
+		// GetQuestDialogStatus never changes quest state.
 		if status != questStatusComplete && status != questStatusIncomplete {
 			continue
 		}
