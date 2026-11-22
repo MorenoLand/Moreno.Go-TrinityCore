@@ -1131,7 +1131,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			if killer != nil && killer.GUID != 0 {
 				deathKillerGUID = killer.GUID
 			}
-			s.server.smartProcessEvents(ctx, motion, smartEventDeath, deathKillerGUID, 0, 0)
+			s.server.smartJustDied(ctx, motion, deathKillerGUID)
 			s.fireCreatureDied(ctx, motion)
 			// Death clears the assistance state with the engagement: the
 			// flag re-arms at the next engage (the Unit::AttackStop reset

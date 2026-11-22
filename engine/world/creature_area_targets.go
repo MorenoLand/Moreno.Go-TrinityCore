@@ -2632,7 +2632,7 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 		// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
 		// Eluna Died fire below). The dispatch no-ops for non-SmartAI
 		// victims (smartStateFor returns nil).
-		s.smartProcessEvents(ctx, live, smartEventDeath, motion.GUID, 0, 0)
+		s.smartJustDied(ctx, live, motion.GUID)
 		// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
 		// right after ai->JustDied, a dead TempSummon notifies its
 		// creature summoner's AI (SUMMONED_UNIT_DIES, 82); no-ops
@@ -3931,7 +3931,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
 			// Eluna Died fire below). The dispatch no-ops for non-SmartAI
 			// victims (smartStateFor returns nil).
-			s.smartProcessEvents(ctx, live, smartEventDeath, motion.GUID, 0, 0)
+			s.smartJustDied(ctx, live, motion.GUID)
 			// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
 			// right after ai->JustDied, a dead TempSummon notifies its
 			// creature summoner's AI (SUMMONED_UNIT_DIES, 82); no-ops

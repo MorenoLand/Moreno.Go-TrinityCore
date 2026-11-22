@@ -2261,7 +2261,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
 				// Eluna Died fire below). The dispatch no-ops for non-SmartAI
 				// victims (smartStateFor returns nil).
-				s.smartProcessEvents(ctx, victim, smartEventDeath, motion.GUID, 0, 0)
+				s.smartJustDied(ctx, victim, motion.GUID)
 				// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
 				// right after ai->JustDied, a dead TempSummon notifies its
 				// creature summoner's AI (SUMMONED_UNIT_DIES, 82); no-ops

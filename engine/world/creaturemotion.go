@@ -1434,7 +1434,7 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 	// (smart_ai.go) dispatches it here, after the motion lock. The killer
 	// GUID is not carried by the death-state arm, so the invoker is 0.
 	if state == creatureDeathJustDied {
-		s.smartProcessEvents(ctx, motion, smartEventDeath, 0, 0, 0)
+		s.smartJustDied(ctx, motion, 0)
 	}
 	for _, arm := range interrupted {
 		s.sendCreatureInterruptPackets(motion, arm)
@@ -7292,6 +7292,7 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 			var liveX, liveY, liveZ float32
 			var liveFlags uint32
 			var liveCreatureType uint32
+			var liveLevel uint8
 			var rageNext uint32
 			var rageChanged bool
 			s.motionMu.Lock()
@@ -7302,6 +7303,7 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 				}
 				liveMaxHealth = live.MaxHealth
 				liveCreatureType = live.CreatureType
+				liveLevel = uint8(live.Level)
 				if damage >= live.Health {
 					overkill = damage - live.Health
 					live.Health = 0
@@ -7354,7 +7356,7 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 				// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
 				// Eluna Died fire below). The dispatch no-ops for non-SmartAI
 				// victims (smartStateFor returns nil).
-				s.smartProcessEvents(ctx, live, smartEventDeath, motion.GUID, 0, 0)
+				s.smartJustDied(ctx, live, motion.GUID)
 				// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
 				// right after ai->JustDied, a dead TempSummon notifies its
 				// creature summoner's AI (SUMMONED_UNIT_DIES, 82); no-ops
@@ -7365,11 +7367,37 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 					live.BossAI.OnDied(ctx, s, live)
 				}
 				s.fireCreatureDeathCast(ctx, live, motion.GUID)
+				// GuardAI::JustDied (GuardAI.cpp:72-76): the zone-under-attack
+				// leg, resolved through the killer motion's charmer/owner
+				// player — the funnel leg, fired here because this melee
+				// path skips onCreatureKilled. A wild-creature killer
+				// resolves to no player and broadcasts nothing.
+				s.fireGuardDeathBroadcast(live, motion)
 				s.recordCreatureKillLoot(live, motion)
 				s.grantCreatureKillReward(ctx, live, motion)
 				s.bindInstanceOnNoFunnelKill(ctx, live, motion)
 				s.creditNoFunnelKillingBlow(motion)
 				s.handleNoFunnelBattlegroundKill(live, motion)
+				// Creature::RemoveCorpse schedules the respawn for every
+				// death (boss_ai.go precedent: the owner path gets it from
+				// onCreatureKilled); placed ahead of the dead-leg stamp, so
+				// the respawn legs run before the stamp like on that path.
+				respawnHealth := liveMaxHealth
+				if respawnHealth == 0 {
+					respawnHealth = 1
+				}
+				if live.InstanceID == 0 {
+					s.scheduleCreatureRespawn(ctx, uint32(target.GUID&0x00FFFFFF), respawnHealth, time.Now())
+				} else {
+					s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: target.GUID, Map: motion.Map, InstanceID: live.InstanceID, X: liveX, Y: liveY, Z: liveZ, Health: 0, MaxHealth: liveMaxHealth, Level: liveLevel}, respawnHealth, time.Now())
+				}
+				// TempSummon corpse/dead legs (TemporarySummon.cpp:66-170):
+				// this melee path runs no session death funnel, so a slain
+				// temp summon would otherwise keep its first-observation
+				// stamp as the only timer start (types 1/4 lingering to
+				// the prune). Placed last, mirroring the onCreatureKilled
+				// tail stamp.
+				s.checkDeadTempSummon(ctx, live, time.Now())
 			} else {
 				healthUpdate := map[int]uint32{unitFieldHealth: liveNewHealth}
 				if rageChanged {

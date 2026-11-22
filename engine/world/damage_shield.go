@@ -575,7 +575,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			if attackerMotion != nil {
 				deathKillerGUID = attackerMotion.GUID
 			}
-			s.smartProcessEvents(ctx, m, smartEventDeath, deathKillerGUID, 0, 0)
+			s.smartJustDied(ctx, m, deathKillerGUID)
 			// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
 			// right after ai->JustDied, a dead TempSummon notifies its
 			// creature summoner's AI (SUMMONED_UNIT_DIES, 82); no-ops

@@ -5329,7 +5329,7 @@ func (s *Server) smartUpdatePath(ctx context.Context, motion *creatureMotion, st
 	if st.escortInvokerCheckTimer < diff {
 		if !s.smartEscortInvokerInRange(motion, st) {
 			s.smartStopPath(ctx, motion, st, 0, st.escortQuestID, true)
-			s.smartProcessEvents(ctx, motion, smartEventDeath, motion.GUID, 0, 0)
+			s.smartJustDied(ctx, motion, motion.GUID)
 			s.despawnCreatureMotion(ctx, motion.Map, motion.InstanceID, motion.GUID)
 			return
 		}
@@ -6904,6 +6904,26 @@ func (s *Server) smartSummonedUnitDies(ctx context.Context, dead *creatureMotion
 		return
 	}
 	s.smartProcessEvents(ctx, summoner, smartEventSummonedUnitDies, dead.GUID, 0, 0)
+}
+
+// smartJustDied is SmartAI::JustDied (SmartAI.cpp:570-575): an escorting
+// creature ends its path as failed (EndPath(true) fails the escort quest
+// and restores the stashed NPC flags) before the DEATH event fires with
+// the killer as invoker. The escort gate reads only the ESCORTING bit,
+// like C++ HasEscortState(SMART_ESCORT_ESCORTING) — the wider
+// ESCORTING|PAUSED|RETURNING gate belongs to OnCharmed (SmartAI.cpp:672),
+// not here — and EndPath clears the bit, so a site that already ended the
+// path (smartUpdatePath's out-of-range StopPath) re-enters as a plain
+// DEATH dispatch. smartProcessEvents no-ops for non-SmartAI victims
+// (smartStateFor returns nil), so the helper is safe on every death chain.
+func (s *Server) smartJustDied(ctx context.Context, motion *creatureMotion, killerGUID uint64) {
+	if s == nil || motion == nil {
+		return
+	}
+	if st := s.smartStateFor(ctx, motion); st != nil && st.escortState&smartEscortEscorting != 0 {
+		s.smartEndPath(ctx, motion, st, true)
+	}
+	s.smartProcessEvents(ctx, motion, smartEventDeath, killerGUID, 0, 0)
 }
 
 // smartKilledUnit is SmartAI::KilledUnit (SmartAI.cpp:578-581):

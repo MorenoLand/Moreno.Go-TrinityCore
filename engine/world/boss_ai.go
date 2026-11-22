@@ -11641,7 +11641,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 			// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
 			// Eluna Died fire below). The dispatch no-ops for non-SmartAI
 			// victims (smartStateFor returns nil).
-			s.smartProcessEvents(ctx, live, smartEventDeath, m.GUID, 0, 0)
+			s.smartJustDied(ctx, live, m.GUID)
 			// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
 			// right after ai->JustDied, a dead TempSummon notifies its
 			// creature summoner's AI (SUMMONED_UNIT_DIES, 82); no-ops
@@ -11906,7 +11906,7 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// victims (smartStateFor returns nil). The owner path
 	// (onCreatureKilled) and the other no-owner kill chains fire
 	// the same dispatch at their JustDied leg.
-	s.smartProcessEvents(ctx, tm, smartEventDeath, m.GUID, 0, 0)
+	s.smartJustDied(ctx, tm, m.GUID)
 	// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
 	// right after ai->JustDied, a dead TempSummon notifies its
 	// creature summoner's AI (SUMMONED_UNIT_DIES, 82). TDB 26091:
