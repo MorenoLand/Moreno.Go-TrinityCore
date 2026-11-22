@@ -81,10 +81,12 @@ func (s *Server) loadCreatureTexts(ctx context.Context, creatureID uint32) map[u
 	return groups
 }
 
-// broadcastCreatureTalk emits sound, emote, and chat message matching TrinityCore CreatureTextMgr::SendChat.
-func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID uint32, creatureGUID uint64, entry uint32, creatureName string, groupID uint8, whisperTarget uint64) {
+// creatureTextGroups loads (and caches) the creature_text groups for one
+// entry, the shared load behind broadcastCreatureTalk and
+// broadcastCreatureTalkAsPlayer.
+func (s *Server) creatureTextGroups(ctx context.Context, entry uint32) map[uint8][]CreatureText {
 	if s == nil || entry == 0 {
-		return
+		return nil
 	}
 	if s.creatureTextMgr == nil {
 		s.creatureTextMgr = newCreatureTextMgr()
@@ -104,7 +106,15 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID ui
 		groups = loaded
 		s.creatureTextMgr.mu.Unlock()
 	}
+	return groups
+}
 
+// broadcastCreatureTalk emits sound, emote, and chat message matching TrinityCore CreatureTextMgr::SendChat.
+func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID uint32, creatureGUID uint64, entry uint32, creatureName string, groupID uint8, whisperTarget uint64) {
+	if s == nil || entry == 0 {
+		return
+	}
+	groups := s.creatureTextGroups(ctx, entry)
 	if groups == nil {
 		return
 	}
@@ -215,5 +225,97 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID ui
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
 	} else {
 		s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
+	}
+}
+
+// broadcastCreatureTalkAsPlayer is the SIMPLE_TALK (84) player leg
+// (SmartScript.cpp:316-319): the target player says me's creature_text
+// group — SendChat with srcPlr = the player, so the packet carries the
+// player's GUID/name and fans out around the player (SendChatPacket's
+// default arm, CreatureTextMgrImpl.h:87-118), while the sound still plays
+// from me and the emote from the player. The whisper target is the last
+// invoker when it is a player; a whisper-type row with a non-player
+// whisper target sends no chat (like C++), though the emote still plays.
+func (s *Server) broadcastCreatureTalkAsPlayer(ctx context.Context, motion *creatureMotion, playerGUID uint64, groupID uint8, whisperTarget uint64) {
+	if s == nil || motion == nil {
+		return
+	}
+	sess := s.findSessionByGUID(playerGUID)
+	if sess == nil || sess.player == nil {
+		return
+	}
+	groups := s.creatureTextGroups(ctx, motion.Entry)
+	if groups == nil {
+		return
+	}
+	list := groups[groupID]
+	if len(list) == 0 {
+		return
+	}
+	chosen := list[0]
+	if len(list) > 1 {
+		chosen = list[rand.Intn(len(list))]
+	}
+	msg := chosen.Text
+	if strings.Contains(msg, "%s") {
+		msg = fmt.Sprintf(msg, sess.player.Name)
+	}
+	chatType := chosen.Type
+	if chatType == 0 {
+		chatType = 12 // CHAT_MSG_MONSTER_SAY
+	}
+	listenDist := 25.0
+	if chatType == 0x0E { // CHAT_MSG_MONSTER_YELL
+		listenDist = 300.0
+	}
+	whispered := (chatType == 0x0F || chatType == 0x2A) && chosen.TextRange == 0
+	var whisperSess *session
+	if whispered {
+		if whisperTarget != 0 {
+			whisperSess = s.findSessionByGUID(whisperTarget)
+		}
+		if whisperSess == nil || whisperSess.player == nil {
+			whisperSess = nil
+		}
+	}
+
+	// 1. Play Sound (from me, like C++ SendSound(source = the creature))
+	if chosen.Sound > 0 && (!whispered || whisperSess != nil) {
+		soundPkt := protocol.NewBuffer(4)
+		soundPkt.WriteU32(chosen.Sound)
+		if whispered {
+			_ = whisperSess.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), true)
+		} else if chosen.TextRange == 0 {
+			s.broadcastToSetWithinFromPhase(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, listenDist, motion.PhaseMask)
+		} else if chosen.TextRange == 4 {
+			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), nil)
+		} else {
+			s.broadcastToInstance(motion.Map, motion.InstanceID, uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), nil)
+		}
+	}
+
+	// 2. Play Emote (from the player, like C++ SendEmote(finalSource))
+	if chosen.Emote > 0 {
+		emotePkt := protocol.NewBuffer(12)
+		emotePkt.WriteU32(chosen.Emote)
+		emotePkt.WriteU64(playerGUID)
+		s.broadcastToSetWithinFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), sess.player.Map, sess.player.InstanceID, sess.player.X, sess.player.Y, sess.player.Z, 100.0, sess.currentPlayerPhaseMask())
+	}
+
+	// 3. Broadcast chat message (sender = the player)
+	if whispered && whisperSess == nil {
+		return
+	}
+	chatPkt := protocol.BuildMonsterChatMessage(chatType, uint32(chosen.Language), playerGUID, sess.player.Name, msg)
+	if whispered {
+		_ = whisperSess.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, true)
+		return
+	}
+	if chosen.TextRange == 0 && chatType != 0x0D { // not MONSTER_PARTY
+		s.broadcastToSetWithinFromPhase(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, sess.player.Map, sess.player.InstanceID, sess.player.X, sess.player.Y, sess.player.Z, listenDist, sess.currentPlayerPhaseMask())
+	} else if chosen.TextRange == 4 || chatType == 0x0D {
+		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
+	} else {
+		s.broadcastToInstance(sess.player.Map, sess.player.InstanceID, uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
 	}
 }

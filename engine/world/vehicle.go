@@ -834,6 +834,35 @@ func (s *session) meetVehicleConditions(ctx context.Context, entry uint32, vehic
 	})
 }
 
+// vehiclePassengerSeat is one occupied vehicle seat with its passenger.
+type vehiclePassengerSeat struct {
+	seat int8
+	guid uint64
+}
+
+// seatedPassengerSeats returns the occupied seats with their passenger
+// GUIDs in seat-id order, the seat-aware twin of seatedPassengerGUIDs
+// (SMART_TARGET_VEHICLE_PASSENGER needs the seat id for its seatMask).
+func (v *VehicleKit) seatedPassengerSeats() []vehiclePassengerSeat {
+	if v == nil {
+		return nil
+	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	ids := make([]int8, 0, len(v.Seats))
+	for id := range v.Seats {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	var out []vehiclePassengerSeat
+	for _, id := range ids {
+		if seat := v.Seats[id]; seat != nil && seat.Passenger.GUID != 0 {
+			out = append(out, vehiclePassengerSeat{seat: id, guid: seat.Passenger.GUID})
+		}
+	}
+	return out
+}
+
 // seatedPassengerGUIDs returns the GUIDs of seated passengers in seat-id
 // order, the deterministic twin of VehicleAI::CheckConditions' seat scan
 // (CombatAI.cpp:320-338 iterates Vehicle::Seats; the C++ order is

@@ -155,8 +155,9 @@ const (
 // / 72 CLOSE_GOSSIP (557) are ported below. The 75 ADD_AURA (0 rows)
 // / 76 OVERRIDE_SCRIPT_BASE_OBJECT (0 rows) / 77 RESET_SCRIPT_BASE_OBJECT
 // (0 rows) / 78 CALL_SCRIPT_RESET (50) / 79 SET_RANGED_MOVEMENT (9) are
-// ported below. The next unported block is 84 SIMPLE_TALK / 85 SELF_CAST
-// / 86 CROSS_CAST.
+// ported below. The 84 SIMPLE_TALK (4 rows) / 85 SELF_CAST (481) / 86
+// CROSS_CAST (127) are ported below. The next unported block is 89
+// RANDOM_MOVE / 90 SET_UNIT_FIELD_BYTES_1 / 97 JUMP_TO_POS.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -237,6 +238,9 @@ const (
 	smartActionSetNPCFlag                     uint32 = 81
 	smartActionAddNPCFlag                     uint32 = 82
 	smartActionRemoveNPCFlag                  uint32 = 83
+	smartActionSimpleTalk                     uint32 = 84
+	smartActionSelfCast                       uint32 = 85
+	smartActionCrossCast                      uint32 = 86
 	smartActionCallRandomTimedActionList      uint32 = 87
 	smartActionCallRandomRangeTimedActionList uint32 = 88
 	smartActionRemoveUnitFieldBytes1          uint32 = 91
@@ -295,6 +299,7 @@ const (
 	smartTargetOwnerOrSummoner   uint32 = 23
 	smartTargetThreatList        uint32 = 24
 	smartTargetLootRecipients    uint32 = 27
+	smartTargetVehiclePassenger  uint32 = 29
 )
 
 // SMART_EVENT_FLAG bits (SmartScriptMgr.h:1522-1531).
@@ -1338,6 +1343,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSetRoot(ctx, motion, st, ev, invokerGUID)
 	case smartActionCast:
 		s.smartActionCast(ctx, motion, st, ev, invokerGUID)
+	case smartActionSimpleTalk:
+		s.smartActionSimpleTalk(ctx, motion, st, ev, invokerGUID)
+	case smartActionSelfCast:
+		s.smartActionSelfCast(ctx, motion, st, ev, invokerGUID)
+	case smartActionCrossCast:
+		s.smartActionCrossCast(ctx, motion, st, ev, invokerGUID)
 	case smartActionSummonCreature:
 		s.smartActionSummonCreature(ctx, motion, st, ev, invokerGUID)
 	case smartActionThreatSinglePct:
@@ -1881,6 +1892,196 @@ func (s *Server) smartActionTalk(ctx context.Context, motion *creatureMotion, st
 	st.textTimer = ev.row.actionParam2
 	st.useTextTimer = true
 	s.broadcastCreatureTalk(ctx, talker.Map, talker.InstanceID, talker.GUID, talker.Entry, talker.Name, uint8(ev.row.actionParam1), talkTargetGUID)
+}
+
+// smartActionSimpleTalk is SMART_ACTION_SIMPLE_TALK
+// (SmartScript.cpp:309-327): every target says the creature_text group
+// (param1) itself — no duration/text-over arm, no talker selection like
+// TALK. A player target makes the PLAYER say the text: C++ SendChat
+// passes the player as srcPlr, so the packet carries the player's
+// GUID/name and fans out around the player, while the sound still plays
+// from me (broadcastCreatureTalkAsPlayer). The whisper target on both
+// legs is the last invoker when it is a player (GetLastInvoker,
+// :314/:317). TDB 26091: 4 rows, all ACTION_INVOKER targets, groups 0
+// (3 rows) and 6 (1 row); the 3 timed-list rows name entries with no
+// creature_text rows at all, so the live row is 24238's SPELLHIT
+// group-0 YELL.
+func (s *Server) smartActionSimpleTalk(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
+	whisperTarget := uint64(0)
+	if s.smartIsPlayerGUID(st.lastInvoker) {
+		whisperTarget = st.lastInvoker
+	}
+	for _, tgt := range targets {
+		if tgt.isGameObject {
+			continue
+		}
+		if tgt.isPlayer {
+			s.broadcastCreatureTalkAsPlayer(ctx, motion, tgt.guid, uint8(ev.row.actionParam1), whisperTarget)
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.broadcastCreatureTalk(ctx, tm.Map, tm.InstanceID, tm.GUID, tm.Entry, tm.Name, uint8(ev.row.actionParam1), whisperTarget)
+	}
+}
+
+// smartActionSelfCast is SMART_ACTION_SELF_CAST (SmartScript.cpp:607-640):
+// every target unit casts the spell (param1) on ITSELF — the caster is the
+// target, not me (the SMART_ACTION_CAST twin casts from me instead). The
+// targetsLimit (param4) randomly trims the list, TRIGGERED (param2 0x02)
+// rides the triggered cast, and AURA_NOT_PRESENT (0x20) skips targets
+// that already carry the aura; INTERRUPT_PREVIOUS (0x01) interrupts the
+// target's non-melee casts before its own cast. TDB 26091: 481 rows, all
+// triggerFlags (param3) 0 and targetsLimit 0; castFlags 0 (308),
+// TRIGGERED (172), TRIGGERED|AURA_NOT_PRESENT (1); no row uses
+// INTERRUPT_PREVIOUS. Player targets ride the session cast path
+// (castSpellDirect, the triggered pipeline — the Lua player:CastSpell
+// precedent); a player target's interrupt leg has no Go twin (the
+// SMART_ACTION_INTERRUPT_SPELL precedent) and stays out.
+func (s *Server) smartActionSelfCast(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
+	if len(targets) == 0 {
+		return
+	}
+	if limit := ev.row.actionParam4; limit > 0 && uint32(len(targets)) > limit {
+		rand.Shuffle(len(targets), func(i, j int) { targets[i], targets[j] = targets[j], targets[i] })
+		targets = targets[:limit]
+	}
+	castFlags := ev.row.actionParam2
+	triggered := castFlags&smartCastTriggered != 0
+	for _, tgt := range targets {
+		if tgt.isGameObject {
+			continue
+		}
+		if castFlags&smartCastAuraNotPresent != 0 && s.creatureSpellTargetHasAura(motion, tgt.guid, ev.row.actionParam1) {
+			continue
+		}
+		if tgt.isPlayer {
+			sess := s.findSessionByGUID(tgt.guid)
+			if sess == nil || sess.player == nil {
+				continue
+			}
+			sess.castSpellDirect(ctx, ev.row.actionParam1, tgt.guid)
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		if castFlags&smartCastInterruptPrevious != 0 {
+			for _, arm := range s.interruptCreatureNonMeleeCasts(tm) {
+				s.sendCreatureInterruptPackets(tm, arm)
+			}
+		}
+		if triggered {
+			s.castCreatureSpellTriggered(ctx, tm, ev.row.actionParam1, tgt.guid)
+		} else {
+			s.castCreatureSpell(ctx, tm, ev.row.actionParam1, tgt.guid)
+		}
+	}
+}
+
+// smartActionCrossCast is SMART_ACTION_CROSS_CAST
+// (SmartScript.cpp:1721-1761): the caster list resolves from the
+// crossCast target (param3-6) against a synthetic UPDATE_IC event —
+// the destination list is the row's own target. Every caster casts the
+// spell (param1) on every destination unit: AURA_NOT_PRESENT (param2
+// 0x20) skips destinations that already carry the aura, TRIGGERED
+// (0x02) rides the triggered cast (a plain bool in C++, the
+// TRIGGERED_FULL_MASK twin), and INTERRUPT_PREVIOUS (0x01) interrupts
+// the caster once, before its first cast. TDB 26091: 127 rows; casters
+// CLOSEST_CREATURE (63), CREATURE_GUID (15), ACTION_INVOKER (12),
+// STORED (9), SELF (8), CREATURE_DISTANCE (8), OWNER_OR_SUMMONER (3),
+// VEHICLE_PASSENGER (3, all seatMask 0), PLAYER_DISTANCE (2),
+// CREATURE_RANGE (2), CLOSEST_PLAYER (1), VICTIM (1); castFlags 0 (99),
+// TRIGGERED (25), AURA_NOT_PRESENT (3); no row uses
+// INTERRUPT_PREVIOUS. Player casters ride the session cast path like
+// SELF_CAST; the player-caster interrupt leg has no Go twin.
+func (s *Server) smartActionCrossCast(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
+	if len(targets) == 0 {
+		return
+	}
+	casterRow := *ev.row
+	casterRow.targetType = ev.row.actionParam3
+	casterRow.targetParam1 = ev.row.actionParam4
+	casterRow.targetParam2 = ev.row.actionParam5
+	casterRow.targetParam3 = ev.row.actionParam6
+	casterRow.targetParam4 = 0
+	casters := s.smartTargets(ctx, motion, st, &smartScriptEvent{row: &casterRow}, invokerGUID)
+	castFlags := ev.row.actionParam2
+	triggered := castFlags&smartCastTriggered != 0
+	for _, caster := range casters {
+		if caster.isGameObject {
+			continue
+		}
+		var casterMotion *creatureMotion
+		var casterSess *session
+		if caster.isPlayer {
+			casterSess = s.findSessionByGUID(caster.guid)
+			if casterSess == nil || casterSess.player == nil {
+				continue
+			}
+		} else {
+			casterMotion = s.findCreatureMotion(motion.Map, motion.InstanceID, caster.guid)
+			if casterMotion == nil {
+				continue
+			}
+		}
+		interruptedSpell := false
+		for _, tgt := range targets {
+			if tgt.isGameObject {
+				continue
+			}
+			if tgt.isPlayer {
+				if sess := s.findSessionByGUID(tgt.guid); sess == nil || sess.player == nil {
+					continue
+				}
+			} else if s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid) == nil {
+				continue
+			}
+			if castFlags&smartCastAuraNotPresent != 0 && s.creatureSpellTargetHasAura(motion, tgt.guid, ev.row.actionParam1) {
+				continue
+			}
+			if castFlags&smartCastInterruptPrevious != 0 && !interruptedSpell {
+				if casterMotion != nil {
+					for _, arm := range s.interruptCreatureNonMeleeCasts(casterMotion) {
+						s.sendCreatureInterruptPackets(casterMotion, arm)
+					}
+				}
+				interruptedSpell = true
+			}
+			if casterSess != nil {
+				casterSess.castSpellDirect(ctx, ev.row.actionParam1, tgt.guid)
+			} else if triggered {
+				s.castCreatureSpellTriggered(ctx, casterMotion, ev.row.actionParam1, tgt.guid)
+			} else {
+				s.castCreatureSpell(ctx, casterMotion, ev.row.actionParam1, tgt.guid)
+			}
+		}
+	}
+}
+
+// smartVehiclePassengerTargets is SMART_TARGET_VEHICLE_PASSENGER
+// (SmartScript.cpp:2756-2765): the passengers seated on me's vehicle
+// kit, seatMask selecting seats by bit (0 = all seats), in seat order.
+// TDB 26091: 3 CROSS_CAST caster rows, all seatMask 0.
+func (s *Server) smartVehiclePassengerTargets(motion *creatureMotion, seatMask uint32) []smartTarget {
+	kit := s.smartVehicleKitForTarget(motion, motion.GUID)
+	if kit == nil {
+		return nil
+	}
+	var out []smartTarget
+	for _, p := range kit.seatedPassengerSeats() {
+		if seatMask != 0 && (p.seat < 0 || p.seat >= 32 || seatMask&(uint32(1)<<uint(p.seat)) == 0) {
+			continue
+		}
+		out = append(out, smartTarget{guid: p.guid, isPlayer: s.smartIsPlayerGUID(p.guid)})
+	}
+	return out
 }
 
 // smartActionSound is SMART_ACTION_SOUND (SmartScript.cpp:346-361):
@@ -4889,6 +5090,8 @@ func (s *Server) smartTargets(ctx context.Context, motion *creatureMotion, st *s
 		return s.smartThreatListTargets(motion, float32(ev.row.targetParam1))
 	case smartTargetLootRecipients:
 		return s.smartLootRecipientTargets(motion)
+	case smartTargetVehiclePassenger:
+		return s.smartVehiclePassengerTargets(motion, ev.row.targetParam1)
 	default:
 		return nil
 	}
