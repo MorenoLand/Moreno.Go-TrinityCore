@@ -768,6 +768,7 @@ type session struct {
 	isMoving                  bool
 	isFalling                 bool
 	isFallingFar              bool // MOVEMENTFLAG_FALLING_FAR (UnitDefines.h:236): the STUCK-spell movement exemptions key on this flag exactly (Spell.cpp:3814, 5319)
+	runtimeCanFly             bool // last flight state sent by sendRuntimeFlightState; its true→false transition starts the MoveFall leg
 	lastMovementInfo          movementInfo
 	lastMovementInfoSet       bool
 	transportContactProbeGUID uint64

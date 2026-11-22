@@ -734,6 +734,8 @@ func (s *session) sendRuntimeFlightState() {
 		return
 	}
 	canFly := s.hasActiveFlightCapability()
+	wasFlying := s.runtimeCanFly
+	s.runtimeCanFly = canFly
 	packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU32(0)
@@ -743,7 +745,42 @@ func (s *session) sendRuntimeFlightState() {
 	} else {
 		_ = s.write(uint16(protocol.OpcodeSMSG_MOVE_UNSET_CAN_FLY), packet.Bytes(), true)
 		s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0)
+		// SpellAuraEffects.cpp:2636-2645, :3040-3047 (fly-aura remove
+		// legs): SetCanFly(false) starts a fall unless gravity is
+		// disabled — the true→false transition only, not every
+		// UNSET_CAN_FLY send.
+		if wasFlying {
+			s.startFallAfterFlightLoss()
+		}
 	}
+}
+
+// startFallAfterFlightLoss is MotionMaster::MoveFall's player arm
+// (MotionMaster.cpp:919-955): FALLING + SetFallTime(0) +
+// SetFallInformation(0, z). The ground-near abort runs only when a
+// ground height is available; without height data the fall still
+// starts (C++ searches MAX_FALL_DISTANCE and almost always finds one).
+// The rooted abort is MoveFall's own; stunned has no Go model.
+func (s *session) startFallAfterFlightLoss() {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if last, exists := s.lastMovementInfoSnapshot(); exists && last.Flags&movementDisableGravity != 0 {
+		return
+	}
+	if s.rooted {
+		return
+	}
+	if ground, ok := s.server.mapHeight(s.player.Map, s.player.X, s.player.Y, s.player.Z, true, terrainDefaultHeightSearch); ok && math.Abs(float64(s.player.Z-ground)) < 0.1 {
+		return
+	}
+	s.movementMu.Lock()
+	s.lastMovementInfo.Flags |= movementFalling
+	s.lastMovementInfo.FallTime = 0
+	s.lastMovementInfoSet = true
+	s.movementMu.Unlock()
+	s.isFalling = true
+	s.lastFallZ, s.lastFallTime = s.player.Z, 0
 }
 
 func (s *session) sendRuntimeMovementUpdates(auraType uint32) {

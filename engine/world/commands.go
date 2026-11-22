@@ -262,6 +262,18 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 			}
 		}
 		if uint32(s.accountExpansion) < entry.ExpansionID {
+			// Player::TeleportTo (Player.cpp:1693-1700): expansion-
+			// insufficient while on a transport removes the passenger
+			// and repops at the graveyard before the abort packet.
+			// Detach first: repopAtGraveyard reads TransportGUID for
+			// its auto-revive leg, and the C++ passenger is already
+			// off the transport when RepopAtGraveyard runs.
+			if s.player.TransportGUID != 0 {
+				s.player.TransportGUID = 0
+				s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
+				s.player.TransportSeat = 0
+				s.repopAtGraveyard(context.Background())
+			}
 			s.sendTransferAborted(mapID, transferAbortExpansionLevel, uint8(entry.ExpansionID))
 			return false
 		}
@@ -272,6 +284,12 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 	// below, so a vehicle passenger never arrives with a stale
 	// VehicleGUID pointing at a vehicle on the origin map.
 	s.exitVehicle(context.Background())
+	// Player::TeleportTo (Player.cpp:1704-1706): DisableSpline() +
+	// MotionMaster::Remove(EFFECT_MOTION_TYPE) clear the script-move
+	// slots — a chased/followed target on the origin map must not keep
+	// pulling the player after arrival. Both branches funnel through
+	// here; a deferred teleport clears at drain time.
+	s.clearPlayerScriptMoveSlots()
 	oldMap := s.player.Map
 	sameMap := oldMap == mapID
 	// Player::TeleportTo (Player.cpp:1721-1724): a cross-map teleport

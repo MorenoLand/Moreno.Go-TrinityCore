@@ -2341,7 +2341,10 @@ func (s *session) sendLoginFlightState() error {
 	if s == nil || s.player == nil {
 		return nil
 	}
-	if !s.hasActiveFlightCapability() {
+	// Seed the runtime flight state so a later fly-aura removal
+	// transitions true→false and starts the MoveFall leg.
+	s.runtimeCanFly = s.hasActiveFlightCapability()
+	if !s.runtimeCanFly {
 		return nil
 	}
 	packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
