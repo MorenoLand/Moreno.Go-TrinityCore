@@ -39877,18 +39877,39 @@ func (s *session) clearOtherMountedAuras(spellID uint32) {
 	}
 }
 
-// mountTemplateDisplayAndVehicle reads a creature template's first
-// nonzero model id plus its VehicleId — ObjectMgr::ChooseDisplayId's
-// deterministic Go proxy (first valid model; the random pick + 50%
-// other-gender swap have no bridge) alongside the vehicle leg's id.
+// mountTemplateDisplayAndVehicle reads a creature template's display id
+// plus its VehicleId — ObjectMgr::ChooseDisplayId (ObjectMgr.cpp:1581-1592)
+// with the 50% other-gender swap (ObjectMgr::GetCreatureModelRandomGender,
+// ObjectMgr.cpp:1613-1638): a random pick among the template's nonzero
+// model ids (CreatureTemplate::GetRandomValidModelId, Creature.cpp:112-125),
+// then DisplayID_Other_Gender from creature_model_info on a 50% roll (the
+// taxiMountDisplayID twin, taxi.go). A template with no valid model still
+// returns ok with display 0, preserving the vehicle leg's read. The
+// CREATURE_FLAG_EXTRA_TRIGGER invisible-model arm of ChooseDisplayId is out
+// of scope: mount templates are not triggers.
 func (s *session) mountTemplateDisplayAndVehicle(ctx context.Context, entry uint32) (displayID int64, vehicleID uint32, ok bool) {
 	if s == nil || entry == 0 || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return 0, 0, false
 	}
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0), COALESCE(VehicleId, 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID, &vehicleID); err != nil {
+	var m1, m2, m3, m4 uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT modelid1, modelid2, modelid3, modelid4, COALESCE(VehicleId, 0) FROM creature_template WHERE entry = ?", entry).Scan(&m1, &m2, &m3, &m4, &vehicleID); err != nil {
 		return 0, 0, false
 	}
-	return displayID, vehicleID, true
+	models := make([]uint32, 0, 4)
+	for _, m := range []uint32{m1, m2, m3, m4} {
+		if m != 0 {
+			models = append(models, m)
+		}
+	}
+	if len(models) == 0 {
+		return 0, vehicleID, true
+	}
+	display := models[rand.IntN(len(models))]
+	var otherGender uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT DisplayID_Other_Gender FROM creature_model_info WHERE DisplayID = ?", display).Scan(&otherGender); err == nil && otherGender != 0 && rand.IntN(2) == 0 {
+		display = otherGender
+	}
+	return int64(display), vehicleID, true
 }
 
 // setMountDisplayFromEntry sets the mount display from a creature entry
@@ -39973,9 +39994,9 @@ func (s *session) restoreMountDisplayFromMountedAura(ctx context.Context) {
 // mount entry's rows), SMSG_PLAYER_VEHICLE_DATA,
 // SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA, then InstallAllAccessories
 // (installPlayerVehicleAccessories). Documented deltas:
-// display selection uses the first nonzero modelid1..4, where C++ takes
-// ObjectMgr::GetRandomValidModelId (random among valid model ids) plus a 50%
-// GetCreatureModelRandomGender other-gender swap; the charmed-NPC stun has
+// display selection mirrors ObjectMgr::ChooseDisplayId + the 50%
+// GetCreatureModelRandomGender other-gender swap via
+// mountTemplateDisplayAndVehicle; the charmed-NPC stun has
 // no bridge; the festive Holiday Mount 62061 check reads the TARGET's live
 // aura set (target->HasAura(62061)), not the applied aura's own spell id —
 // the old self-id check was outcome-wrong for mount-while-62061-up, and
