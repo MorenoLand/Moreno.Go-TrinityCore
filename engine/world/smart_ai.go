@@ -170,9 +170,11 @@ const (
 // are ported below. The 108 SET_POWER (3) / 111 GAME_EVENT_STOP (2) /
 // 112 GAME_EVENT_START (1) are ported below. The 113
 // START_CLOSEST_WAYPOINT (2) / 114 MOVE_OFFSET (76) / 115 RANDOM_SOUND
-// (14) are ported below. The next unported block is 116 SET_CORPSE_DELAY
-// (69) / 117 DISABLE_EVADE (20) / 127 PAUSE_MOVEMENT (8); 118-126 have
-// zero TDB rows.
+// (14) are ported below. The 116 SET_CORPSE_DELAY (69) / 117
+// DISABLE_EVADE (20) / 127 PAUSE_MOVEMENT (8) are ported below. The
+// next unported block is 118 GO_SET_GO_STATE (5) / 131 SPAWN_SPAWNGROUP
+// (5) / 132 DESPAWN_SPAWNGROUP (12); 119-126 and 128-130 have zero TDB
+// rows (the head's "118-126 zero rows" was wrong: 118 carries 5).
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -276,6 +278,9 @@ const (
 	smartActionStartClosestWaypoint           uint32 = 113
 	smartActionMoveOffset                     uint32 = 114
 	smartActionRandomSound                    uint32 = 115
+	smartActionSetCorpseDelay                 uint32 = 116
+	smartActionDisableEvade                   uint32 = 117
+	smartActionPauseMovement                  uint32 = 127
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
 )
@@ -1706,6 +1711,18 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionMoveOffset(ctx, motion, st, ev, invokerGUID)
 	case smartActionRandomSound:
 		s.smartActionRandomSound(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetCorpseDelay:
+		s.smartActionSetCorpseDelay(ctx, motion, st, ev, invokerGUID)
+	case smartActionDisableEvade:
+		// SMART_ACTION_DISABLE_EVADE (SmartScript.cpp:2247-2253):
+		// me-only (not targets), gated on IsSmart — the dispatch
+		// only runs for smart-script creatures — and SmartAI::
+		// SetEvadeDisabled flips _evadeDisabled, which the evade
+		// entry reads from the motion-level twin. TDB 26091: 20
+		// rows, param1 1 on 16, 0 on 4.
+		motion.EvadeDisabled = ev.row.actionParam1 != 0
+	case smartActionPauseMovement:
+		s.smartActionPauseMovement(ctx, motion, st, ev, invokerGUID)
 	default:
 		// Residual: the remaining AGGRO-row action (146) has no Go
 		// twin. 146 has no enum value in this C++ revision
@@ -4673,7 +4690,8 @@ func (s *Server) smartActionSetEmoteState(ctx context.Context, motion *creatureM
 // after _EnterEvadeMode (SmartAI.cpp:429) and takes the owner-follow
 // leg. TDB 26091: 121 rows, param1 0 on all of them, so the reset
 // always runs. The _evadeDisabled early arm (SmartAI.cpp:411-415,
-// action 117, unported) stays out: evade is never disabled in Go.
+// action 117) runs at the top of triggerCreatureEvade via
+// motion.EvadeDisabled.
 // Summons/pets/totems carry no Spawn record, so the reset is a
 // no-op for them and their (undrifted) home stands.
 func (s *Server) smartActionEvade(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
@@ -5488,6 +5506,103 @@ func (s *Server) smartActionRandomSound(ctx context.Context, motion *creatureMot
 			continue
 		}
 		s.smartPlaySound(motion, tgt, sounds[rand.Intn(len(sounds))], ev.row.actionParam5 != 0, ev.row.actionParam6 == 1)
+	}
+}
+
+// smartActionSetCorpseDelay is SMART_ACTION_SET_CORPSE_DELAY
+// (SmartScript.cpp:2152-2160): every creature target takes
+// SetCorpseDelay(action_param1), the m_corpseDelay override in
+// seconds — the rank default (Creature.cpp:1153-1165) stands until
+// the action fires. The override lives on the motion (the
+// CorpseDelayOverrideSet latch) and the death paths read it when
+// they build the respawn record (kill.go), so the corpse removes at
+// death + the overridden delay and a compat-mode respawn pushes by
+// it too. A respawn rebuilds the motion, so the override dies with
+// the creature like the C++ DB reload. TDB 26091: 69 rows, all
+// target SELF, param1 0-120s (5s on 33, 0s on 2), 59 on AI_INIT.
+func (s *Server) smartActionSetCorpseDelay(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tm.CorpseDelayOverride = ev.row.actionParam1
+		tm.CorpseDelayOverrideSet = true
+		s.motionMu.Unlock()
+	}
+}
+
+// smartActionPauseMovement is SMART_ACTION_PAUSE_MOVEMENT
+// (SmartScript.cpp:2306-2312): every unit target takes
+// Unit::PauseMovement(pauseTimer = param2 ms, movementSlot = param1,
+// force = param3). Slots are MOTION_SLOT_DEFAULT 0 and MOTION_SLOT_ACTIVE
+// 1 (MovementDefines.h:63-67); slot >= 2 is invalid and the whole call
+// no-ops (IsInvalidMovementSlot) — the one live slot-2 row (24514
+// Steelfeather, timer 1) is a no-op in C++ too. Only the Random and
+// Waypoint generators implement Pause (the base is a no-op), and both
+// live in the default slot, so slot 0 pauses the idle legs — waypoint
+// patrol, random wander, and the escort path (MovePath is a waypoint
+// generator, SmartAI.cpp:75) — while slot 1 pauses nothing on its own:
+// chase/follow/point/home generators inherit the no-op Pause. A timer
+// pauses until now + timer and clears an indefinite pause; timer 0
+// pauses indefinitely (WaypointMovementGenerator::Pause), cleared by
+// evade (the MotionMaster::Clear twin) — Go has no non-escort
+// ResumeMovement bridge, and WP_RESUME is escort-only. The timer-0
+// latch is unreachable from live rows: the C++ loader rejects
+// pauseTimer 0 (SmartScriptMgr.cpp:1524), so the two live timer-0
+// rows (26811/26812) never execute in C++ either. The forced
+// leg stops the current spline only when the paused slot IS the
+// current slot (MotionMaster::GetCurrentSlot: active while any active
+// generator runs, else default): halted here as Moving = false, which
+// also drops the arrival inform, like a mid-flight StopMoving. Player
+// targets stay out (no Go player generator model). TDB 26091: 8 rows,
+// all SELF — slot 0 timer 300000 x4 (23094), slot 0 timer 0 force 1
+// x2 (26811/26812), slot 0 timer 5000 force 1 (40176), slot 2 timer 1
+// (24514).
+func (s *Server) smartActionPauseMovement(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	slot := ev.row.actionParam1
+	if slot >= 2 {
+		return
+	}
+	timer := ev.row.actionParam2
+	force := ev.row.actionParam3 != 0
+	now := time.Now()
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tm.MovementPausedSlot = uint8(slot)
+		if timer == 0 {
+			tm.MovementPaused = true
+			tm.MovementPausedUntil = time.Time{}
+		} else {
+			tm.MovementPausedUntil = now.Add(time.Duration(timer) * time.Millisecond)
+			tm.MovementPaused = false
+		}
+		if force {
+			// MotionMaster::GetCurrentSlot (MotionMaster.cpp:176-185):
+			// ACTIVE while any active generator runs — a chase or
+			// follow slot, an in-flight script spline, fleeing, or
+			// confused — else DEFAULT.
+			active := tm.ScriptChaseTargetGUID != 0 || tm.ScriptFollowTargetGUID != 0 || tm.Evading || tm.Fleeing || tm.Confused || (tm.Moving && now.Before(tm.MoveEnds) && tm.ScriptMoveType != 0)
+			currentSlot := uint32(0)
+			if active {
+				currentSlot = 1
+			}
+			if slot == currentSlot {
+				tm.Moving = false
+			}
+		}
+		s.motionMu.Unlock()
 	}
 }
 

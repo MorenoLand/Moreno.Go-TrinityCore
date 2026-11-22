@@ -898,9 +898,19 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	})
 	// GetCorpseDelay / RemoveCorpse are the session-bound twins of the
 	// handler-creature bindings (lua_creature_events.go): the rank-mapped
-	// corpse-decay delay, and the direct Creature::RemoveCorpse port in
-	// kill.go (a motion that no longer resolves is a no-op there).
+	// corpse-decay delay — replaced by the SMART_ACTION_SET_CORPSE_DELAY
+	// (116) override while the motion carries one — and the direct
+	// Creature::RemoveCorpse port in kill.go (a motion that no longer
+	// resolves is a no-op there).
 	methods["GetCorpseDelay"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.motionMu.Lock()
+			override, set := motion.CorpseDelayOverride, motion.CorpseDelayOverrideSet
+			s.server.motionMu.Unlock()
+			if set {
+				return []any{override}, nil
+			}
+		}
 		return []any{s.server.creatureCorpseDelaySeconds(ctx, state.Entry)}, nil
 	}
 	methods["RemoveCorpse"] = func(ctx context.Context, _ []any) ([]any, error) {

@@ -2256,6 +2256,12 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 		s.motionMu.Lock()
 		preDeathLooted = motion.PreDeathLooted
 		motion.PreDeathLooted = false
+		// SMART_ACTION_SET_CORPSE_DELAY (116): the motion override
+		// replaces the rank default (Creature.h:93, m_corpseDelay
+		// read at Creature.cpp:2068/2080).
+		if motion.CorpseDelayOverrideSet {
+			corpseDelay = motion.CorpseDelayOverride
+		}
 		s.motionMu.Unlock()
 	}
 	// Creature::setDeathState JUST_DIED (Creature.cpp:2077-2093): a
@@ -2371,6 +2377,12 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 		s.motionMu.Lock()
 		preDeathLooted = motion.PreDeathLooted
 		motion.PreDeathLooted = false
+		// SMART_ACTION_SET_CORPSE_DELAY (116): the motion override
+		// replaces the rank default (Creature.h:93, m_corpseDelay
+		// read at Creature.cpp:2068/2080).
+		if motion.CorpseDelayOverrideSet {
+			corpseDelay = motion.CorpseDelayOverride
+		}
 		s.motionMu.Unlock()
 	}
 	// Compatibility-mode respawn time, same as the world path above
@@ -2543,6 +2555,7 @@ func (s *Server) queueEscortRespawnTime(ctx context.Context, motion *creatureMot
 	s.motionMu.Lock()
 	guid, entry, mapID, instanceID := motion.GUID, motion.Entry, motion.Map, motion.InstanceID
 	health, homeX, homeY, homeZ := motion.MaxHealth, motion.HomeX, motion.HomeY, motion.HomeZ
+	corpseDelayOverride, corpseDelayOverrideSet := motion.CorpseDelayOverride, motion.CorpseDelayOverrideSet
 	s.motionMu.Unlock()
 	dbGUID := uint32(guid & 0x00FFFFFF)
 	if dbGUID == 0 || s.WorldStore == nil || s.WorldStore.DB == nil {
@@ -2567,11 +2580,17 @@ func (s *Server) queueEscortRespawnTime(ctx context.Context, motion *creatureMot
 	if health == 0 {
 		health = 1
 	}
+	// SMART_ACTION_SET_CORPSE_DELAY (116): the live motion's
+	// override replaces the rank default, like the death paths.
+	corpseDelay := s.creatureCorpseDelaySeconds(ctx, entry)
+	if corpseDelayOverrideSet {
+		corpseDelay = corpseDelayOverride
+	}
 	s.insertCreatureRespawnRecord(ctx, creatureRespawn{
 		GUID: dbGUID, At: time.Now().Add(time.Duration(delay) * time.Second),
 		Health: health, Entry: entry, Map: mapID, InstanceID: instanceID,
 		X: homeX, Y: homeY, Z: homeZ,
-		CorpseDelay: s.creatureCorpseDelaySeconds(ctx, entry), RespawnDelay: delay,
+		CorpseDelay: corpseDelay, RespawnDelay: delay,
 	})
 }
 

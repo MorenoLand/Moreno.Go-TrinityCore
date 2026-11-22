@@ -724,6 +724,38 @@ type creatureMotion struct {
 	// face the distraction and pauses wandering until this time. Zero when
 	// not distracted.
 	DistractedUntil time.Time
+	// CorpseDelayOverride / CorpseDelayOverrideSet are the SmartScript
+	// SET_CORPSE_DELAY (116) twin: Creature::SetCorpseDelay
+	// (Creature.h:93) writes m_corpseDelay, read at death
+	// (Creature.cpp:2068/2080/2844) for the corpse-removal time. The
+	// rank-mapped default still comes from creatureCorpseDelaySeconds;
+	// the override replaces it at the two kill.go death paths and in
+	// the GetCorpseDelay Lua reads. The Set flag exists because 0 is a
+	// live value (TDB 26091: two rows set 0, corpse gone at once).
+	CorpseDelayOverride    uint32
+	CorpseDelayOverrideSet bool
+	// EvadeDisabled is the SmartAI::_evadeDisabled twin
+	// (SmartAI.cpp:34/753): SET via SMART_ACTION_DISABLE_EVADE (117),
+	// it makes SmartAI::EnterEvadeMode fire SMART_EVENT_EVADE and
+	// return before _EnterEvadeMode — no combat stop, no threat clear,
+	// no home move. Read at the top of triggerCreatureEvade.
+	EvadeDisabled bool
+	// MovementPaused / MovementPausedUntil / MovementPausedSlot are the
+	// Unit::PauseMovement (Unit.cpp:10514) twin behind
+	// SMART_ACTION_PAUSE_MOVEMENT (127): the movement generator in the
+	// slot pauses until MovementPausedUntil (the TIMED_PAUSED flag +
+	// _nextMoveTime); a timer-0 action latches MovementPaused instead
+	// (the PAUSED flag) until evade clears it (the MotionMaster::Clear
+	// twin). Go has no per-slot generator stack, so the pause keys on
+	// the tick's leg launches — slot 0 (DEFAULT, all 7 live rows) gates
+	// the idle wander/waypoint launch, slot 1 (ACTIVE, zero live rows)
+	// gates the follow leg and the chase re-path. Zero when not paused.
+	// The timer-0 latch is unreachable from live rows: the C++ loader
+	// rejects pauseTimer 0 (SmartScriptMgr.cpp:1524), so the two live
+	// timer-0 rows (26811/26812) never execute in C++ either.
+	MovementPaused      bool
+	MovementPausedUntil time.Time
+	MovementPausedSlot  uint8
 	// RotateUntil / RotateID / RotateMaxMs / RotateLeft / RotateLast are the
 	// RotateMovementGenerator state (IdleMovementGenerator.cpp:65-149):
 	// MoveRotate(id, time, direction) turns in place at 2*pi/time rad per
@@ -5438,6 +5470,19 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	if motion == nil {
 		return
 	}
+	// SmartAI::EnterEvadeMode (SmartAI.cpp:412-416): with _evadeDisabled
+	// the SmartAI override fires SMART_EVENT_EVADE and returns before
+	// _EnterEvadeMode — no combat stop, no threat clear, no health
+	// restore, no home move, no UNIT_STATE_EVADE. The creature keeps
+	// fighting; the script's EVADE event is the only observable arm.
+	// The check precedes the already-evading guard exactly as in C++
+	// (the IsInEvadeMode check lives inside _EnterEvadeMode, which
+	// this branch never reaches), so a trigger on a disabled creature
+	// re-fires the event at the trigger's own cadence, as C++ does.
+	if motion.EvadeDisabled {
+		s.smartProcessEvents(ctx, motion, smartEventEvade, 0, 0, 0)
+		return
+	}
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:294-298) no-ops on a
 	// creature already in evade mode (IsInEvadeMode / UNIT_STATE_EVADE):
 	// a re-entrant EnterEvadeMode — a Lua ev2 relay back to a creature
@@ -5523,6 +5568,12 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.ScriptFollowDist = 0
 	motion.ScriptFollowAngle = 0
 	// MotionMaster::Clear drops the default-slot generators too: a
+	// PAUSE_MOVEMENT (127) timer-0 latch dies with them — a waypoint or
+	// random generator re-added after the evade starts unpaused. The
+	// timed leg needs no clear (its Until expires on its own).
+	motion.MovementPaused = false
+	motion.MovementPausedUntil = time.Time{}
+	// MotionMaster::Clear drops the default-slot generators too: a
 	// rotating creature evades home without rotating (no MovementInform —
 	// the evade Reset arm re-arms the fight from scratch).
 	motion.RotateUntil = time.Time{}
@@ -5593,8 +5644,8 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	}
 	// SmartAI::EnterEvadeMode (SmartAI.cpp:429) fires SMART_EVENT_EVADE
 	// after _EnterEvadeMode (spells, auras, combat stop) — the
-	// _evadeDisabled early arm has no Go model (evade is never disabled)
-	// and the !IsAIControlled arm is vacuous here.
+	// _evadeDisabled early arm runs at the top of this function, and
+	// the !IsAIControlled arm is vacuous here.
 	s.smartProcessEvents(ctx, motion, smartEventEvade, 0, 0, 0)
 	homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
 	// CreatureAI::EnterEvadeMode (CreatureAI.cpp:222-228): a creature
@@ -10778,7 +10829,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// relaunch the spline when the victim left the launch
 					// point so a kiting victim can't outrun a stale spline.
 					targetMoved := motion.ChaseTX != target.X || motion.ChaseTY != target.Y
-					if !motion.Moving || now.After(motion.MoveEnds) || targetMoved {
+					// Unit::PauseMovement (Unit.cpp:10514) on the ACTIVE slot:
+					// the chase generator is paused, so no re-path launches
+					// while the hold runs. The swing below still fires —
+					// DoMeleeAttackIfReady gates CASTING only
+					// (UnitAI.cpp:61-63) — so a paused pursuer still swings
+					// in range, exactly as in C++.
+					if (!motion.Moving || now.After(motion.MoveEnds) || targetMoved) && !(motion.MovementPausedSlot == 1 && (motion.MovementPaused || now.Before(motion.MovementPausedUntil))) {
 						// ChaseMovementGenerator paths to the victim's center
 						// then shortens to maxTarget = CONTACT_DISTANCE +
 						// hitboxSum (CONTACT_DISTANCE 0.5, ObjectDefines.h:23;
@@ -11555,6 +11612,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// in combat the chase leg above runs instead. stepScriptFollow
 	// returns false only when the target left the world and the slot
 	// cleared, letting the tick fall through to formation/wander.
+	// Unit::PauseMovement (Unit.cpp:10514) on the ACTIVE slot pauses
+	// the follow generator too, so the leg below never launches while
+	// the hold runs; a DEFAULT-slot pause leaves it alone. The return
+	// also skips the formation leg (ACTIVE slot, correct) and the
+	// wander/waypoint launch below (DEFAULT slot — a documented
+	// over-block: Go's section 3 shares one return path, and no live
+	// row uses slot 1).
+	if motion.MovementPausedSlot == 1 && (motion.MovementPaused || now.Before(motion.MovementPausedUntil)) {
+		return
+	}
 	if motion.ScriptFollowTargetGUID != 0 && !motion.InCombat {
 		if s.stepScriptFollow(ctx, motion, players, now) {
 			return
@@ -11578,6 +11645,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	var wait time.Duration
 	var facing float32
 	var hasFacing bool
+	// Unit::PauseMovement (Unit.cpp:10514) on the DEFAULT slot pauses
+	// the idle wander/waypoint generator: no new leg launches while the
+	// hold runs. The gate sits after the Moving/arrival block above, so
+	// an in-flight leg still finalizes during the pause (the force=0
+	// arm); the forced-stop arm halts it in the action itself. The
+	// follow/formation/confused legs above already ran — they live in
+	// the ACTIVE slot, which a DEFAULT pause never touches.
+	if motion.MovementPausedSlot == 0 && (motion.MovementPaused || now.Before(motion.MovementPausedUntil)) {
+		return
+	}
 	walk := true
 	animTier := animTierNone
 	if motion.MoveType == 2 {

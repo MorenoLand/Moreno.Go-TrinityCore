@@ -1652,10 +1652,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// GetCorpseDelay is Creature::GetCorpseDelay (CreatureMethods.h:615,
 	// Creature.h:94): the rank-mapped corpse-decay delay in seconds, the
 	// same value creatureCorpseDelaySeconds feeds the corpse-removal
-	// sweep. SmartScript SetCorpseDelay overrides are not modeled in Go
-	// (no per-motion field); the default rank value is what the sweep
-	// uses too.
+	// sweep — replaced by the SMART_ACTION_SET_CORPSE_DELAY (116)
+	// override while the motion carries one, like the death paths.
 	methods["GetCorpseDelay"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		override, set := motion.CorpseDelayOverride, motion.CorpseDelayOverrideSet
+		s.motionMu.Unlock()
+		if set {
+			return []any{override}, nil
+		}
 		return []any{s.creatureCorpseDelaySeconds(ctx, motion.Entry)}, nil
 	}
 	// RemoveCorpse is Creature::RemoveCorpse (CreatureMethods.h:1187,
