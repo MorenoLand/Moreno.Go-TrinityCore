@@ -556,6 +556,12 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 					s.fireCreatureTargetDied(ctx, attackerMotion, s.luaMotionCreature(m))
 				}
 				s.fireCreatureTargetDied(ctx, attackerMotion, s.luaMotionCreature(m))
+				// SmartAI::KilledUnit (SmartAI.cpp:578-581): the same two
+				// arms (Unit.cpp:11324-11335 pet arm + 11385-11387 branch).
+				if attackerMotion.OwnerGUID != 0 {
+					s.smartKilledUnit(ctx, attackerMotion, m.GUID)
+				}
+				s.smartKilledUnit(ctx, attackerMotion, m.GUID)
 			}
 			s.fireCreatureDiedByCreature(ctx, m, attackerMotion)
 			if m.BossAI != nil {

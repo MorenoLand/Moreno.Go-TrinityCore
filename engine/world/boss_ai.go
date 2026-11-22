@@ -11624,6 +11624,12 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 				s.fireCreatureTargetDied(ctx, m, s.luaMotionCreature(live))
 			}
 			s.fireCreatureTargetDied(ctx, m, s.luaMotionCreature(live))
+			// SmartAI::KilledUnit (SmartAI.cpp:578-581): the same two arms
+			// (Unit.cpp:11324-11335 pet arm + 11385-11387 branch arm).
+			if m.OwnerGUID != 0 {
+				s.smartKilledUnit(ctx, m, guid)
+			}
+			s.smartKilledUnit(ctx, m, guid)
 			s.fireCreatureDiedByCreature(ctx, live, m)
 			if live.BossAI != nil {
 				live.BossAI.OnDied(ctx, s, live)

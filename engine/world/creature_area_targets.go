@@ -2621,6 +2621,12 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 			s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
 		}
 		s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
+		// SmartAI::KilledUnit (SmartAI.cpp:578-581): the same two arms
+		// (Unit.cpp:11324-11335 pet arm + 11385-11387 branch arm).
+		if motion.OwnerGUID != 0 {
+			s.smartKilledUnit(ctx, motion, victimGUID)
+		}
+		s.smartKilledUnit(ctx, motion, victimGUID)
 		s.fireCreatureDiedByCreature(ctx, live, motion)
 		if live.BossAI != nil {
 			live.BossAI.OnDied(ctx, s, live)
@@ -3903,6 +3909,12 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
 			}
 			s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
+			// SmartAI::KilledUnit (SmartAI.cpp:578-581): the same two arms
+			// (Unit.cpp:11324-11335 pet arm + 11385-11387 branch arm).
+			if motion.OwnerGUID != 0 {
+				s.smartKilledUnit(ctx, motion, guid)
+			}
+			s.smartKilledUnit(ctx, motion, guid)
 			s.fireCreatureDiedByCreature(ctx, live, motion)
 			if live.BossAI != nil {
 				live.BossAI.OnDied(ctx, s, live)

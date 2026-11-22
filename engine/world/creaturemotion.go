@@ -7281,6 +7281,14 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 				s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, target.GUID)
 				s.clearCreatureDeathState(live)
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
+				// SmartAI::KilledUnit (SmartAI.cpp:578-581): the branch arm
+				// (Unit.cpp:11385-11387) plus the pet-arm double for a
+				// player-owned killer (Unit.cpp:11324-11335). The Eluna twin
+				// fires once on this melee path; the pet arm rides C++.
+				if motion.OwnerGUID != 0 {
+					s.smartKilledUnit(ctx, motion, target.GUID)
+				}
+				s.smartKilledUnit(ctx, motion, target.GUID)
 				s.fireCreatureDiedByCreature(ctx, live, motion)
 				if live.BossAI != nil {
 					live.BossAI.OnDied(ctx, s, live)
