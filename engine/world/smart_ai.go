@@ -2,10 +2,13 @@
 // SET_FACTION / PLAY_EMOTE / CAST / AUTO_ATTACK / SET_EVENT_PHASE;
 // slice 2: the remaining AGGRO-used actions and targets; slice 3:
 // timed-action lists (CALL_TIMED_ACTIONLIST / RANDOM / RANGE + the
-// list engine below), the phase actions (INC/RANDOM/RANDOM_RANGE) and
-// the small state actions (SET_REACT_STATE, ALLOW_COMBAT_MOVEMENT,
-// REMOVE_NPC_FLAG, SET_ROOT, SET_VISIBILITY, SET_ACTIVE, ATTACK_START,
-// INTERRUPT_SPELL).
+// list engine below), the phase actions (INC/RANDOM/RANDOM_RANGE),
+// ATTACK_START, and the small state actions (SET_REACT_STATE,
+// ALLOW_COMBAT_MOVEMENT, REMOVE_NPC_FLAG, SET_ROOT, SET_VISIBILITY,
+// SET_ACTIVE, INTERRUPT_SPELL) — of which the phase actions,
+// ATTACK_START, SET_REACT_STATE and the NPC-flag family are ported;
+// ALLOW_COMBAT_MOVEMENT, SET_ROOT, SET_VISIBILITY, SET_ACTIVE and
+// INTERRUPT_SPELL stay residual.
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -24,7 +27,8 @@
 // CALL_TIMED_ACTIONLIST + CALL_RANDOM_TIMED_ACTIONLIST +
 // CALL_RANDOM_RANGE_TIMED_ACTIONLIST (source_type-9 timed-action lists,
 // installed per target creature, stepped from smartUpdateTimers), and
-// SET_REACT_STATE + the SET/ADD/REMOVE_NPC_FLAG family. RESET wiring
+// SET_REACT_STATE + the SET/ADD/REMOVE_NPC_FLAG family, INC_EVENT_PHASE +
+// RANDOM_PHASE + RANDOM_PHASE_RANGE + ATTACK_START. RESET wiring
 // landed with smartReset / smartJustReachedHome (evade-follow legs, home
 // arrival, spawn): the EVADE event fires from triggerCreatureEvade, RESPAWN +
 // OnReset from fireCreatureSpawned. `.reload smart_scripts` re-runs the
@@ -70,11 +74,12 @@ const (
 	smartEventLink           uint32 = 61
 	smartEventJustCreated    uint32 = 63
 	smartEventPhaseChange    uint32 = 66
+	smartEventPhase12        uint32 = 12 // SMART_EVENT_PHASE_12 (SmartScriptMgr.h:55), the IncPhase clamp (SmartScript.cpp:3996-4000)
 )
 
 // SMART_ACTION ids (SmartScriptMgr.h:457-600), AGGRO-used set. The
-// remaining AGGRO-row actions (31, 21, 43, 42, 146, 103, 23, 49, 36, 41,
-// 25, 47, 5, 74, 92, 133, 30) hit the default arm, matching C++'s
+// remaining AGGRO-row actions (21, 43, 42, 146, 103, 36, 41, 25, 47, 5,
+// 74, 92, 133) hit the default arm, matching C++'s
 // "Unhandled Action type" log-and-skip
 // (SmartScript.cpp:2370-2372): no react-state, or template machinery
 // exists in Go to run them on.
@@ -88,10 +93,14 @@ const (
 	smartActionSummonCreature                 uint32 = 12
 	smartActionAutoAttack                     uint32 = 20
 	smartActionSetEventPhase                  uint32 = 22
+	smartActionIncEventPhase                  uint32 = 23
 	smartActionRemoveAurasFromSpell           uint32 = 28
+	smartActionRandomPhase                    uint32 = 30
+	smartActionRandomPhaseRange               uint32 = 31
 	smartActionSetInstData                    uint32 = 34
 	smartActionCallForHelp                    uint32 = 39
 	smartActionSetData                        uint32 = 45
+	smartActionAttackStart                    uint32 = 49
 	smartActionStoreTargetList                uint32 = 64
 	smartActionCallTimedActionList            uint32 = 80
 	smartActionSetNPCFlag                     uint32 = 81
@@ -882,10 +891,60 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 	case smartActionAutoAttack:
 		motion.NoMeleeAttack = ev.row.actionParam1 == 0
 	case smartActionSetEventPhase:
-		oldPhase := st.phase
-		st.phase = ev.row.actionParam1
-		if oldPhase != st.phase {
-			s.smartProcessEvents(ctx, motion, smartEventPhaseChange, invokerGUID, 0, 0)
+		s.smartSetEventPhase(ctx, motion, st, ev.row.actionParam1, invokerGUID)
+	case smartActionIncEventPhase:
+		// SMART_ACTION_INC_EVENT_PHASE (SmartScript.cpp:809-819): IncPhase
+		// then DecPhase, each through SetPhase, so a row with only one
+		// nonzero leg still passes through the other as a no-op. IncPhase
+		// clamps at PHASE_12 (SmartScript.cpp:3996-4000); DecPhase clamps
+		// at 0 (SmartScript.cpp:4002-4008); each leg fires the
+		// phase-change event only if it moved the phase.
+		phase := st.phase
+		if ev.row.actionParam1 > smartEventPhase12-phase {
+			phase = smartEventPhase12
+		} else {
+			phase += ev.row.actionParam1
+		}
+		s.smartSetEventPhase(ctx, motion, st, phase, invokerGUID)
+		if ev.row.actionParam2 >= st.phase {
+			phase = 0
+		} else {
+			phase = st.phase - ev.row.actionParam2
+		}
+		s.smartSetEventPhase(ctx, motion, st, phase, invokerGUID)
+	case smartActionRandomPhase:
+		// SMART_ACTION_RANDOM_PHASE (SmartScript.cpp:939-953): pick one of
+		// the nonzero phases (params 1-6). All-zero rows are rejected at
+		// load (SmartScriptMgr.cpp:1255-1267), so the empty pick is a
+		// guard only — C++ would select from an empty vector there.
+		phases := make([]uint32, 0, 6)
+		for _, p := range [6]uint32{ev.row.actionParam1, ev.row.actionParam2, ev.row.actionParam3, ev.row.actionParam4, ev.row.actionParam5, ev.row.actionParam6} {
+			if p != 0 {
+				phases = append(phases, p)
+			}
+		}
+		if len(phases) > 0 {
+			s.smartSetEventPhase(ctx, motion, st, phases[rand.Intn(len(phases))], invokerGUID)
+		}
+	case smartActionRandomPhaseRange:
+		// SMART_ACTION_RANDOM_PHASE_RANGE (SmartScript.cpp:954-965): urand
+		// of phaseMin..phaseMax (params 1-2, inclusive). C++ urand ASSERTs
+		// max >= min (Random.cpp:42); the clamp keeps an unvalidated row
+		// defined instead of panicking rand.Intn.
+		phaseMin, phaseMax := ev.row.actionParam1, ev.row.actionParam2
+		if phaseMax < phaseMin {
+			phaseMax = phaseMin
+		}
+		s.smartSetEventPhase(ctx, motion, st, phaseMin+uint32(rand.Intn(int(phaseMax-phaseMin+1))), invokerGUID)
+	case smartActionAttackStart:
+		// SMART_ACTION_ATTACK_START (SmartScript.cpp:1238-1249): engage a
+		// random target. The engage runs the AttackStart funnel
+		// (triggerCreatureAggro) — its evading/passive gate is the
+		// documented EngageWithTarget deviation, C++ AttackStart has no
+		// such gate (see the smartActionSummonCreature comment).
+		targets := s.smartTargets(motion, st, ev, invokerGUID)
+		if len(targets) > 0 {
+			s.triggerCreatureAggro(ctx, motion.GUID, targets[rand.Intn(len(targets))].guid, true)
 		}
 	case smartActionRemoveAurasFromSpell:
 		s.smartActionRemoveAuras(ctx, motion, st, ev, invokerGUID)
@@ -916,8 +975,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 	case smartActionRemoveUnitFieldBytes1:
 		s.smartActionRemoveUnitFieldBytes1(motion, st, ev, invokerGUID)
 	default:
-		// Residual: the remaining AGGRO-row actions (31, 21, 43, 42, 146,
-		// 103, 23, 49, 36, 41, 25, 47, 5, 74, 92, 133, 30) have no Go twin
+		// Residual: the remaining AGGRO-row actions (21, 43, 42, 146,
+		// 103, 36, 41, 25, 47, 5, 74, 92, 133) have no Go twin
 		// — mounts, invincibility HP, visibility — and the event
 		// still consumed its chance roll and link below, matching
 		// C++'s log-and-skip default (SmartScript.cpp:2370-2372).
@@ -934,6 +993,17 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 			}
 		}
 		st.linkDepth--
+	}
+}
+
+// smartSetEventPhase is SmartScript::SetPhase (SmartScript.cpp:4010-4018):
+// store the phase number and fire SMART_EVENT_EVENT_PHASE_CHANGE only when
+// it moved.
+func (s *Server) smartSetEventPhase(ctx context.Context, motion *creatureMotion, st *smartScriptState, phase uint32, invokerGUID uint64) {
+	oldPhase := st.phase
+	st.phase = phase
+	if oldPhase != st.phase {
+		s.smartProcessEvents(ctx, motion, smartEventPhaseChange, invokerGUID, 0, 0)
 	}
 }
 
