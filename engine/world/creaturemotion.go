@@ -726,6 +726,19 @@ type creatureMotion struct {
 	Moving   bool
 	Evading  bool
 	MoveEnds time.Time
+	// ScriptMoveFromX/Y/Z + ScriptMoveFromKnown + ScriptMoveParabolicAmp
+	// are MoveSpline::ComputePosition's (MoveSpline.cpp:20-60) inputs for
+	// the atomic-spline model: the launch origin of the in-flight spline,
+	// so a mid-flight relaunch (MoveSplineInit::Launch,
+	// MoveSplineInit.cpp:60-68) legs from the interpolated position
+	// instead of the snapped destination. The parabolic amplitude is the
+	// jump/knockback arc height (SetParabolic, MotionMaster.cpp:747,812),
+	// 0 for linear splines. Inline launchers (chase, follow, flee, evade,
+	// wander) stamp no origin, so they clear ScriptMoveFromKnown and the
+	// helper falls back to the stored position.
+	ScriptMoveFromX, ScriptMoveFromY, ScriptMoveFromZ float32
+	ScriptMoveFromKnown                               bool
+	ScriptMoveParabolicAmp                            float32
 	// ChaseTX/ChaseTY record the victim's position when the combat pursuit
 	// spline launched — ChaseMovementGenerator's _lastTargetPosition
 	// (ChaseMovementGenerator.h): the chase re-paths whenever the target
@@ -981,6 +994,49 @@ func capSplineVelocity(velocity, runSpeed float32) float32 {
 // zero-length spline becomes a 1ms spline, MoveSpline.cpp:145-149).
 func splineDurationMs(dist float64, speed float32) uint32 {
 	return 1 + uint32(dist*1000/float64(speed))
+}
+
+// creatureSplinePosition is MoveSpline::ComputePosition
+// (MoveSpline.cpp:20-60) for the atomic-spline model: the creature's
+// position along the in-flight spline at now. The server snaps to the
+// launch destination, so the position is recovered from the stamped
+// launch origin, the remaining time, and the current velocity: the
+// remaining distance is MoveVelocity * time-to-MoveEnds and the
+// travelled fraction is 1 - remaining/total, which stays exact across
+// PropagateSpeedChange rescales (the rescale rewrites MoveEnds and
+// MoveVelocity together, refreshCreatureRunSpeedMotion). The Z leg
+// adds the parabolic arc (MoveSpline::computeParabolicElevation,
+// MoveSpline.cpp:68-77: 4*amplitude*u*(1-u), peak amplitude at
+// mid-flight) when the in-flight spline is a jump/knockback. A
+// creature not mid-spline, or one whose leg was launched inline (no
+// stamped origin), reads its stored position.
+func creatureSplinePosition(motion *creatureMotion, now time.Time) (x, y, z float32) {
+	if motion == nil {
+		return 0, 0, 0
+	}
+	x, y, z = motion.X, motion.Y, motion.Z
+	if !motion.Moving || !motion.ScriptMoveFromKnown || !now.Before(motion.MoveEnds) {
+		return x, y, z
+	}
+	totalDist := distance3D(motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ, motion.X, motion.Y, motion.Z)
+	if totalDist <= 0 || motion.MoveVelocity <= 0 {
+		return x, y, z
+	}
+	remaining := float64(motion.MoveEnds.Sub(now)) / float64(time.Second) * float64(motion.MoveVelocity)
+	u := 1 - remaining/totalDist
+	if u < 0 {
+		u = 0
+	}
+	if u > 1 {
+		u = 1
+	}
+	x = motion.ScriptMoveFromX + float32(float64(motion.X-motion.ScriptMoveFromX)*u)
+	y = motion.ScriptMoveFromY + float32(float64(motion.Y-motion.ScriptMoveFromY)*u)
+	z = motion.ScriptMoveFromZ + float32(float64(motion.Z-motion.ScriptMoveFromZ)*u)
+	if motion.ScriptMoveParabolicAmp > 0 {
+		z += 4 * motion.ScriptMoveParabolicAmp * float32(u*(1-u))
+	}
+	return x, y, z
 }
 
 // spellHasSpeedAura reports whether the spell carries any effect feeding
@@ -4604,6 +4660,7 @@ func (s *Server) launchCreatureFleeLeg(motion *creatureMotion, targetX, targetY 
 	transportGUID := motion.TransportGUID
 	motion.X, motion.Y = destX, destY
 	motion.Moving = true
+	motion.ScriptMoveFromKnown = false
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.MoveVelocity = speed
 	motion.FleeNextAt = motion.MoveEnds.Add(time.Duration(800+rand.Intn(701)) * time.Millisecond)
@@ -4868,7 +4925,10 @@ func (s *Server) launchCreatureScriptSplineAnim(motion *creatureMotion, destX, d
 // 0 wins over the creature speed), so the chain walker launches
 // through here while every other script leg uses the wrapper above.
 // A non-chain launch clears a running chain (MotionMaster takes a
-// new generator, the old one finalizes without informing).
+// new generator, the old one finalizes without informing). A relaunch
+// mid-flight starts from the interpolated spline position
+// (MoveSplineInit::Launch, MoveSplineInit.cpp:60-68), not the snapped
+// destination.
 func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32, flying bool, animTier int) bool {
 	if s == nil || motion == nil {
 		return false
@@ -4888,12 +4948,20 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	if moveType != movementGeneratorSplineChain {
 		motion.SplineChain = nil
 	}
-	dist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)
+	// MoveSplineInit::Launch (MoveSplineInit.cpp:60-68): a spline
+	// launched while another is unfinalized starts from the running
+	// spline's ComputePosition, not the stored position — the
+	// atomic-spline model snaps to the destination at launch, so
+	// creatureSplinePosition recovers the interpolated point and
+	// the new leg's distance, duration, and packet from-point all
+	// run from it.
+	now := time.Now()
+	fromX, fromY, fromZ := creatureSplinePosition(motion, now)
+	dist := distance3D(fromX, fromY, fromZ, destX, destY, destZ)
 	duration := splineDurationMs(float64(dist), speed)
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
 	phase := motion.PhaseMask
 	transportGUID := motion.TransportGUID
-	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 	// HomeMovementGenerator::SetTargetLocation
 	// (HomeMovementGenerator.cpp:78): every home spline carries
 	// SetFacing(home orientation), applied at finalize
@@ -4906,8 +4974,11 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	}
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
-	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
+	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.MoveVelocity = speed
+	motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ = fromX, fromY, fromZ
+	motion.ScriptMoveFromKnown = true
+	motion.ScriptMoveParabolicAmp = 0
 	motion.ScriptMoveType = moveType
 	motion.ScriptMovePointID = pointID
 	motion.ScriptMoveDestX = destX
@@ -5114,6 +5185,35 @@ func jumpParabolicParams(speedZ float32, durationMs uint32) (amplitude, vertical
 // destination at launch on the atomic-spline precedent; clients arc
 // through the parabolic wire flags.
 func (s *Server) launchCreatureJumpSpline(motion *creatureMotion, destX, destY, destZ, speedXY, speedZ float32, id uint32) bool {
+	return s.launchCreatureParabolicSpline(motion, destX, destY, destZ, speedXY, speedZ, id, false, true)
+}
+
+// launchCreatureKnockbackSpline is MotionMaster::MoveKnockbackFrom
+// (MotionMaster.cpp:735-763) via the same parabolic core: the flight
+// is dist = 2 * (speedZ / gravity) * speedXY (the caller computes the
+// destination), SetParabolic(max_height, 0) with max_height =
+// speedZ^2 / (2 * gravity) — the jumpParabolicParams amplitude, the
+// same -computeFallElevation(moveTimeHalf, false, -speedZ) both arms
+// use — SetOrientationFixed(true), velocity speedXY, id 0 (the
+// GenericMovementGenerator informs (EFFECT, 0) on landing, like the
+// jump's (EFFECT, EVENT_JUMP)). Unlike MoveJump it sets no
+// UNIT_STATE_JUMPING (MoveKnockbackFrom leaves BaseUnitState at the
+// GenericMovementGenerator ROAMING default), so JumpUntil stays
+// untouched and sight scans keep seeing the creature mid-flight.
+func (s *Server) launchCreatureKnockbackSpline(motion *creatureMotion, destX, destY, destZ, speedXY, speedZ float32) bool {
+	return s.launchCreatureParabolicSpline(motion, destX, destY, destZ, speedXY, speedZ, 0, true, false)
+}
+
+// launchCreatureParabolicSpline is the shared MoveJump /
+// MoveKnockbackFrom core (MotionMaster.cpp:735-763, 785-824): a
+// parabolic spline to xyz at horizontal speed speedXY with the
+// vertical profile from speedZ. orientationFixed carries
+// SetOrientationFixed (knockback only; MoveJump never sets it) onto
+// the wire flags, jumping carries UNIT_STATE_JUMPING (MoveJump only;
+// knockback leaves the ROAMING default). A relaunch mid-flight starts
+// from the interpolated position (MoveSplineInit::Launch,
+// MoveSplineInit.cpp:60-68), including the arc height.
+func (s *Server) launchCreatureParabolicSpline(motion *creatureMotion, destX, destY, destZ, speedXY, speedZ float32, id uint32, orientationFixed, jumping bool) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -5128,18 +5228,24 @@ func (s *Server) launchCreatureJumpSpline(motion *creatureMotion, destX, destY, 
 	// (MotionMaster::MoveJump computes max_height from speedZ before
 	// SetVelocity, so the cap never touches it).
 	speedXY = capSplineVelocity(speedXY, motion.RunSpeed)
-	dist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)
+	now := time.Now()
+	fromX, fromY, fromZ := creatureSplinePosition(motion, now)
+	dist := distance3D(fromX, fromY, fromZ, destX, destY, destZ)
 	duration := splineDurationMs(float64(dist), speedXY)
-	_, verticalAccel := jumpParabolicParams(speedZ, duration)
+	amplitude, verticalAccel := jumpParabolicParams(speedZ, duration)
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
 	phase := motion.PhaseMask
 	transportGUID := motion.TransportGUID
-	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
-	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
+	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.MoveVelocity = speedXY
-	motion.JumpUntil = motion.MoveEnds
+	if jumping {
+		motion.JumpUntil = motion.MoveEnds
+	}
+	motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ = fromX, fromY, fromZ
+	motion.ScriptMoveFromKnown = true
+	motion.ScriptMoveParabolicAmp = amplitude
 	motion.ScriptMoveType = movementGeneratorEffect
 	motion.ScriptMovePointID = id
 	motion.ScriptMoveDestX = destX
@@ -5153,7 +5259,7 @@ func (s *Server) launchCreatureJumpSpline(motion *creatureMotion, destX, destY, 
 	motion.ScriptFollowDist = 0
 	motion.ScriptFollowAngle = 0
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveJumpInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, verticalAccel, phase, transportGUID)
+	s.broadcastMonsterMoveJumpInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, verticalAccel, phase, transportGUID, orientationFixed)
 	return true
 }
 
@@ -5256,6 +5362,7 @@ func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, p
 	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, tz, duration, false, tOrient, true, motion.PhaseMask, motion.TransportGUID)
 	motion.X, motion.Y, motion.Z = destX, destY, tz
 	motion.Moving = true
+	motion.ScriptMoveFromKnown = false
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.MoveVelocity = speed
 	motion.ScriptMoveType = movementGeneratorFollow
@@ -5439,6 +5546,7 @@ func (s *Server) startCreatureSeekAssistance(ctx context.Context, motion *creatu
 	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 	motion.X, motion.Y, motion.Z = x, y, z
 	motion.Moving = true
+	motion.ScriptMoveFromKnown = false
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.MoveVelocity = speed
 	motion.SeekAssistPending = true
@@ -5850,6 +5958,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
 				motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 				motion.Moving = true
+				motion.ScriptMoveFromKnown = false
 				motion.Evading = true
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 				motion.MoveVelocity = speed
@@ -7925,6 +8034,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	}
 	if motion.Moving {
 		if now.Before(motion.MoveEnds) {
+			// SplineChainMovementGenerator::Update
+			// (SplineChainMovementGenerator.cpp:149-171): the
+			// _msToNext expiry sends the next link even mid-spline
+			// (Launch restarts from ComputePosition), so a chain
+			// run advances here too — the early return below must
+			// not starve a link whose wait expired in flight.
+			if motion.SplineChain != nil {
+				s.advanceSplineChain(ctx, motion, now)
+			}
 			return
 		}
 		motion.Moving = false
@@ -7990,9 +8108,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// SplineChainMovementGenerator::Update
 	// (SplineChainMovementGenerator.cpp:147-175): a chain run waiting
 	// out its msUntilNext gap sends its next link once the wait
-	// expires; the run only advances while the creature is not
-	// moving, so a link never launches over a live spline.
-	if motion.SplineChain != nil && !motion.Moving {
+	// expires — even mid-spline (the overlap arm runs in the
+	// mid-flight early return above); Moving is already false here,
+	// the landing gate just cleared it.
+	if motion.SplineChain != nil {
 		s.advanceSplineChain(ctx, motion, now)
 	}
 
@@ -8085,6 +8204,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
 			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 			motion.Moving = true
+			motion.ScriptMoveFromKnown = false
 			motion.Evading = true
 			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 			motion.MoveVelocity = speed
@@ -11081,6 +11201,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							motion.X, motion.Y, motion.Z = destX, destY, target.Z
 							motion.ChaseTX, motion.ChaseTY = target.X, target.Y
 							motion.Moving = true
+							motion.ScriptMoveFromKnown = false
 							motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 							motion.MoveVelocity = speed
 						}
@@ -11990,6 +12111,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	s.broadcastMonsterMoveFlagsInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk, facing, hasFacing, motion.PhaseMask, motion.TransportGUID, false, animTier)
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
+	motion.ScriptMoveFromKnown = false
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
 	// Creature::SignalFormationMovement (Creature.cpp:362-369) via

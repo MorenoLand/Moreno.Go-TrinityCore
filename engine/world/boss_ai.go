@@ -6611,11 +6611,17 @@ func (s *Server) jumpToCreatureTargetDest(tm *creatureMotion, absoluteAngle floa
 // (GetRelativeAngle + PI through MovePositionToFirstCollision nets the
 // source-to-target direction; the <0.001 coincidence arm takes a random
 // angle, the GetSinCos twin), Z kept — the mmap first-collision clamp
-// has no Go model, the charge/pull snap precedent. Orientation is fixed
-// by the spline (SetOrientationFixed), so it is untouched. The snap
-// rides broadcastMonsterMoveStop + syncCreatureVehiclePassengers: the
-// spline ticks land in UpdateSplinePosition -> CreatureRelocation
-// (Map.cpp:1136), so a knocked vehicle base fans its passengers out.
+// has no Go model, the charge/pull snap precedent. The origin is the
+// interpolated spline position (MoveKnockbackFrom reads the owner's
+// live position, which C++ tracks along the spline), not the snapped
+// destination. The flight rides launchCreatureKnockbackSpline: a
+// parabolic spline (SetParabolic(max_height, 0), SetOrientationFixed,
+// velocity speedXY, id 0), so clients arc through the flight and the
+// landing gate fires MovementInform(EFFECT, 0). Orientation is fixed
+// by the spline (SetOrientationFixed), so it is untouched.
+// syncCreatureVehiclePassengers still runs: the server snaps to the
+// landing point at launch on the atomic-spline precedent, so a knocked
+// vehicle base fans its passengers out at once.
 func (s *Server) knockBackCreatureTarget(tm *creatureMotion, fromX, fromY float64, speedXY, speedZ float32) {
 	if s == nil || tm == nil {
 		return
@@ -6629,10 +6635,8 @@ func (s *Server) knockBackCreatureTarget(tm *creatureMotion, fromX, fromY float6
 	if speedXY < 0.01 {
 		return
 	}
-	const knockbackGravity = 19.29110527038574
 	s.motionMu.Lock()
-	tx, ty, tz := tm.X, tm.Y, tm.Z
-	mapID, instanceID, phase, transportGUID := tm.Map, tm.InstanceID, tm.PhaseMask, tm.TransportGUID
+	tx, ty, tz := creatureSplinePosition(tm, time.Now())
 	s.motionMu.Unlock()
 	ddx := float64(tx) - fromX
 	ddy := float64(ty) - fromY
@@ -6644,14 +6648,11 @@ func (s *Server) knockBackCreatureTarget(tm *creatureMotion, fromX, fromY float6
 		dist := math.Hypot(ddx, ddy)
 		vcos, vsin = ddx/dist, ddy/dist
 	}
-	moveTimeHalf := float64(speedZ) / knockbackGravity
+	moveTimeHalf := float64(speedZ) / jumpToGravity
 	flight := 2 * moveTimeHalf * float64(speedXY)
 	destX := tx + float32(flight*vcos)
 	destY := ty + float32(flight*vsin)
-	s.motionMu.Lock()
-	tm.X, tm.Y = destX, destY
-	s.motionMu.Unlock()
-	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, tm.GUID, destX, destY, tz, phase, transportGUID)
+	s.launchCreatureKnockbackSpline(tm, destX, destY, tz, speedXY, speedZ)
 	s.syncCreatureVehiclePassengers(tm)
 }
 

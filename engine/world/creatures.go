@@ -867,11 +867,13 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 // UnitDefines.h:81-88 (Ground 0, Swim 1, Hover 2, Fly 3, Submerged 4);
 // animTierNone (-1) sends no animation leg at all.
 const (
-	splineFlagFlying    uint32 = 0x00002000
-	splineFlagAnimation uint32 = 0x00200000
-	animTierGround             = 0
-	animTierHover              = 2
-	animTierNone               = -1
+	splineFlagFlying           uint32 = 0x00002000
+	splineFlagAnimation        uint32 = 0x00200000
+	splineFlagParabolic        uint32 = 0x00000800
+	splineFlagOrientationFixed uint32 = 0x00004000
+	animTierGround                    = 0
+	animTierHover                     = 2
+	animTierNone                      = -1
 )
 
 func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, facing float32, hasFacing bool, transportGUID uint64, flying bool, animTier int) []byte {
@@ -935,8 +937,12 @@ func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, dest
 // Mask_No_Monster_Move, so it survives onto the wire), and the parabolic
 // leg writes vertical_acceleration + effect_start_time (0, SetParabolic
 // (amplitude, 0)) between Duration and the point count. Everything else
-// matches the linear layout exactly.
-func buildMonsterMoveParabolic(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, verticalAccel float32, transportGUID uint64) []byte {
+// matches the linear layout exactly. orientationFixed carries
+// MoveSplineFlag::OrientationFixed (0x00004000, MoveSplineFlag.h:40 —
+// likewise outside Mask_No_Monster_Move): MoveKnockbackFrom sets it, so
+// the client keeps the model orientation instead of re-facing along the
+// spline; MoveJump never sets it.
+func buildMonsterMoveParabolic(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, verticalAccel float32, transportGUID uint64, orientationFixed bool) []byte {
 	packet := protocol.NewBuffer(64)
 	packet.WritePackedGUID(rawGUID)
 	if transportGUID != 0 {
@@ -949,11 +955,15 @@ func buildMonsterMoveParabolic(rawGUID uint64, startX, startY, startZ, destX, de
 	packet.WriteF32(startZ)
 	packet.WriteU32(uint32(time.Now().UnixMilli())) // SplineID
 	packet.WriteU8(0)                               // MonsterMoveNormal
-	packet.WriteU32(0x00000800)                     // SplineFlags (Parabolic)
-	packet.WriteU32(duration)                       // Duration in ms
-	packet.WriteF32(verticalAccel)                  // vertical_acceleration
-	packet.WriteU32(0)                              // effect_start_time
-	packet.WriteU32(1)                              // Points count
+	splineFlags := splineFlagParabolic
+	if orientationFixed {
+		splineFlags |= splineFlagOrientationFixed
+	}
+	packet.WriteU32(splineFlags)   // SplineFlags (Parabolic [+ OrientationFixed])
+	packet.WriteU32(duration)      // Duration in ms
+	packet.WriteF32(verticalAccel) // vertical_acceleration
+	packet.WriteU32(0)             // effect_start_time
+	packet.WriteU32(1)             // Points count
 	packet.WriteF32(destX)
 	packet.WriteF32(destY)
 	packet.WriteF32(destZ)
@@ -1101,8 +1111,8 @@ func (s *Server) broadcastMonsterMoveFlagsInInstance(mapID, instanceID uint32, r
 // broadcastMonsterMoveInInstance with the parabolic packet: a run-mode
 // packet plus the parabolic move packet to the same in-instance,
 // in-range, phase-visible set. The jump carries no walk-mode leg.
-func (s *Server) broadcastMonsterMoveJumpInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, verticalAccel float32, phase uint32, transportGUID uint64) {
-	packet := buildMonsterMoveParabolic(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, verticalAccel, transportGUID)
+func (s *Server) broadcastMonsterMoveJumpInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, verticalAccel float32, phase uint32, transportGUID uint64, orientationFixed bool) {
+	packet := buildMonsterMoveParabolic(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, verticalAccel, transportGUID, orientationFixed)
 	moveOpcode := protocol.OpcodeSMSG_MONSTER_MOVE
 	if transportGUID != 0 {
 		moveOpcode = protocol.OpcodeSMSG_MONSTER_MOVE_TRANSPORT

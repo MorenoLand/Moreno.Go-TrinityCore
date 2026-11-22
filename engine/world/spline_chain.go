@@ -26,10 +26,11 @@ import (
 // the repo's world.db placeholder carries no such tables, so the
 // bridge is live but idle until the deployment DB ships the rows.
 // Go walks a link's points as sequential single-point splines (the
-// engine has no multi-point spline primitive), so a link's next leg
-// only launches once the previous leg has landed; the msUntilNext
-// wait still runs from the link's launch, so a slow link delays the
-// next one past the wait instead of cutting the spline short.
+// engine has no multi-point spline primitive), so a link's next point
+// still waits for the previous leg to land; the next LINK cuts the
+// running spline short once its msUntilNext wait expires
+// (SplineChainMovementGenerator::Update sends mid-spline), launching
+// from the interpolated position.
 
 // splineChainPoint is one waypoint of a spline-chain link.
 type splineChainPoint struct {
@@ -69,6 +70,12 @@ type splineChainRun struct {
 	LinkLaunchedAt time.Time
 	LinkActualMs   uint32 // summed leg durations of the current link
 	WaitUntil      time.Time
+	// WaitArmed says WaitUntil belongs to the next link and has not
+	// been consumed yet: advanceSplineChain must only fire on an
+	// armed wait. A fresh run's WaitUntil is zero-valued (already
+	// expired), so without the arm the mid-flight advance would
+	// re-send the in-flight link every tick and it could never land.
+	WaitArmed bool
 }
 
 // loadSplineChains is the SystemMgr::LoadScriptSplineChains twin
@@ -174,6 +181,25 @@ func (s *Server) moveAlongSplineChain(ctx context.Context, motion *creatureMotio
 	return s.sendSplineChainLink(ctx, motion, time.Now())
 }
 
+// splineChainWaitMs scales a link's msUntilNext by the ratio of the
+// actually-launched duration to the DB expected duration (the C++
+// actual-duration comparison in the census note): the wait runs from
+// the link's launch, so it is armed once the link's last point is
+// sent and its actual duration is known.
+func splineChainWaitMs(link splineChainLink, actualMs uint32) uint32 {
+	waitMs := link.MsUntilNext
+	if waitMs < 1 {
+		waitMs = 1
+	}
+	if link.ExpectedDurationMs > 0 && actualMs > 0 && actualMs != link.ExpectedDurationMs {
+		waitMs = waitMs * actualMs / link.ExpectedDurationMs
+		if waitMs < 1 {
+			waitMs = 1
+		}
+	}
+	return waitMs
+}
+
 // sendSplineChainLink sends the current link of a run (its next
 // point) as one atomic script spline at the link velocity
 // (SplineChainMovementGenerator::SendPathSpline: velocity > 0 wins,
@@ -206,10 +232,26 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	}
 	// The wait scaling below compares against the C++ actual duration,
 	// which Launch computes from the capped velocity (capSplineVelocity),
-	// so the accumulation must use the capped speed too.
+	// so the accumulation must use the capped speed too. The distance
+	// runs from the interpolated spline position
+	// (MoveSplineInit::Launch, MoveSplineInit.cpp:60-68): a link
+	// launched over a live spline starts where the creature is, not
+	// where the running leg will land.
 	speed = capSplineVelocity(speed, motion.RunSpeed)
-	dist := distance3D(motion.X, motion.Y, motion.Z, pt.X, pt.Y, pt.Z)
+	fromX, fromY, fromZ := creatureSplinePosition(motion, now)
+	dist := distance3D(fromX, fromY, fromZ, pt.X, pt.Y, pt.Z)
 	run.LinkActualMs += splineDurationMs(float64(dist), speed)
+	// The wait for the next link runs from this link's launch
+	// (SplineChainMovementGenerator::_msToNext), so it is armed
+	// once the link's last point is sent and its actual duration
+	// is known; until then advanceSplineChain must not re-send
+	// the in-flight link. The arm is re-asserted at landing with
+	// the identical value (LinkActualMs is final by then).
+	run.WaitArmed = false
+	if run.PointIndex == len(link.Points)-1 && run.LinkIndex < len(run.Links)-1 {
+		run.WaitUntil = run.LinkLaunchedAt.Add(time.Duration(splineChainWaitMs(link, run.LinkActualMs)) * time.Millisecond)
+		run.WaitArmed = true
+	}
 	pointID, walk := run.PointID, run.Walk
 	flying, animTier := run.Flying, run.AnimTier
 	s.motionMu.Unlock()
@@ -360,17 +402,8 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorSplineChain), pointID)
 		return
 	}
-	waitMs := link.MsUntilNext
-	if waitMs < 1 {
-		waitMs = 1
-	}
-	if link.ExpectedDurationMs > 0 && run.LinkActualMs > 0 && run.LinkActualMs != link.ExpectedDurationMs {
-		waitMs = waitMs * run.LinkActualMs / link.ExpectedDurationMs
-		if waitMs < 1 {
-			waitMs = 1
-		}
-	}
-	run.WaitUntil = run.LinkLaunchedAt.Add(time.Duration(waitMs) * time.Millisecond)
+	run.WaitUntil = run.LinkLaunchedAt.Add(time.Duration(splineChainWaitMs(link, run.LinkActualMs)) * time.Millisecond)
+	run.WaitArmed = true
 	run.LinkIndex++
 	run.PointIndex = 0
 	motion.ScriptMoveType = 0
@@ -384,14 +417,18 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 
 // advanceSplineChain sends the next link of a waiting run once its
 // msUntilNext wait has expired (the Update arm: _msToNext <= diff).
-// It runs from the step tick only while the creature is not moving.
+// SplineChainMovementGenerator::Update (SplineChainMovementGenerator.cpp:
+// 149-171) sends the next link even mid-spline — only the final link
+// waits for the running spline to finalize — so the run advances
+// whether or not the creature is still moving; the launch restarts
+// from the interpolated position (creatureSplinePosition).
 func (s *Server) advanceSplineChain(ctx context.Context, motion *creatureMotion, now time.Time) {
 	if s == nil || motion == nil {
 		return
 	}
 	s.motionMu.Lock()
 	run := motion.SplineChain
-	if run == nil || motion.Moving || now.Before(run.WaitUntil) {
+	if run == nil || !run.WaitArmed || now.Before(run.WaitUntil) {
 		s.motionMu.Unlock()
 		return
 	}

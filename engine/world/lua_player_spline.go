@@ -77,7 +77,7 @@ func (s *session) launchPlayerJumpSpline(destX, destY, destZ, speedXY, speedZ fl
 	s.player.X, s.player.Y, s.player.Z = destX, destY, destZ
 	s.playerScriptMoveType = movementGeneratorEffect
 	s.playerScriptMoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
-	s.server.broadcastMonsterMoveJumpInInstance(mapID, instanceID, guid, fromX, fromY, fromZ, destX, destY, destZ, duration, verticalAccel, phase, 0)
+	s.server.broadcastMonsterMoveJumpInInstance(mapID, instanceID, guid, fromX, fromY, fromZ, destX, destY, destZ, duration, verticalAccel, phase, 0, false)
 	return true
 }
 
