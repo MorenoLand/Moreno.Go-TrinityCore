@@ -2954,7 +2954,10 @@ func (s *session) openSkinningLoot(ctx context.Context, targetGUID uint64, entry
 		if !skinOwnerOK || skinOwner.PlayerGUID != s.playerGUID {
 			s.server.lootMu.Unlock()
 			s.interruptCurrentCast()
-			return s.sendLootError(targetGUID, 0) == nil
+			// Player::SendLoot (Player.cpp:8911-8912): the permission-NONE arm
+			// answers with the cleared loot GUID (0), not the target GUID —
+			// the entry DoLootRelease already cleared it (LootHandler.cpp:262).
+			return s.sendLootError(0, 0) == nil
 		}
 		s.server.lootMu.Unlock()
 		loot.addViewer(s)
