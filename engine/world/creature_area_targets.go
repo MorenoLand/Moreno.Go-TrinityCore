@@ -2511,6 +2511,10 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 	var rageNext uint32
 	var rageChanged bool
 	var live *creatureMotion
+	// Unit::DealDamage (Unit.cpp:701-704): the DAMAGED (32) /
+	// DAMAGED_TARGET (33) SmartAI fire runs here, ahead of the lock —
+	// the actions take motionMu (smartDamagedPreLock).
+	s.smartDamagedPreLock(ctx, s.findCreatureMotion(motion.Map, motion.InstanceID, victimGUID), motion, motion.GUID, victimGUID, damage)
 	s.motionMu.Lock()
 	if m := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, victimGUID); m != nil && m.Health > 0 {
 		live = m

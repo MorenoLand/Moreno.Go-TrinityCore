@@ -26030,6 +26030,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// state directly. The lethal leg decides on the post-hook damage against
 	// the locked motion health (the pre-lock snapshot is stale once hooks
 	// run); when the motion is gone the snapshot decides, as before.
+	// The DAMAGED (32) / DAMAGED_TARGET (33) SmartAI fire runs here,
+	// ahead of the lock — the actions take motionMu (smartDamagedPreLock).
+	s.server.smartDamagedPreLock(ctx, s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, target.GUID), nil, s.playerGUID, target.GUID, damage)
 	s.server.motionMu.Lock()
 	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 	if motion != nil {
@@ -49090,6 +49093,16 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 	// locked motion health (the pre-lock snapshot is stale once hooks run).
 	var motion *creatureMotion
 	if s.server != nil {
+		// Unit::DealDamage (Unit.cpp:701-704): the DAMAGED (32) /
+		// DAMAGED_TARGET (33) SmartAI fire runs here, ahead of the lock
+		// — the actions take motionMu (smartDamagedPreLock). The
+		// attacker leg resolves the aura caster's creature motion when
+		// it is a creature, like the hook below.
+		var preAttacker *creatureMotion
+		if cm := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); cm != nil && cm.Health > 0 {
+			preAttacker = cm
+		}
+		s.server.smartDamagedPreLock(ctx, s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID), preAttacker, aura.CasterGUID, key.GUID, dmg)
 		s.server.motionMu.Lock()
 		motion = s.server.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 		if motion != nil {

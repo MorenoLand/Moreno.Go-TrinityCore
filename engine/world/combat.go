@@ -1712,6 +1712,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// state directly. The lethal leg decides on the post-hook damage against
 	// the locked motion health (the pre-lock snapshot is stale once hooks
 	// run); when the motion is gone the snapshot decides, as before.
+	// The DAMAGED (32) / DAMAGED_TARGET (33) SmartAI fire runs here,
+	// ahead of the lock — the actions take motionMu (smartDamagedPreLock).
+	s.server.smartDamagedPreLock(ctx, s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, target.GUID), nil, s.playerGUID, target.GUID, damage)
 	s.server.motionMu.Lock()
 	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 	if motion != nil {
@@ -2542,6 +2545,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// state directly. The lethal leg decides on the post-hook damage against
 	// the locked motion health (the pre-lock snapshot is stale once hooks
 	// run); when the motion is gone the snapshot decides, as before.
+	// The DAMAGED (32) / DAMAGED_TARGET (33) SmartAI fire runs here,
+	// ahead of the lock — the actions take motionMu (smartDamagedPreLock).
+	s.server.smartDamagedPreLock(ctx, s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, target.GUID), nil, s.playerGUID, target.GUID, damage)
 	s.server.motionMu.Lock()
 	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.GUID)
 	if motion != nil {

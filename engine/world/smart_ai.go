@@ -1290,12 +1290,12 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		// zero damage, exactly like C++), then re-arms on the cooldown
 		// window (event_param3/4) and runs its action with the attacker
 		// (DAMAGED) or the damaged unit (DAMAGED_TARGET) as invoker.
-		// DISPATCH-ONLY for now: the fire belongs before each
+		// The fire is smartDamagedPreLock, called before each
 		// fireDealDamageAIHooks call site's motionMu.Lock() (Unit::
 		// DealDamage, Unit.cpp:701-704 — ahead of the health change, so
 		// lethal blows still fire; 32 on pre-clamp damage, 33 on
 		// post-clamp), because the hook itself runs under held motionMu
-		// at 7 of 9 sites and the actions take motionMu (deadlock).
+		// at all 13 call sites and the actions take motionMu (deadlock).
 		// TDB 26091: 32 = 7 src-0 rows (min 1/50/0, max
 		// 100000/20000/10000), 33 = 1 src-0 row (Spire Frostwyrm,
 		// 100-30000, flags 31).
@@ -5762,6 +5762,39 @@ func (s *Server) smartOnCharmed(ctx context.Context, motion *creatureMotion, cha
 		charmedVar = 1
 	}
 	s.smartProcessEvents(ctx, motion, smartEventCharmed, 0, charmedVar, 0)
+}
+
+// smartDamagedPreLock is the SmartAI half of Unit::DealDamage
+// (Unit.cpp:701-704; SmartAI.cpp:626-636 DamageTaken, :652-655
+// DamageDealt): the victim's DAMAGED (32) fires first, with the
+// pre-clamp damage as var0 and the attacker as invoker; then the
+// invincibility clamp applies (same formula as fireDealDamageAIHooks,
+// read after the 32 fire so a DAMAGED action that sets the level
+// takes effect, like C++); then the attacker's DAMAGED_TARGET (33)
+// fires with the clamped damage as var0 and the victim as invoker.
+// Call with motionMu NOT held, immediately before the call site's
+// motionMu.Lock(): the SmartAI actions take motionMu (findCreatureMotion,
+// the cast pipeline), so firing inside the hook deadlocks (Nov-17
+// motionMu self-deadlock class). A nil victim or attacker leg is a
+// no-fire (player victim / pet attacker carry no SmartAI). The hook
+// itself still runs under the lock afterwards and still owns the
+// clamp that the lethal leg decides on.
+func (s *Server) smartDamagedPreLock(ctx context.Context, victim, attacker *creatureMotion, attackerGUID, victimGUID uint64, damage uint32) {
+	if s == nil {
+		return
+	}
+	if victim != nil {
+		s.smartProcessEvents(ctx, victim, smartEventDamaged, attackerGUID, damage, 0)
+	}
+	clamped := damage
+	if victim != nil && victim.smart != nil && victim.CharmerGUID == 0 {
+		if level := victim.smart.invincibilityHPLevel; level != 0 && clamped >= victim.Health-level {
+			clamped = victim.Health - level
+		}
+	}
+	if attacker != nil {
+		s.smartProcessEvents(ctx, attacker, smartEventDamagedTarget, victimGUID, clamped, 0)
+	}
 }
 
 // smartGossipSelect is SmartAI::OnGossipSelect (SmartAI.cpp:765-770):

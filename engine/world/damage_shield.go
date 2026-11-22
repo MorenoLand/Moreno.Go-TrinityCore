@@ -422,6 +422,18 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 	if attackerSess != nil {
 		attackerSess.splitShareDamagePct(ctx, key.GUID, false, key, attackerGUID, damage, schoolMask)
 	}
+	// Unit::DealDamage (Unit.cpp:701-704): the DAMAGED (32) /
+	// DAMAGED_TARGET (33) SmartAI fire runs here, ahead of the lock —
+	// the actions take motionMu (smartDamagedPreLock). The attacker leg
+	// resolves the original attacker's creature motion when it is a
+	// creature, like the hook below.
+	var preAttacker *creatureMotion
+	if am := s.findCreatureMotion(key.Map, key.InstanceID, attackerGUID); am != nil && am.Health > 0 {
+		preAttacker = am
+	}
+	if pm := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID); pm != nil && pm.Health > 0 {
+		s.smartDamagedPreLock(ctx, pm, preAttacker, attackerGUID, key.GUID, damage)
+	}
 	s.motionMu.Lock()
 	m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 	if m == nil || m.Health == 0 {

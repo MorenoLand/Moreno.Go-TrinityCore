@@ -2081,6 +2081,12 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		var pendingValues map[int]uint32
 		var pendingVX, pendingVY, pendingVZ float32
 		var pendingVPhase uint32
+		// SmartAI DAMAGED (32) / DAMAGED_TARGET (33) fire ahead of the lock
+		// (smartDamagedPreLock): the attacker is the pet motion (no SmartAI,
+		// so 33 is a no-op); the victim resolves by GUID.
+		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil {
+			s.smartDamagedPreLock(ctx, vm, motion, motion.GUID, targetGUID, damage)
+		}
 		s.motionMu.Lock()
 		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
 		if cMotion != nil {
@@ -9595,6 +9601,13 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// documented no-fires today (pet_combat.go convention); the call
 			// holds the hook point like the creature arm below.
 			if s.server != nil && caster != nil {
+				// Unit::DealDamage (Unit.cpp:701-704): the DAMAGED (32) /
+				// DAMAGED_TARGET (33) SmartAI fire runs here, ahead of
+				// the lock — the actions take motionMu
+				// (smartDamagedPreLock). The victim is a player and the
+				// pet attacker carries no SmartAI, so both legs are
+				// no-fires; the call holds the fire point.
+				s.server.smartDamagedPreLock(ctx, nil, caster, caster.GUID, target.GUID, damage)
 				s.server.motionMu.Lock()
 				fireDealDamageAIHooks(ctx, s.server, nil, caster, caster.GUID, target.GUID, &damage)
 				s.server.motionMu.Unlock()
@@ -9645,6 +9658,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		var pendingRX, pendingRY, pendingRZ float32
 		var pendingRPhase uint32
 		if s.server != nil {
+			// Unit::DealDamage (Unit.cpp:701-704): the DAMAGED (32) /
+			// DAMAGED_TARGET (33) SmartAI fire runs here, ahead of the
+			// lock — the actions take motionMu (smartDamagedPreLock).
+			s.server.smartDamagedPreLock(ctx, s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID), caster, caster.GUID, target.GUID, damage)
 			s.server.motionMu.Lock()
 			if m := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID); m != nil {
 				tm = m
@@ -9734,6 +9751,13 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// the CHEAT_GOD return (Unit.cpp:735-737). Same documented-no-fire
 		// legs as the zero arm (player victim, pet motion with no BossAI).
 		if s.server != nil && caster != nil {
+			// Unit::DealDamage (Unit.cpp:701-704): the DAMAGED (32) /
+			// DAMAGED_TARGET (33) SmartAI fire runs here, ahead of the
+			// lock — the actions take motionMu (smartDamagedPreLock).
+			// The victim is a player and the pet attacker carries no
+			// SmartAI, so both legs are no-fires; the call holds the
+			// fire point.
+			s.server.smartDamagedPreLock(ctx, nil, caster, caster.GUID, target.GUID, damage)
 			s.server.motionMu.Lock()
 			fireDealDamageAIHooks(ctx, s.server, nil, caster, caster.GUID, target.GUID, &damage)
 			s.server.motionMu.Unlock()
@@ -9910,6 +9934,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	// span for pet casters — and the fold takes the owner's castMu.
 	threatModOwner := s.server.spellModOwnerSessionForMotion(caster)
 	threatModFlat, threatModMul, threatModOK := threatModOwner.precomputeSpellModThreatFold(ctx, spellID, float32(damage))
+	// Unit::DealDamage (Unit.cpp:701-704): the DAMAGED (32) /
+	// DAMAGED_TARGET (33) SmartAI fire runs here, ahead of the lock —
+	// the actions take motionMu (smartDamagedPreLock).
+	s.server.smartDamagedPreLock(ctx, s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID), caster, caster.GUID, target.GUID, damage)
 	s.server.motionMu.Lock()
 	targetMotion := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
 	newlyTapped := false

@@ -175,22 +175,20 @@ func fireDealDamageAIHooks(ctx context.Context, s *Server, victim, attacker *cre
 	if victim != nil && victim.BossAI != nil {
 		victim.BossAI.OnDamageTaken(ctx, s, victim, attackerGUID, damage)
 	}
-	if attacker != nil && attacker.BossAI != nil {
-		attacker.BossAI.DamageDealt(ctx, s, attacker, victimGUID, damage)
-	}
 	// SmartAI::DamageTaken (SmartAI.cpp:626-636): after the DAMAGED event
-	// fire, an AI-controlled creature's invincibility HP level clamps the
-	// damage to health - level. The DAMAGED (32) / DAMAGED_TARGET (33)
-	// dispatch exists (smartProcessEvent) but has NO fire site here: this
-	// hook runs under held motionMu at 7 of its 9 call sites, while the
-	// SmartAI actions it would run take motionMu (findCreatureMotion,
-	// the cast pipeline) — firing here deadlocks the server goroutine
-	// (the Nov-17 motionMu self-deadlock class; smart_ai.go header: every
-	// entry point assumes motionMu NOT held). Dispatch-only, the
-	// SMART_EVENT_KILL precedent. The fire belongs before each call
-	// site's motionMu.Lock(), on the pre-clamp damage for 32 and the
-	// post-clamp damage for 33 (C++ DamageDealt sees the clamped value,
-	// Unit.cpp:701-704) — queued as the next unit.
+	// fire — which lives in smartDamagedPreLock, called before each call
+	// site's motionMu.Lock() — an AI-controlled creature's invincibility
+	// HP level clamps the damage to health - level. The clamp runs here,
+	// before DamageDealt below, so the attacker's DamageDealt (and the
+	// DAMAGED_TARGET event) see the clamped value, like C++
+	// (Unit::DealDamage, Unit.cpp:701-704: DamageTaken runs fully before
+	// DamageDealt). The event fire itself cannot live in this hook: it
+	// runs under held motionMu at all 13 call sites, while the SmartAI
+	// actions it runs take motionMu (findCreatureMotion, the cast
+	// pipeline) — firing here deadlocks the server goroutine (the Nov-17
+	// motionMu self-deadlock class; smart_ai.go header: every entry
+	// point assumes motionMu NOT held). The clamp stays here so the
+	// lethal leg decides on the clamped damage.
 	// IsAIControlled is !_charmed (SmartAI.cpp:40-43); Go tracks charm
 	// as CharmerGUID. The level is set by SMART_ACTION_SET_INVINCIBILITY_HP_LEVEL on the victim's own
 	// SmartAI state; a nil state means no level was ever set. The uint32
@@ -200,6 +198,9 @@ func fireDealDamageAIHooks(ctx context.Context, s *Server, victim, attacker *cre
 		if level := victim.smart.invincibilityHPLevel; level != 0 && *damage >= victim.Health-level {
 			*damage = victim.Health - level
 		}
+	}
+	if attacker != nil && attacker.BossAI != nil {
+		attacker.BossAI.DamageDealt(ctx, s, attacker, victimGUID, damage)
 	}
 }
 
@@ -11518,6 +11519,10 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		var rageNext uint32
 		var rageChanged bool
 		var live *creatureMotion
+		// Unit::DealDamage (Unit.cpp:701-704): the DAMAGED (32) /
+		// DAMAGED_TARGET (33) SmartAI fire runs here, ahead of the lock
+		// — the actions take motionMu (smartDamagedPreLock).
+		s.smartDamagedPreLock(ctx, s.findCreatureMotion(m.Map, m.InstanceID, guid), m, m.GUID, guid, damage)
 		s.motionMu.Lock()
 		if mv := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid); mv != nil && mv.Health > 0 {
 			live = mv
@@ -11734,6 +11739,13 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	var tapPlayer, tapGroup uint64
 	if owner != nil && owner.player != nil {
 		tapPlayer, tapGroup = owner.playerGUID, owner.groupID
+	}
+	// Unit::DealDamage (Unit.cpp:701-704): the DAMAGED (32) /
+	// DAMAGED_TARGET (33) SmartAI fire runs here, ahead of the lock —
+	// the actions take motionMu (smartDamagedPreLock). The damage is
+	// the victim's whole health (NODAMAGE insta-kill).
+	if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil && tm.Health > 0 {
+		s.smartDamagedPreLock(ctx, tm, m, m.GUID, guid, tm.Health)
 	}
 	s.motionMu.Lock()
 	tm := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
