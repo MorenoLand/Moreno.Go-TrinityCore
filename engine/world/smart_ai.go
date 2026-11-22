@@ -157,6 +157,44 @@ const (
 	smartEventEnd                 uint32 = 83 // SMART_EVENT_END (SmartScriptMgr.h:183), loader rejects event types >= this
 )
 
+// Transport / quest / game-event / scene SmartAI event ids, triaged
+// 2026-11-22 (TDB 26091 census, 49,382 rows, 0 bad): 41-44, 45 and
+// 47-51 are dead in the DB (0 rows each) with no C++ fire site —
+// 41-44 fire only through ScriptMgr TransportScript hooks
+// (Transport::AddPassenger/RemovePassenger/Update, ScriptMgr.cpp:
+// 1898-1936) and no TransportScript is registered anywhere in the
+// tree, so they are unreachable in C++; 45 and 47-51 appear only in
+// the dispatch switch and the type-mask tables, with no
+// ProcessEventsFor caller. 78-81 are 0 rows and "don't use on
+// 3.3.5a" (SmartScriptMgr.h:177-180). 68/69 are live (9 + 7 src-0
+// rows) and dispatched; 70/71 are GO-source only (285 + 48 rows)
+// with no Go GO SmartAI state; 72 is 1 src-0 row whose fire site
+// (SmartAI::DoAction, SmartAI.cpp:708-711) has no Go twin; 75/76
+// are 31 + 1 src-0 rows whose fire is the OnUpdate distance scan
+// (SmartScript.cpp:3400-3597), which Go has no twin of.
+const (
+	smartEventTransportAddPlayer    uint32 = 41 // SMART_EVENT_TRANSPORT_ADDPLAYER (SmartScriptMgr.h:140), no params; dead, no dispatch arm
+	smartEventTransportAddCreature  uint32 = 42 // SMART_EVENT_TRANSPORT_ADDCREATURE (SmartScriptMgr.h:141), Param1 = Entry (0 = any); dead, no dispatch arm
+	smartEventTransportRemovePlayer uint32 = 43 // SMART_EVENT_TRANSPORT_REMOVE_PLAYER (SmartScriptMgr.h:142), no params; dead, no dispatch arm
+	smartEventTransportRelocate     uint32 = 44 // SMART_EVENT_TRANSPORT_RELOCATE (SmartScriptMgr.h:143), Param1 = PointId; dead, no dispatch arm
+	smartEventInstancePlayerEnter   uint32 = 45 // SMART_EVENT_INSTANCE_PLAYER_ENTER (SmartScriptMgr.h:144), Param1 = Team (0 = any), Param2/3 CooldownMin/Max; dead, no dispatch arm
+	smartEventQuestAccepted         uint32 = 47 // SMART_EVENT_QUEST_ACCEPTED (SmartScriptMgr.h:146), no params; dead, no dispatch arm
+	smartEventQuestObjCompletion    uint32 = 48 // SMART_EVENT_QUEST_OBJ_COPLETETION (SmartScriptMgr.h:147), no params; dead, no dispatch arm
+	smartEventQuestCompletion       uint32 = 49 // SMART_EVENT_QUEST_COMPLETION (SmartScriptMgr.h:148), no params; dead, no dispatch arm
+	smartEventQuestRewarded         uint32 = 50 // SMART_EVENT_QUEST_REWARDED (SmartScriptMgr.h:149), no params; dead, no dispatch arm
+	smartEventQuestFail             uint32 = 51 // SMART_EVENT_QUEST_FAIL (SmartScriptMgr.h:150), no params; dead, no dispatch arm
+	smartEventGameEventStart        uint32 = 68 // SMART_EVENT_GAME_EVENT_START (SmartScriptMgr.h:167), Param1 = game_event.Entry
+	smartEventGameEventEnd          uint32 = 69 // SMART_EVENT_GAME_EVENT_END (SmartScriptMgr.h:168), Param1 = game_event.Entry
+	smartEventGOEventInform         uint32 = 71 // SMART_EVENT_GO_EVENT_INFORM (SmartScriptMgr.h:170), Param1 = eventId; GO-source only, no dispatch arm
+	smartEventActionDone            uint32 = 72 // SMART_EVENT_ACTION_DONE (SmartScriptMgr.h:171), Param1 = eventId (SharedDefines.EventId); no DoAction fire site in Go, no dispatch arm
+	smartEventDistanceCreature      uint32 = 75 // SMART_EVENT_DISTANCE_CREATURE (SmartScriptMgr.h:174), Param1 = guid, Param2 = entry, Param3 = distance, Param4 = repeat; no distance scan in Go, no dispatch arm
+	smartEventDistanceGameObject    uint32 = 76 // SMART_EVENT_DISTANCE_GAMEOBJECT (SmartScriptMgr.h:175), same params as DISTANCE_CREATURE; no distance scan in Go, no dispatch arm
+	smartEventSceneStart            uint32 = 78 // SMART_EVENT_SCENE_START (SmartScriptMgr.h:177), don't use on 3.3.5a; dead, no dispatch arm
+	smartEventSceneTrigger          uint32 = 79 // SMART_EVENT_SCENE_TRIGGER (SmartScriptMgr.h:178), don't use on 3.3.5a; dead, no dispatch arm
+	smartEventSceneCancel           uint32 = 80 // SMART_EVENT_SCENE_CANCEL (SmartScriptMgr.h:179), don't use on 3.3.5a; dead, no dispatch arm
+	smartEventSceneComplete         uint32 = 81 // SMART_EVENT_SCENE_COMPLETE (SmartScriptMgr.h:180), don't use on 3.3.5a; dead, no dispatch arm
+)
+
 // SMART_ACTION ids (SmartScriptMgr.h:457-600), ported set. Actions
 // >= SMART_ACTION_END (140) never reach dispatch: the C++ loader
 // rejects them (SmartScriptMgr::IsEventValid, SmartScriptMgr.cpp:682-686),
@@ -1022,6 +1060,20 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 	switch ev.row.eventType {
 	case smartEventLink:
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventGameEventStart, smartEventGameEventEnd:
+		// SMART_EVENT_GAME_EVENT_START / GAME_EVENT_END (SmartScript.cpp:
+		// 3325-3331): the event fires only for its game-event id
+		// (event_param1 == var0), with no invoker and no re-arm;
+		// GameEventMgr::RunSmartAIScripts (GameEventMgr.cpp:1744-1752)
+		// visits every in-world creature and gameobject AI on
+		// ApplyNewEvent/UnApplyEvent — the GO leg stays out (Go has no
+		// GO SmartAI state) and all 16 TDB rows are creature-source
+		// (68: 9, 69: 7). The fire is smartGameEvent, wired into
+		// applyGameEventTransition.
+		if ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, 0, var0, 0)
 	case smartEventDataSet:
 		// SMART_EVENT_DATA_SET (SmartScript.cpp:3286-3292): the event
 		// fires only for its (field, value) pair, then re-arms its

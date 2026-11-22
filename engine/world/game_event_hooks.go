@@ -96,6 +96,43 @@ func (s *Server) updateGameEventHooks(ctx context.Context) {
 // id ApplyNewEvent announces with.
 const langEventMessage = 4
 
+// smartGameEvent is GameEventMgr::RunSmartAIScripts (GameEventMgr.cpp:
+// 1744-1752): on a game-event start/stop it visits every in-world
+// creature AI (IsInWorld && IsAIEnabled — Unit.h:762 is just a
+// non-nil AI, so dead-but-present creatures are visited too) and
+// every gameobject AI. Go motions in instanceCreatureMotion are
+// in-world by construction, and smartProcessEvents no-ops for a
+// motion with no SmartAI state, so the snapshot covers the creature
+// leg exactly; the GO leg stays out (Go has no GO SmartAI state).
+// The motions snapshot rides the pet-sweep pattern (pet_runtime.go):
+// collect under motionMu, fire after releasing it — the SmartAI
+// actions take motionMu, so firing under the lock deadlocks (the
+// Nov-17 motionMu self-deadlock class). Called from
+// applyGameEventTransition, which runs on the world tick with
+// motionMu released.
+func (s *Server) smartGameEvent(ctx context.Context, eventID uint32, start bool) {
+	if s == nil {
+		return
+	}
+	s.motionMu.Lock()
+	motions := make([]*creatureMotion, 0, 64)
+	for _, motionMap := range s.instanceCreatureMotion {
+		for _, motion := range motionMap {
+			if motion != nil {
+				motions = append(motions, motion)
+			}
+		}
+	}
+	s.motionMu.Unlock()
+	eventType := smartEventGameEventEnd
+	if start {
+		eventType = smartEventGameEventStart
+	}
+	for _, motion := range motions {
+		s.smartProcessEvents(ctx, motion, eventType, 0, eventID, 0)
+	}
+}
+
 // applyGameEventTransition runs the ApplyNewEvent/UnApplyEvent legs that
 // live outside the query-time spawn application, in C++ order (apply
 // before the Eluna hook fire): on start, the worldstate write for
@@ -122,6 +159,9 @@ func (s *Server) applyGameEventTransition(ctx context.Context, id int64, start b
 		return
 	}
 	if !start {
+		// UnApplyEvent (GameEventMgr.cpp:1155-1163) runs the SAI
+		// scripts first, before the worldstate cleanup below.
+		s.smartGameEvent(ctx, uint32(id), false)
 		s.setWorldState(ctx, uint32(id), 0)
 		return
 	}
@@ -136,6 +176,9 @@ func (s *Server) applyGameEventTransition(ctx context.Context, id int64, start b
 	if ev.Announce == 1 || (ev.Announce == 2 && s.Config.EventAnnounce) {
 		s.broadcastGameEventAnnounce(ctx, ev.Description)
 	}
+	// ApplyNewEvent (GameEventMgr.cpp:1196-1208) runs the SAI scripts
+	// last, after the spawn/quest/worldstate legs.
+	s.smartGameEvent(ctx, uint32(id), true)
 }
 
 // broadcastGameEventAnnounce sends the ApplyNewEvent world text
