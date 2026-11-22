@@ -1206,13 +1206,39 @@ func (s *Server) creatureIsMounted(key creatureAuraKey, motion *creatureMotion) 
 	return len(s.creatureAuraAmountsByType(key, spellAuraMounted)) > 0
 }
 
+// creatureMinSpeedBase is the MOD_MINIMUM_SPEED (305) floor base in
+// Unit::UpdateSpeed (Unit.cpp:8795-8806): 1.0f unless the unit is a
+// non-player-owned, non-hunter-pet creature, which uses the template
+// speed_run. GetOwnerGUID is UNIT_FIELD_SUMMONEDBY (Unit.h:1147), which
+// charm never touches — so a charmed unit keeps its pre-charm owner
+// (motion.CharmOwnerGUID), while Go's OwnerGUID is overwritten with the
+// charmer on charm.
+func (s *Server) creatureMinSpeedBase(motion *creatureMotion, base float32) float32 {
+	if motion == nil {
+		return base
+	}
+	if motion.PetType == petTypeHunter {
+		return 1.0
+	}
+	ownerGUID := motion.OwnerGUID
+	if motion.Charmed {
+		ownerGUID = motion.CharmOwnerGUID
+	}
+	if ownerGUID != 0 && s != nil && s.findSessionByGUID(ownerGUID) != nil {
+		return 1.0
+	}
+	return base
+}
+
 // creatureRunSpeedRate mirrors the MOVE_RUN arm of Unit::UpdateSpeed
 // (Unit.cpp:8666-8809) for AI-driven creatures: main_speed_mod is the
 // strongest MOD_INCREASE_SPEED (31); the rate starts at
 // max(1+strongest MOD_SPEED_NOT_STACK (171), product MOD_SPEED_ALWAYS
 // (129), same-effect-group gated); the strongest MOD_DECREASE_SPEED (33)
 // applies after; the
-// MOD_MINIMUM_SPEED (305) floor rides the template base rate. Mounted
+// MOD_MINIMUM_SPEED (305) floor rides the template base rate — except
+// for player-owned and hunter pets, where the floor base is 1.0
+// (creatureMinSpeedBase, Unit.cpp:8795-8806). Mounted
 // creatures take the mounted branch instead (Unit.cpp:8683-8688):
 // strongest MOD_INCREASE_MOUNTED_SPEED (32), product
 // MOD_MOUNTED_SPEED_ALWAYS (130, same-effect-group gated), strongest
@@ -1302,7 +1328,7 @@ func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotio
 		}
 	}
 	if minMod > 0 {
-		if minSpeed := base * float32(minMod) / 100; rate < minSpeed {
+		if minSpeed := s.creatureMinSpeedBase(motion, base) * float32(minMod) / 100; rate < minSpeed {
 			rate = minSpeed
 		}
 	}
@@ -1366,7 +1392,7 @@ func (s *Server) creatureSwimSpeedRate(key creatureAuraKey, motion *creatureMoti
 		}
 	}
 	if minMod > 0 {
-		if minSpeed := base * float32(minMod) / 100; rate < minSpeed {
+		if minSpeed := s.creatureMinSpeedBase(motion, base) * float32(minMod) / 100; rate < minSpeed {
 			rate = minSpeed
 		}
 	}
@@ -1463,7 +1489,7 @@ func (s *Server) creatureFlightSpeedRate(key creatureAuraKey, motion *creatureMo
 		}
 	}
 	if minMod > 0 {
-		if minSpeed := base * float32(minMod) / 100; rate < minSpeed {
+		if minSpeed := s.creatureMinSpeedBase(motion, base) * float32(minMod) / 100; rate < minSpeed {
 			rate = minSpeed
 		}
 	}

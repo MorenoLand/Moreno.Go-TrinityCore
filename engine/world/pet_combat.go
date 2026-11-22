@@ -1100,8 +1100,9 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			// near point at PET_FOLLOW_DIST plus both combat reaches
 			// (WorldObject::GetNearPoint, Object.cpp:3307). The walk-when-the-
 			// owner-walks arm (init.SetWalk(target->IsWalking()),
-			// FollowMovementGenerator.cpp:155) has no bridge — Go models no
-			// player walk state. init.SetFacing(target->GetOrientation())
+			// FollowMovementGenerator.cpp:165) reads the owner's WALKING
+			// bit from its last movement packet, as stepScriptFollow does.
+			// init.SetFacing(target->GetOrientation())
 			// (FollowMovementGenerator.cpp:156) faces the pet at the owner's
 			// orientation for the whole spline. The stop distance is the
 			// combat reaches + PET_FOLLOW_DIST (PositionOkay,
@@ -1144,7 +1145,13 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			destX := owner.X + float32(nearDist*math.Cos(absAngle))
 			destY := owner.Y + float32(nearDist*math.Sin(absAngle))
 			destZ := owner.Z
-			speed := creatureSplineVelocity(motion, false)
+			ownerWalking := false
+			if owner.Sess != nil {
+				if mi, ok := owner.Sess.lastMovementInfoSnapshot(); ok {
+					ownerWalking = mi.Flags&movementWalking != 0
+				}
+			}
+			speed := creatureSplineVelocityExplicit(motion, ownerWalking)
 			if speed < 0.001 {
 				// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate
 				// (MoveSpline.cpp:210): velocity below 0.001 fails validation —
@@ -1158,7 +1165,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			} else {
 				motion.Orientation = ownerOrient
 				duration := splineDurationMs(float64(dist), speed)
-				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, ownerOrient, true, motion.PhaseMask, motion.TransportGUID)
+				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, ownerWalking, ownerOrient, true, motion.PhaseMask, motion.TransportGUID)
 				motion.X = destX
 				motion.Y = destY
 				motion.Z = destZ
