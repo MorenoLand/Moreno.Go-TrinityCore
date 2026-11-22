@@ -168,10 +168,12 @@ const (
 // ProcessEventsFor caller. 78-81 are 0 rows and "don't use on
 // 3.3.5a" (SmartScriptMgr.h:177-180). 68/69 are live (9 + 7 src-0
 // rows) and dispatched; 70/71 are GO-source only (285 + 48 rows)
-// with no Go GO SmartAI state; 72 is 1 src-0 row whose fire site
-// (SmartAI::DoAction, SmartAI.cpp:708-711) has no Go twin; 75/76
-// are 31 + 1 src-0 rows whose fire is the OnUpdate distance scan
-// (SmartScript.cpp:3400-3597), which Go has no twin of.
+// with no Go GO SmartAI state, so they are dispatch-only; 72 is 1
+// src-0 row (Michael Belfast 30571, DoAction 100) whose fire site
+// (the CoS intro machine, culling_of_stratholme.cpp:119) has no Go
+// twin, so it is dispatch-only; 75/76 are 31 + 1 src-0 rows fired
+// by the OnUpdate distance scan (SmartScript.cpp:3400-3456), ported
+// in smartProcessEvent + smartInitTimer + smartUpdateTimers.
 const (
 	smartEventTransportAddPlayer    uint32 = 41 // SMART_EVENT_TRANSPORT_ADDPLAYER (SmartScriptMgr.h:140), no params; dead, no dispatch arm
 	smartEventTransportAddCreature  uint32 = 42 // SMART_EVENT_TRANSPORT_ADDCREATURE (SmartScriptMgr.h:141), Param1 = Entry (0 = any); dead, no dispatch arm
@@ -185,10 +187,10 @@ const (
 	smartEventQuestFail             uint32 = 51 // SMART_EVENT_QUEST_FAIL (SmartScriptMgr.h:150), no params; dead, no dispatch arm
 	smartEventGameEventStart        uint32 = 68 // SMART_EVENT_GAME_EVENT_START (SmartScriptMgr.h:167), Param1 = game_event.Entry
 	smartEventGameEventEnd          uint32 = 69 // SMART_EVENT_GAME_EVENT_END (SmartScriptMgr.h:168), Param1 = game_event.Entry
-	smartEventGOEventInform         uint32 = 71 // SMART_EVENT_GO_EVENT_INFORM (SmartScriptMgr.h:170), Param1 = eventId; GO-source only, no dispatch arm
-	smartEventActionDone            uint32 = 72 // SMART_EVENT_ACTION_DONE (SmartScriptMgr.h:171), Param1 = eventId (SharedDefines.EventId); no DoAction fire site in Go, no dispatch arm
-	smartEventDistanceCreature      uint32 = 75 // SMART_EVENT_DISTANCE_CREATURE (SmartScriptMgr.h:174), Param1 = guid, Param2 = entry, Param3 = distance, Param4 = repeat; no distance scan in Go, no dispatch arm
-	smartEventDistanceGameObject    uint32 = 76 // SMART_EVENT_DISTANCE_GAMEOBJECT (SmartScriptMgr.h:175), same params as DISTANCE_CREATURE; no distance scan in Go, no dispatch arm
+	smartEventGOEventInform         uint32 = 71 // SMART_EVENT_GO_EVENT_INFORM (SmartScriptMgr.h:170), Param1 = eventId; GO-source only (48 rows), dispatch arm only — no Go GO SmartAI state, no fire site
+	smartEventActionDone            uint32 = 72 // SMART_EVENT_ACTION_DONE (SmartScriptMgr.h:171), Param1 = eventId; 1 src-0 row (Michael Belfast 30571, DoAction 100, EVENT_BELFAST_MOVE); dispatch arm only — the sole C++ caller is the CoS intro machine (culling_of_stratholme.cpp:119), no Go twin
+	smartEventDistanceCreature      uint32 = 75 // SMART_EVENT_DISTANCE_CREATURE (SmartScriptMgr.h:174), Param1 = guid, Param2 = entry, Param3 = distance, Param4 = repeat; 31 src-0 rows, fired by the OnUpdate distance scan
+	smartEventDistanceGameObject    uint32 = 76 // SMART_EVENT_DISTANCE_GAMEOBJECT (SmartScriptMgr.h:175), same params as DISTANCE_CREATURE; 1 src-0 row (Plump Turkey 32818), fired by the OnUpdate distance scan
 	smartEventSceneStart            uint32 = 78 // SMART_EVENT_SCENE_START (SmartScriptMgr.h:177), don't use on 3.3.5a; dead, no dispatch arm
 	smartEventSceneTrigger          uint32 = 79 // SMART_EVENT_SCENE_TRIGGER (SmartScriptMgr.h:178), don't use on 3.3.5a; dead, no dispatch arm
 	smartEventSceneCancel           uint32 = 80 // SMART_EVENT_SCENE_CANCEL (SmartScriptMgr.h:179), don't use on 3.3.5a; dead, no dispatch arm
@@ -858,11 +860,15 @@ func (s *Server) smartStateFor(ctx context.Context, motion *creatureMotion) *sma
 }
 
 // smartInitTimer is SmartScript::InitTimer (:3472-3486): timed-update events
-// start on their initial min/max roll, everything else starts active.
+// start on their initial min/max roll, distance events on their repeat
+// roll (RecalcTimer(repeat, repeat), :3482-3484), everything else
+// starts active.
 func (s *Server) smartInitTimer(ev *smartScriptEvent) {
 	switch ev.row.eventType {
 	case smartEventUpdate, smartEventUpdateIC, smartEventUpdateOOC:
 		s.smartRecalcTimer(ev, ev.row.eventParam1, ev.row.eventParam2)
+	case smartEventDistanceCreature, smartEventDistanceGameObject:
+		s.smartRecalcTimer(ev, ev.row.eventParam4, ev.row.eventParam4)
 	default:
 		ev.active = true
 	}
@@ -1025,6 +1031,90 @@ func (s *Server) smartUnitAuraCount(m *creatureMotion, targetGUID uint64, spell 
 	return 0
 }
 
+// smartDistanceCreature is the SMART_EVENT_DISTANCE_CREATURE range
+// check (SmartScript.cpp:3400-3425): param1 (spawn guid) looks the
+// creature up by GUID and checks 3D range (FindCreatureNear +
+// IsInRange, SmartScript.cpp:156-165/:3411-3415); param2 (entry)
+// takes a creature of that entry inside param3 yards
+// (GetCreatureListWithEntryInGrid, AllCreaturesOfEntryInRange,
+// GridNotifiers.h:1456-1480: entry + 2D range, no alive filter). Go
+// takes the nearest match where C++ takes the grid list's front(),
+// and uses the 3D range the other SmartAI scans use where C++ uses
+// 2D for the entry leg — no live row depends on either (0
+// self-entry rows, all targets ground-level). The guid leg scans
+// the motion registry by low GUID like smartCreatureGUIDTarget
+// (FindCreatureNear tests guid and entry only, no alive check;
+// C++ prefers an alive one among same-spawn duplicates, Go takes
+// the first in registry order).
+func (s *Server) smartDistanceCreature(motion *creatureMotion, ev *smartScriptEvent) (uint64, bool) {
+	if motion == nil {
+		return 0, false
+	}
+	if ev.row.eventParam1 != 0 {
+		dbGuid := ev.row.eventParam1
+		s.motionMu.Lock()
+		var target *creatureMotion
+		for _, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+			if m == nil || uint32(m.GUID&0x00FFFFFF) != dbGuid {
+				continue
+			}
+			target = m
+			break
+		}
+		s.motionMu.Unlock()
+		if target == nil {
+			return 0, false
+		}
+		if distance3D(motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z) > float64(ev.row.eventParam3) {
+			return 0, false
+		}
+		return target.GUID, true
+	}
+	if ev.row.eventParam2 == 0 {
+		return 0, false
+	}
+	if targets := s.smartClosestCreatureTarget(motion, ev.row.eventParam2, ev.row.eventParam3, 1); len(targets) > 0 {
+		return targets[0].guid, true
+	}
+	return 0, false
+}
+
+// smartDistanceGameObject is the SMART_EVENT_DISTANCE_GAMEOBJECT range
+// check (SmartScript.cpp:3430-3456): param1 (spawn guid) looks the
+// gameobject up by GUID and checks range (FindGameObjectNear +
+// IsInRange, SmartScript.cpp:147-154/:3437-3441), param2 (entry)
+// takes a gameobject of that entry inside param3 yards
+// (GetGameObjectListWithEntryInGrid, AllGameObjectsWithEntryInRange,
+// GridNotifiers.h:1437-1454: entry + 2D range). The GO itself is
+// never the invoker — C++ passes it as the gob argument to
+// ProcessTimedAction while the unit stays null — so this returns
+// only whether one is in range; the 1 live row's action (80, target
+// SELF) needs neither. Same nearest-match / 3D-range notes as
+// smartDistanceCreature.
+func (s *Server) smartDistanceGameObject(ctx context.Context, motion *creatureMotion, ev *smartScriptEvent) bool {
+	if motion == nil {
+		return false
+	}
+	if ev.row.eventParam1 != 0 {
+		dbGuid := ev.row.eventParam1
+		found := false
+		s.scanNearbyGameObjectsAtServer(ctx, motion.Map, motion.InstanceID, motion.X, motion.Y, float32(ev.row.eventParam3), func(g nearbyGameObject) {
+			if found || g.spawnLow != dbGuid {
+				return
+			}
+			if distance3D(motion.X, motion.Y, motion.Z, g.x, g.y, g.z) > float64(ev.row.eventParam3) {
+				return
+			}
+			found = true
+		})
+		return found
+	}
+	if ev.row.eventParam2 == 0 {
+		return false
+	}
+	return len(s.smartGameObjectNear(ctx, motion, ev.row.eventParam2, float32(ev.row.eventParam3))) > 0
+}
+
 // smartProcessEvent is SmartScript::ProcessEvent (:2882-...): the active,
 // phase-mask, NOT_REPEATABLE, WHILE_CHARMED and difficulty gates, then the
 // per-type dispatch — direct events run their action, timed events run
@@ -1070,6 +1160,50 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		// GO SmartAI state) and all 16 TDB rows are creature-source
 		// (68: 9, 69: 7). The fire is smartGameEvent, wired into
 		// applyGameEventTransition.
+		if ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, 0, var0, 0)
+	case smartEventGOLootStateChanged:
+		// SMART_EVENT_GO_LOOT_STATE_CHANGED (SmartScript.cpp:3333-3338):
+		// the event fires only for its loot state (event_param1 ==
+		// var0 — GO_NOT_READY 0 / GO_READY 1 / GO_ACTIVATED 2 /
+		// GO_JUST_DEACTIVATED 3), then runs its action with the GO
+		// user as invoker and the state as var0. No Go fire site:
+		// C++ fires it from SmartGameObjectAI::OnLootStateChanged
+		// (SmartAI.cpp:1090) and all 285 TDB rows are GO-source —
+		// Go has no GO SmartAI state and loads creature sources
+		// only, so the dispatch arm stands ready for a future GO
+		// script state. TDB 26091: 70 = 285 src-1 rows (p1: 2 x264,
+		// 1 x13, 3 x7, 0 x1).
+		if ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventGOEventInform:
+		// SMART_EVENT_GO_EVENT_INFORM (SmartScript.cpp:3340-3345): the
+		// event fires only for its event id (event_param1 == var0),
+		// then runs its action with no invoker and the id as var0.
+		// No Go fire site: C++ fires it from
+		// SmartGameObjectAI::EventInform (SmartAI.cpp:1094) and all
+		// 48 TDB rows are GO-source — Go has no GO SmartAI state.
+		// TDB 26091: 71 = 48 src-1 rows (30 action 147, load-rejected).
+		if ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, 0, var0, 0)
+	case smartEventActionDone:
+		// SMART_EVENT_ACTION_DONE (SmartScript.cpp:3347-3352): the
+		// event fires only for its event id (event_param1 == var0),
+		// then runs its action with no invoker (SmartAI::DoAction
+		// passes nullptr, SmartAI.cpp:708-711) and the id as var0.
+		// No Go fire site: the sole C++ caller is the Culling of
+		// Stratholme intro machine — belfast->AI()->DoAction(
+		// EVENT_BELFAST_MOVE) (culling_of_stratholme.cpp:119,
+		// EVENT_BELFAST_MOVE = 100) — and Go has no CoS intro
+		// machine. TDB 26091: 72 = 1 src-0 row (Michael Belfast
+		// 30571, p1 100, action 17 SET_EMOTE_STATE, NOT_REPEATABLE,
+		// link 1).
 		if ev.row.eventParam1 != var0 {
 			return
 		}
@@ -1174,6 +1308,48 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 			}
 		}
 		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam3, ev.row.eventParam4, targetGUID, 0, 0)
+	case smartEventDistanceCreature, smartEventDistanceGameObject:
+		// SMART_EVENT_DISTANCE_CREATURE / DISTANCE_GAMEOBJECT
+		// (SmartScript.cpp:3400-3456): timed-condition events, polled
+		// from UpdateTimer — param1 (spawn guid) looks the object up
+		// by GUID and checks range (FindCreatureNear /
+		// FindGameObjectNear + IsInRange, :147-165/:3411-3415), param2
+		// (entry) takes the first creature / gameobject of that entry
+		// inside param3 yards (GetCreatureListWithEntryInGrid /
+		// GetGameObjectListWithEntryInGrid, AllCreaturesOfEntryInRange
+		// / AllGameObjectsWithEntryInRange, GridNotifiers.h:1437-1480:
+		// entry + 2D range, no alive filter). On a hit the event
+		// re-arms on the repeat window (param4) via ProcessTimedAction
+		// and runs its action with the found creature as invoker
+		// (DISTANCE_CREATURE) or no invoker (DISTANCE_GAMEOBJECT,
+		// whose GO rides the action's target resolution instead); on
+		// a miss it returns WITHOUT re-arming, so the expired timer
+		// re-checks every tick — exactly like C++ UpdateTimer. Go
+		// takes the nearest match where C++ takes the grid list's
+		// front(), and uses the 3D range the other SmartAI scans use
+		// where C++ uses 2D for the entry leg; no live row depends
+		// on either (0 self-entry rows, all targets ground-level).
+		// TDB 26091: 75 = 31 src-0 rows (all guid 0, entries set,
+		// dist 1-40, repeats 0/1/5000/15000/20000/60000/90000/120000;
+		// 3 rows carry repeat 0 with no NOT_REPEATABLE flag and so
+		// fire every tick while in range, like C++), 76 = 1 src-0
+		// row (Plump Turkey 32818, campfire 31442, 6yd, repeat 0,
+		// flags 513 NOT_REPEATABLE + DONT_RESET).
+		if motion == nil {
+			return
+		}
+		if ev.row.eventType == smartEventDistanceCreature {
+			targetGUID, ok := s.smartDistanceCreature(motion, ev)
+			if !ok {
+				return
+			}
+			s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam4, ev.row.eventParam4, targetGUID, 0, 0)
+			return
+		}
+		if !s.smartDistanceGameObject(ctx, motion, ev) {
+			return
+		}
+		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam4, ev.row.eventParam4, 0, 0, 0)
 	case smartEventTimedEventTriggered:
 		// SMART_EVENT_TIMED_EVENT_TRIGGERED (SmartScript.cpp:3303-3307):
 		// the event fires only for its timed-event id, then runs its
@@ -1545,7 +1721,8 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 			case smartEventUpdate, smartEventUpdateOOC, smartEventUpdateIC,
 				smartEventHealthPct, smartEventTargetHealthPc, smartEventManaPct,
 				smartEventTargetManaPct, smartEventRange,
-				smartEventHasAura, smartEventTargetBuffed:
+				smartEventHasAura, smartEventTargetBuffed,
+				smartEventDistanceCreature, smartEventDistanceGameObject:
 				s.smartProcessEvent(ctx, motion, st, ev, 0, 0, 0)
 			}
 		} else {
