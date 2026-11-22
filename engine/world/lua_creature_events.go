@@ -6828,10 +6828,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// MOVE_WALK=0 reads the motion walk speed (template walk speed,
 	// 2.5 fallback), MOVE_RUN=1 the engine run speed (base 7.0 times
 	// the creatureRunSpeedRate fold, 7.0 fallback), MOVE_FLIGHT=6 the
-	// Creature::Initialize flight speed (1.0 * 7.0, creaturemotion.go:507),
-	// folded by a script-set MOVE_FLIGHT rate while known.
-	// Other move types have no Go creature model and error, mirroring
-	// the SetSpeedRate rejection.
+	// creatureFlightSpeedRate fold (Unit::UpdateSpeed MOVE_FLIGHT arm,
+	// base 7.0; a script-set MOVE_FLIGHT rate replaces the fold while
+	// known, as in creatureRunSpeedRate). Other move types have no Go
+	// creature model and error, mirroring the SetSpeedRate rejection.
 	methods["GetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -6839,7 +6839,6 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		walk, run := motion.Speed, motion.RunSpeed
-		flightRate, flightKnown := motion.ScriptFlightRate, motion.ScriptFlightRateKnown
 		s.motionMu.Unlock()
 		switch mt {
 		case 0:
@@ -6853,11 +6852,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 			return []any{run}, nil
 		case 6:
-			flight := float32(creatureBaseFlightSpeed)
-			if flightKnown {
-				flight *= flightRate
-			}
-			return []any{flight}, nil
+			return []any{creatureBaseFlightSpeed * s.creatureFlightSpeedRate(creatureAuraKeyForMotion(motion), motion)}, nil
 		default:
 			return nil, fmt.Errorf("GetSpeed supports MOVE_WALK=0, MOVE_RUN=1, MOVE_FLIGHT=6 only, got %d", mt)
 		}

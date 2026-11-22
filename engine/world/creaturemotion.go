@@ -1221,8 +1221,9 @@ func (s *Server) creatureIsMounted(key creatureAuraKey, motion *creatureMotion) 
 // template speed_run (banked on BaseRunRate) multiplies the rate, matching
 // the `speed *= ToCreature()->GetCreatureTemplate()->speed_run` leg.
 // MOVE_WALK returns early in C++ so walk is untouched; MOVE_SWIM folds
-// in creatureSwimSpeedRate (banked on motion.SwimSpeed); MOVE_FLIGHT has
-// no Go creature model; the minion follow catch-up arm rides
+// in creatureSwimSpeedRate (banked on motion.SwimSpeed); MOVE_FLIGHT folds
+// in creatureFlightSpeedRate (read live by GetSpeed(6) — no banked flight
+// speed exists, no spline selects it); the minion follow catch-up arm rides
 // minionFollowBorrow below.
 func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
 	// A script-set rate replaces the aura fold outright: C++ keeps a
@@ -1349,6 +1350,103 @@ func (s *Server) creatureSwimSpeedRate(key creatureAuraKey, motion *creatureMoti
 		}
 	}
 	rate = s.minionFollowBorrow(rate, motion, true)
+	var slow int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
+		if a < slow {
+			slow = a
+		}
+	}
+	if slow < 0 {
+		rate *= 1 + float32(slow)/100
+	}
+	var minMod int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraMinimumSpeed) {
+		if a > minMod {
+			minMod = a
+		}
+	}
+	if minMod > 0 {
+		if minSpeed := base * float32(minMod) / 100; rate < minSpeed {
+			rate = minSpeed
+		}
+	}
+	if rate < 0 {
+		rate = 0
+	}
+	return rate
+}
+
+// creatureFlightSpeedRate mirrors the MOVE_FLIGHT arm of Unit::UpdateSpeed
+// (Unit.cpp:8700-8726, 8744-8810) for AI-driven creatures: mounted takes
+// strongest MOD_INCREASE_MOUNTED_FLIGHT_SPEED (207) as the main mod with
+// the product MOD_MOUNTED_FLIGHT_SPEED_ALWAYS (209, same-effect-group
+// gated); unmounted sums MOD_INCREASE_FLIGHT_SPEED (208) +
+// MOD_INCREASE_VEHICLE_FLIGHT_SPEED (206); both add strongest
+// MOD_FLIGHT_SPEED_NOT_STACK (211) / 100 to the non-stack bonus; the rate
+// is max(non-stack, stack) with the main mod folded in, times the template
+// speed_run (BaseRunRate), then the shared tail — the 191 normalization
+// cap against baseMoveSpeed[MOVE_FLIGHT] (creatureBaseFlightSpeed 7.0)
+// unless the template is SNARE/DAZE immune, strongest MOD_DECREASE_SPEED
+// (33), the MOD_MINIMUM_SPEED (305) floor. A script-set rate replaces the
+// aura fold outright, as in creatureRunSpeedRate. The result is a rate;
+// multiply by creatureBaseFlightSpeed for yd/s, as GetSpeed(6) does.
+// Residuals: the TYPEID_UNIT controlled-by-player vehicle-flight arm
+// (206-with-vehicle + GetCharmer owner max, 210 stack) has no creature-side
+// charmer fold, and the minion follow borrow is not applied — the owner
+// flight rate is not banked anywhere (no FlightSpeed field; GetSpeed(6)
+// is the only consumer), so there is no banked owner rate to borrow.
+func (s *Server) creatureFlightSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
+	if motion != nil && motion.ScriptFlightRateKnown {
+		return motion.ScriptFlightRate
+	}
+	base := float32(1.0)
+	if motion != nil && motion.BaseRunRate > 0 {
+		base = motion.BaseRunRate
+	}
+	var mainMod int32
+	var stack float32 = 1.0
+	if s.creatureIsMounted(key, motion) {
+		for _, a := range s.creatureAuraAmountsByType(key, spellAuraMountedFlightSpeed) {
+			if a > mainMod {
+				mainMod = a
+			}
+		}
+		stack = s.creatureSpeedAlwaysMultiplierFor(key, spellAuraMountedFlightSpeedAlways)
+	} else {
+		for _, a := range s.creatureAuraAmountsByType(key, spellAuraIncreaseFlightSpeed) {
+			mainMod += a
+		}
+		for _, a := range s.creatureAuraAmountsByType(key, spellAuraIncreaseVehicleFlight) {
+			mainMod += a
+		}
+	}
+	nonStack := float32(1.0)
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraFlightSpeedNotStack) {
+		if v := float32(1.0) + float32(a)/100; v > nonStack {
+			nonStack = v
+		}
+	}
+	rate := nonStack
+	if stack > rate {
+		rate = stack
+	}
+	if mainMod != 0 {
+		rate *= 1 + float32(mainMod)/100
+	}
+	rate *= base
+	if motion != nil && motion.MechanicImmuneMask&(1<<10|1<<26) == 0 {
+		var norm int32
+		for _, a := range s.creatureAuraAmountsByType(key, spellAuraUseNormalMovementSpeed) {
+			if a > norm {
+				norm = a
+			}
+		}
+		if norm > 0 {
+			if maxRate := float32(norm) / creatureBaseFlightSpeed; rate > maxRate {
+				rate = maxRate
+			}
+		}
+	}
 	var slow int32
 	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
 		if a < slow {
