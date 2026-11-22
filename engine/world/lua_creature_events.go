@@ -3835,15 +3835,17 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.clearCreatureVisualTarget(motion)
 		return nil, nil
 	}
-	// CombatStop is Unit::CombatStop (Unit.cpp:5809-5825) for handler
+	// CombatStop is Unit::CombatStop (Unit.cpp:5809-5826) for handler
 	// creatures: in C++ order, InterruptNonMeleeSpells(false) when
 	// includingCast (the Go cast-state gate is motion.CastingUntil, the
 	// evade precedent at creaturemotion.go:2191), AttackStop (own victim
 	// dropped, SMSG_ATTACK_STOP, visual target cleared, assistance flag
 	// reset), RemoveAllAttackers (every attacker stops — see
-	// removeCreatureAttackers), then the mutualPvP=false leg,
-	// CombatManager::EndAllPvECombat (CombatManager.cpp:344-350):
-	// RemoveMeFromThreatLists + ClearAllThreat + InCombat=false.
+	// removeCreatureAttackers), then the mutualPvP=true default leg
+	// (Unit.h:823): ClearInCombat (Unit.h:1052) -> EndAllCombat
+	// (CombatManager.h:126) -> EndAllPvECombat (CombatManager.cpp:344-351):
+	// RemoveMeFromThreatLists + ClearAllThreat + InCombat=false
+	// (+ EndAllPvPCombat, unmodeled in Go).
 	// NOT carried: the player-only SendAttackSwingCancelAttack (this
 	// method exists only on creature objects), SuppressPvPCombat (Go has
 	// no PvP-suppression model outside sanctuary handling), health

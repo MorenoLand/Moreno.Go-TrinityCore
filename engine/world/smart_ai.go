@@ -1836,13 +1836,15 @@ func (s *Server) smartInvokerPlayerSession(motion *creatureMotion, invokerGUID u
 // invoker credits its owner — anchored on the base object (the motion)
 // for the group reward distance test; a vehicle-riding invoker credits
 // each seated passenger the same way (:864-867). The C++ `unit` is the
-// invoker; a missing invoker no-ops (:854-855). TDB 26091: 15 rows.
+// raw ProcessAction param, so a missing invoker no-ops (:854-855) —
+// timer-fired rows pass nullptr (SmartScript.cpp:2900, UpdateTimer's
+// else ProcessEvent(e)) while timed-list rows carry the stored list
+// invoker (:3563-3564, Go's st.timedListInvoker); there is deliberately
+// NO lastInvoker fallback here, a stale invoker would credit the wrong
+// player. TDB 26091: 15 rows, all on DEATH (6) / LINK (61) /
+// GOSSIP_SELECT (62) with a real invoker.
 func (s *Server) smartActionCallGroupEventHappens(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
-	invoker := invokerGUID
-	if invoker == 0 {
-		invoker = st.lastInvoker
-	}
-	if invoker == 0 {
+	if invokerGUID == 0 {
 		return
 	}
 	questID := ev.row.actionParam1
@@ -1852,94 +1854,57 @@ func (s *Server) smartActionCallGroupEventHappens(ctx context.Context, motion *c
 			sess.groupEventHappens(ctx, questID, base)
 		}
 	}
-	credit(s.smartInvokerPlayerSession(motion, invoker))
-	if kit := s.smartVehicleKitForTarget(motion, invoker); kit != nil {
+	credit(s.smartInvokerPlayerSession(motion, invokerGUID))
+	if kit := s.smartVehicleKitForTarget(motion, invokerGUID); kit != nil {
 		for _, passengerGUID := range kit.seatedPassengerGUIDs() {
 			credit(s.findSessionByGUID(passengerGUID))
 		}
 	}
 }
 
-// smartRemoveAllAttackers is the Unit::RemoveAllAttackers half of
-// CombatStop (Unit.cpp:5867-5876): every current attacker AttackStops —
-// creatures whose target is me take the Lua AttackStop twin (visual
-// target clear, stop packet, assistance latch reset, threat untouched),
-// players attacking me clear their attack target and take the
-// SMSG_ATTACK_STOP packet. Attackers keep their combat state: C++
-// AttackStop ends no combat, only the m_attacking link.
-func (s *Server) smartRemoveAllAttackers(ctx context.Context, motion *creatureMotion) {
-	s.motionMu.Lock()
-	var attackers []*creatureMotion
-	for _, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
-		if m == nil || m.GUID == motion.GUID || m.TargetGUID != motion.GUID {
-			continue
-		}
-		attackers = append(attackers, m)
-	}
-	s.motionMu.Unlock()
-	for _, m := range attackers {
-		s.motionMu.Lock()
-		victim := m.TargetGUID
-		if victim != motion.GUID {
-			s.motionMu.Unlock()
-			continue
-		}
-		m.TargetGUID = 0
-		m.AlreadyCallAssistance = false
-		mapID, instanceID, x, y, z, phase := m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask
-		guid := m.GUID
-		s.motionMu.Unlock()
-		s.clearCreatureVisualTarget(m)
-		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(guid, victim, false), mapID, instanceID, x, y, z, phase)
-	}
-	s.sessionsMu.RLock()
-	var sessions []*session
-	for sess := range s.sessions {
-		if sess != nil && sess.attackTarget == motion.GUID {
-			sessions = append(sessions, sess)
-		}
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range sessions {
-		if sess.attackTarget != motion.GUID {
-			continue
-		}
-		sess.attackTarget = 0
-		_ = sess.sendAttackStop(motion.GUID, false)
-	}
-}
-
 // smartActionCombatStop is SMART_ACTION_COMBAT_STOP
-// (SmartScript.cpp:873-881): me->CombatStop(true) (Unit.cpp:5809-5826) —
+// (SmartScript.cpp:873-881): me->CombatStop(true) (Unit.cpp:5809-5826),
+// the Lua CombatStop bridge's twin (lua_creature_events.go:3846-3895):
 // interrupt the non-melee cast, AttackStop (visual target clear, stop
-// packet, assistance latch reset), RemoveAllAttackers, then end PvE
-// combat (InCombat=false; the mutualPvP=false leg — EndAllPvECombat /
-// SuppressPvPCombat, no ClearInCombat). Threat is untouched: C++ keeps
-// the threat list and re-engagement rides the normal aggro paths.
-// TDB 26091: 13 rows, all SELF-targeted.
+// packet, assistance latch reset), RemoveAllAttackers via the shared
+// removeCreatureAttackers twin, then the mutualPvP=true default leg
+// (Unit.h:823): ClearInCombat (Unit.h:1052) -> EndAllCombat
+// (CombatManager.h:126) -> EndAllPvECombat (CombatManager.cpp:344-351):
+// RemoveMeFromThreatLists + ClearAllThreat + InCombat=false. Threat is
+// NOT kept - the "mutualPvP=false / threat untouched" reading was wrong.
+// The pending AssistDelayEvent dies with the engagement (evade
+// precedent); no health restore / home walk / aura clear - those are
+// EnterEvadeMode legs, not CombatStop's. TDB 26091: 13 rows, all
+// SELF-targeted.
 func (s *Server) smartActionCombatStop(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	interrupted := s.interruptCreatureNonMeleeCasts(motion)
 	if len(interrupted) == 0 {
 		motion.CastingUntil = time.Time{}
 		s.cancelPendingCreatureCast(motion)
 	}
-	for _, arm := range interrupted {
-		s.sendCreatureInterruptPackets(motion, arm)
-	}
 	s.motionMu.Lock()
 	victim := motion.TargetGUID
+	motion.TargetGUID = 0
+	motion.AlreadyCallAssistance = false
+	motion.AssistAt = time.Time{}
+	motion.AssistVictim = 0
+	motion.Assistants = nil
 	motion.InCombat = false
-	if victim != 0 {
-		motion.TargetGUID = 0
-		motion.AlreadyCallAssistance = false
+	if motion.ThreatMgr != nil {
+		motion.ThreatMgr.ClearThreat()
 	}
 	mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
 	s.motionMu.Unlock()
+	for _, arm := range interrupted {
+		s.sendCreatureInterruptPackets(motion, arm)
+	}
 	if victim != 0 {
-		s.clearCreatureVisualTarget(motion)
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, victim, false), mapID, instanceID, x, y, z, phase)
 	}
-	s.smartRemoveAllAttackers(ctx, motion)
+	s.clearCreatureVisualTarget(motion)
+	s.removeCreatureAttackers(mapID, instanceID, motion.GUID)
+	s.removeThreatVictimFromAllLists(mapID, instanceID, motion.GUID)
+	s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, motion.GUID, phase)
 }
 
 // smartActionActivateGObject is SMART_ACTION_ACTIVATE_GOBJECT

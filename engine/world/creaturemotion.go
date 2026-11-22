@@ -4137,10 +4137,13 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.CharmUnitFlagsKnown = false
 	// Unit::RemoveCharmedBy ends charm with CombatStop() (Unit.cpp:11946-11947):
 	// the unit leaves combat before the restored AI's OnCharmed runs.
-	// Threat is kept — C++ CombatStop does not clear the threat table.
-	// CastStop runs first (Unit.cpp:11946), the same twin as the charm
-	// leg: a possess-bar cast in flight at uncharm time dies instead
-	// of completing under the restored AI.
+	// CombatStop() takes the mutualPvP=true default (Unit.h:823), so
+	// ClearInCombat -> EndAllPvECombat (CombatManager.cpp:344-351)
+	// clears the threat table and removes the unit from others' lists
+	// — the "threat is kept" reading was wrong (same correction as
+	// SMART_ACTION_COMBAT_STOP). CastStop runs first (Unit.cpp:11946),
+	// the same twin as the charm leg: a possess-bar cast in flight at
+	// uncharm time dies instead of completing under the restored AI.
 	interrupted := s.interruptCreatureNonMeleeCasts(motion)
 	if len(interrupted) == 0 {
 		motion.CastingUntil = time.Time{}
@@ -4149,7 +4152,11 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.TargetGUID = 0
 	motion.InCombat = false
 	motion.Moving = false
+	if motion.ThreatMgr != nil {
+		motion.ThreatMgr.ClearThreat()
+	}
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
+	x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
 	flags, faction := motion.UnitFlags, motion.Faction
 	// The banked owner restored above: when the charmer IS the owner
 	// (a pet possessed by its owner), the engage/evade tails below must
@@ -4162,6 +4169,8 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 		s.sendCreatureInterruptPackets(motion, arm)
 	}
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+	s.removeThreatVictimFromAllLists(mapID, instanceID, rawGUID)
+	s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, rawGUID, phase)
 	// Unit::RemoveCharmedBy CHARM_TYPE_POSSESS (Unit.cpp:11979-11986):
 	// the player charmer regains self-control (SetClientControl(charmer,
 	// true)) and drops UNIT_FLAG_REMOVE_CLIENT_CONTROL. The target-side
