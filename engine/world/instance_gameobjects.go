@@ -340,9 +340,7 @@ func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternat
 	if st.State == GameObjectStateReady {
 		newState = GameObjectStateActive
 		if alternative {
-			// GO_STATE_DESTROYED twin (SharedDefines.h:1663); Go reuses the
-			// ActiveAlternative constant for value 2.
-			newState = GameObjectStateActiveAlternative
+			newState = GameObjectStateDestroyed
 		}
 	}
 	st.State = newState

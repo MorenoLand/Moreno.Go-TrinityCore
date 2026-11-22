@@ -172,9 +172,12 @@ const (
 // START_CLOSEST_WAYPOINT (2) / 114 MOVE_OFFSET (76) / 115 RANDOM_SOUND
 // (14) are ported below. The 116 SET_CORPSE_DELAY (69) / 117
 // DISABLE_EVADE (20) / 127 PAUSE_MOVEMENT (8) are ported below. The
-// next unported block is 118 GO_SET_GO_STATE (5) / 131 SPAWN_SPAWNGROUP
-// (5) / 132 DESPAWN_SPAWNGROUP (12); 119-126 and 128-130 have zero TDB
-// rows (the head's "118-126 zero rows" was wrong: 118 carries 5).
+// 118 GO_SET_GO_STATE (5) / 131 SPAWN_SPAWNGROUP (5) / 132
+// DESPAWN_SPAWNGROUP (12) are ported below. The next unported block
+// is 134 INVOKER_CAST (35) / 138 OVERRIDE_LIGHT (2) / 139
+// OVERRIDE_WEATHER (2); 119-126, 128-130, 135-137 and 140 have zero
+// TDB rows, and 141-146 have no enum value (SMART_ACTION_END = 140)
+// so their rows hit the dispatch default exactly as in C++.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -280,9 +283,21 @@ const (
 	smartActionRandomSound                    uint32 = 115
 	smartActionSetCorpseDelay                 uint32 = 116
 	smartActionDisableEvade                   uint32 = 117
+	smartActionGoSetGoState                   uint32 = 118
 	smartActionPauseMovement                  uint32 = 127
+	smartActionSpawnSpawnGroup                uint32 = 131
+	smartActionDespawnSpawnGroup              uint32 = 132
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
+)
+
+// SMARTAI_SPAWN_FLAGS (SmartScriptMgr.h:1200-1205), the spawnflags
+// decode for SMART_ACTION_SPAWN_SPAWNGROUP (131) and
+// SMART_ACTION_DESPAWN_SPAWNGROUP (132).
+const (
+	smartSpawnFlagIgnoreRespawn uint32 = 0x01
+	smartSpawnFlagForceSpawn    uint32 = 0x02
+	smartSpawnFlagNoSaveRespawn uint32 = 0x04
 )
 
 // SMART_ESCORT_* state flags (SmartAI.h:30-33) and SMART_ESCORT_TARGETS
@@ -1723,6 +1738,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		motion.EvadeDisabled = ev.row.actionParam1 != 0
 	case smartActionPauseMovement:
 		s.smartActionPauseMovement(ctx, motion, st, ev, invokerGUID)
+	case smartActionGoSetGoState:
+		s.smartActionGOSetGoState(ctx, motion, st, ev, invokerGUID)
+	case smartActionSpawnSpawnGroup:
+		s.smartActionSpawnSpawnGroup(ctx, motion, st, ev, invokerGUID)
+	case smartActionDespawnSpawnGroup:
+		s.smartActionDespawnSpawnGroup(ctx, motion, st, ev, invokerGUID)
 	default:
 		// Residual: the remaining AGGRO-row action (146) has no Go
 		// twin. 146 has no enum value in this C++ revision
@@ -5144,6 +5165,77 @@ func (s *Server) smartActionGOSetLootState(ctx context.Context, motion *creature
 		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, uint8(state))
 		s.triggerGameObjectEvent(ctx, tgt.guid, scripting.GameObjectEventOnLootState, state)
 	}
+}
+
+// smartActionGOSetGoState is SMART_ACTION_GO_SET_GO_STATE
+// (SmartScript.cpp:1907-1914): every gameobject target takes
+// SetGoState(state) — the GAMEOBJECT_BYTES_1 byte-0 write
+// (GameObject.cpp:2407) whose Go twin is
+// setGameObjectStateInInstance (values update +
+// GAMEOBJECT_EVENT_ON_GO_STATE_CHANGE). The AI OnStateChanged leg
+// stays out (no GO script engine) and the collision toggle has no Go
+// twin. TDB 26091: 5 rows, all src-1 GO-source — no live
+// creature-leg rows; the port rides the dispatch for
+// timed-actionlist/creature rows of the same shape. States in rows:
+// 1 (READY) and 2 (DESTROYED, SharedDefines.h:1659-1663 — the Eluna
+// doc's ACTIVE_ALTERNATIVE label for 2 is stale in this revision);
+// no validation, matching the C++ cast.
+func (s *Server) smartActionGOSetGoState(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	state := ev.row.actionParam1
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isGameObject {
+			continue
+		}
+		s.setGameObjectStateInInstance(motion.Map, motion.InstanceID, tgt.guid, uint8(state))
+	}
+}
+
+// smartActionSpawnSpawnGroup is SMART_ACTION_SPAWN_SPAWNGROUP
+// (SmartScript.cpp:2162-2203): with minDelay == maxDelay == 0 the
+// group spawns at once via Map::SpawnGroupSpawn (spawnGroupSpawn,
+// ignoreRespawn + force from spawnflags); otherwise a one-shot
+// SMART_EVENT_UPDATE (chance 100, NOT_REPEATABLE, min/max delay,
+// same groupId/spawnflags, delays zeroed) is stored and fires the
+// instant leg on expiry. TDB 26091: 5 rows, all instant (delays 0);
+// 4 timed-actionlist + 1 creature (Raelorasz). The stored event
+// re-rolls its timer on a script reset (C++ keeps mStoredEvents
+// timers); no live row exercises it.
+func (s *Server) smartActionSpawnSpawnGroup(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	groupID := ev.row.actionParam1
+	minDelay := ev.row.actionParam2
+	maxDelay := ev.row.actionParam3
+	spawnflags := ev.row.actionParam4
+	if minDelay == 0 && maxDelay == 0 {
+		if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+			return
+		}
+		s.spawnGroupSpawn(ctx, s.WorldStore.DB, motion.Map, motion.InstanceID, groupID, spawnflags&smartSpawnFlagIgnoreRespawn != 0, spawnflags&smartSpawnFlagForceSpawn != 0)
+		return
+	}
+	s.smartInstallTemplateEvent(st, smartEventUpdate, smartEventFlagNotRepeatable, minDelay, maxDelay, 0, 0, 0, smartActionSpawnSpawnGroup, groupID, 0, 0, spawnflags, 0, 0, ev.row.targetType, ev.row.targetParam1, ev.row.targetParam2, ev.row.targetParam3, ev.row.targetParam4, 0)
+}
+
+// smartActionDespawnSpawnGroup is SMART_ACTION_DESPAWN_SPAWNGROUP
+// (SmartScript.cpp:2205-2246): the despawn mirror of 131 — instant
+// Map::SpawnGroupDespawn (spawnGroupDespawn, deleteRespawnTimes from
+// the NOSAVE_RESPAWN flag) when both delays are 0, else the same
+// one-shot SMART_EVENT_UPDATE store. TDB 26091: 12 rows, all instant;
+// 10 timed-actionlist + 2 creature (Commander Hobb on death).
+// NOSAVE_RESPAWN (deleteRespawnTimes) on 10 rows, 0 on the Thrall /
+// Drek'Thar rows. Same stored-event reset caveat as 131.
+func (s *Server) smartActionDespawnSpawnGroup(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	groupID := ev.row.actionParam1
+	minDelay := ev.row.actionParam2
+	maxDelay := ev.row.actionParam3
+	spawnflags := ev.row.actionParam4
+	if minDelay == 0 && maxDelay == 0 {
+		if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+			return
+		}
+		s.spawnGroupDespawn(ctx, s.WorldStore.DB, motion.Map, motion.InstanceID, groupID, spawnflags&smartSpawnFlagNoSaveRespawn != 0)
+		return
+	}
+	s.smartInstallTemplateEvent(st, smartEventUpdate, smartEventFlagNotRepeatable, minDelay, maxDelay, 0, 0, 0, smartActionDespawnSpawnGroup, groupID, 0, 0, spawnflags, 0, 0, ev.row.targetType, ev.row.targetParam1, ev.row.targetParam2, ev.row.targetParam3, ev.row.targetParam4, 0)
 }
 
 // smartActionSendTargetToTarget is SMART_ACTION_SEND_TARGET_TO_TARGET

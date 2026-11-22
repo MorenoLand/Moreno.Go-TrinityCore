@@ -65,11 +65,11 @@ const (
 	GameObjectTypeTrapDoor             uint8 = 35
 )
 
-// Game object states mirroring TrinityCore GOState (GameObject.h:35).
+// Game object states mirroring TrinityCore GOState (SharedDefines.h:1659-1663).
 const (
-	GameObjectStateActive            uint8 = 0 // open / active / pressed
-	GameObjectStateReady             uint8 = 1 // closed / ready
-	GameObjectStateActiveAlternative uint8 = 2
+	GameObjectStateActive    uint8 = 0 // open / active / pressed
+	GameObjectStateReady     uint8 = 1 // closed / ready
+	GameObjectStateDestroyed uint8 = 2 // already used, not yet reset (e.g. door opened by cannon fire)
 )
 
 type dynamicGameObjectState struct {
