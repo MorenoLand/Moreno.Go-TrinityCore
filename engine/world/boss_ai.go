@@ -172,15 +172,26 @@ func fireDealHealAIHooks(ctx context.Context, s *Server, victim, healer *creatur
 // carries no AI model, so the hook is skipped there (C++ always has an
 // AI; players and pet motions have none in Go).
 func fireDealDamageAIHooks(ctx context.Context, s *Server, victim, attacker *creatureMotion, attackerGUID, victimGUID uint64, damage *uint32) {
+	// SmartAI::DamageTaken / DamageDealt (SmartAI.cpp:626-636, 652-655):
+	// the victim's DAMAGED (32) event fires first (invoker = attacker),
+	// then the attacker's DAMAGED_TARGET (33) event (invoker = victim),
+	// both on the pre-clamp damage — the same C++ order as the BossAI
+	// hooks below (a creature carries one AI or the other; the smart
+	// fire is a no-op for non-SmartAI motions).
+	if damage != nil && victim != nil {
+		s.smartProcessEvents(ctx, victim, smartEventDamaged, attackerGUID, *damage, 0)
+	}
 	if victim != nil && victim.BossAI != nil {
 		victim.BossAI.OnDamageTaken(ctx, s, victim, attackerGUID, damage)
+	}
+	if damage != nil && attacker != nil {
+		s.smartProcessEvents(ctx, attacker, smartEventDamagedTarget, victimGUID, *damage, 0)
 	}
 	if attacker != nil && attacker.BossAI != nil {
 		attacker.BossAI.DamageDealt(ctx, s, attacker, victimGUID, damage)
 	}
 	// SmartAI::DamageTaken (SmartAI.cpp:626-636): after the DAMAGED event
-	// fire (which Go never dispatches — see the smartProcessEvent default
-	// arm), an AI-controlled creature's invincibility HP level clamps the
+	// fire, an AI-controlled creature's invincibility HP level clamps the
 	// damage to health - level. IsAIControlled is !_charmed
 	// (SmartAI.cpp:40-43); Go tracks charm as CharmerGUID. The level is
 	// set by SMART_ACTION_SET_INVINCIBILITY_HP_LEVEL on the victim's own
@@ -4517,6 +4528,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				// modeled.
 				if status == protocol.SpellMissNone {
 					s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
+					s.smartSpellHit(ctx, m, m.GUID, spellID)
 					s.fireCreatureSpellHitTarget(ctx, m, m.GUID, spellID)
 				}
 				continue
@@ -4532,6 +4544,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.fireCreatureLuaEvent(ctx, tm, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
+				s.smartSpellHit(ctx, tm, m.GUID, spellID)
 			}
 			// The ev15 leg rides the same target iteration, matching C++
 			// order (2639-2650 follow 2629-2638 per TargetInfo) — chain
@@ -4798,6 +4811,10 @@ func (s *Server) fireCreatureSpellHitTarget(ctx context.Context, m *creatureMoti
 		target = s.luaMotionCreature(tm)
 	}
 	s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnSpellHitTarget, target, spellID)
+	// SmartAI::SpellHitTarget (SmartAI.cpp:621-624) rides the same leg:
+	// the caster creature's SPELLHIT_TARGET (31) event fires with the
+	// hit target as invoker.
+	s.smartSpellHitTarget(ctx, m, targetGUID, spellID)
 }
 
 // creatureEffectInstaKill mirrors Spell::EffectInstaKill

@@ -2703,6 +2703,7 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 			s.standCreatureMotionUp(live)
 		}
 		s.fireCreatureLuaEvent(ctx, live, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(motion), spellID)
+		s.smartSpellHit(ctx, live, motion.GUID, spellID)
 		s.fireCreatureSpellHitTarget(ctx, motion, victimGUID, spellID)
 		s.fireCreatureHitTriggers(ctx, motion, inlineSpell, spellID, []uint64{victimGUID})
 	}
@@ -3542,6 +3543,11 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 			reflector.standUp()
 		}
 		if spell.ID != 0 {
+			// The return trip's target-side leg (Spell.cpp:2629):
+			// _spellHitTarget is the caster itself, so the caster's
+			// own SPELLHIT event fires with the caster as invoker,
+			// ahead of the caster-side SpellHitTarget leg below.
+			s.smartSpellHit(ctx, motion, motion.GUID, spell.ID)
 			s.fireCreatureSpellHitTarget(ctx, motion, motion.GUID, spell.ID)
 		}
 	}

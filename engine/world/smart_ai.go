@@ -138,6 +138,12 @@ const (
 	smartEventTargetBuffed        uint32 = 24 // SMART_EVENT_TARGET_BUFFED (SmartScriptMgr.h:123), same params as HAS_AURA
 	smartEventOocLos              uint32 = 10 // SMART_EVENT_OOC_LOS (SmartScriptMgr.h:109), Param1 = NoHostile, Param2 = MaxDist, Param3/4 CooldownMin/Max, Param5 = PlayerOnly
 	smartEventIcLos               uint32 = 26 // SMART_EVENT_IC_LOS (SmartScriptMgr.h:125), same params as OOC_LOS
+	smartEventSpellHit            uint32 = 8  // SMART_EVENT_SPELLHIT (SmartScriptMgr.h:107), Param1 = SpellID, Param2 = School, Param3/4 CooldownMin/Max
+	smartEventCharmed             uint32 = 29 // SMART_EVENT_CHARMED (SmartScriptMgr.h:128), Param1 = onRemove (0 - on apply, 1 - on remove)
+	smartEventCharmedTarget       uint32 = 30 // SMART_EVENT_CHARMED_TARGET (SmartScriptMgr.h:129), no params; no C++ fire site and zero TDB rows — dead, no dispatch arm
+	smartEventSpellHitTarget      uint32 = 31 // SMART_EVENT_SPELLHIT_TARGET (SmartScriptMgr.h:130), same params as SPELLHIT
+	smartEventDamaged             uint32 = 32 // SMART_EVENT_DAMAGED (SmartScriptMgr.h:131), Param1/2 = MinDmg/MaxDmg, Param3/4 CooldownMin/Max
+	smartEventDamagedTarget       uint32 = 33 // SMART_EVENT_DAMAGED_TARGET (SmartScriptMgr.h:132), same params as DAMAGED
 	smartEventFriendlyIsCC        uint32 = 15 // SMART_EVENT_FRIENDLY_IS_CC (SmartScriptMgr.h:114), loader missing-repeat rule only, no dispatch arm
 	smartEventVictimCasting       uint32 = 13 // SMART_EVENT_VICTIM_CASTING (SmartScriptMgr.h:112), loader missing-repeat rule only, no dispatch arm
 	smartEventFriendlyHealth      uint32 = 14 // SMART_EVENT_FRIENDLY_HEALTH (SmartScriptMgr.h:113), loader missing-repeat rule only, no dispatch arm
@@ -1240,6 +1246,60 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		s.smartRecalcTimer(ev, ev.row.eventParam2, ev.row.eventParam3)
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
+	case smartEventSpellHit, smartEventSpellHitTarget:
+		// SMART_EVENT_SPELLHIT / SPELLHIT_TARGET (SmartScript.cpp:3125-3136):
+		// the event fires only for its spell id (event_param1, 0 = any)
+		// and school mask (event_param2, 0 = any — the spell's SchoolMask
+		// must intersect it), then re-arms on the cooldown window
+		// (event_param3/4) and runs its action with the caster (SPELLHIT)
+		// or the hit target (SPELLHIT_TARGET) as invoker and var0/var1
+		// zeroed — the C++ case passes ProcessAction(e, unit, 0, 0, bvar,
+		// spell, gob), and the spell is never consumed by an action, so
+		// the id/school arrive here as var0/var1 from the fire site and
+		// are dropped before the action (linked rows see 0/0, like C++).
+		// TDB 26091: 8 = 1,083 src-0 rows (36 any-spell, 1,059 school-0;
+		// 12 src-1 GO rows stay out — Go loads creature sources only),
+		// 31 = 25 src-0 rows (all spell-specific, all school-0).
+		if ev.row.eventParam1 != 0 && ev.row.eventParam1 != var0 {
+			return
+		}
+		if ev.row.eventParam2 != 0 && var1&ev.row.eventParam2 == 0 {
+			return
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam3, ev.row.eventParam4)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
+	case smartEventCharmed:
+		// SMART_EVENT_CHARMED (SmartScript.cpp:3043-3049): the event fires
+		// when the charm state changes — on apply when event_param1
+		// (onRemove) is 0, on remove when it is 1
+		// (bvar == (onRemove != 1)); the fire site passes the live
+		// charmed state as var0. The action runs with no invoker
+		// (C++ passes unit = nullptr) and var0/var1 zeroed. The
+		// WHILE_CHARMED gate above already enforces SmartScript.cpp:2890,
+		// so an apply arm without the flag never fires while charmed —
+		// all 4 TDB rows carry it (3 on-apply, 1 on-remove).
+		// TDB 26091: 29 = 4 src-0 rows.
+		if (var0 != 0) != (ev.row.eventParam1 != 1) {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, 0, 0, 0)
+	case smartEventDamaged, smartEventDamagedTarget:
+		// SMART_EVENT_DAMAGED / DAMAGED_TARGET (SmartScript.cpp:3205-3213):
+		// the event fires only when the dealt damage (var0) falls inside
+		// the [min, max] window (event_param1/2 — a max of 0 admits only
+		// zero damage, exactly like C++), then re-arms on the cooldown
+		// window (event_param3/4) and runs its action with the attacker
+		// (DAMAGED) or the damaged unit (DAMAGED_TARGET) as invoker.
+		// The fire rides fireDealDamageAIHooks (Unit::DealDamage,
+		// Unit.cpp:701-704), ahead of the health change, so lethal blows
+		// still fire. TDB 26091: 32 = 7 src-0 rows (min 1/50/0, max
+		// 100000/20000/10000), 33 = 1 src-0 row (Spire Frostwyrm,
+		// 100-30000, flags 31).
+		if var0 < ev.row.eventParam1 || var0 > ev.row.eventParam2 {
+			return
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam3, ev.row.eventParam4)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
 	case smartEventOocLos, smartEventIcLos:
 		// SMART_EVENT_OOC_LOS / IC_LOS (SmartScript.cpp:3138-3180): the
 		// event fires from OnMoveInLineOfSight (SmartScript.cpp:3885-3891:
@@ -1300,8 +1360,8 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	default:
 		// Timed/conditioned types with no Go condition evaluation
-		// (SPELLHIT, DAMAGED, FRIENDLY_*, ...) never fire from
-		// the direct path; their timer arm re-arms in smartUpdateTimers.
+		// (FRIENDLY_*, VICTIM_CASTING, ...) never fire from the
+		// direct path; their timer arm re-arms in smartUpdateTimers.
 		return
 	}
 }
@@ -5640,6 +5700,64 @@ func (s *Server) smartReceiveEmote(ctx context.Context, target *creatureMotion, 
 		return
 	}
 	s.smartProcessEvents(ctx, target, smartEventReceiveEmote, playerGUID, textEmote, 0)
+}
+
+// smartSpellHit is SmartAI::SpellHit (SmartAI.cpp:616-619): the hit
+// creature's SPELLHIT (8) event fires with the caster as invoker and the
+// spell id / school mask as var0/var1 (the dispatch gate's inputs — the
+// action itself sees 0/0, like C++). The school comes from the DBC spell;
+// an unknown spell carries mask 0, so only any-school rows fire. Fired
+// beside the Eluna OnHitBySpell leg at every DoDamageAndTriggers twin
+// (Spell.cpp:2629-2638), so misses, evades and immunes never reach it.
+func (s *Server) smartSpellHit(ctx context.Context, target *creatureMotion, casterGUID uint64, spellID uint32) {
+	if s == nil || target == nil || casterGUID == 0 || spellID == 0 {
+		return
+	}
+	var school uint32
+	if s.Data != nil {
+		if spell, found, err := s.Data.Spell(spellID); err == nil && found {
+			school = uint32(spell.SchoolMask)
+		}
+	}
+	s.smartProcessEvents(ctx, target, smartEventSpellHit, casterGUID, spellID, school)
+}
+
+// smartSpellHitTarget is SmartAI::SpellHitTarget (SmartAI.cpp:621-624): the
+// caster creature's SPELLHIT_TARGET (31) event fires with the hit target
+// as invoker and the spell id / school mask as var0/var1. It rides inside
+// fireCreatureSpellHitTarget, so every caster-side Eluna leg carries it —
+// including the reflected return trip (Spell.cpp:2631-2632, target =
+// caster) and GO targets (Spell.cpp:2678, whose ToUnit() invoker is null
+// in C++; Go passes the GO guid, which no action target resolves).
+func (s *Server) smartSpellHitTarget(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32) {
+	if s == nil || caster == nil || targetGUID == 0 || spellID == 0 {
+		return
+	}
+	var school uint32
+	if s.Data != nil {
+		if spell, found, err := s.Data.Spell(spellID); err == nil && found {
+			school = uint32(spell.SchoolMask)
+		}
+	}
+	s.smartProcessEvents(ctx, caster, smartEventSpellHitTarget, targetGUID, spellID, school)
+}
+
+// smartOnCharmed is SmartAI::OnCharmed (SmartAI.cpp:672-705) reduced to its
+// event fire: the CHARMED (29) event fires with the live charmed state as
+// var0 (1 on apply, 0 on remove) and no invoker. The motion legs of
+// OnCharmed already live in charmCreatureFaction / uncharmCreature (follow
+// command, last-charmer engage, evade tail); the escort EndPath arm runs
+// in charmCreatureFaction ahead of this fire. CHARMED_TARGET (30) has no
+// C++ fire site and zero TDB rows, so nothing calls it.
+func (s *Server) smartOnCharmed(ctx context.Context, motion *creatureMotion, charmed bool) {
+	if s == nil || motion == nil {
+		return
+	}
+	var charmedVar uint32
+	if charmed {
+		charmedVar = 1
+	}
+	s.smartProcessEvents(ctx, motion, smartEventCharmed, 0, charmedVar, 0)
 }
 
 // smartGossipSelect is SmartAI::OnGossipSelect (SmartAI.cpp:765-770):

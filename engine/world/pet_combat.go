@@ -6561,6 +6561,11 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 					}
 				}
 				s.server.standPetReflectReflectorUp(motion, trip.victimGUID, spell)
+				// Return-trip target-side leg (Spell.cpp:2629): the
+				// reflected spell's _spellHitTarget is the caster
+				// itself, so its own SPELLHIT event fires ahead of
+				// the caster-side leg.
+				s.server.smartSpellHit(effCtx, motion, motion.GUID, spell.ID)
 				s.server.fireCreatureSpellHitTarget(effCtx, motion, motion.GUID, spell.ID)
 				s.server.fireCreatureHitTriggers(effCtx, motion, spell, spell.ID, []uint64{motion.GUID})
 			}
@@ -9003,6 +9008,7 @@ func (s *session) executePetSpellZeroDamageTail(ctx context.Context, caster *cre
 		s.server.fireCreatureHitTriggers(ctx, caster, spellCopy, spellID, []uint64{target.GUID})
 	} else if targetMotion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); targetMotion != nil {
 		s.server.fireCreatureLuaEvent(ctx, targetMotion, scripting.CreatureEventOnHitBySpell, s.server.luaMotionCreature(caster), spellID)
+		s.server.smartSpellHit(ctx, targetMotion, caster.GUID, spellID)
 		s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
 		s.server.fireCreatureHitTriggers(ctx, caster, spellCopy, spellID, []uint64{target.GUID})
 	}
@@ -9411,6 +9417,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 			if reflectorGUID != 0 {
 				s.server.standPetReflectReflectorUp(caster, reflectorGUID, petSpell)
+				// Return-trip target-side leg (Spell.cpp:2629): the
+				// reflected spell's _spellHitTarget is the caster
+				// itself, so its own SPELLHIT event fires ahead of
+				// the caster-side leg.
+				s.server.smartSpellHit(ctx, caster, caster.GUID, spellID)
 				s.server.fireCreatureSpellHitTarget(ctx, caster, caster.GUID, spellID)
 				s.server.fireCreatureHitTriggers(ctx, caster, petSpell, spellID, []uint64{caster.GUID})
 			} else if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
@@ -9425,6 +9436,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 					s.server.standCreatureMotionUp(targetMotion)
 				}
 				s.server.fireCreatureLuaEvent(ctx, targetMotion, scripting.CreatureEventOnHitBySpell, s.server.luaMotionCreature(caster), spellID)
+				s.server.smartSpellHit(ctx, targetMotion, caster.GUID, spellID)
 				s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
 				s.server.fireCreatureHitTriggers(ctx, caster, petSpell, spellID, []uint64{target.GUID})
 			}
@@ -9700,6 +9712,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 						}
 					}
 					s.server.standPetReflectReflectorUp(caster, reflectorGUID, hitSpell)
+					// Return-trip target-side leg (Spell.cpp:2629): the
+					// reflected spell's _spellHitTarget is the caster
+					// itself, so its own SPELLHIT event fires ahead of
+					// the caster-side leg.
+					s.server.smartSpellHit(ctx, caster, caster.GUID, spellID)
 					s.server.fireCreatureSpellHitTarget(ctx, caster, caster.GUID, spellID)
 					s.server.fireCreatureHitTriggers(ctx, caster, hitSpell, spellID, []uint64{caster.GUID})
 				}
@@ -10172,6 +10189,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 		s.server.fireCreatureLuaEvent(ctx, targetMotion, scripting.CreatureEventOnHitBySpell, s.server.luaMotionCreature(caster), spellID)
+		s.server.smartSpellHit(ctx, targetMotion, caster.GUID, spellID)
 		s.server.fireCreatureSpellHitTarget(ctx, caster, target.GUID, spellID)
 		s.server.fireCreatureHitTriggers(ctx, caster, hitSpell, spellID, []uint64{target.GUID})
 	}

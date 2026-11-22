@@ -4105,6 +4105,16 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 		}
 	}
 	s.broadcastCreatureValuesUpdateInInstance(mapID, motion.InstanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+	// SmartAI::OnCharmed (SmartAI.cpp:672-705): a charmed escort ends its
+	// path (EndPath(true) fails the escort quest), then the CHARMED event
+	// fires with charmed = true. Only a first charm reaches here — a
+	// re-apply is refused above, matching C++ SetCharmedBy.
+	if firstCharm {
+		if st := s.smartStateFor(ctx, motion); st != nil && st.escortState&(smartEscortEscorting|smartEscortPaused|smartEscortReturning) != 0 {
+			s.smartEndPath(ctx, motion, st, true)
+		}
+		s.smartOnCharmed(ctx, motion, true)
+	}
 	return spells, reactState, commandState, true
 }
 
@@ -4276,6 +4286,13 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 		if evade {
 			s.triggerCreatureEvade(context.Background(), m, time.Now())
 		}
+	}
+	// SmartAI::OnCharmed (SmartAI.cpp:672-705) runs its event fire last,
+	// after the uncharm motion tails above — the CHARMED event fires with
+	// charmed = false. The motion is re-looked-up: it may have despawned
+	// during the evade tail.
+	if m := s.findCreatureMotion(mapID, instanceID, rawGUID); m != nil {
+		s.smartOnCharmed(context.Background(), m, false)
 	}
 }
 

@@ -21039,6 +21039,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			if motion := s.findCreatureMotion(effectTarget); motion != nil {
 				s.server.fireCreatureLuaEvent(effCtx, motion, scripting.CreatureEventOnHitBySpell, s.luaPlayer(), spellID)
+				s.server.smartSpellHit(effCtx, motion, s.playerGUID, spellID)
 			}
 		}
 		// Spell::DoTriggersOnSpellHit (Spell.cpp:2913): the per-hit consumer
@@ -31877,6 +31878,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			if motion := s.findCreatureMotion(effectTarget); motion != nil {
 				s.server.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnHitBySpell, s.luaPlayer(), spellID)
+				s.server.smartSpellHit(ctx, motion, s.playerGUID, spellID)
 			}
 		}
 	}
