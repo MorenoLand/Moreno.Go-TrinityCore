@@ -601,6 +601,18 @@ type creatureMotion struct {
 	// (PetAI.cpp:514-515) and the aggressive auto-select is
 	// suppressed (PetAI.cpp:351), so a returning pet does not
 	// re-engage mid-return.
+	// PetStayX/PetStayY/PetStayZ is the CharmInfo stay position twin
+	// (PetHandler.cpp:161 SaveStayPosition, run on the COMMAND_STAY
+	// click): the spline final destination at click time — Go
+	// teleports motion positions to the spline destination on
+	// launch, so the current position is that destination. PetAtStay
+	// is CharmInfo::_isAtStay, set on the stay click and cleared
+	// when the pet leaves stay (attack order, spell cast, follow
+	// click); PetStaySet marks a recorded position (a stay click
+	// happened and no follow click has superseded it).
+	PetStayX, PetStayY, PetStayZ float32
+	PetAtStay                    bool
+	PetStaySet                   bool
 	// TempSummonLifetime is the TempSummon::m_lifetime twin
 	// (TemporarySummon.cpp:168-173, InitStats): the creating spell's
 	// duration stamped at summon for temporary-duration guardians
@@ -4582,6 +4594,12 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	motion.UnitFlagsKnown = true
 	motion.OwnerGUID = charmerGUID
 	motion.PetCommand = PetCommandFollow
+	// A fresh charm builds a fresh CharmInfo (Unit.cpp:11926+
+	// DeleteCharmInfo drops it on uncharm): no stay position
+	// survives, so a stale stay record must not restore Stay
+	// on a later disengage.
+	motion.PetStaySet = false
+	motion.PetAtStay = false
 	motion.PetReact = PetReactDefensive
 	motion.InCombat = false
 	motion.TargetGUID = 0
@@ -4704,6 +4722,12 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.UnitFlagsKnown = motion.CharmUnitFlagsKnown || motion.UnitFlags != motion.CharmUnitFlags
 	motion.OwnerGUID = motion.CharmOwnerGUID
 	motion.PetCommand = PetCommandStay
+	// DeleteCharmInfo (Unit.cpp:11926+) drops the stay position
+	// with the charm: the restored Stay carries no recorded
+	// point, so the stay branch must not return the wild
+	// creature anywhere.
+	motion.PetStaySet = false
+	motion.PetAtStay = false
 	// CharmInfo::RestoreState (Unit.cpp:9936-9940): the pre-charm react
 	// state is restored (DeleteCharmInfo), not forced to passive.
 	motion.PetReact = motion.CharmOldReact
@@ -4926,6 +4950,11 @@ func (s *Server) unpossessPetTail(key creatureAuraKey, charmerGUID uint64) {
 	s.motionMu.Lock()
 	if m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID); m != nil {
 		m.PetCommand = PetCommandFollow
+		// Fresh command state on the re-own: a stale stay record
+		// from before the uncharm must not restore Stay on a
+		// later disengage.
+		m.PetStaySet = false
+		m.PetAtStay = false
 	}
 	s.motionMu.Unlock()
 	charmer.sendPetSpells(context.Background(), petID, entry, react)

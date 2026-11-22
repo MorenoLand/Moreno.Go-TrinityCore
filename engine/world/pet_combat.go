@@ -278,8 +278,12 @@ func (s *Server) onPetCommandAttack(ctx context.Context, mapID, instanceID uint3
 		motion.InCombat = true
 		motion.PetCommand = PetCommandAttack
 		// DoAttack clears the charm flags (PetAI.cpp:420-421): an
-		// attack order ends any return-to-owner in progress.
+		// attack order ends any return-to-owner in progress, and
+		// clears IsAtStay — the pet leaves stay to chase, and the
+		// stay-return arm re-sets it on arrival (or the epsilon gate
+		// in the stay branch when the pet never moved).
 		motion.PetReturning = false
+		motion.PetAtStay = false
 		motion.Moving = true
 	}
 	s.motionMu.Unlock()
@@ -314,9 +318,15 @@ func (s *Server) onPetCommandFollow(ctx context.Context, mapID, instanceID uint3
 		// (PetAI.cpp:392-402, only when !IsFollowing() &&
 		// !IsReturning()) is the UpdateAI no-victim path, not the
 		// click path. The arrival MovementInform arm clears it
-		// (updatePetMotion §4).
+		// (updatePetMotion §4). A follow click supersedes any stay
+		// order (IsAtStay(false) on the click); the recorded stay
+		// position is moot under COMMAND_FOLLOW, so the disengage
+		// restore falls back to follow instead of returning to a
+		// stale stay point.
 		motion.PetReturning = true
 		motion.PetCommand = PetCommandFollow
+		motion.PetStaySet = false
+		motion.PetAtStay = false
 		motion.Moving = false
 		if motion.ThreatMgr != nil {
 			motion.ThreatMgr.ClearThreat()
@@ -337,7 +347,12 @@ func (s *Server) onPetCommandFollow(ctx context.Context, mapID, instanceID uint3
 // range (PetAI::UpdateAI:84-89, bridged in petCombatPursuitAndAttack's
 // stay arm). Go used to clear TargetGUID/InCombat/threat here, which
 // disengaged the pet outright; the victim now survives until NeedToStop or
-// death clears it.
+// death clears it. The click also records the stay position
+// (CharmInfo::SaveStayPosition, PetHandler.cpp:161): the spline final
+// destination at click time — Go teleports motion positions to the
+// spline destination on launch, so the current position is that
+// destination — and sets IsAtStay (PetHandler.cpp:159); the stay branch
+// in updatePetMotion returns the pet here when combat ends.
 func (s *Server) onPetCommandStay(mapID, instanceID uint32, petGUID uint64) {
 	if s == nil || petGUID == 0 {
 		return
@@ -346,9 +361,11 @@ func (s *Server) onPetCommandStay(mapID, instanceID uint32, petGUID uint64) {
 	defer s.motionMu.Unlock()
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil {
 		motion.PetCommand = PetCommandStay
+		motion.PetStayX, motion.PetStayY, motion.PetStayZ = motion.X, motion.Y, motion.Z
+		motion.PetStaySet = true
+		motion.PetAtStay = true
 		// A stay click ends any return-to-owner (HandleReturnMovement
-		// switches to the stay arm, PetAI.cpp:377-390); the stay-point
-		// return itself is unported — Go records no stay position.
+		// switches to the stay arm, PetAI.cpp:377-390).
 		motion.PetReturning = false
 		motion.Moving = false
 	}
@@ -423,7 +440,9 @@ func (s *Server) petCommandOnSpellCast(mapID, instanceID uint32, petGUID uint64)
 	motion.PetCommand = PetCommandAttack
 	// DoAttack clears the charm flags (PetAI.cpp:420-421): a
 	// spell-cast attack order ends any return-to-owner in progress.
+	// The spell arm also clears IsAtStay (PetHandler.cpp:304-310).
 	motion.PetReturning = false
+	motion.PetAtStay = false
 	return prev
 }
 
@@ -1081,6 +1100,48 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 	if motion.PetCommand == PetCommandStay {
 		if motion.InCombat && motion.TargetGUID != 0 {
 			s.petCombatPursuitAndAttack(ctx, motion, owner, now)
+			return
+		}
+		// HandleReturnMovement COMMAND_STAY arm (PetAI.cpp:377-390):
+		// a stay-commanded pet that is not at stay and not already
+		// returning walks back to the recorded stay point with a
+		// MovePoint; the POINT_MOTION_TYPE MovementInform arm
+		// (PetAI.cpp:448-458) clears the return and sets IsAtStay
+		// on arrival. Go teleports the position to the spline
+		// destination on launch, so the tick after launch the pet
+		// is already there and the positional arrival check below
+		// clears the return (the follow standing-branch inform
+		// twin, §4 — but positional, not angle-gated: the point
+		// inform fires on landing regardless of angle). A pet
+		// interrupted mid-return by combat re-launches on the
+		// next quiet tick: the arrival test is positional, so a
+		// fight that dragged the pet off the point does not
+		// strand it at stay.
+		if !motion.PetAtStay && motion.PetStaySet {
+			stayDist := float32(distance3D(motion.X, motion.Y, motion.Z, motion.PetStayX, motion.PetStayY, motion.PetStayZ))
+			if stayDist <= 0.1 {
+				motion.PetReturning = false
+				motion.PetAtStay = true
+				motion.Moving = false
+				return
+			}
+			speed := motion.RunSpeed
+			if speed < 0.001 {
+				// MoveSplineInit::Launch validation (MoveSpline.cpp:210)
+				// rejects a sub-0.001 velocity — no spline launches;
+				// the pet stands and the return retries next tick.
+				motion.Moving = false
+				return
+			}
+			motion.PetReturning = true
+			duration := splineDurationMs(float64(stayDist), speed)
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PetStayX, motion.PetStayY, motion.PetStayZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
+			motion.X = motion.PetStayX
+			motion.Y = motion.PetStayY
+			motion.Z = motion.PetStayZ
+			motion.Moving = true
+			motion.ScriptMoveFromKnown = false
+			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 		}
 		return
 	}
@@ -1097,7 +1158,10 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 	// (PetAI.cpp:351: !IsReturning() || IsFollowing() || IsAtStay();
 	// a follow-commanded returning pet is neither following nor at
 	// stay, so no auto-select until the arrival inform clears it).
-	if motion.PetReact == PetReactAggressive && motion.PetCommand != PetCommandStay && !motion.PetReturning {
+	// The IsAtStay leg means a stay-commanded pet DOES auto-select
+	// once it is at stay — the old PetCommand != Stay exclusion
+	// wrongly silenced aggressive stay pets outright.
+	if motion.PetReact == PetReactAggressive && (!motion.PetReturning || motion.PetAtStay) {
 		hostileGUID := s.findNearbyPetHostile(motion, players)
 		if hostileGUID != 0 {
 			motion.TargetGUID = hostileGUID
@@ -1530,7 +1594,21 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			s.firePetLeaveCombat(ctx, motion)
 		}
 		if motion.PetCommand == PetCommandAttack {
-			motion.PetCommand = PetCommandFollow
+			// The C++ command state survives the attack order
+			// (PetHandler.cpp COMMAND_ATTACK sets only
+			// IsCommandAttack; COMMAND_STAY is untouched), so a
+			// stay-commanded pet returns to stay on disengage
+			// instead of following — HandleReturnMovement's stay
+			// arm (PetAI.cpp:377-390) runs the return; PetAtStay
+			// stays false (cleared on the attack order) until the
+			// stay branch re-sets it on arrival. A follow click
+			// clears the stay record, so only a live stay order
+			// restores here.
+			if motion.PetStaySet {
+				motion.PetCommand = PetCommandStay
+			} else {
+				motion.PetCommand = PetCommandFollow
+			}
 		}
 		if motion.PetCommand == PetCommandFollow {
 			// KilledUnit with no next target returns via
@@ -1572,7 +1650,21 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 				s.firePetLeaveCombat(ctx, motion)
 			}
 			if motion.PetCommand == PetCommandAttack {
-				motion.PetCommand = PetCommandFollow
+				// The C++ command state survives the attack order
+				// (PetHandler.cpp COMMAND_ATTACK sets only
+				// IsCommandAttack; COMMAND_STAY is untouched), so a
+				// stay-commanded pet returns to stay on disengage
+				// instead of following — HandleReturnMovement's stay
+				// arm (PetAI.cpp:377-390) runs the return; PetAtStay
+				// stays false (cleared on the attack order) until the
+				// stay branch re-sets it on arrival. A follow click
+				// clears the stay record, so only a live stay order
+				// restores here.
+				if motion.PetStaySet {
+					motion.PetCommand = PetCommandStay
+				} else {
+					motion.PetCommand = PetCommandFollow
+				}
 			}
 			if motion.PetCommand == PetCommandFollow {
 				// StopAttack with no next target returns via
