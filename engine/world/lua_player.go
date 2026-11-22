@@ -2344,7 +2344,17 @@ func (s *session) luaPlayer() *scripting.Object {
 	// UNIT_STATE_MOVING). conditions.go maps s.isMoving to that
 	// UNIT_STATE_MOVE bit, so this is its negation.
 	methods["IsStopped"] = luaNoArgs(func() any { return !s.isMoving })
-	methods["CanFly"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
+	// CanFly is Player::CanFly (Player.h:2172): HasMovementFlag(
+	// MOVEMENTFLAG_CAN_FLY) on the player's movement info — the same
+	// lastMovementInfo snapshot IsFlying reads above. The old
+	// MountDisplayID proxy read true for any ground mount and false
+	// for druid flight form / a fly aura with no mount display.
+	methods["CanFly"] = luaNoArgs(func() any {
+		if mi, ok := s.lastMovementInfoSnapshot(); ok {
+			return mi.Flags&movementCanFly != 0
+		}
+		return false
+	})
 	// CanParry/CanBlock are Unit::CanParry/CanBlock (Player.h:1819-1821):
 	// the m_canParry/m_canBlock flags Go tracks on playerState and
 	// already reads for the melee-outcome arms.

@@ -82,6 +82,20 @@ type nearTeleportDestination struct {
 	Movement    movementInfo
 }
 
+// pendingTeleportRequest is one deferred Player::TeleportTo call: the
+// destination + options TeleportTo saved while the session was inside
+// a delay window (m_teleport_dest / m_teleport_options, Player.h:2497-2498).
+// near marks a NearTeleportTo request, which re-enters nearTeleportMove
+// at drain time instead of teleportToOptions.
+type pendingTeleportRequest struct {
+	mapID           uint32
+	x, y, z         float32
+	orientation     float32
+	stayOnTransport bool
+	teleToSpell     bool
+	near            bool
+}
+
 func buildTeleportMovementPackets(guid uint64, info movementInfo) ([]byte, []byte) {
 	info.GUID = guid
 	self := protocol.NewBuffer(64)
@@ -284,6 +298,14 @@ func (s *Server) broadcastCreatureSplineMove(mapID, instanceID uint32, x, y floa
 // An unresolvable transport falls back to detaching, as in teleportToOptions.
 func (s *session) nearTeleportMove(x, y, z, orientation float32, keepTransport bool) {
 	if s == nil || s.player == nil {
+		return
+	}
+	// Player::TeleportTo (Player.cpp:1730-1740, via Unit::NearTeleportTo,
+	// Unit.cpp:13332-13338): inside a delay window the teleport only
+	// saves its destination and returns — the drain after the window
+	// re-enters here with the depth at zero.
+	if s.delayTeleportDepth > 0 {
+		s.pendingTeleport = &pendingTeleportRequest{mapID: s.player.Map, x: x, y: y, z: z, orientation: orientation, stayOnTransport: keepTransport, near: true}
 		return
 	}
 	movement := s.movementInfoForCreate(*s.player)

@@ -200,9 +200,38 @@ func (s *session) teleportToStayOnTransport(mapID uint32, x, y, z, orientation f
 // carries TELE_TO_NOT_LEAVE_TRANSPORT (Transport.cpp:676) and teleToSpell
 // carries TELE_TO_SPELL (SpellEffects.cpp:1227-1228) — a teleport spell's own
 // far teleport must not interrupt its caster's cast (Player.cpp:1841-1842).
+// drainPendingTeleport executes a teleport deferred while the session was
+// inside a delay window (Player::Update, Player.cpp:1376-1377: only for
+// alive players). The request is cleared before executing so a nested
+// deferral during the drain cannot loop.
+func (s *session) drainPendingTeleport() {
+	if s == nil || s.pendingTeleport == nil {
+		return
+	}
+	req := s.pendingTeleport
+	s.pendingTeleport = nil
+	if s.player == nil || s.isDeadOrGhost() {
+		return
+	}
+	if req.near {
+		s.nearTeleportMove(req.x, req.y, req.z, req.orientation, req.stayOnTransport)
+		return
+	}
+	s.teleportToOptions(req.mapID, req.x, req.y, req.z, req.orientation, req.stayOnTransport, req.teleToSpell)
+}
+
 func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, stayOnTransport, teleToSpell bool) bool {
 	if s.player == nil {
 		return false
+	}
+	// Player::TeleportTo (Player.cpp:1730-1740 same-map, :1789-1799 far):
+	// inside a delay window the teleport only saves its destination
+	// (m_teleport_dest / m_teleport_options) and returns true — the
+	// validity gates below re-run at drain time. A later request in
+	// the same window overwrites, as C++ keeps a single dest.
+	if s.delayTeleportDepth > 0 {
+		s.pendingTeleport = &pendingTeleportRequest{mapID: mapID, x: x, y: y, z: z, orientation: orientation, stayOnTransport: stayOnTransport, teleToSpell: teleToSpell}
+		return true
 	}
 	if s.server != nil && !s.validTrinityMapLocation(mapID, x, y, z, orientation) {
 		return false

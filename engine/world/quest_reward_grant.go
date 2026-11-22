@@ -270,6 +270,17 @@ func (s *session) getNextQuestInChain(ctx context.Context, giverGUID uint64, que
 // Player::RewardQuest itself never touches the gossip frame.
 func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardView, questID uint32, giverGUID uint64, reward uint32, grants []questItemGrant, destroyedGUIDs []uint64, announce bool) bool {
 	wdb := s.server.WorldStore.DB
+	// Player::RewardQuest (Player.cpp:15336, :15518) sets CanDelayTeleport
+	// for the whole reward body ("protect code from quest, which cast on
+	// player far teleport as a reward"): a reward-spell teleport defers
+	// until the grants finish.
+	s.delayTeleportDepth++
+	defer func() {
+		s.delayTeleportDepth--
+		if s.delayTeleportDepth == 0 {
+			s.drainPendingTeleport()
+		}
+	}()
 	// C++ Player::RewardQuest (Player.cpp:15439-15448): the quest reward mail
 	// goes out as part of the reward flow, once the reward is committed.
 	s.sendQuestRewardMail(ctx, questID, giverGUID)

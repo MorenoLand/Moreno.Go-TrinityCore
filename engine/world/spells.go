@@ -10923,6 +10923,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if s.player == nil {
 		return
 	}
+	// Player::Update (Player.cpp:1058-1060) sets CanDelayTeleport around
+	// Unit::Update: a TeleportTo requested while spell effects resolve
+	// only saves its destination and runs after the update. Go resolves
+	// spell effects inside finishSpellCast, so the cast is the delay
+	// window; the depth counter keeps the castAgain re-entry below
+	// from draining early. Cross-player teleports resolve on the
+	// target's own session (depth 0 there) and execute immediately,
+	// as in C++ — the target is not inside its own update.
+	s.delayTeleportDepth++
+	defer func() {
+		s.delayTeleportDepth--
+		if s.delayTeleportDepth == 0 {
+			s.drainPendingTeleport()
+		}
+	}()
 	// Spell::_cast head (Spell.cpp:3284): UpdatePointers re-derives the
 	// dest from the transport's current position before the effects run,
 	// so a cast started on a moving transport lands where the transport
@@ -43093,6 +43108,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		if eff.Aura == 36 || eff.Aura == 56 {
 			targetSess.refreshTransformDisplay(ctx)
+		}
+		// AuraEffect::HandleAuraTransform (SpellAuraEffects.cpp:2104-2106):
+		// a transform applying to a polymorphed player dismounts them —
+		// SetTransformSpell runs ahead of the check (:1924), so the
+		// polymorph's own apply fires it (the aura registered above,
+		// so isPolymorphed already sees it). The regen-timer leg
+		// (:2102-2103) has no Go model.
+		if eff.Aura == 56 && targetSess.isPolymorphed() && (targetSess.player.UnitFlags&unitFlagMount != 0 || targetSess.player.MountDisplayID != 0) {
+			targetSess.removeAurasByType(spellAuraMounted)
 		}
 		// Player::SetShapeshiftForm (Player.cpp:21795-21812) always re-runs
 		// the melee + ranged UpdateAttackPowerAndDamage pair on a form

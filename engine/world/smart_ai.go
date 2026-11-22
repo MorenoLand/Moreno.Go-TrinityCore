@@ -1071,15 +1071,17 @@ func (s *Server) smartStateForTransport(ctx context.Context, guid uint64) (*crea
 	s.transportMu.Lock()
 	transport := s.transports[uint32(guid)]
 	var spawn gameObjectSpawn
+	var instanceID uint32
 	if transport != nil {
 		spawn = transport.Spawn
+		instanceID = transport.InstanceID
 	}
 	s.transportMu.Unlock()
 	if transport == nil || spawn.Entry == 0 {
 		return nil, nil
 	}
 	motion := &creatureMotion{
-		GUID: guid, Entry: spawn.Entry, Map: spawn.Map, InstanceID: 0,
+		GUID: guid, Entry: spawn.Entry, Map: spawn.Map, InstanceID: instanceID,
 		X: spawn.X, Y: spawn.Y, Z: spawn.Z, Orientation: spawn.Orientation,
 		PhaseMask: 1, AIName: "SmartAI", BaseIsGameObject: true,
 	}
@@ -2539,20 +2541,21 @@ func (s *Server) updateGameObjectSmartAI(ctx context.Context, now time.Time) {
 		s.smartUpdateGOTimers(ctx, motion, now)
 	}
 	type transportRef struct {
-		guid  uint64
-		x, y  float32
-		mapID uint32
+		guid       uint64
+		x, y       float32
+		mapID      uint32
+		instanceID uint32
 	}
 	var transportRefs []transportRef
 	s.transportMu.Lock()
 	for _, transport := range s.transports {
 		if transport != nil {
-			transportRefs = append(transportRefs, transportRef{transportGUID(transport.Spawn.GUID), transport.Spawn.X, transport.Spawn.Y, transport.Spawn.Map})
+			transportRefs = append(transportRefs, transportRef{transportGUID(transport.Spawn.GUID), transport.Spawn.X, transport.Spawn.Y, transport.Spawn.Map, transport.InstanceID})
 		}
 	}
 	s.transportMu.Unlock()
 	for _, r := range transportRefs {
-		if !near(r.mapID, 0, r.x, r.y) {
+		if !near(r.mapID, r.instanceID, r.x, r.y) {
 			continue
 		}
 		motion, state := s.smartStateForTransport(ctx, r.guid)

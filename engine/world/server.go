@@ -332,8 +332,15 @@ type Server struct {
 	evadeDespawns map[uint64]evadeDespawn
 	transportMu   sync.Mutex
 	transports    map[uint32]*continentTransport
-	lootMu        sync.Mutex
-	creatureLoot  map[lootObjectKey]*activeLootState
+	// instanceTransportGUIDMu / instanceTransportGUIDNext seed the
+	// per-instance transport GUID counter
+	// (generateInstanceTransportGUID, transports.go), mirroring the
+	// generateItemGUID counter shape.
+	instanceTransportGUIDMu    sync.Mutex
+	instanceTransportGUIDReady bool
+	instanceTransportGUIDNext  uint32
+	lootMu                     sync.Mutex
+	creatureLoot               map[lootObjectKey]*activeLootState
 	// goSkillupLists mirrors GameObject::m_SkillupList (GameObject.h:190-199):
 	// the players (low GUIDs) that already took their one lockpicking
 	// skill-up from a given GO (Spell::EffectOpenLock, SpellEffects.cpp:2042-2055).
@@ -587,6 +594,16 @@ type session struct {
 	farTeleportOriginInstanceID  uint32
 	nearTeleportPending          bool
 	nearTeleportDest             nearTeleportDestination
+	// delayTeleportDepth / pendingTeleport mirror Player::TeleportTo's
+	// delayed-teleport model (Player.h:2474-2504, Player.cpp:1058-1060,
+	// :1376-1377, :1730-1740, :1789-1799): while the depth is nonzero
+	// the session is inside a delay window (spell-effect resolution,
+	// quest-reward grants) and TeleportTo only saves the destination;
+	// the drain after the window executes it, alive players only.
+	// A counter, not a bool, so nested casts drain only at the
+	// outermost exit.
+	delayTeleportDepth           int
+	pendingTeleport              *pendingTeleportRequest
 	initialLoginPending          bool
 	initialLoginFirst            bool
 	temporaryUnsummonedPetNumber uint32

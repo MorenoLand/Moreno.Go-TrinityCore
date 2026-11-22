@@ -11062,12 +11062,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						// The 2D dist can sit inside the archer stop distance
 						// while the 3D band check above passed (large dz): never
 						// launch onto the victim's center in that case.
-						if speed := creatureSplineVelocityExplicit(motion, chaseWalk(motion)); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) {
+						if speed := creatureSplineVelocityExplicit(motion, chaseWalk(motion)); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z) {
 							// ChaseMovementGenerator.cpp:180-207 shortens the path to the
 							// victim's ring (ShortenPathUntilDist) before Launch, so the
 							// spline duration runs on the shortened 3D travel distance to
 							// the ring point at the victim's Z (Spline.cpp:152-156), not
-							// the 2D center distance.
+							// the 2D center distance. ChaseMovementGenerator::PositionOkay
+							// (:45-60) also requires line of sight to the victim before
+							// arrival — without it C++ stops (StopMoving +
+							// SetCannotReachTarget, :196-200) and re-paths next update.
+							// Go has no PathGenerator, so the launch itself is LOS-gated
+							// on the victim's center: a creature behind a wall stands
+							// and retries next tick (this leg re-runs while !Moving)
+							// instead of chasing through it.
 							travelDist := float32(distance3D(motion.X, motion.Y, motion.Z, destX, destY, target.Z))
 							duration := splineDurationMs(float64(travelDist), speed)
 							s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true, motion.PhaseMask, motion.TransportGUID)

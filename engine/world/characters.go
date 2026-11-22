@@ -1791,6 +1791,14 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 			return false
 		}
 	}
+	// TransportMgr::CreateInstanceTransports (TransportMgr.cpp:459-469):
+	// the gunship entries (icecrown_citadel.h:365-374,
+	// halls_of_reflection.h:109-110) have no `transports`-table row, so
+	// instance entry is their only creation moment — before the
+	// entering player streams the map below.
+	if mapEntry.IsDungeon() && selection.InstanceID != 0 {
+		s.server.createInstanceTransports(ctx, state.Map, selection.InstanceID)
+	}
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
 	}

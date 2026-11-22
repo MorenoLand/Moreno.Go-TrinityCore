@@ -11,9 +11,14 @@ import (
 )
 
 type continentTransport struct {
-	Spawn           gameObjectSpawn
-	Name            string
-	TransportMapID  uint32
+	Spawn          gameObjectSpawn
+	Name           string
+	TransportMapID uint32
+	// InstanceID binds the transport to one instance (TransportMgr::
+	// CreateTransport, TransportMgr.cpp:366-426, map != nullptr arm):
+	// 0 is a continent transport, visible on the whole map; nonzero is
+	// an instance transport, visible only to that instance's players.
+	InstanceID      uint32
 	PathID          uint32
 	Path            *TransportTrajectory
 	PathProgress    uint32
@@ -37,6 +42,10 @@ type continentTransportMovement struct {
 	OldSpawn   gameObjectSpawn
 	Spawn      gameObjectSpawn
 	Passengers []creatureSpawn
+	// InstanceID is the moved transport's instance binding (0 for a
+	// continent transport): the broadcast fan-out below only streams
+	// the movement to sessions in the same instance.
+	InstanceID uint32
 }
 
 func (s *Server) loadContinentTransports(ctx context.Context) {
@@ -118,6 +127,179 @@ func (s *Server) loadContinentTransports(ctx context.Context) {
 	if s.Logger != nil {
 		s.Logger.Info("continent transports loaded", "count", loaded)
 	}
+}
+
+// createInstanceTransport is the TransportMgr::CreateTransport
+// (TransportMgr.cpp:366-426) instance arm: a transport built from its
+// gameobject_template row alone (no `transports`-table row, which only
+// ever holds continent transports) and bound to one instance map.
+// The template's path must stay on a single instanceable map —
+// GeneratePath's inInstance (TransportMgr.cpp:190-193) and
+// CreateTransport's MapEntry.Instanceable() guard (:406-415) — and
+// that map must be the instance map passed in. Creation is idempotent
+// per (entry, instance): the gunship scripts guard on the stored GUID
+// (instance_icecrown_citadel.cpp:1035-1042,
+// instance_halls_of_reflection.cpp:382), and Go keeps no per-instance
+// script state, so a second create for the same entry in the same
+// instance returns the existing transport instead of a duplicate.
+func (s *Server) createInstanceTransport(ctx context.Context, entry, mapID, instanceID uint32) *continentTransport {
+	if s == nil || entry == 0 || mapID == 0 || instanceID == 0 || s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.transportMu.Lock()
+	for _, existing := range s.transports {
+		if existing != nil && existing.InstanceID == instanceID && existing.Spawn.Entry == entry {
+			s.transportMu.Unlock()
+			return existing
+		}
+	}
+	s.transportMu.Unlock()
+	var name string
+	var pathID, transportMapID, displayID, canBeStopped, flags, faction int64
+	var speed, acceleration, size float64
+	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), COALESCE(gt.data6, 0), COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0), COALESCE(ta.flags, 0), COALESCE(ta.faction, 0) FROM gameobject_template AS gt LEFT JOIN gameobject_template_addon AS ta ON ta.entry = gt.entry WHERE gt.entry = ? AND gt.type = 15`, entry).Scan(&name, &pathID, &speed, &acceleration, &transportMapID, &displayID, &size, &canBeStopped, &flags, &faction)
+	if err != nil && isMissingColumn(err) {
+		err = s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), 0, COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0), COALESCE(ta.flags, 0), COALESCE(ta.faction, 0) FROM gameobject_template AS gt LEFT JOIN gameobject_template_addon AS ta ON ta.entry = gt.entry WHERE gt.entry = ? AND gt.type = 15`, entry).Scan(&name, &pathID, &speed, &acceleration, &transportMapID, &displayID, &size, &canBeStopped, &flags, &faction)
+	}
+	if err != nil || pathID <= 0 {
+		if s.Logger != nil {
+			s.Logger.Warn("instance transport template unavailable", "entry", entry, "map", mapID, "instance", instanceID, "error", err)
+		}
+		return nil
+	}
+	points, err := s.Data.TaxiPathPoints(uint32(pathID))
+	path, pathErr := NewTransportTrajectory(points, float32(speed), float32(acceleration))
+	if err != nil || pathErr != nil {
+		if s.Logger != nil {
+			if err == nil {
+				err = pathErr
+			}
+			s.Logger.Warn("instance transport route unavailable", "entry", entry, "path", pathID, "error", err)
+		}
+		return nil
+	}
+	if size <= 0 {
+		size = 1
+	}
+	if mapsUsed := transportPathMapsUsed(points); len(mapsUsed) != 1 {
+		return nil
+	} else {
+		for usedMapID := range mapsUsed {
+			if usedMapID != mapID {
+				return nil
+			}
+			if mapEntry, found, mapErr := s.Data.Map(usedMapID); mapErr != nil || !found || mapEntry.InstanceType == 0 {
+				return nil
+			}
+		}
+	}
+	startMap, x, y, z, orientation := path.Position(0)
+	if startMap != mapID {
+		return nil
+	}
+	guid := s.generateInstanceTransportGUID(ctx)
+	if guid == 0 {
+		return nil
+	}
+	state := uint8(1)
+	if canBeStopped != 0 {
+		state = 0
+	}
+	transport := &continentTransport{Spawn: gameObjectSpawn{GUID: guid, Entry: entry, Map: startMap, X: x, Y: y, Z: z, Orientation: orientation, State: state, AnimProgress: 255, Type: GameObjectTypeMOTransport, DisplayID: uint32(displayID), Size: float32(size), Flags: uint32(flags), Faction: uint32(faction), RotationW: 1, ParentRotation: [4]float32{0, 0, 0, 1}}, Name: name, TransportMapID: uint32(transportMapID), InstanceID: instanceID, PathID: uint32(pathID), Path: path, LastUpdate: time.Now()}
+	s.loadTransportPassengers(ctx, transport)
+	transport.updatePosition()
+	s.transportMu.Lock()
+	for _, existing := range s.transports {
+		if existing != nil && existing.InstanceID == instanceID && existing.Spawn.Entry == entry {
+			s.transportMu.Unlock()
+			return existing
+		}
+	}
+	if s.transports == nil {
+		s.transports = make(map[uint32]*continentTransport)
+	}
+	s.transports[guid] = transport
+	s.transportMu.Unlock()
+	s.relocateTransportCreatureMotions(ctx, transport.passengerCreatures())
+	return transport
+}
+
+// createInstanceTransports is the CreateInstanceTransports
+// (TransportMgr.cpp:459-469) sweep: every MO_TRANSPORT template whose
+// path stays on this instanceable map gets its per-instance transport.
+// In this C++ tree the sweep itself is never called — the live creation
+// points are the ICC/HoR instance and gunship-battle scripts — but Go
+// has no Lua CreateTransport bridge, so instance entry is the closest
+// creation moment: the transports exist before the entering player
+// streams the map. Entries whose path is not instance-only on this map
+// are skipped by createInstanceTransport's guard.
+func (s *Server) createInstanceTransports(ctx context.Context, mapID, instanceID uint32) {
+	if s == nil || mapID == 0 || instanceID == 0 || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT entry FROM gameobject_template WHERE type = 15`)
+	if err != nil {
+		if !missingTable(err) && s.Logger != nil {
+			s.Logger.Warn("instance transport lookup failed", "map", mapID, "instance", instanceID, "error", err)
+		}
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var entry int64
+		if rows.Scan(&entry) != nil || entry <= 0 {
+			continue
+		}
+		s.createInstanceTransport(ctx, uint32(entry), mapID, instanceID)
+	}
+}
+
+// generateInstanceTransportGUID mirrors
+// ObjectGuidGenerator<HighGuid::Mo_Transport>::Generate
+// (ObjectGuid.h:300-309): a fresh low GUID above every `transports`
+// row and every live transport, from the in-memory counter seeded
+// once, like generateItemGUID. Instance transports have no DB row,
+// so the counter — not MAX(guid) per call — keeps concurrent
+// instance entries from colliding.
+func (s *Server) generateInstanceTransportGUID(ctx context.Context) uint32 {
+	s.instanceTransportGUIDMu.Lock()
+	defer s.instanceTransportGUIDMu.Unlock()
+	if !s.instanceTransportGUIDReady {
+		s.instanceTransportGUIDReady = true
+		next := uint32(1)
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			var maxDB int64
+			if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM transports").Scan(&maxDB); err == nil && maxDB > 0 && maxDB < int64(^uint32(0)) {
+				next = uint32(maxDB) + 1
+			}
+		}
+		s.transportMu.Lock()
+		for guid := range s.transports {
+			if guid >= next {
+				next = guid + 1
+			}
+		}
+		s.transportMu.Unlock()
+		s.instanceTransportGUIDNext = next
+	}
+	if s.instanceTransportGUIDNext == 0 || s.instanceTransportGUIDNext >= 0xFFFFFFFE {
+		if s.Logger != nil {
+			s.Logger.Error("object: instance transport GUID counter overflow, cannot generate new transport GUIDs")
+		}
+		return 0
+	}
+	guid := s.instanceTransportGUIDNext
+	s.instanceTransportGUIDNext++
+	return guid
 }
 
 func (s *Server) transportSpawnForGUID(guid uint64) (gameObjectSpawn, bool) {
@@ -355,9 +537,10 @@ func (s *Server) reviveTransportPassengerRespawn(ctx context.Context, respawn cr
 // transportMu and dispatched after it is released — SmartAI actions
 // take motionMu, and the transport lock must never be held under them.
 type transportNodeFire struct {
-	guid    uint64
-	mapID   uint32
-	eventID uint32
+	guid       uint64
+	mapID      uint32
+	instanceID uint32
+	eventID    uint32
 }
 
 func (t *continentTransport) updatePosition() {
@@ -420,11 +603,11 @@ func (t *continentTransport) crossedNodeEvents(oldProgress, newProgress uint32) 
 		frame := &t.Path.frames[i]
 		if frame.point.ArrivalEventID != 0 && crossed(frame.arrival) {
 			mapID, _, _, _, _ := t.Path.Position(frame.arrival)
-			out = append(out, transportNodeFire{guid: guid, mapID: mapID, eventID: frame.point.ArrivalEventID})
+			out = append(out, transportNodeFire{guid: guid, mapID: mapID, instanceID: t.InstanceID, eventID: frame.point.ArrivalEventID})
 		}
 		if frame.point.DepartureEventID != 0 && crossed(frame.departure) {
 			mapID, _, _, _, _ := t.Path.Position(frame.departure)
-			out = append(out, transportNodeFire{guid: guid, mapID: mapID, eventID: frame.point.DepartureEventID})
+			out = append(out, transportNodeFire{guid: guid, mapID: mapID, instanceID: t.InstanceID, eventID: frame.point.DepartureEventID})
 		}
 	}
 	return out
@@ -444,7 +627,7 @@ func (s *Server) updateContinentTransports(now time.Time) {
 		oldSpawn := transport.Spawn
 		moved, events := transport.advance(now)
 		if moved {
-			changes = append(changes, continentTransportMovement{OldSpawn: oldSpawn, Spawn: transport.Spawn, Passengers: transport.passengerCreatures()})
+			changes = append(changes, continentTransportMovement{OldSpawn: oldSpawn, Spawn: transport.Spawn, Passengers: transport.passengerCreatures(), InstanceID: transport.InstanceID})
 		}
 		nodeFires = append(nodeFires, events...)
 	}
@@ -466,7 +649,7 @@ func (s *Server) updateContinentTransports(now time.Time) {
 	// TALK + timed-list rows. Fired after transportMu is released:
 	// SmartAI actions take motionMu.
 	for _, fire := range nodeFires {
-		s.smartProcessGOEvents(context.Background(), fire.mapID, 0, fire.guid, smartEventGOEventInform, 0, fire.eventID, 0)
+		s.smartProcessGOEvents(context.Background(), fire.mapID, fire.instanceID, fire.guid, smartEventGOEventInform, 0, fire.eventID, 0)
 	}
 }
 
@@ -477,7 +660,7 @@ func (s *Server) nearbyTransportSpawns(state playerState, distance float64) []ga
 	result := make([]gameObjectSpawn, 0)
 	s.transportMu.Lock()
 	for _, transport := range s.transports {
-		if transport == nil || transport.Spawn.Map != state.Map || math.Hypot(float64(transport.Spawn.X-state.X), float64(transport.Spawn.Y-state.Y)) > distance {
+		if transport == nil || transport.Spawn.Map != state.Map || (transport.InstanceID != 0 && transport.InstanceID != state.InstanceID) || math.Hypot(float64(transport.Spawn.X-state.X), float64(transport.Spawn.Y-state.Y)) > distance {
 			continue
 		}
 		result = append(result, transport.Spawn)
@@ -1044,7 +1227,7 @@ func (s *Server) buildMapTransportUpdates(state playerState, exclude uint64) (*p
 	spawns := make([]gameObjectSpawn, 0)
 	s.transportMu.Lock()
 	for _, transport := range s.transports {
-		if transport == nil || transport.Spawn.Map != state.Map {
+		if transport == nil || transport.Spawn.Map != state.Map || (transport.InstanceID != 0 && transport.InstanceID != state.InstanceID) {
 			continue
 		}
 		rawGUID := transportGUID(transport.Spawn.GUID)
@@ -1177,6 +1360,11 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		if !sess.authed || !sess.worldReady.Load() || sess.player == nil {
 			continue
 		}
+		// An instance transport's movement streams only to its own
+		// instance; passengers match by TransportGUID above and are
+		// unaffected — their InstanceID is the transport's by
+		// construction.
+		sameInstance := change.InstanceID == 0 || sess.player.InstanceID == change.InstanceID
 		if sess.player.TransportGUID == rawGUID && change.OldSpawn.Map == change.Spawn.Map && !sess.nearTeleportPending && !sess.farTeleportPending {
 			// Transport::UpdatePassengerPositions (Transport.cpp:724-727)
 			// skips vehicle riders: the vehicle is relocated as a
@@ -1254,7 +1442,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			pendingVehicleRiders = append(pendingVehicleRiders, sess)
 			continue
 		}
-		if change.OldSpawn.Map != change.Spawn.Map && sess.player.Map == change.OldSpawn.Map {
+		if change.OldSpawn.Map != change.Spawn.Map && sameInstance && sess.player.Map == change.OldSpawn.Map {
 			updates := protocol.NewUpdateData()
 			updates.AddOutOfRangeGUID(rawGUID)
 			for _, guid := range sess.clearTransportPassengerVisibility(rawGUID) {
@@ -1268,7 +1456,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			}
 			continue
 		}
-		if sess.player.Map != change.Spawn.Map {
+		if sess.player.Map != change.Spawn.Map || !sameInstance {
 			continue
 		}
 		updates := protocol.NewUpdateData()
