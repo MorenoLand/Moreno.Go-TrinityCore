@@ -155,8 +155,28 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 	if groupBound {
 		selection.InstanceID, selection.Difficulty, selection.GroupPermanent = uint32(groupInstanceID), uint32(groupBoundDifficulty), groupPermanent != 0
 		selection.GroupDBID, selection.RestoreGroupBind = groupDBID, true
+		// MapInstanced::CreateInstanceForPlayer (MapInstanced.cpp:163-174):
+		// taking the group bind unbinds the solo save ("solo saves should
+		// be reset when entering a group's instance") — the UnbindPlayer
+		// twin above, not a rejection: InstanceMap::Add's solo-bind
+		// mismatch arm (Map.cpp:3910-3925) can only fire for a bind the
+		// selection did not already unbind, which the ack path never
+		// reaches. A permanent bind a global reset demoted to extendState
+		// 0 is invisible to the characterBound query above, but C++
+		// UnbindInstance (Player.cpp:19093-19119) deletes the row
+		// unconditionally when the group bind is taken, so look it up
+		// without the extendState filter here as well.
 		if characterBound {
 			selection.UnbindPlayerInstanceID = uint32(characterInstanceID)
+		} else {
+			var demotedInstanceID int64
+			demotedErr := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ci.instance FROM character_instance AS ci
+				JOIN instance AS i ON i.id = ci.instance WHERE ci.guid = ? AND i.map = ? AND i.difficulty = ? LIMIT 1`, state.GUID, state.Map, playerDifficulty).Scan(&demotedInstanceID)
+			if demotedErr == nil && demotedInstanceID > 0 && demotedInstanceID <= int64(^uint32(0)) {
+				selection.UnbindPlayerInstanceID = uint32(demotedInstanceID)
+			} else if demotedErr != nil && !errors.Is(demotedErr, sql.ErrNoRows) {
+				return selection, false, demotedErr
+			}
 		}
 		return selection, true, nil
 	}
@@ -514,7 +534,12 @@ func (s *session) persistWorldportInstance(ctx context.Context, selection worldp
 		}
 	}
 	if selection.UnbindPlayerInstanceID != 0 {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ? AND permanent = 0", s.playerGUID, selection.UnbindPlayerInstanceID); err != nil {
+		// Player::UnbindInstance (Player.cpp:19099-19119) deletes the row
+		// regardless of permanence (a permanent bind only adds a calendar
+		// lockout removal, which Go has no arm for), so no permanent
+		// filter: a demoted permanent bind resolved by the group-bound
+		// leg must actually go.
+		if _, err := tx.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ?", s.playerGUID, selection.UnbindPlayerInstanceID); err != nil {
 			return err
 		}
 	}

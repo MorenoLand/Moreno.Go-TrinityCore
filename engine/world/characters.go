@@ -1690,18 +1690,36 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 		s.player.Z = state.Z
 		s.lastFallZ, s.lastFallTime = state.Z, 0
 	}
-	if !s.validTrinityMapID(state.Map) || (!s.initialLoginPending && !validTrinityMapCoordinates(state.X, state.Y, state.Z, state.Orientation)) {
-		return false
-	}
-	mapEntry, found, err := s.server.Data.Map(state.Map)
-	if err != nil || !found {
-		return false
-	}
+	// MovementHandler.cpp:89-115 (HandleMoveWorldportAck): a post-resolve
+	// failure homebinds — CannotEnter at ack, or AddPlayerToMap false
+	// (ResetMap/SetMap(oldMap), then TeleportTo homebind). The closure
+	// below is that arm: every pre-commit failure in this function
+	// (before the initial update is written and the player is broadcast)
+	// routes through it instead of returning false, which used to leave
+	// the client on the loading screen with farTeleportPending already
+	// cleared and player.Map already overwritten to the destination.
+	// teleportTo re-records the failed destination as the fallback's
+	// origin (Player.cpp:1801-1822 far branch), so the origin-map
+	// restore C++ does is the fallback teleport itself.
 	fallbackHomebind := func() bool {
 		if !s.validTrinityMapLocation(state.HomebindMap, state.HomebindX, state.HomebindY, state.HomebindZ, originOrientation) {
 			return false
 		}
 		return s.teleportTo(state.HomebindMap, state.HomebindX, state.HomebindY, state.HomebindZ, originOrientation)
+	}
+	if !s.validTrinityMapID(state.Map) || (!s.initialLoginPending && !validTrinityMapCoordinates(state.X, state.Y, state.Z, state.Orientation)) {
+		// MovementHandler.cpp:57-62: invalid destination coords log the
+		// player out (LogoutPlayer(false)). At login the caller logs out
+		// on a false return (login_replay.go), so skip the double logout
+		// there.
+		if !s.initialLoginPending {
+			s.logout()
+		}
+		return false
+	}
+	mapEntry, found, err := s.server.Data.Map(state.Map)
+	if err != nil || !found {
+		return fallbackHomebind()
 	}
 	selection, canCreate, err := s.resolveWorldportInstance(ctx, state, mapEntry)
 	if err != nil || !canCreate {
@@ -1733,30 +1751,30 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	}
 	s.player.InstanceID = selection.InstanceID
 	if err := s.sendInitialPacketsBeforeAddToMap(ctx, state); err != nil {
-		return false
+		return fallbackHomebind()
 	}
 	attachedTransport, err := s.server.buildAttachedTransportUpdate(ctx, state)
 	if err != nil {
-		return false
+		return fallbackHomebind()
 	}
 	attachedPassengers, err := s.server.buildAttachedTransportPassengerUpdates(ctx, state, s)
 	if err != nil {
-		return false
+		return fallbackHomebind()
 	}
 	attachedPlayers, attachedPlayerGUIDs, err := s.server.buildAttachedTransportPlayerUpdates(state, s.playerGUID, s)
 	if err != nil {
-		return false
+		return fallbackHomebind()
 	}
 	playerUpdate, err := s.server.buildPlayerUpdate(state)
 	if err != nil || playerUpdate == nil {
-		return false
+		return fallbackHomebind()
 	}
 	s.captureUpdatePackets = true
 	s.capturedUpdatePackets = nil
 	if err := s.sendInventoryItemsBeforeMap(ctx); err != nil {
 		s.captureUpdatePackets = false
 		s.capturedUpdatePackets = nil
-		return false
+		return fallbackHomebind()
 	}
 	inventoryPackets := s.capturedUpdatePackets
 	s.captureUpdatePackets = false
@@ -1775,11 +1793,11 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	}
 	initialUpdate, err := protocol.MergeUpdatePackets(initialPackets...)
 	if err != nil || initialUpdate == nil {
-		return false
+		return fallbackHomebind()
 	}
 	if selection.CreateSave || selection.BindPlayer || selection.BindGroup || selection.UnbindPlayerInstanceID != 0 {
 		if err := s.persistWorldportInstance(ctx, selection); err != nil {
-			return false
+			return fallbackHomebind()
 		}
 		instanceCommitted = true
 		if selection.Reserved {
@@ -1788,7 +1806,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	}
 	if mapEntry.IsDungeon() && !selection.CreateSave {
 		if err := s.ensureWorldportInstanceSave(ctx, selection, mapEntry); err != nil {
-			return false
+			return fallbackHomebind()
 		}
 	}
 	// TransportMgr::CreateInstanceTransports (TransportMgr.cpp:459-469):
@@ -1800,7 +1818,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 		s.server.createInstanceTransports(ctx, state.Map, selection.InstanceID)
 	}
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
-		return false
+		return fallbackHomebind()
 	}
 	s.markVisiblePlayers(attachedPlayerGUIDs)
 	s.server.broadcastPlayerCreate(state, s)

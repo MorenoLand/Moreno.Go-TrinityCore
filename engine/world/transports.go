@@ -1223,6 +1223,75 @@ func (t *continentTransport) passengerCreatures() []creatureSpawn {
 	return result
 }
 
+// summonTransportPassenger is the Transport::SummonPassenger twin
+// (Transport.cpp:440+, Transport.h:68): a temporary creature summoned
+// onto the transport at the given offsets. The offsets convert to world
+// coordinates via CalculatePassengerPosition (TransportBase), the
+// creature carries the transport GUID with the offsets stored
+// (SetTransport / m_movementInfo.transport.pos), its home is the world
+// position (SetHomePosition) with the transport home the offsets
+// (SetTransportHomePosition), and it ignores pathfinding
+// (UNIT_STATE_IGNORE_PATHFINDING — the transport models are not in the
+// map's dynamic LoS). The spawn joins StaticCreatures, so the existing
+// passenger sweep (passengerCreatures / relocateTransportCreatureMotions)
+// keeps it riding the transport; the despawn family is MANUAL_DESPAWN
+// (bridge scheme 7), the sole caller's type (Battleground::AddCreature,
+// Battleground.cpp:1455, TEMPSUMMON_MANUAL_DESPAWN). No summoner object
+// exists on that path, so there is no JustSummoned fire and the phase
+// stays PHASEMASK_NORMAL (the template stats leg in motionForLocked
+// covers InitStats). Unknown entries return nil, as C++ returns null
+// for a missing template. No live caller yet: Go has no Battleground
+// AddCreature twin (the BG creature spawn path is a separate gap).
+func (s *Server) summonTransportPassenger(ctx context.Context, transport *continentTransport, entry uint32, offsetX, offsetY, offsetZ, offsetO float32) *creatureMotion {
+	if s == nil || transport == nil || entry == 0 || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var exists int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM creature_template WHERE entry = ?", entry).Scan(&exists); err != nil || exists == 0 {
+		return nil
+	}
+	var walkSpeed, runSpeed float64 = 1.0, 1.14286
+	_ = s.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(speed_walk, 1), COALESCE(speed_run, 1) FROM creature_template WHERE entry = ?",
+		entry).Scan(&walkSpeed, &runSpeed)
+	worldX, worldY, worldZ, worldO := CalculatePassengerPosition(transport.Spawn.X, transport.Spawn.Y, transport.Spawn.Z, transport.Spawn.Orientation, offsetX, offsetY, offsetZ, offsetO)
+	spawn := creatureSpawn{
+		GUID:          s.nextDynamicCreatureLowGUID(),
+		Entry:         entry,
+		Map:           transport.Spawn.Map,
+		X:             worldX,
+		Y:             worldY,
+		Z:             worldZ,
+		Orientation:   worldO,
+		TransportGUID: transportGUID(transport.Spawn.GUID),
+		TransportX:    offsetX,
+		TransportY:    offsetY,
+		TransportZ:    offsetZ,
+		TransportO:    offsetO,
+		WalkSpeed:     float32(walkSpeed),
+		RunSpeed:      float32(runSpeed),
+	}
+	s.transportMu.Lock()
+	transport.StaticCreatures = append(transport.StaticCreatures, spawn)
+	s.transportMu.Unlock()
+	s.relocateTransportCreatureMotions(ctx, []creatureSpawn{spawn})
+	s.motionMu.Lock()
+	motion := s.motionMapLocked(spawn.Map, 0)[creatureWorldGUID(spawn.GUID, spawn.Entry)]
+	if motion != nil {
+		motion.IsTempSummon = true
+		motion.TempSummonType = 7
+	}
+	s.motionMu.Unlock()
+	if motion != nil {
+		s.creatureUnitStateAdd(motion, unitStateIgnorePathfinding)
+	}
+	return motion
+}
+
 func (t *continentTransport) passengerObjects() []gameObjectSpawn {
 	if t == nil {
 		return nil
