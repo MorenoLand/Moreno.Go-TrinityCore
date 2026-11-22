@@ -143,13 +143,45 @@ var instanceBossBoundaries = map[bossBoundaryKey][]areaBoundary{
 	{mapID: 669, entry: 39863}: {circleBoundary{centerX: 3156.037, centerY: 533.2656, radius: 48.5}},
 	// Trial of the Crusader (map 649): instance_trial_of_the_crusader.cpp:32-39.
 	// DATA_NORTHREND_BEASTS / JARAXXUS / FACTION_CRUSADERS / TWIN_VALKIRIES
-	// share the arena circle; the champions controller row is NOT seeded
-	// (its BossAI bossId is unverified — the champions' own AI carries it).
+	// share the arena circle. The controller (34781) takes it via its
+	// BossAI(creature, DATA_FACTION_CRUSADERS) ctor (boss_faction_champions.cpp:374);
+	// all 28 champions take it via the explicit SetBoundary in
+	// boss_faction_championsAI's ctor (:585) — their own bossId
+	// DATA_FACTION_CHAMPIONS has no boundary row.
 	{mapID: 649, entry: 34796}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
 	{mapID: 649, entry: 35144}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
 	{mapID: 649, entry: 34799}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
 	{mapID: 649, entry: 34797}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
 	{mapID: 649, entry: 34780}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34781}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34461}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34460}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34469}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34467}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34468}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34465}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34471}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34466}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34473}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34472}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34463}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34470}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34474}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34475}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34458}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34451}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34459}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34448}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34449}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34445}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34456}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34447}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34441}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34454}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34455}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34444}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34450}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
+	{mapID: 649, entry: 34453}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
 	{mapID: 649, entry: 34497}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
 	{mapID: 649, entry: 34496}: {circleBoundary{centerX: 563.26, centerY: 139.6, radius: 75.0}},
 	{mapID: 649, entry: 34564}: {newEllipseBoundary(746.0, 135.0, 100.0, 75.0)},
@@ -209,6 +241,7 @@ var instanceBossBoundaries = map[bossBoundaryKey][]areaBoundary{
 	{mapID: 564, entry: 22950}: {newEllipseBoundary(696.6, 305.0, 70.0, 85.0)},
 	{mapID: 564, entry: 22951}: {newEllipseBoundary(696.6, 305.0, 70.0, 85.0)},
 	{mapID: 564, entry: 22952}: {newEllipseBoundary(696.6, 305.0, 70.0, 85.0)},
+	{mapID: 564, entry: 23426}: {newEllipseBoundary(696.6, 305.0, 70.0, 85.0)}, // the council controller itself: BossAI(creature, DATA_ILLIDARI_COUNCIL), boss_illidari_council.cpp:137
 	{mapID: 564, entry: 22917}: {newEllipseBoundary(694.8, 309.0, 80.0, 95.0)},
 	// Ulduar (map 603): instance_ulduar.cpp:33-48. Thorim sets its
 	// boundary dynamically, so no static row exists for it.
