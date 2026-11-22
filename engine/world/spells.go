@@ -55907,6 +55907,20 @@ func (s *session) handleEffectCharge(ctx context.Context, targetGUID uint64, spe
 	destX := target.X + reach*float32(math.Cos(angle))
 	destY := target.Y + reach*float32(math.Sin(angle))
 	facing := float32(math.Atan2(float64(target.Y-destY), float64(target.X-destX)))
+	// MotionMaster::MoveCharge (MotionMaster.cpp:698-720) launches a
+	// spline for a player caster (PointMovementGenerator, EVENT_CHARGE)
+	// at SPEED_CHARGE 42 (MovementDefines.h:23) — C++ takes the
+	// spell's Speed when set (SpellEffects.cpp:4505-4506), but the Go
+	// spell record carries no Speed field, so 42 stands. The mover's
+	// spline is unfinalized for dist/42, so MovementHandler.cpp:294-298
+	// drops the player's movement packets until it lands; Go charges by
+	// near-teleport, so the flight window is stamped here on the same
+	// playerScriptMoveEnds the generic movement gate reads (type POINT,
+	// the C++ generator). The stamp is armed before the teleport so a
+	// delay-window deferral (nearTeleportMove) cannot skip it.
+	chargeDist := distance3D(s.player.X, s.player.Y, s.player.Z, destX, destY, target.Z)
+	s.playerScriptMoveType = movementGeneratorPoint
+	s.playerScriptMoveEnds = time.Now().Add(time.Duration(splineDurationMs(chargeDist, 42)) * time.Millisecond)
 	s.nearTeleportMove(destX, destY, target.Z, facing, true)
 	if !spellIsPositive(spell) && target.Health != 0 {
 		s.startAttackOn(ctx, targetGUID)

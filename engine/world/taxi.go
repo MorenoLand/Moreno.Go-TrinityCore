@@ -959,7 +959,11 @@ func (s *session) sendTaxiSegment(f *taxiFlight, segIdx int) bool {
 	s.taxiMu.Lock()
 	f.splineIDs[segIdx] = splineID
 	s.taxiMu.Unlock()
-	s.sendTaxiMonsterMove(pts, splineID)
+	// The server segment timer uses the packet duration (the
+	// Catmull-Rom arc length at PLAYER_FLIGHT_SPEED), so the server
+	// and the client agree on when the leg lands; the hop delays
+	// below stay chord-proportioned fractions of it.
+	segDuration := time.Duration(s.sendTaxiMonsterMove(pts, splineID)) * time.Millisecond
 	last := pts[len(pts)-1]
 	s.player.X, s.player.Y, s.player.Z = last.X, last.Y, last.Z
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -975,9 +979,8 @@ func (s *session) sendTaxiSegment(f *taxiFlight, segIdx int) bool {
 	if segDist <= 0 {
 		segDist = 1
 	}
-	segDuration := time.Duration(segDist/taxiFlightSpeed*1000) * time.Millisecond
-	if segDuration < 500*time.Millisecond {
-		segDuration = 500 * time.Millisecond
+	if segDuration < time.Millisecond {
+		segDuration = time.Millisecond
 	}
 	for h := hopIdx; h < len(f.hops); h++ {
 		endPt := f.hops[h].endPt
@@ -1002,10 +1005,72 @@ func (s *session) sendTaxiSegment(f *taxiFlight, segIdx int) bool {
 // speed.
 const taxiFlightSpeed = 32.0
 
+// taxiCatmullRomArcLength is SplineBase::SegLengthCatmullRom
+// (Spline.cpp:158-176) summed over a control list: each segment is
+// sampled at t = 1/3, 2/3, 1 (STEPS_PER_SEGMENT = 3, Spline.h:59)
+// along the Catmull-Rom curve through the segment's 4-point window,
+// and the chord lengths between successive samples are summed. The
+// window's virtual first point is controls[0] stepped back one yard
+// along the initial orientation (InitCatmullRom, Spline.cpp:237-262,
+// non-cyclic arm) and the virtual last point duplicates the final
+// control, exactly like C++. The taxi flight is one C++ spline over
+// the whole path (FlightPathMovementGenerator.cpp:85-100); Go sends
+// it per segment, so the window restarts at each segment boundary —
+// an approximation the client shares, since its spline is built
+// from the packet's points alone.
+func taxiCatmullRomArcLength(controls [][3]float64, initialOrientation float64) float64 {
+	n := len(controls)
+	if n < 2 {
+		return 0
+	}
+	total := float64(0)
+	for i := 0; i < n-1; i++ {
+		var p0, p3 [3]float64
+		if i == 0 {
+			p0 = [3]float64{
+				controls[0][0] - float64(math.Cos(initialOrientation)),
+				controls[0][1] - float64(math.Sin(initialOrientation)),
+				controls[0][2],
+			}
+		} else {
+			p0 = controls[i-1]
+		}
+		p1 := controls[i]
+		p2 := controls[i+1]
+		if i+2 < n {
+			p3 = controls[i+2]
+		} else {
+			p3 = controls[n-1]
+		}
+		cur := p1
+		for step := 1; step <= 3; step++ {
+			t := float64(step) / 3
+			t2, t3 := t*t, t*t*t
+			// s_catmullRomCoeffs (Spline.cpp:60-64) rows, folded:
+			// w0 = -0.5t^3 + t^2 - 0.5t, w1 = 1.5t^3 - 2.5t^2 + 1,
+			// w2 = -1.5t^3 + 2t^2 + 0.5t, w3 = 0.5t^3 - 0.5t^2.
+			w0 := -0.5*t3 + t2 - 0.5*t
+			w1 := 1.5*t3 - 2.5*t2 + 1
+			w2 := -1.5*t3 + 2*t2 + 0.5*t
+			w3 := 0.5*t3 - 0.5*t2
+			next := [3]float64{
+				w0*p0[0] + w1*p1[0] + w2*p2[0] + w3*p3[0],
+				w0*p0[1] + w1*p1[1] + w2*p2[1] + w3*p3[1],
+				w0*p0[2] + w1*p1[2] + w2*p2[2] + w3*p3[2],
+			}
+			dx, dy, dz := next[0]-cur[0], next[1]-cur[1], next[2]-cur[2]
+			total += math.Sqrt(dx*dx + dy*dy + dz*dz)
+			cur = next
+		}
+	}
+	return total
+}
+
 // sendTaxiMonsterMove broadcasts one flight spline: SMSG_MONSTER_MOVE with
 // Flying | Catmullrom (MoveSplineFlag), the C++ SendDoFlight/MoveTaxiFlight
 // spline launch (TaxiHandler.cpp:115-125, MotionMaster.cpp:983-1005).
-func (s *session) sendTaxiMonsterMove(pts []wotlk.TaxiSplinePoint, splineID uint32) {
+// It returns the packet duration in milliseconds.
+func (s *session) sendTaxiMonsterMove(pts []wotlk.TaxiSplinePoint, splineID uint32) uint32 {
 	packet := protocol.NewBuffer(32 + len(pts)*12)
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU8(0) // MOVEMENTFLAG2_UNK7
@@ -1015,17 +1080,21 @@ func (s *session) sendTaxiMonsterMove(pts []wotlk.TaxiSplinePoint, splineID uint
 	packet.WriteU32(splineID)
 	packet.WriteU8(0)           // MonsterMoveNormal
 	packet.WriteU32(0x00042000) // Flying | Catmullrom
-	total := float64(0)
-	prevX, prevY, prevZ := s.player.X, s.player.Y, s.player.Z
+	// The duration is the C++ spline duration at PLAYER_FLIGHT_SPEED:
+	// the Catmull-Rom arc length over the starting vertex plus the
+	// segment points (FlightPathMovementGenerator.cpp:85-100,
+	// Spline.cpp:158-176), not the chord sum. The client scales the
+	// spline by the provided duration. The floor is MoveSpline's
+	// minimal_duration, 1 ms (MoveSpline.cpp:104-109,145-149) — the
+	// old 500 ms floor had no C++ twin.
+	controls := make([][3]float64, 0, len(pts)+1)
+	controls = append(controls, [3]float64{float64(s.player.X), float64(s.player.Y), float64(s.player.Z)})
 	for _, point := range pts {
-		total += math.Sqrt(float64((point.X-prevX)*(point.X-prevX) + (point.Y-prevY)*(point.Y-prevY) + (point.Z-prevZ)*(point.Z-prevZ)))
-		prevX, prevY, prevZ = point.X, point.Y, point.Z
+		controls = append(controls, [3]float64{float64(point.X), float64(point.Y), float64(point.Z)})
 	}
-	// The duration is the C++ spline duration at PLAYER_FLIGHT_SPEED;
-	// the client scales the spline by the provided duration.
-	duration := uint32((total / taxiFlightSpeed) * 1000)
-	if duration < 500 {
-		duration = 500
+	duration := uint32((taxiCatmullRomArcLength(controls, float64(s.player.Orientation)) / taxiFlightSpeed) * 1000)
+	if duration < 1 {
+		duration = 1
 	}
 	packet.WriteU32(duration)
 	packet.WriteU32(uint32(len(pts)))
@@ -1035,6 +1104,7 @@ func (s *session) sendTaxiMonsterMove(pts []wotlk.TaxiSplinePoint, splineID uint
 		packet.WriteF32(point.Z)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet.Bytes(), true)
+	return duration
 }
 
 // onTaxiHopArrival fires when the flight reaches a hop's last vertex: the Go

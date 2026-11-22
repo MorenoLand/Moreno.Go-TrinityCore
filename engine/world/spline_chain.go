@@ -57,7 +57,12 @@ type splineChainKey struct {
 // motion: the chain being walked, the next link/point to send, the
 // MovementInform id reported at the final landing, and the wait
 // until the next link may be sent (measured from the current link's
-// launch, the C++ _msToNext arm).
+// launch, the C++ _msToNext arm). EnteredCycle is the MoveSpline
+// enter-cycle arm (MoveSpline.cpp:290-330): after the first full
+// revolution the spline's first point (the owner's pre-cycle
+// position) is removed and the velocity re-derived so the next
+// revolution keeps the first cycle's duration; set once, on the
+// first cyclic wrap, in landSplineChainLink.
 type splineChainRun struct {
 	Links          []splineChainLink
 	LinkIndex      int // next link to send
@@ -67,6 +72,7 @@ type splineChainRun struct {
 	Flying         bool // MoveCirclePath twin: the flying branch sets SetFly (MotionMaster.cpp:851-855); passed through to the wire by sendSplineChainLink
 	AnimTier       int  // MoveCirclePath twin: the flying branch sets SetAnimation(Hover); animTierNone otherwise
 	Cyclic         bool // MoveCirclePath twin: the run loops to point 0 at the final landing with no wait and no inform, until superseded
+	EnteredCycle   bool
 	LinkLaunchedAt time.Time
 	LinkActualMs   uint32 // summed leg durations of the current link
 	WaitUntil      time.Time
@@ -258,6 +264,22 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, flying, animTier)
 }
 
+// splineChainClosedLength is the closed-loop length of a chain link's
+// points: consecutive segments plus the closing segment from the last
+// point back to the first, the length a cyclic spline traverses per
+// revolution.
+func splineChainClosedLength(points []splineChainPoint) float64 {
+	if len(points) < 2 {
+		return 0
+	}
+	total := float64(0)
+	for i := 1; i < len(points); i++ {
+		total += distance3D(points[i-1].X, points[i-1].Y, points[i-1].Z, points[i].X, points[i].Y, points[i].Z)
+	}
+	total += distance3D(points[len(points)-1].X, points[len(points)-1].Y, points[len(points)-1].Z, points[0].X, points[0].Y, points[0].Z)
+	return total
+}
+
 // moveCirclePath is MotionMaster::MoveCirclePath
 // (MotionMaster.cpp:827-865): a GenericMovementGenerator
 // (EFFECT_MOTION_TYPE 16) whose spline is the owner's current
@@ -267,9 +289,13 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 // as a single-link cyclic spline-chain run: the chain walker
 // sends one point at a time and wraps to point 0 at the end with
 // no wait and no inform, matching the C++ cyclic spline. The
-// points take the passed z (the flying branch — IsFlying reads
-// the given z; the ground branch's GetMapHeight + hover offset
-// has no Go twin). All in-tree callers fly (quel_delar sword,
+// flying branch takes the passed z; the ground branch takes
+// GetMapHeight(x, y, z) + GetHoverOffset() per point — the hover
+// offset has no Go creature model and reads 0. After the first
+// revolution the owner's starting point is removed and the
+// velocity re-derived to preserve the first cycle's duration
+// (MoveSpline.cpp:290-330, the enter-cycle arm in
+// landSplineChainLink). All in-tree callers fly (quel_delar sword,
 // malygos phase 3, yogg-saron). Speed is the Launch-selected
 // velocity (creatureSplineVelocity): the flying branch's SetFly
 // only sets the spline flying flag (MoveSplineInit.h:146) — the
@@ -285,12 +311,15 @@ func (s *Server) moveCirclePath(ctx context.Context, motion *creatureMotion, cen
 	if s == nil || motion == nil || stepCount == 0 || radius <= 0 {
 		return false
 	}
+	// Snapshot the launch state under the lock; the ground heights
+	// below read .map files through Server.mapHeight and must not
+	// run under motionMu. The install re-checks the snapshot so a
+	// motion that moved or was relaunched mid-computation is not
+	// clobbered with a stale circle.
 	s.motionMu.Lock()
-	angle := math.Atan2(float64(motion.Y-centerY), float64(motion.X-centerX))
-	step := 2 * math.Pi / float64(stepCount)
-	if clockwise {
-		step = -step
-	}
+	ox, oy, oz := motion.X, motion.Y, motion.Z
+	mapID := motion.Map
+	prevChain := motion.SplineChain
 	// MotionMaster.cpp:851-856: the IsFlying branch sets SetFly +
 	// SetCyclic + SetAnimation(Hover); the ground branch walks
 	// (SetWalk(true)) with no flags. IsFlying is Unit.h:1644
@@ -316,18 +345,37 @@ func (s *Server) moveCirclePath(ctx context.Context, motion *creatureMotion, cen
 	if flying && speed > 50 {
 		speed = 50
 	}
-	points := make([]splineChainPoint, 0, int(stepCount))
+	s.motionMu.Unlock()
+	angle := math.Atan2(float64(oy-centerY), float64(ox-centerX))
+	step := 2 * math.Pi / float64(stepCount)
+	if clockwise {
+		step = -step
+	}
+	// C++ pushes the owner's current position first — it is removed
+	// after the first cycle by the enter-cycle arm, so the run's
+	// point 0 is the pre-cycle position, not a circle point.
+	points := make([]splineChainPoint, 0, int(stepCount)+1)
+	points = append(points, splineChainPoint{X: ox, Y: oy, Z: oz})
 	for i := uint8(0); i < stepCount; i++ {
-		points = append(points, splineChainPoint{
-			X: centerX + radius*float32(math.Cos(angle)),
-			Y: centerY + radius*float32(math.Sin(angle)),
-			Z: centerZ,
-		})
+		px := centerX + radius*float32(math.Cos(angle))
+		py := centerY + radius*float32(math.Sin(angle))
+		pz := centerZ
+		if !flying {
+			if ground, ok := s.mapHeight(mapID, px, py, centerZ, true, terrainDefaultHeightSearch); ok {
+				pz = ground
+			}
+		}
+		points = append(points, splineChainPoint{X: px, Y: py, Z: pz})
 		angle += step
 	}
 	animTier := animTierNone
 	if flying {
 		animTier = animTierHover
+	}
+	s.motionMu.Lock()
+	if motion.X != ox || motion.Y != oy || motion.Z != oz || motion.SplineChain != prevChain {
+		s.motionMu.Unlock()
+		return false
 	}
 	motion.SplineChain = &splineChainRun{
 		Links:    []splineChainLink{{Velocity: speed, Points: points}},
@@ -385,6 +433,25 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 			// never finalizes — the next revolution starts at once
 			// with no wait and no MovementInform, until a fresh
 			// launch supersedes it (the LAND leg's MoveLand).
+			// MoveSpline::_updateState enter-cycle arm
+			// (MoveSpline.cpp:290-330): after the first full cycle
+			// the spline's first point — the owner's pre-cycle
+			// position — is removed, and the velocity is
+			// re-derived so the new cycle keeps the first cycle's
+			// duration (new length / old duration, i.e. the old
+			// velocity scaled by new/old loop length). Later
+			// revolutions keep that velocity: the point is already
+			// gone, so there is nothing left to remove.
+			if !run.EnteredCycle {
+				run.EnteredCycle = true
+				link := &run.Links[run.LinkIndex]
+				if oldLen := splineChainClosedLength(link.Points); len(link.Points) > 1 && oldLen > 0 {
+					link.Points = link.Points[1:]
+					if newLen := splineChainClosedLength(link.Points); newLen > 0 {
+						link.Velocity *= float32(newLen / oldLen)
+					}
+				}
+			}
 			run.LinkIndex = 0
 			run.PointIndex = 0
 			s.motionMu.Unlock()

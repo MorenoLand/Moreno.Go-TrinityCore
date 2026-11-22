@@ -356,6 +356,14 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 	if _, err := b.ReadU32(); err != nil {
 		return true
 	}
+	// MovementHandler.cpp:220-223 — plMover =
+	// _player->GetUnitBeingMoved()->ToPlayer() is null while driving a
+	// vehicle or possessing a creature, so the ack is dropped; the
+	// mover-GUID check below alone would accept a forged ack carrying
+	// the player GUID.
+	if s.controlsVehicle() || s.possessedCreatureGUID() != 0 {
+		return true
+	}
 	if !s.nearTeleportPending || guid != s.playerGUID {
 		return true
 	}
@@ -518,7 +526,8 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// mover's spline is not finalized. In Go that state is a taxi flight
 	// (the arrival position is pinned at flight start and the flight spline
 	// is server-driven), so mid-flight client movement is dropped like C++
-	// drops it — never applied, never rebroadcast. MovementHandler.cpp:269
+	// drops it — never applied, never rebroadcast. The script-spline half
+	// of the same gate is the next check below. MovementHandler.cpp:269
 	// gates the teleport-pending drop on plrMover (plrMover &&
 	// IsBeingTeleported()), so only packets from the player mover drop:
 	// a possessed mover — plrMover null — is exempt, and so is a driven
@@ -528,6 +537,25 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// passenger still drops like C++'s plrMover arm.
 	if (s.nearTeleportPending || s.farTeleportPending || s.inFlight) && guid == s.playerGUID {
 		return true
+	}
+	// MovementHandler.cpp:294-298, script-spline half: a live player
+	// script spline (launchPlayerScriptSpline / launchPlayerJumpSpline,
+	// stamped in playerScriptMoveEnds) is a MoveSplineInit::Launch, so
+	// the mover's spline is unfinalized until it lands and movement
+	// packets from the player mover drop. Mover-scoped like the gate
+	// above: a driven vehicle or possessed creature is a different
+	// mover with its own (unmodeled) spline, so only player-GUID
+	// packets drop. Knockback arms nothing here — the player arms of
+	// Unit::KnockbackFrom / Unit::JumpTo send SMSG_MOVE_KNOCK_BACK
+	// with no server spline (Unit.cpp:12510-12544, 12950-12972), so
+	// C++ Finalized() stays true through a knockback. Charge does
+	// launch a spline (MotionMaster::MoveCharge player arm,
+	// MotionMaster.cpp:704-711) and handleEffectCharge arms the same
+	// stamp for its flight window.
+	if guid == s.playerGUID && !s.controlsVehicle() && s.possessedCreatureGUID() == 0 {
+		if _, live := s.playerScriptMoveTypeNow(); live {
+			return true
+		}
 	}
 	// Mover resolution (MovementHandler.cpp:261): the tamper check runs
 	// against mover = _player->GetUnitBeingMoved(), not the player. Boarding
@@ -2500,16 +2528,12 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	buf := protocol.NewBuffer(16)
 	buf.WritePackedGUID(moverGUID)
 	buf.WriteU32(timeSkipped)
+	// MovementHandler.cpp:652-656 — GetPlayer()->SendMessageToSet, so the
+	// broadcast is centered on the player even when the mover is a
+	// possessed creature; centering on the creature misses observers near
+	// the player (and vice versa).
 	if s.server != nil {
-		bx, by, bz := s.player.X, s.player.Y, s.player.Z
-		if possessedGUID != 0 {
-			s.server.motionMu.Lock()
-			if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, possessedGUID); motion != nil {
-				bx, by, bz = motion.X, motion.Y, motion.Z
-			}
-			s.server.motionMu.Unlock()
-		}
-		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s.player.Map, s.player.InstanceID, bx, by, bz, s)
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 	// MovementHandler.cpp:647-650: GetPlayer()->SendMessageToSet(&data, false) —
 	// same Player bool overload as the knockback ack: self=false sends
