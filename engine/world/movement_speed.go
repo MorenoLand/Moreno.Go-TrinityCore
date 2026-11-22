@@ -760,7 +760,8 @@ func (s *session) sendRuntimeFlightState() {
 // SetFallInformation(0, z). The ground-near abort runs only when a
 // ground height is available; without height data the fall still
 // starts (C++ searches MAX_FALL_DISTANCE and almost always finds one).
-// The rooted abort is MoveFall's own; stunned has no Go model.
+// The rooted/stunned abort is MoveFall's own (boss_ai.go:6453 precedent:
+// rooted || hasAuraType(spellAuraModStun)).
 func (s *session) startFallAfterFlightLoss() {
 	if s == nil || s.player == nil || s.server == nil {
 		return
@@ -768,7 +769,7 @@ func (s *session) startFallAfterFlightLoss() {
 	if last, exists := s.lastMovementInfoSnapshot(); exists && last.Flags&movementDisableGravity != 0 {
 		return
 	}
-	if s.rooted {
+	if s.rooted || s.hasAuraType(spellAuraModStun) {
 		return
 	}
 	if ground, ok := s.server.mapHeight(s.player.Map, s.player.X, s.player.Y, s.player.Z, true, terrainDefaultHeightSearch); ok && math.Abs(float64(s.player.Z-ground)) < 0.1 {
