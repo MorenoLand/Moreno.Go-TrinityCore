@@ -144,6 +144,10 @@ const (
 	smartEventSpellHitTarget      uint32 = 31 // SMART_EVENT_SPELLHIT_TARGET (SmartScriptMgr.h:130), same params as SPELLHIT
 	smartEventDamaged             uint32 = 32 // SMART_EVENT_DAMAGED (SmartScriptMgr.h:131), Param1/2 = MinDmg/MaxDmg, Param3/4 CooldownMin/Max
 	smartEventDamagedTarget       uint32 = 33 // SMART_EVENT_DAMAGED_TARGET (SmartScriptMgr.h:132), same params as DAMAGED
+	smartEventSummonDespawned     uint32 = 35 // SMART_EVENT_SUMMON_DESPAWNED (SmartScriptMgr.h:134), Param1 = Entry (0 = any), Param2/3 CooldownMin/Max
+	smartEventCorpseRemoved       uint32 = 36 // SMART_EVENT_CORPSE_REMOVED (SmartScriptMgr.h:135), no params
+	smartEventAreatrigger         uint32 = 46 // SMART_EVENT_AREATRIGGER_ONTRIGGER (SmartScriptMgr.h:145), Param1 = TriggerId (0 = any); all 139 TDB rows are src-2 areatrigger — Go loads creature sources only and has no areatrigger script engine, so no dispatch arm and no fire site
+	smartEventReceiveHeal         uint32 = 53 // SMART_EVENT_RECEIVE_HEAL (SmartScriptMgr.h:152), Param1/2 = MinHeal/MaxHeal, Param3/4 RepeatMin/Max
 	smartEventFriendlyIsCC        uint32 = 15 // SMART_EVENT_FRIENDLY_IS_CC (SmartScriptMgr.h:114), loader missing-repeat rule only, no dispatch arm
 	smartEventVictimCasting       uint32 = 13 // SMART_EVENT_VICTIM_CASTING (SmartScriptMgr.h:112), loader missing-repeat rule only, no dispatch arm
 	smartEventFriendlyHealth      uint32 = 14 // SMART_EVENT_FRIENDLY_HEALTH (SmartScriptMgr.h:113), loader missing-repeat rule only, no dispatch arm
@@ -1210,6 +1214,27 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		s.smartRecalcTimer(ev, ev.row.eventParam2, ev.row.eventParam3)
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
+	case smartEventSummonDespawned:
+		// SMART_EVENT_SUMMON_DESPAWNED (SmartScript.cpp:3240-3246): the
+		// event fires only for its creature entry (event_param1, 0 = any,
+		// var0 = the despawned summon's entry), then re-arms on the
+		// cooldown window (event_param2/3) and runs its action with the
+		// despawned summon as invoker and its entry as var0. The
+		// invoker motion is already deleted from the map at every fire
+		// site, so the entry arrives as var0 instead of a lookup (the
+		// SUMMONED_UNIT lookup above would miss it). TDB 26091: 10
+		// rows, all src-1 GO (demon portals 177243-177400, entry
+		// 11937, 5000/5000, action 147, target SELF) — Go loads
+		// creature sources only, so the rows stay out; the creature
+		// fire below is the C++ SmartAI leg.
+		if invokerGUID == 0 {
+			return
+		}
+		if ev.row.eventParam1 != 0 && ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam2, ev.row.eventParam3)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, 0)
 	case smartEventAcceptedQuest, smartEventRewardQuest:
 		// SMART_EVENT_ACCEPTED_QUEST / REWARD_QUEST
 		// (SmartScript.cpp:3256-3263): the event fires only for its quest
@@ -1304,6 +1329,21 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		s.smartRecalcTimer(ev, ev.row.eventParam3, ev.row.eventParam4)
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
+	case smartEventReceiveHeal:
+		// SMART_EVENT_RECEIVE_HEAL (SmartScript.cpp:3204-3213, the same
+		// minMaxRepeat arm as DAMAGED/DAMAGED_TARGET): the event fires
+		// only when the received heal (var0) falls inside the [min,
+		// max] window (event_param1/2 — a max of 0 admits only zero
+		// heals, exactly like C++), then re-arms on the cooldown
+		// window (event_param3/4) and runs its action with the healer
+		// as invoker and var0/var1 zeroed. TDB 26091: 53 = 1 src-0
+		// row (Draenei Youngling 17587, TALK, 1-200000, 20000/20000,
+		// target ACTION_INVOKER).
+		if var0 < ev.row.eventParam1 || var0 > ev.row.eventParam2 {
+			return
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam3, ev.row.eventParam4)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
 	case smartEventOocLos, smartEventIcLos:
 		// SMART_EVENT_OOC_LOS / IC_LOS (SmartScript.cpp:3138-3180): the
 		// event fires from OnMoveInLineOfSight (SmartScript.cpp:3885-3891:
@@ -1359,7 +1399,7 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
 		smartEventAIInit, smartEventJustCreated,
 		smartEventTextOver, smartEventPhaseChange,
-		smartEventFollowCompleted,
+		smartEventFollowCompleted, smartEventCorpseRemoved,
 		smartEventJustSummoned, smartEventOnSpellClick:
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	default:
@@ -5622,6 +5662,58 @@ func (s *Server) smartSummonedUnitDies(ctx context.Context, dead *creatureMotion
 		return
 	}
 	s.smartProcessEvents(ctx, summoner, smartEventSummonedUnitDies, dead.GUID, 0, 0)
+}
+
+// smartSummonDespawned is SmartAI::SummonedCreatureDespawn
+// (SmartAI.cpp:657-660): the summoner's SUMMON_DESPAWNED (35) event fires
+// with the despawned summon as invoker and its entry as var0.
+// TemporarySummon::UnSummon (TemporarySummon.cpp:274-284) calls it on the
+// owner's AI for every temp summon whose owner is a creature with AI
+// enabled (a GO owner fires SmartGameObjectAI::SummonedCreatureDespawn
+// instead — no Go script state, stays out); a player summoner never
+// qualifies. The five Go UnSummon twins (despawnCreatureMotion,
+// expireTempSummonGuardian, the 52173/60243 and 57347 spell arms,
+// despawnVehicleMotion) fire it next to the Eluna event-20 leg, after
+// motionMu is released.
+func (s *Server) smartSummonDespawned(ctx context.Context, summoner, despawned *creatureMotion) {
+	if s == nil || summoner == nil || despawned == nil {
+		return
+	}
+	s.smartProcessEvents(ctx, summoner, smartEventSummonDespawned, despawned.GUID, despawned.Entry, 0)
+}
+
+// smartCorpseRemoved is SmartAI::CorpseRemoved (SmartAI.cpp:662-665): the
+// creature's own CORPSE_REMOVED (36) event fires with no invoker and the
+// respawn delay as var0 (dropped by the plain dispatch arm).
+// Creature::RemoveCorpse (Creature.cpp:393/429) calls it when the corpse
+// leaves the world; the Go twins are removeCreatureCorpseNow (direct) and
+// processCreatureCorpseRemovals (Update-driven), both firing next to the
+// Eluna CorpseRemoved leg, after motionMu is released. The delay passed is
+// the record's own value: a SmartAI creature never runs Eluna AI in C++,
+// so it never sees the Eluna leg's rewrite.
+func (s *Server) smartCorpseRemoved(ctx context.Context, motion *creatureMotion, respawnDelay uint32) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.smartProcessEvents(ctx, motion, smartEventCorpseRemoved, 0, respawnDelay, 0)
+}
+
+// smartHealReceived is SmartAI::HealReceived (SmartAI.cpp:637-640): the
+// healed creature's RECEIVE_HEAL (53) event fires with the healer as
+// invoker and the pre-clamp heal as var0. Unit::DealHeal (Unit.cpp:6299-
+// 6304) calls the victim AI's HealReceived ahead of the health gain; the
+// Go twin fires first inside fireDealHealAIHooks, before the BossAI hooks,
+// on the incoming value — C++ has one AI per creature, so the victim's
+// hook always sees the unrewritten heal. Unlike the DAMAGED 32/33 fire,
+// no pre-lock relocation is needed: all 10 fireDealHealAIHooks call sites
+// run with motionMu released (spells.go applyCreaturePeriodicLeechHeal
+// states it in-code), and the Eluna heal twin already fires inside this
+// hook.
+func (s *Server) smartHealReceived(ctx context.Context, victim *creatureMotion, healerGUID uint64, addhealth uint32) {
+	if s == nil || victim == nil {
+		return
+	}
+	s.smartProcessEvents(ctx, victim, smartEventReceiveHeal, healerGUID, addhealth, 0)
 }
 
 // smartQuestAccepted is SmartAI::OnQuestAccept (SmartAI.cpp:777-780):

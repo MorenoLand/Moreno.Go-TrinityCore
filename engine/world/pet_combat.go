@@ -994,6 +994,7 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 	// released above — fireCreatureSummoned requires that.
 	if ownerMotion := s.findCreatureMotion(mapID, instanceID, ownerGUID); ownerMotion != nil {
 		s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, motion)
+		s.smartSummonDespawned(ctx, ownerMotion, motion)
 	}
 	// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): this is the
 	// TempSummon::UnSummon twin (TemporarySummon.cpp:298 ends at

@@ -303,6 +303,7 @@ func (s *Server) removeCreatureCorpseNow(ctx context.Context, motion *creatureMo
 	}
 	s.motionMu.Unlock()
 	finalDelay := s.fireCreatureCorpseRemoved(ctx, motion, record.RespawnDelay)
+	s.smartCorpseRemoved(ctx, motion, record.RespawnDelay)
 	pushed := now.Add(time.Duration(finalDelay) * time.Second)
 	if pushed.After(record.At) {
 		s.motionMu.Lock()
@@ -386,6 +387,7 @@ func (s *Server) processCreatureCorpseRemovals(ctx context.Context, now time.Tim
 		corpsePhaseKnown := false
 		if motion := s.findCreatureMotion(broadcastMap, instanceID, rawGUID); motion != nil {
 			_ = s.fireCreatureCorpseRemoved(ctx, motion, item.respawn.RespawnDelay)
+			s.smartCorpseRemoved(ctx, motion, item.respawn.RespawnDelay)
 			corpsePhase, corpsePhaseKnown = motion.PhaseMask, true
 		}
 		destroyBuf := protocol.NewBuffer(9)

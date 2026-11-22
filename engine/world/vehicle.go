@@ -948,6 +948,7 @@ func (s *Server) despawnVehicleMotion(ctx context.Context, motion *creatureMotio
 	if isTempSummon {
 		if ownerMotion := s.findCreatureMotion(mapID, instanceID, ownerGUID); ownerMotion != nil {
 			s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, m)
+			s.smartSummonDespawned(ctx, ownerMotion, m)
 		}
 	}
 	// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): this function is the

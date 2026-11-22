@@ -151,6 +151,14 @@ func RegisterBossAI(scriptName string, entry uint32, factory func(*creatureMotio
 // healer==victim filter). A nil motion or a motion with no BossAI carries
 // no AI model, so the hook is skipped there (C++ always has an AI).
 func fireDealHealAIHooks(ctx context.Context, s *Server, victim, healer *creatureMotion, healerGUID, victimGUID uint64, addhealth *uint32) {
+	// SmartAI::HealReceived (SmartAI.cpp:637-640) fires first, on the
+	// incoming pre-clamp heal: Unit::DealHeal (Unit.cpp:6299-6304) calls
+	// the victim AI's HealReceived before the healer AI's HealDone, and
+	// C++ has one AI per creature, so the victim's hook always sees the
+	// unrewritten value.
+	if victim != nil && addhealth != nil {
+		s.smartHealReceived(ctx, victim, healerGUID, *addhealth)
+	}
 	if victim != nil && victim.BossAI != nil {
 		victim.BossAI.HealReceived(ctx, s, victim, healerGUID, addhealth)
 	}
@@ -9256,6 +9264,7 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			// lookup skips them (the expireTempSummonGuardian twin).
 			if ownerMotion := s.findCreatureMotion(m.Map, m.InstanceID, ownerGUID); ownerMotion != nil {
 				s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, tm)
+				s.smartSummonDespawned(ctx, ownerMotion, tm)
 			}
 			// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): UnSummon
 			// ends at AddObjectToRemoveList (TemporarySummon.cpp:298).

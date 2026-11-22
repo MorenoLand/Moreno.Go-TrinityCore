@@ -57426,6 +57426,7 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			if removedMotion != nil && removedMotion.IsTempSummon {
 				if ownerMotion := s.server.findCreatureMotion(removedMotion.Map, removedMotion.InstanceID, removedMotion.OwnerGUID); ownerMotion != nil {
 					s.server.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, removedMotion)
+					s.server.smartSummonDespawned(ctx, ownerMotion, removedMotion)
 				}
 			}
 			// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): this case is
