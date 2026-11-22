@@ -449,6 +449,7 @@ func (s *Server) planFormationLeg(motion, leader *creatureMotion, now time.Time)
 	motion.X, motion.Y = destX, destY
 	motion.Z = leader.Z
 	motion.Moving = true
+	motion.ScriptMoveFromKnown = false
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.WaitUntil = motion.MoveEnds
 	motion.MoveHeading = heading

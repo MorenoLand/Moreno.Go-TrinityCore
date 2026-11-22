@@ -1163,6 +1163,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 				motion.Y = destY
 				motion.Z = destZ
 				motion.Moving = true
+				motion.ScriptMoveFromKnown = false
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 			}
 		} else {
@@ -1540,6 +1541,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			motion.Y = destY
 			motion.Z = destZ
 			motion.Moving = true
+			motion.ScriptMoveFromKnown = false
 			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
 		}
 	} else {
