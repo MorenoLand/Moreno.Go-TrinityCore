@@ -1698,13 +1698,19 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	// routes through it instead of returning false, which used to leave
 	// the client on the loading screen with farTeleportPending already
 	// cleared and player.Map already overwritten to the destination.
-	// teleportTo re-records the failed destination as the fallback's
-	// origin (Player.cpp:1801-1822 far branch), so the origin-map
-	// restore C++ does is the fallback teleport itself.
+	// The origin-map restore is part of that arm: C++ restores the
+	// origin map (ResetMap/SetMap(oldMap), :103-104) BEFORE the
+	// homebind TeleportTo, so the fallback's far branch records the
+	// origin — not the failed destination — as its origin and its
+	// battleground/arena/pet legs evaluate the map being left. Go
+	// overwrote player.Map at initiation, so restore it from the
+	// recorded origin here; the fallback teleport then re-records it.
 	fallbackHomebind := func() bool {
 		if !s.validTrinityMapLocation(state.HomebindMap, state.HomebindX, state.HomebindY, state.HomebindZ, originOrientation) {
 			return false
 		}
+		s.player.Map = s.farTeleportOriginMap
+		s.player.InstanceID = s.farTeleportOriginInstanceID
 		return s.teleportTo(state.HomebindMap, state.HomebindX, state.HomebindY, state.HomebindZ, originOrientation)
 	}
 	if !s.validTrinityMapID(state.Map) || (!s.initialLoginPending && !validTrinityMapCoordinates(state.X, state.Y, state.Z, state.Orientation)) {
@@ -1723,6 +1729,14 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	}
 	selection, canCreate, err := s.resolveWorldportInstance(ctx, state, mapEntry)
 	if err != nil || !canCreate {
+		return fallbackHomebind()
+	}
+	// MovementHandler.cpp:89-100 (HandleMoveWorldportAck): CannotEnter
+	// is re-checked at ack ("conditions may change while the player is
+	// in transit, for example the map may get full") — the initiation
+	// check (canStartMapTeleport, commands.go) is not enough. A deny
+	// homebinds, like every other pre-commit failure above.
+	if check := s.playerCannotEnterMap(ctx, state.Map); check.Reason != mapEntryAllowed {
 		return fallbackHomebind()
 	}
 	instanceCommitted := false
@@ -1819,6 +1833,19 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	}
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return fallbackHomebind()
+	}
+	// MovementHandler.cpp:120-143 (HandleMoveWorldportAck): a player in
+	// a battleground who lands on a non-BG/arena map leaves the
+	// battleground state behind (SetBattlegroundId(0, NONE) +
+	// SetBGTeam(0)). The join side runs at port-accept
+	// (battleground.go); the clear side was missing here, so a plain
+	// far teleport out of a BG map (GM .teleport, summon) left stale
+	// bgData gating corpse lootability and BG-only spell checks. The
+	// initial-login path never runs the C++ ack handler, so it is
+	// excluded like the map-leave event above.
+	if !s.initialLoginPending && s.bgData.InstanceID != 0 && !teleIsBattlegroundOrArena(mapEntry) {
+		s.bgData.InstanceID = 0
+		s.bgData.Team = 0
 	}
 	s.markVisiblePlayers(attachedPlayerGUIDs)
 	s.server.broadcastPlayerCreate(state, s)
