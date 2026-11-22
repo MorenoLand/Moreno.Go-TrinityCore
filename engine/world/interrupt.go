@@ -380,6 +380,16 @@ func (s *Server) interruptCreatureCast(m *creatureMotion) []interruptedCreatureC
 // Callers still clear the plain gate when no arm returns: the helper
 // only clears state for arms it reports. Takes no locks itself.
 func (s *Server) interruptCreatureNonMeleeCasts(m *creatureMotion) []interruptedCreatureCast {
+	return s.interruptCreatureNonMeleeCastsForSpell(m, 0)
+}
+
+// interruptCreatureNonMeleeCastsForSpell is the spell-filtered form of
+// the twin above: SMART_ACTION_INTERRUPT_SPELL passes the row's spell_id
+// (param2), and C++ gates each current spell on (!spell_id || id ==
+// spell_id) (Unit.cpp:3215-3224) — the generic and channeled legs each
+// carry the gate, so a filtered call never cancels a different spell.
+// spellID 0 keeps the unfiltered behavior for the existing callers.
+func (s *Server) interruptCreatureNonMeleeCastsForSpell(m *creatureMotion, spellID uint32) []interruptedCreatureCast {
 	if s == nil || m == nil {
 		return nil
 	}
@@ -390,7 +400,7 @@ func (s *Server) interruptCreatureNonMeleeCasts(m *creatureMotion) []interrupted
 	} else if m.PendingCastSpellID != 0 {
 		genericSpellID = m.PendingCastSpellID
 	}
-	if genericSpellID != 0 {
+	if genericSpellID != 0 && (spellID == 0 || genericSpellID == spellID) {
 		s.cancelPendingCreatureCast(m)
 		s.interruptCreatureCancelTail(m, genericSpellID, false)
 		if !s.creatureChannelLive(m) {
@@ -398,7 +408,7 @@ func (s *Server) interruptCreatureNonMeleeCasts(m *creatureMotion) []interrupted
 		}
 		interrupted = append(interrupted, interruptedCreatureCast{spellID: genericSpellID})
 	}
-	if s.creatureChannelLive(m) {
+	if s.creatureChannelLive(m) && (spellID == 0 || m.ChannelSpellID == spellID) {
 		channelSpellID := m.ChannelSpellID
 		s.stripCreatureChannelAuras(m, channelSpellID)
 		m.CastingUntil = time.Time{}

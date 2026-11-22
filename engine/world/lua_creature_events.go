@@ -7041,21 +7041,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
 		if !visible {
-			destroyBuf := protocol.NewBuffer(9)
-			destroyBuf.WriteU64(guid)
-			destroyBuf.WriteU8(0)
-			payload := destroyBuf.Bytes()
-			opcode := uint16(protocol.OpcodeSMSG_DESTROY_OBJECT)
-			s.sessionsMu.RLock()
-			for target := range s.sessions {
-				if !target.authed || !target.worldReady.Load() || target.player == nil ||
-					target.player.Map != mapID || target.player.InstanceID != instanceID ||
-					target.gmVisibilityDetect != 0 {
-					continue
-				}
-				_ = target.write(opcode, payload, true)
-			}
-			s.sessionsMu.RUnlock()
+			s.broadcastCreatureDestroyToPlayers(mapID, instanceID, guid)
 		}
 		return nil, nil
 	}

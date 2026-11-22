@@ -6,9 +6,9 @@
 // ATTACK_START, and the small state actions (SET_REACT_STATE,
 // ALLOW_COMBAT_MOVEMENT, REMOVE_NPC_FLAG, SET_ROOT, SET_VISIBILITY,
 // SET_ACTIVE, INTERRUPT_SPELL) — of which the phase actions,
-// ATTACK_START, SET_REACT_STATE and the NPC-flag family are ported;
-// ALLOW_COMBAT_MOVEMENT, SET_ROOT, SET_VISIBILITY, SET_ACTIVE and
-// INTERRUPT_SPELL stay residual.
+// ATTACK_START, SET_REACT_STATE, the NPC-flag family,
+// ALLOW_COMBAT_MOVEMENT, SET_ROOT, SET_VISIBILITY and INTERRUPT_SPELL
+// are ported; SET_ACTIVE stays residual.
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -28,7 +28,9 @@
 // CALL_RANDOM_RANGE_TIMED_ACTIONLIST (source_type-9 timed-action lists,
 // installed per target creature, stepped from smartUpdateTimers), and
 // SET_REACT_STATE + the SET/ADD/REMOVE_NPC_FLAG family, INC_EVENT_PHASE +
-// RANDOM_PHASE + RANDOM_PHASE_RANGE + ATTACK_START. RESET wiring
+// RANDOM_PHASE + RANDOM_PHASE_RANGE + ATTACK_START, ALLOW_COMBAT_MOVEMENT +
+// SET_ROOT + SET_VISIBILITY + INTERRUPT_SPELL + per-target PLAY_EMOTE.
+// RESET wiring
 // landed with smartReset / smartJustReachedHome (evade-follow legs, home
 // arrival, spawn): the EVADE event fires from triggerCreatureEvade, RESPAWN +
 // OnReset from fireCreatureSpawned. `.reload smart_scripts` re-runs the
@@ -78,9 +80,8 @@ const (
 )
 
 // SMART_ACTION ids (SmartScriptMgr.h:457-600), AGGRO-used set. The
-// remaining AGGRO-row actions (21, 43, 42, 146, 103, 36, 41, 25, 47, 5,
-// 74, 92, 133) hit the default arm, matching C++'s
-// "Unhandled Action type" log-and-skip
+// remaining AGGRO-row actions (43, 42, 146, 36, 41, 74, 133) hit
+// the default arm, matching C++'s "Unhandled Action type" log-and-skip
 // (SmartScript.cpp:2370-2372): no react-state, or template machinery
 // exists in Go to run them on.
 const (
@@ -92,14 +93,21 @@ const (
 	smartActionCast                           uint32 = 11
 	smartActionSummonCreature                 uint32 = 12
 	smartActionAutoAttack                     uint32 = 20
+	smartActionAllowCombatMovement            uint32 = 21
 	smartActionSetEventPhase                  uint32 = 22
 	smartActionIncEventPhase                  uint32 = 23
+	smartActionFleeForAssist                  uint32 = 25
 	smartActionRemoveAurasFromSpell           uint32 = 28
 	smartActionRandomPhase                    uint32 = 30
 	smartActionRandomPhaseRange               uint32 = 31
 	smartActionSetInstData                    uint32 = 34
+	smartActionUpdateTemplate                 uint32 = 36
 	smartActionCallForHelp                    uint32 = 39
+	smartActionForceDespawn                   uint32 = 41
+	smartActionSetInvincibilityHPLevel        uint32 = 42
 	smartActionSetData                        uint32 = 45
+	smartActionSetVisibility                  uint32 = 47
+	smartActionSetActive                      uint32 = 48
 	smartActionAttackStart                    uint32 = 49
 	smartActionStoreTargetList                uint32 = 64
 	smartActionCallTimedActionList            uint32 = 80
@@ -109,6 +117,8 @@ const (
 	smartActionCallRandomTimedActionList      uint32 = 87
 	smartActionCallRandomRangeTimedActionList uint32 = 88
 	smartActionRemoveUnitFieldBytes1          uint32 = 91
+	smartActionInterruptSpell                 uint32 = 92
+	smartActionSetRoot                        uint32 = 103
 )
 
 // SMART_TARGET ids (SmartScriptMgr.h:1221-1253), AGGRO-used set. Target 8
@@ -221,22 +231,23 @@ type smartScriptEvent struct {
 // guard (SmartScript.cpp:3952-3958) that refuses a list overwrite from
 // inside a list event's own action.
 type smartScriptState struct {
-	events              []*smartScriptEvent
-	phase               uint32
-	nested              int
-	linkDepth           int
-	lastInvoker         uint64
-	defaultFaction      uint32
-	textTimer           uint32
-	useTextTimer        bool
-	lastTextID          uint32
-	talkerEntry         uint32
-	lastTick            time.Time
-	firedInit           bool
-	storedTargets       map[uint32][]uint64
-	timedList           []*smartScriptEvent
-	timedListInvoker    uint64
-	processingTimedList bool
+	events               []*smartScriptEvent
+	phase                uint32
+	nested               int
+	linkDepth            int
+	lastInvoker          uint64
+	defaultFaction       uint32
+	textTimer            uint32
+	useTextTimer         bool
+	lastTextID           uint32
+	talkerEntry          uint32
+	lastTick             time.Time
+	firedInit            bool
+	storedTargets        map[uint32][]uint64
+	timedList            []*smartScriptEvent
+	timedListInvoker     uint64
+	processingTimedList  bool
+	invincibilityHPLevel uint32
 }
 
 // loadSmartScripts loads the creature-source smart_scripts rows into the
@@ -878,18 +889,58 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 	case smartActionSound:
 		s.smartActionSound(ctx, motion, st, ev, invokerGUID)
 	case smartActionPlayEmote:
-		packet := protocol.NewBuffer(12)
-		packet.WriteU32(ev.row.actionParam1)
-		packet.WriteU64(motion.GUID)
-		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+		// SMART_ACTION_PLAY_EMOTE (SmartScript.cpp:325-337): the emote
+		// plays on every target unit, not just the owner — the self-only
+		// broadcast was the slice-1 partial (TDB 26091: the 1 live row
+		// targets SELF, so the old form was faithful for it). Per-target
+		// coords feed the visible set, falling back to the owner's when
+		// the target has no live motion or session.
+		for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+			mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+			if tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid); tm != nil {
+				s.motionMu.Lock()
+				mapID, instanceID, x, y, z, phase = tm.Map, tm.InstanceID, tm.X, tm.Y, tm.Z, tm.PhaseMask
+				s.motionMu.Unlock()
+			} else if sess := s.findSessionByGUID(tgt.guid); sess != nil && sess.player != nil {
+				mapID, instanceID, x, y, z = sess.player.Map, sess.player.InstanceID, sess.player.X, sess.player.Y, sess.player.Z
+				phase = sess.currentPlayerPhaseMask()
+			}
+			packet := protocol.NewBuffer(12)
+			packet.WriteU32(ev.row.actionParam1)
+			packet.WriteU64(tgt.guid)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), mapID, instanceID, x, y, z, phase)
+		}
 	case smartActionSetReactState:
 		s.smartActionSetReactState(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetVisibility:
+		s.smartActionSetVisibility(ctx, motion, st, ev, invokerGUID)
+	case smartActionInterruptSpell:
+		s.smartActionInterruptSpell(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetRoot:
+		s.smartActionSetRoot(ctx, motion, st, ev, invokerGUID)
 	case smartActionCast:
 		s.smartActionCast(ctx, motion, st, ev, invokerGUID)
 	case smartActionSummonCreature:
 		s.smartActionSummonCreature(ctx, motion, st, ev, invokerGUID)
 	case smartActionAutoAttack:
 		motion.NoMeleeAttack = ev.row.actionParam1 == 0
+	case smartActionAllowCombatMovement:
+		// SMART_ACTION_ALLOW_COMBAT_MOVEMENT (SmartScript.cpp:788-798):
+		// me-only (not targets), gated on IsSmart — the dispatch only
+		// runs for smart-script creatures. SmartAI::SetCombatMove
+		// (SmartAI.cpp:787-815) flips _canCombatMove; the Go twin is
+		// the inverted NoCombatMovement flag, honored by the combat-tick
+		// chase gate. The engaged legs ride the next tick: on=true
+		// re-chases via that gate (which carries the passive arm), and
+		// on=false halts the active chase now (the Remove(chase)
+		// twin) instead of letting the spline run to MoveEnds.
+		move := ev.row.actionParam1 != 0
+		s.motionMu.Lock()
+		motion.NoCombatMovement = !move
+		if !move && motion.InCombat {
+			motion.Moving = false
+		}
+		s.motionMu.Unlock()
 	case smartActionSetEventPhase:
 		s.smartSetEventPhase(ctx, motion, st, ev.row.actionParam1, invokerGUID)
 	case smartActionIncEventPhase:
@@ -912,6 +963,13 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 			phase = st.phase - ev.row.actionParam2
 		}
 		s.smartSetEventPhase(ctx, motion, st, phase, invokerGUID)
+	case smartActionFleeForAssist:
+		// SMART_ACTION_FLEE_FOR_ASSIST (SmartScript.cpp:837-851):
+		// DoFleeToGetAssistance on me. The withEmote leg (param1, 683
+		// of 698 AGGRO rows) sends BROADCAST_TEXT_FLEE_FOR_ASSIST via
+		// CreatureTextMgr — Go has no BroadcastText twin, so the emote
+		// stays out, the CALL_FOR_HELP precedent.
+		s.creatureFleeToGetAssistance(ctx, motion)
 	case smartActionRandomPhase:
 		// SMART_ACTION_RANDOM_PHASE (SmartScript.cpp:939-953): pick one of
 		// the nonzero phases (params 1-6). All-zero rows are rejected at
@@ -939,9 +997,11 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 	case smartActionAttackStart:
 		// SMART_ACTION_ATTACK_START (SmartScript.cpp:1238-1249): engage a
 		// random target. The engage runs the AttackStart funnel
-		// (triggerCreatureAggro) — its evading/passive gate is the
-		// documented EngageWithTarget deviation, C++ AttackStart has no
-		// such gate (see the smartActionSummonCreature comment).
+		// (triggerCreatureAggro): its Evading skip is C++ Unit::Attack's
+		// IsInEvadeMode gate (Unit.cpp: "creatures cannot attack while
+		// evading"), not a deviation, and the passive skip does not fire
+		// for fromAttack calls — C++ SmartAI::AttackStart has no
+		// react-state gate on this path (SmartAI.cpp:593-608).
 		targets := s.smartTargets(motion, st, ev, invokerGUID)
 		if len(targets) > 0 {
 			s.triggerCreatureAggro(ctx, motion.GUID, targets[rand.Intn(len(targets))].guid, true)
@@ -975,9 +1035,9 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 	case smartActionRemoveUnitFieldBytes1:
 		s.smartActionRemoveUnitFieldBytes1(motion, st, ev, invokerGUID)
 	default:
-		// Residual: the remaining AGGRO-row actions (21, 43, 42, 146,
-		// 103, 36, 41, 25, 47, 5, 74, 92, 133) have no Go twin
-		// — mounts, invincibility HP, visibility — and the event
+		// Residual: the remaining AGGRO-row actions (43, 42, 146, 36,
+		// 41, 74, 133) have no Go twin — mounts, invincibility HP,
+		// template swaps — and the event
 		// still consumed its chance roll and link below, matching
 		// C++'s log-and-skip default (SmartScript.cpp:2370-2372).
 	}
@@ -1065,8 +1125,9 @@ func (s *Server) smartActionCast(ctx context.Context, motion *creatureMotion, st
 // funnel (triggerCreatureAggro) — the C++ AttackStart twin — on the
 // target unit, or on the invoker (falling back to the last invoker,
 // the smartTargets convention) for the POSITION leg; the funnel's
-// evading/passive skip is the documented EngageWithTarget deviation,
-// C++ AttackStart has no such gate.
+// Evading skip is C++ Unit::Attack's IsInEvadeMode gate and the passive
+// skip does not fire for fromAttack calls, so neither leg deviates on
+// this path (see the smartActionAttackStart comment).
 func (s *Server) smartActionSummonCreature(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	summonType := ev.row.actionParam2
 	if summonType < 1 || summonType > 8 {
@@ -1388,6 +1449,105 @@ func (s *Server) smartActionNPCFlag(ctx context.Context, motion *creatureMotion,
 		mapID, instanceID, guid := tm.Map, tm.InstanceID, tm.GUID
 		s.motionMu.Unlock()
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCFlags: flags})
+	}
+}
+
+// broadcastCreatureDestroyToPlayers pushes SMSG_DESTROY_OBJECT for a
+// creature to every non-GM-seer session in its map/instance — the hide
+// half of the Lua SetVisible twin (lua_creature_events.go:7031). GM
+// seers (gmVisibilityDetect != 0) keep seeing the unit, matching C++
+// server-side visibility SERVERSIDE_VISIBILITY_GM.
+func (s *Server) broadcastCreatureDestroyToPlayers(mapID, instanceID uint32, guid uint64) {
+	destroyBuf := protocol.NewBuffer(9)
+	destroyBuf.WriteU64(guid)
+	destroyBuf.WriteU8(0)
+	payload := destroyBuf.Bytes()
+	opcode := uint16(protocol.OpcodeSMSG_DESTROY_OBJECT)
+	s.sessionsMu.RLock()
+	for target := range s.sessions {
+		if !target.authed || !target.worldReady.Load() || target.player == nil ||
+			target.player.Map != mapID || target.player.InstanceID != instanceID ||
+			target.gmVisibilityDetect != 0 {
+			continue
+		}
+		_ = target.write(opcode, payload, true)
+	}
+	s.sessionsMu.RUnlock()
+}
+
+// smartActionSetVisibility is SMART_ACTION_SET_VISIBILITY
+// (SmartScript.cpp:1225-1231): Unit::SetVisible on every target unit
+// (Unit.cpp:8656-8663) — server-side visibility GM/PLAYER plus an
+// object-visibility update. The creature leg is the Lua SetVisible twin
+// (lua_creature_events.go:7031): ScriptHidden set under motionMu, and on
+// hide the destroy object is pushed to the non-GM-seer sessions in the
+// instance; on show the flag clears and the periodic nearby-creature
+// rebuild re-creates the unit. Player targets stay out: Go has no
+// player-side server-visibility twin (TDB 26091: the 1 live row
+// targets SELF).
+func (s *Server) smartActionSetVisibility(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	visible := ev.row.actionParam1 != 0
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tm.ScriptHidden = !visible
+		mapID, instanceID, guid := tm.Map, tm.InstanceID, tm.GUID
+		s.motionMu.Unlock()
+		if !visible {
+			s.broadcastCreatureDestroyToPlayers(mapID, instanceID, guid)
+		}
+	}
+}
+
+// smartActionInterruptSpell is SMART_ACTION_INTERRUPT_SPELL
+// (SmartScript.cpp:1858-1867): InterruptNonMeleeSpells(withDelayed,
+// spell_id, withInstant) on every target unit. The creature leg runs the
+// spell-filtered twin (interruptCreatureNonMeleeCastsForSpell, param2
+// as the id gate — TDB 26091: the 1 live row names 44473) and sends the
+// cancel packets per interrupted arm, the INTERRUPT_PREVIOUS precedent
+// in smartActionCast. withDelayed/withInstant are vacuous in Go's
+// synchronous cast model (see the twin's comment). Player targets stay
+// out: Go has no plain player-side InterruptNonMeleeSpells twin.
+func (s *Server) smartActionInterruptSpell(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		for _, arm := range s.interruptCreatureNonMeleeCastsForSpell(tm, ev.row.actionParam2) {
+			s.sendCreatureInterruptPackets(tm, arm)
+		}
+	}
+}
+
+// smartActionSetRoot is SMART_ACTION_SET_ROOT (SmartScript.cpp:2007-2014):
+// SetControlled(root, UNIT_STATE_ROOT) on creature targets only — C++
+// skips non-creatures itself (IsCreature). ROOT is not in
+// UNIT_STATE_CONTROLLED (Unit.h:251), so apply runs no CastStop leg —
+// the plain ScriptRooted set is the exact twin (Lua SetRooted,
+// lua_creature_events.go:5637); the combat-tick chase gate honors it.
+func (s *Server) smartActionSetRoot(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	root := ev.row.actionParam1 != 0
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tm.ScriptRooted = root
+		s.motionMu.Unlock()
 	}
 }
 
