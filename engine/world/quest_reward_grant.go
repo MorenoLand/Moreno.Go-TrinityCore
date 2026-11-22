@@ -184,6 +184,10 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	// opt argument. Go previously fired the hooks at the top of the grant
 	// flow, ahead of every grant and the chain.
 	s.fireCreatureQuestHook(ctx, giverGUID, scripting.CreatureEventOnQuestReward, s.luaQuest(ctx, questID), reward)
+	// SmartAI::OnQuestReward twin (SmartAI.cpp:782-785).
+	if motion := s.findCreatureMotion(giverGUID); motion != nil {
+		s.server.smartQuestRewarded(ctx, motion, s.playerGUID, questID, reward)
+	}
 	s.fireGameObjectQuestHook(ctx, giverGUID, scripting.GameObjectEventOnQuestReward, s.luaQuest(ctx, questID), reward)
 	return true
 }
@@ -461,6 +465,10 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 					if (nextData.Flags&questFlagsAutoAccept != 0 || chainSpecialFlags&4 != 0) && s.canAddQuest(ctx, nextQuestID, true) {
 						s.addQuestToPlayer(ctx, nextQuestID, giverGUID)
 						s.fireCreatureQuestHook(ctx, giverGUID, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, nextQuestID))
+						// SmartAI::OnQuestAccept twin (SmartAI.cpp:777-780).
+						if motion := s.findCreatureMotion(giverGUID); motion != nil {
+							s.server.smartQuestAccepted(ctx, motion, s.playerGUID, nextQuestID)
+						}
 						s.fireGameObjectQuestHook(ctx, giverGUID, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, nextQuestID))
 						s.fireItemQuestHook(ctx, giverGUID, nextQuestID)
 					}

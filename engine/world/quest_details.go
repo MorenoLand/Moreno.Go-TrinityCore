@@ -309,6 +309,10 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 		// Eluna CREATURE_EVENT_ON_QUEST_ACCEPT (event 31), fired from
 		// Player::AddQuestAndCheckCompletion (Player.cpp:15119 region).
 		s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
+		// SmartAI::OnQuestAccept twin (SmartAI.cpp:777-780).
+		if motion := s.findCreatureMotion(guid); motion != nil {
+			s.server.smartQuestAccepted(ctx, motion, s.playerGUID, questID)
+		}
 		s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, questID))
 		// Eluna ITEM_EVENT_ON_QUEST_ACCEPT (event 3), fired from the
 		// TYPEID_ITEM/TYPEID_CONTAINER arm of Player::AddQuestAndCheckCompletion
@@ -605,6 +609,10 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	// Player::AddQuestAndCheckCompletion after the auto-complete check
 	// (Player.cpp:15105-15122).
 	s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
+	// SmartAI::OnQuestAccept twin (SmartAI.cpp:777-780).
+	if motion := s.findCreatureMotion(guid); motion != nil {
+		s.server.smartQuestAccepted(ctx, motion, s.playerGUID, questID)
+	}
 	s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, questID))
 	// Eluna ITEM_EVENT_ON_QUEST_ACCEPT (event 3), fired from the
 	// TYPEID_ITEM/TYPEID_CONTAINER arm of Player::AddQuestAndCheckCompletion

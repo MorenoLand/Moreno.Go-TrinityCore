@@ -130,6 +130,8 @@ const (
 	smartEventOnSpellClick        uint32 = 73 // SMART_EVENT_ON_SPELLCLICK (SmartScriptMgr.h:172), invoker = clicker
 	smartEventSummonedUnit        uint32 = 17 // SMART_EVENT_SUMMONED_UNIT (SmartScriptMgr.h:116), invoker = summoned creature
 	smartEventSummonedUnitDies    uint32 = 82 // SMART_EVENT_SUMMONED_UNIT_DIES (SmartScriptMgr.h:181), invoker = dead summoned creature
+	smartEventAcceptedQuest       uint32 = 19 // SMART_EVENT_ACCEPTED_QUEST (SmartScriptMgr.h:118), invoker = player, var0 = quest id
+	smartEventRewardQuest         uint32 = 20 // SMART_EVENT_REWARD_QUEST (SmartScriptMgr.h:119), invoker = player, var0 = quest id, var1 = reward choice
 	smartEventEnd                 uint32 = 83 // SMART_EVENT_END (SmartScriptMgr.h:183), loader rejects event types >= this
 )
 
@@ -1072,6 +1074,24 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		s.smartRecalcTimer(ev, ev.row.eventParam2, ev.row.eventParam3)
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
+	case smartEventAcceptedQuest, smartEventRewardQuest:
+		// SMART_EVENT_ACCEPTED_QUEST / REWARD_QUEST
+		// (SmartScript.cpp:3256-3263): the event fires only for its quest
+		// id (event_param1, 0 = any, var0), then re-arms on the cooldown
+		// window (event_param2/3) and runs its action with the player as
+		// invoker and the quest id as var0 — the reward-choice index
+		// (var1) is dropped by the case's ProcessAction(e, unit, var0)
+		// call. TDB 26091: 19 = 310 src-0 rows (304 quest-specific, 6
+		// any-quest, all cooldowns 0/0), 20 = 386 src-0 rows (all
+		// quest-specific; 7 carry real cooldowns, 10-30s).
+		if invokerGUID == 0 {
+			return
+		}
+		if ev.row.eventParam1 != 0 && ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam2, ev.row.eventParam3)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, 0)
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
 		smartEventAIInit, smartEventJustCreated,
@@ -5338,6 +5358,38 @@ func (s *Server) smartSummonedUnitDies(ctx context.Context, dead *creatureMotion
 		return
 	}
 	s.smartProcessEvents(ctx, summoner, smartEventSummonedUnitDies, dead.GUID, 0, 0)
+}
+
+// smartQuestAccepted is SmartAI::OnQuestAccept (SmartAI.cpp:777-780):
+// the quest giver's ACCEPTED_QUEST (19) event fires with the accepting
+// player as invoker and the quest id as var0. Player::
+// AddQuestAndCheckCompletion (Player.cpp:15104-15122) calls it on the
+// giver creature's AI right after the Eluna OnQuestAccept hook — a GO
+// giver fires SmartGameObjectAI::OnQuestAccept instead (no Go script
+// state, stays out), and item/player givers have no SmartAI at all.
+// The session call sites resolve the giver motion, so a non-creature
+// giver never reaches here.
+func (s *Server) smartQuestAccepted(ctx context.Context, giver *creatureMotion, playerGUID uint64, questID uint32) {
+	if s == nil || giver == nil || playerGUID == 0 {
+		return
+	}
+	s.smartProcessEvents(ctx, giver, smartEventAcceptedQuest, playerGUID, questID, 0)
+}
+
+// smartQuestRewarded is SmartAI::OnQuestReward (SmartAI.cpp:782-785):
+// the quest giver's REWARD_QUEST (20) event fires with the player as
+// invoker, the quest id as var0 and the reward-choice index as var1
+// (dropped by the dispatch case, SmartScript.cpp:3256-3263).
+// QuestHandler::HandleQuestgiverChooseRewardOpcode (QuestHandler.cpp:
+// 320-360) calls it on the giver creature's AI after RewardQuest and
+// the next-quest chain, right after the Eluna OnQuestReward hook; the
+// GM-command and TRACKING reward arms have no such call in C++ and
+// stay silent here.
+func (s *Server) smartQuestRewarded(ctx context.Context, giver *creatureMotion, playerGUID uint64, questID, reward uint32) {
+	if s == nil || giver == nil || playerGUID == 0 {
+		return
+	}
+	s.smartProcessEvents(ctx, giver, smartEventRewardQuest, playerGUID, questID, reward)
 }
 
 // smartGossipSelect is SmartAI::OnGossipSelect (SmartAI.cpp:765-770):

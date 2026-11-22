@@ -1387,6 +1387,10 @@ func (s *session) fastOpenQuestGiverQuest(ctx context.Context, guid uint64, q go
 		if canTake, terr := s.canTakeQuest(ctx, questID); terr == nil && canTake && s.canAddQuest(ctx, questID, true) {
 			s.addQuestToPlayer(ctx, questID, guid)
 			s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnQuestAccept, s.luaQuest(ctx, questID))
+			// SmartAI::OnQuestAccept twin (SmartAI.cpp:777-780).
+			if motion := s.findCreatureMotion(guid); motion != nil {
+				s.server.smartQuestAccepted(ctx, motion, s.playerGUID, questID)
+			}
 			s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnQuestAccept, s.luaQuest(ctx, questID))
 			s.fireItemQuestHook(ctx, guid, questID)
 		}
