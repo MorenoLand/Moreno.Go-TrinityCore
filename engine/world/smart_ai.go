@@ -351,6 +351,7 @@ const (
 	smartActionSetUnitFieldBytes1             uint32 = 90
 	smartActionRemoveUnitFieldBytes1          uint32 = 91
 	smartActionInterruptSpell                 uint32 = 92
+	smartActionSendGOCustomAnim               uint32 = 93
 	smartActionSetDynamicFlag                 uint32 = 94
 	smartActionAddDynamicFlag                 uint32 = 95
 	smartActionRemoveDynamicFlag              uint32 = 96
@@ -376,6 +377,8 @@ const (
 	smartActionSetCorpseDelay                 uint32 = 116
 	smartActionDisableEvade                   uint32 = 117
 	smartActionGoSetGoState                   uint32 = 118
+	smartActionSetCanFly                      uint32 = 119
+	smartActionRemoveAurasByType              uint32 = 120
 	smartActionPauseMovement                  uint32 = 127
 	smartActionSpawnSpawnGroup                uint32 = 131
 	smartActionDespawnSpawnGroup              uint32 = 132
@@ -2773,6 +2776,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSetActive(ctx, motion, st, ev, invokerGUID)
 	case smartActionInterruptSpell:
 		s.smartActionInterruptSpell(ctx, motion, st, ev, invokerGUID)
+	case smartActionSendGOCustomAnim:
+		s.smartActionSendGOCustomAnim(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetRoot:
 		s.smartActionSetRoot(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetGOFlag, smartActionAddGOFlag, smartActionRemoveGOFlag:
@@ -2907,6 +2912,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartSetRun(motion, st, ev.row.actionParam1 != 0)
 	case smartActionSetDisableGravity:
 		s.smartActionSetDisableGravity(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetCanFly:
+		s.smartActionSetCanFly(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetSwim:
 		s.smartActionSetSwim(ctx, motion, st, ev, invokerGUID)
 	case smartActionTeleport:
@@ -2939,6 +2946,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSetRangedMovement(ctx, motion, st, ev, invokerGUID)
 	case smartActionRemoveAurasFromSpell:
 		s.smartActionRemoveAuras(ctx, motion, st, ev, invokerGUID)
+	case smartActionRemoveAurasByType:
+		s.smartActionRemoveAurasByType(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetInstData:
 		s.smartActionSetInstData(ctx, motion, ev)
 	case smartActionCallForHelp:
@@ -3856,6 +3865,33 @@ func (s *Server) smartActionRemoveAuras(ctx context.Context, motion *creatureMot
 			continue
 		}
 		s.removeCreatureAura(key, spellID)
+	}
+}
+
+// smartActionRemoveAurasByType is SMART_ACTION_REMOVE_AURAS_BY_TYPE
+// (SmartScript.cpp:2255-2261): every unit target loses all applied
+// auras of the given AuraType (param1, no validation, matching the
+// C++ cast) — the vehicle-exit leg. Players take the session
+// removeAurasByType twin (Unit::RemoveAurasByType, Unit.cpp:3884),
+// creatures the removeCreatureAurasByType twin; other targets are
+// skipped, mirroring the smartActionRemoveAuras target loop. TDB
+// 26091: 0 rows.
+func (s *Server) smartActionRemoveAurasByType(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	auraType := ev.row.actionParam1
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			sess := s.findSessionByGUID(tgt.guid)
+			if sess == nil {
+				continue
+			}
+			sess.removeAurasByType(auraType)
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.removeCreatureAurasByType(creatureAuraKey{Map: tm.Map, InstanceID: tm.InstanceID, GUID: tm.GUID}, auraType)
 	}
 }
 
@@ -5526,6 +5562,29 @@ func (s *Server) smartActionSetSwim(ctx context.Context, motion *creatureMotion,
 	s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
 }
 
+// smartActionSetCanFly is SMART_ACTION_SET_CAN_FLY
+// (SmartScript.cpp:1359-1366): me-only (IsSmart gate = this dispatch),
+// SmartAI::SetCanFly -> Creature::SetCanFly. The body mirrors the Lua
+// SetCanFly bridge (lua_creature_events.go: no-op-on-unchanged, Flying
+// latch, SMSG_SPLINE_MOVE_SET/UNSET_FLYING broadcast). TDB 26091: 0 rows.
+func (s *Server) smartActionSetCanFly(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	enable := ev.row.actionParam1 != 0
+	s.motionMu.Lock()
+	if motion.Flying == enable {
+		s.motionMu.Unlock()
+		return
+	}
+	motion.Flying = enable
+	mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+	phase := motion.PhaseMask
+	s.motionMu.Unlock()
+	opcode := protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_FLYING
+	if enable {
+		opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_FLYING
+	}
+	s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+}
+
 // smartTeleportCreature is Unit::NearTeleportTo (Unit.cpp:13332-13346)
 // for a creature motion: the position write plus the teleport-movement
 // broadcast, mirroring the Lua Teleport bridge (lua_creature_events.go).
@@ -7111,6 +7170,21 @@ func (s *Server) smartActionGOSetGoState(ctx context.Context, motion *creatureMo
 			continue
 		}
 		s.setGameObjectStateInInstance(motion.Map, motion.InstanceID, tgt.guid, uint8(state))
+	}
+}
+
+// smartActionSendGOCustomAnim is SMART_ACTION_SEND_GO_CUSTOM_ANIM
+// (SmartScript.cpp:1865-1871): every gameobject target takes
+// SendCustomAnim(anim) — SMSG_GAMEOBJECT_CUSTOM_ANIM with the GO GUID
+// + anim (GameObject.cpp:2097), whose Go twin is
+// broadcastGameObjectCustomAnimInInstance. TDB 26091: 0 rows.
+func (s *Server) smartActionSendGOCustomAnim(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	anim := ev.row.actionParam1
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isGameObject {
+			continue
+		}
+		s.broadcastGameObjectCustomAnimInInstance(motion.Map, motion.InstanceID, tgt.guid, anim)
 	}
 }
 
