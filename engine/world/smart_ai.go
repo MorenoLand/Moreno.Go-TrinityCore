@@ -165,9 +165,10 @@ const (
 // CROSS_CAST (127) are ported below. The 89 RANDOM_MOVE (131) / 90
 // SET_UNIT_FIELD_BYTES_1 (297) / 97 JUMP_TO_POS (12) are ported below.
 // The 98 SEND_GOSSIP_MENU (14) / 99 GO_SET_LOOT_STATE (22) / 100
-// SEND_TARGET_TO_TARGET (155) are ported below. The next unported
-// block is 101 SET_HOME_POS (102) / 102 SET_HEALTH_REGEN (23) / 107
-// SUMMON_CREATURE_GROUP (231).
+// SEND_TARGET_TO_TARGET (155) are ported below. The 101 SET_HOME_POS
+// (102) / 102 SET_HEALTH_REGEN (23) / 107 SUMMON_CREATURE_GROUP (231)
+// are ported below. The next unported block is 108 SET_POWER (3) / 111
+// GAME_EVENT_STOP (2) / 112 GAME_EVENT_START (1).
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -261,7 +262,10 @@ const (
 	smartActionSendGossipMenu                 uint32 = 98
 	smartActionGOSetLootState                 uint32 = 99
 	smartActionSendTargetToTarget             uint32 = 100
+	smartActionSetHomePos                     uint32 = 101
+	smartActionSetHealthRegen                 uint32 = 102
 	smartActionSetRoot                        uint32 = 103
+	smartActionSummonCreatureGroup            uint32 = 107
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
 )
@@ -1668,6 +1672,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionGOSetLootState(ctx, motion, st, ev, invokerGUID)
 	case smartActionSendTargetToTarget:
 		s.smartActionSendTargetToTarget(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetHomePos:
+		s.smartActionSetHomePos(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetHealthRegen:
+		s.smartActionSetHealthRegen(ctx, motion, st, ev, invokerGUID)
+	case smartActionSummonCreatureGroup:
+		s.smartActionSummonCreatureGroup(ctx, motion, st, ev, invokerGUID)
 	default:
 		// Residual: the remaining AGGRO-row action (146) has no Go
 		// twin. 146 has no enum value in this C++ revision
@@ -5103,6 +5113,105 @@ func (s *Server) smartActionSendTargetToTarget(ctx context.Context, motion *crea
 			tst.storedTargets = make(map[uint32][]uint64)
 		}
 		tst.storedTargets[ev.row.actionParam1] = append([]uint64(nil), stored...)
+	}
+}
+
+// smartActionSetHomePos is SMART_ACTION_SET_HOME_POS (SmartScript.cpp:
+// 1974-1999): the home position is the target type's position, not a
+// param — all params are 0 in TDB 26091. SELF homes me to me's current
+// position; the range/GUID/distance, closest and owner/invoker legs
+// home each creature target to its own current position; POSITION
+// homes to the row's target_x/y/z/o. The POSITION leg is dead in
+// practice: GetTargets yields no targets for it (SmartScript.cpp:
+// 2864-2867), so the loop never runs, matching C++ exactly. Any other
+// target type logs and skips in C++ — TDB's one CLOSEST_PLAYER row
+// (1780900 timed list, Champion Bloodwrath) is that skip leg, and it
+// stays out here too. GO/player targets fail the IsCreature check:
+// findCreatureMotion returns nil for them. TDB 26091: 102 rows, 100
+// SELF, 1 CLOSEST_PLAYER, 1 OWNER_OR_SUMMONER (2417300 timed list,
+// Frostgore, home to summoner position).
+func (s *Server) smartActionSetHomePos(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	switch ev.row.targetType {
+	case smartTargetSelf:
+		s.motionMu.Lock()
+		motion.HomeX, motion.HomeY, motion.HomeZ = motion.X, motion.Y, motion.Z
+		motion.HomeO = motion.Orientation
+		s.motionMu.Unlock()
+	case smartTargetPosition:
+		// Dead leg: no targets resolve for POSITION, so nothing homes.
+	case smartTargetActionInvoker, smartTargetCreatureRange, smartTargetCreatureGUID, smartTargetCreatureDist, smartTargetGameObjectRange, smartTargetGameObjectGUID, smartTargetGameObjectDist, smartTargetClosestCreature, smartTargetClosestGameObject, smartTargetOwnerOrSummoner:
+		// C++ also lists CLOSEST_ENEMY (25), CLOSEST_FRIENDLY (26)
+		// and CLOSEST_UNSPAWNED_GAMEOBJECT (30); Go has no consts
+		// for them and smartTargets resolves none, so no row can
+		// reach this leg through them.
+		for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+			if tgt.isPlayer {
+				continue
+			}
+			tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+			if tm == nil {
+				continue
+			}
+			s.motionMu.Lock()
+			tm.HomeX, tm.HomeY, tm.HomeZ = tm.X, tm.Y, tm.Z
+			tm.HomeO = tm.Orientation
+			s.motionMu.Unlock()
+		}
+	default:
+		// C++ TC_LOG_ERROR + skip for any other target type.
+	}
+}
+
+// smartActionSetHealthRegen is SMART_ACTION_SET_HEALTH_REGEN
+// (SmartScript.cpp:2000-2006): Creature::SetRegenerateHealth(param1
+// != 0) on every creature target. The Go twin is the
+// RegenHealthDisabled latch the Lua SetRegenerateHealth bridge writes
+// (lua_creature_events.go:5639) and the regen tick honors
+// (creaturemotion.go:145). TDB 26091: 23 rows, param1 0 x20 (regen
+// off) / 1 x3 (on); 22 SELF, 1 STORED (2533500 timed list,
+// Longrunner Proudhoof, stored list 1).
+func (s *Server) smartActionSetHealthRegen(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	regen := ev.row.actionParam1 != 0
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tm.RegenHealthDisabled = !regen
+		s.motionMu.Unlock()
+	}
+}
+
+// smartActionSummonCreatureGroup is SMART_ACTION_SUMMON_CREATURE_GROUP
+// (SmartScript.cpp:2035-2044): WorldObject::SummonCreatureGroup(group,
+// &list) on the base object — targets are ignored — then, when
+// param2 (attackInvoker) is set and an invoker exists, every summon
+// AI()->AttackStart(unit). The group summon rides the shared
+// summonCreatureGroup funnel (creature_summon_groups keyed by the
+// summoner's entry, summonerType creature, groupId); the AttackStart
+// leg rides triggerCreatureAggro, the SUMMON_CREATURE attackInvoker
+// twin. TDB 26091: 231 rows — 15 creature + 210 timed-list rows live
+// (all 15 creature rows have exact group coverage; groups 0-12 all
+// present), 6 GO-source rows stay out (Go loads no GO smart scripts),
+// attackInvoker set on 27 rows.
+func (s *Server) smartActionSummonCreatureGroup(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	summoned := s.summonCreatureGroup(ctx, motion, ev.row.actionParam1)
+	if ev.row.actionParam2 == 0 || len(summoned) == 0 {
+		return
+	}
+	invoker := invokerGUID
+	if invoker == 0 {
+		invoker = st.lastInvoker
+	}
+	if invoker == 0 {
+		return
+	}
+	for _, sm := range summoned {
+		s.triggerCreatureAggro(ctx, sm.GUID, invoker, true)
 	}
 }
 
