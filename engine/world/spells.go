@@ -9003,14 +9003,24 @@ func (s *session) fireSpellLinkedHitTriggers(ctx context.Context, spellID uint32
 // target itself otherwise — with the effect amount as effect 0's base point
 // (CastSpellExtraArgs SPELLVALUE_BASE_POINT0, only when nonzero).
 // targetKey is the creature key when the target is a creature, the zero key
-// for player targets. The difficulty adjustment
-// (GetSpellIdForDifficulty) has no Go model — TriggerSpell is used as-is,
-// the same convention as the SPELL_EFFECT_TRIGGER_SPELL funnel.
+// for player targets. The trigger id resolves through
+// GetSpellIdForDifficulty at the head of HandleAuraLinked
+// (SpellAuraEffects.cpp:4884), keyed on the aura TARGET's map — the same
+// id the remove arm removes (:4898-4903), so the apply and remove legs
+// agree when a difficulty variant fires. The cast funnels below re-resolve
+// idempotently on the caster's map (same map for a live aura).
 func (s *session) fireLinkedAuraTrigger(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, amount uint32, targetGUID uint64, targetKey creatureAuraKey) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || eff.TriggerSpell == 0 {
 		return
 	}
-	triggered, found, err := s.server.Data.Spell(eff.TriggerSpell)
+	targetMap, targetInstance := uint32(0), uint32(0)
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		targetMap, targetInstance = ts.player.Map, ts.player.InstanceID
+	} else if targetKey.GUID != 0 {
+		targetMap, targetInstance = targetKey.Map, targetKey.InstanceID
+	}
+	triggerID := s.server.spellIDForDifficulty(eff.TriggerSpell, targetMap, targetInstance)
+	triggered, found, err := s.server.Data.Spell(triggerID)
 	if err != nil || !found {
 		// HandleAuraLinked: unknown triggered spell — nothing fires.
 		return
@@ -9020,9 +9030,9 @@ func (s *session) fireLinkedAuraTrigger(ctx context.Context, spell wotlk.Spell, 
 			return
 		}
 		if amount != 0 {
-			caster.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, target, amount)
+			caster.castSpellDirectWithBasePoint(ctx, triggerID, target, amount)
 		} else {
-			caster.castSpellDirect(ctx, eff.TriggerSpell, target)
+			caster.castSpellDirect(ctx, triggerID, target)
 		}
 	}
 	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
@@ -9044,7 +9054,7 @@ func (s *session) fireLinkedAuraTrigger(ctx context.Context, spell wotlk.Spell, 
 		return
 	}
 	if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil {
-		s.server.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, targetGUID, true)
+		s.server.castCreatureSpellInternal(ctx, m, triggerID, targetGUID, true)
 	}
 }
 
@@ -9072,7 +9082,11 @@ func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterG
 		if se.Aura != spellAuraLinked || se.TriggerSpell == 0 {
 			continue
 		}
-		triggered, found, err := targetSess.server.Data.Spell(se.TriggerSpell)
+		// HandleAuraLinked head (SpellAuraEffects.cpp:4884): the linked
+		// trigger id is the difficulty variant for the target's map, so
+		// the sync finds the aura the apply arm actually cast.
+		triggerID := targetSess.server.spellIDForDifficulty(se.TriggerSpell, targetSess.player.Map, targetSess.player.InstanceID)
+		triggered, found, err := targetSess.server.Data.Spell(triggerID)
 		if err != nil || !found {
 			continue
 		}
@@ -9090,7 +9104,7 @@ func (targetSess *session) syncLinkedAuraStacks(spell wotlk.Spell, parentCasterG
 			want = maxStack
 		}
 		targetSess.castMu.Lock()
-		trig := targetSess.activeAuras[se.TriggerSpell]
+		trig := targetSess.activeAuras[triggerID]
 		synced := trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != uint8(want)
 		if synced {
 			// Aura::ModStackAmount -> SetStackAmount (SpellAuras.cpp:1008)
@@ -9208,7 +9222,11 @@ func (srv *Server) syncCreatureLinkedAuraStacks(spell wotlk.Spell, key creatureA
 		if se.Aura != spellAuraLinked || se.TriggerSpell == 0 {
 			continue
 		}
-		triggered, found, err := srv.Data.Spell(se.TriggerSpell)
+		// HandleAuraLinked head (SpellAuraEffects.cpp:4884): the linked
+		// trigger id is the difficulty variant for the target's map, so
+		// the sync finds the aura the apply arm actually cast.
+		triggerID := srv.spellIDForDifficulty(se.TriggerSpell, key.Map, key.InstanceID)
+		triggered, found, err := srv.Data.Spell(triggerID)
 		if err != nil || !found {
 			continue
 		}
@@ -9225,7 +9243,7 @@ func (srv *Server) syncCreatureLinkedAuraStacks(spell wotlk.Spell, key creatureA
 			want = maxStack
 		}
 		srv.auraMu.Lock()
-		if trig := srv.activeCreatureAuras[key][se.TriggerSpell]; trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != uint8(want) {
+		if trig := srv.activeCreatureAuras[key][triggerID]; trig != nil && !trig.Stopped && trig.CasterGUID == wantCaster && trig.StackCount != uint8(want) {
 			// Same SetStackAmount recalc as the player sync above.
 			oldCount := uint32(trig.StackCount)
 			trig.StackCount = uint8(want)
@@ -9285,10 +9303,12 @@ type linkedTriggerRef struct {
 
 // linkedTriggersOfSpell collects the 284 trigger references of a spell,
 // mirroring the trigger lookup at the head of AuraEffect::HandleAuraLinked
-// (SpellAuraEffects.cpp:4882-4885): unknown triggered spells contribute
-// nothing, and only effects with a nonzero TriggerSpell count.
-func linkedTriggersOfSpell(store *wotlk.Store, spell wotlk.Spell) []linkedTriggerRef {
-	if store == nil {
+// (SpellAuraEffects.cpp:4882-4885): each trigger id resolves through
+// GetSpellIdForDifficulty on the aura target's map, so the remove arm
+// removes the same variant the apply arm cast. Unknown triggered spells
+// contribute nothing, and only effects with a nonzero TriggerSpell count.
+func linkedTriggersOfSpell(srv *Server, spell wotlk.Spell, mapID, instanceID uint32) []linkedTriggerRef {
+	if srv == nil || srv.Data == nil {
 		return nil
 	}
 	var refs []linkedTriggerRef
@@ -9296,11 +9316,12 @@ func linkedTriggersOfSpell(store *wotlk.Store, spell wotlk.Spell) []linkedTrigge
 		if se.Aura != spellAuraLinked || se.TriggerSpell == 0 {
 			continue
 		}
-		triggered, found, err := store.Spell(se.TriggerSpell)
+		triggerID := srv.spellIDForDifficulty(se.TriggerSpell, mapID, instanceID)
+		triggered, found, err := srv.Data.Spell(triggerID)
 		if err != nil || !found {
 			continue
 		}
-		refs = append(refs, linkedTriggerRef{spellID: se.TriggerSpell, needsCaster: spellNeedsToBeTriggeredByCaster(triggered, spell)})
+		refs = append(refs, linkedTriggerRef{spellID: triggerID, needsCaster: spellNeedsToBeTriggeredByCaster(triggered, spell)})
 	}
 	return refs
 }
@@ -38934,7 +38955,11 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			// before Stopped is set, like the other effect-gated legs.
 			if s.server != nil {
 				if rspell, found, rerr := s.server.Data.Spell(spellID); rerr == nil && found {
-					removedLinkedTriggers = linkedTriggersOfSpell(s.server.Data, rspell)
+					mapID, instanceID := uint32(0), uint32(0)
+					if s.player != nil {
+						mapID, instanceID = s.player.Map, s.player.InstanceID
+					}
+					removedLinkedTriggers = linkedTriggersOfSpell(s.server, rspell, mapID, instanceID)
 				}
 			}
 			wasVisibilityAura = affectsPlayerVisibility(aura.AuraType)
@@ -49426,7 +49451,7 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 				// the aura is deleted.
 				if s.server.Data != nil {
 					if rspell, found, rerr := s.server.Data.Spell(spellID); rerr == nil && found {
-						removedLinkedTriggers = linkedTriggersOfSpell(s.server.Data, rspell)
+						removedLinkedTriggers = linkedTriggersOfSpell(s.server, rspell, key.Map, key.InstanceID)
 						removedLinkedParentCaster = aura.CasterGUID
 						// The quest-tame arm of AuraEffect::HandleAuraDummy AT
 						// REMOVE (SpellAuraEffects.cpp:4444-4472) is captured
@@ -49735,7 +49760,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 				if s.Data != nil {
 					if rspell, found, rerr := s.Data.Spell(spellID); rerr == nil && found {
 						wasSchoolImmunity = spellHasAura(rspell, spellAuraSchoolImmunity)
-						removedLinkedTriggers = linkedTriggersOfSpell(s.Data, rspell)
+						removedLinkedTriggers = linkedTriggersOfSpell(s, rspell, key.Map, key.InstanceID)
 						removedLinkedParentCaster = aura.CasterGUID
 						// The quest-tame arm of AuraEffect::HandleAuraDummy AT
 						// REMOVE (SpellAuraEffects.cpp:4444-4472) is captured
