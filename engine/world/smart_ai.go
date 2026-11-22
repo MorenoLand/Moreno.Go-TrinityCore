@@ -266,6 +266,9 @@ const (
 	smartActionSetHealthRegen                 uint32 = 102
 	smartActionSetRoot                        uint32 = 103
 	smartActionSummonCreatureGroup            uint32 = 107
+	smartActionSetPower                       uint32 = 108
+	smartActionGameEventStop                  uint32 = 111
+	smartActionGameEventStart                 uint32 = 112
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
 )
@@ -1678,6 +1681,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSetHealthRegen(ctx, motion, st, ev, invokerGUID)
 	case smartActionSummonCreatureGroup:
 		s.smartActionSummonCreatureGroup(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetPower:
+		s.smartActionSetPower(ctx, motion, st, ev, invokerGUID)
+	case smartActionGameEventStop:
+		s.smartActionGameEventStop(ctx, motion, st, ev, invokerGUID)
+	case smartActionGameEventStart:
+		s.smartActionGameEventStart(ctx, motion, st, ev, invokerGUID)
 	default:
 		// Residual: the remaining AGGRO-row action (146) has no Go
 		// twin. 146 has no enum value in this C++ revision
@@ -5213,6 +5222,114 @@ func (s *Server) smartActionSummonCreatureGroup(ctx context.Context, motion *cre
 	for _, sm := range summoned {
 		s.triggerCreatureAggro(ctx, sm.GUID, invoker, true)
 	}
+}
+
+// smartActionSetPower is SMART_ACTION_SET_POWER
+// (SmartScript.cpp:2045-2051): Unit::SetPower(Powers(param1), param2)
+// on every unit target. The C++ leg no-ops when the value is
+// unchanged, clamps to the max power, writes UNIT_FIELD_POWER1+power,
+// and sends SMSG_POWER_UPDATE to the set (plus a group-update flag
+// for players/pets). The creature leg mirrors the pet power flush
+// (pet_runtime.go): values update + SMSG_POWER_UPDATE to the visible
+// set, Mana mirrored for power 0 (boss_ai.go energize twin); the
+// player leg writes the session power and sends the update to self +
+// visible set (spells.go). The party-frame flag rides the 5s
+// SMSG_PARTY_MEMBER_STATS delta flush (flushGroupMemberStats), as in
+// C++ — never pushed immediately. TDB 26091: 3 rows, all RESET (25)
+// events on SELF, mana (0) to 0 — Emissary Roman'khan (14862),
+// Obsidian Eradicator (15262), Obsidian Nullifier (15312). 109
+// ADD_POWER / 110 REMOVE_POWER have zero rows.
+func (s *Server) smartActionSetPower(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	powerType := ev.row.actionParam1
+	newPower := ev.row.actionParam2
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isGameObject {
+			continue
+		}
+		if tgt.isPlayer {
+			sess := s.findSessionByGUID(tgt.guid)
+			if sess == nil || sess.player == nil {
+				continue
+			}
+			if powerType >= uint32(len(sess.player.Powers)) {
+				continue
+			}
+			if sess.player.Powers[powerType] == newPower {
+				continue
+			}
+			val := newPower
+			if val > sess.player.MaxPowers[powerType] {
+				val = sess.player.MaxPowers[powerType]
+			}
+			sess.player.Powers[powerType] = val
+			packet := protocol.NewBuffer(packedGUIDSize(tgt.guid) + 5)
+			packet.WritePackedGUID(tgt.guid)
+			packet.WriteU8(uint8(powerType))
+			packet.WriteU32(val)
+			_ = sess.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), true)
+			s.broadcastToVisibleSetFromSession(sess, uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes())
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		if powerType >= uint32(len(tm.Powers)) {
+			continue
+		}
+		s.motionMu.Lock()
+		if tm.Powers[powerType] == newPower {
+			s.motionMu.Unlock()
+			continue
+		}
+		val := newPower
+		if val > tm.MaxPowers[powerType] {
+			val = tm.MaxPowers[powerType]
+		}
+		tm.Powers[powerType] = val
+		if powerType == 0 {
+			tm.Mana = val
+		}
+		x, y, z, phase := tm.X, tm.Y, tm.Z, tm.PhaseMask
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, tgt.guid, map[int]uint32{unitFieldPower1 + int(powerType): val})
+		packet := protocol.NewBuffer(packedGUIDSize(tgt.guid) + 5)
+		packet.WritePackedGUID(tgt.guid)
+		packet.WriteU8(uint8(powerType))
+		packet.WriteU32(val)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), motion.Map, motion.InstanceID, x, y, z, phase)
+	}
+}
+
+// smartActionGameEventStop is SMART_ACTION_GAME_EVENT_STOP
+// (SmartScript.cpp:2066-2075): when the event is not active C++ logs
+// a sql error and skips; otherwise StopEvent(id, true) — overwrite
+// true, the schedule rewrite the luaGameEventControl force leg
+// applies (lua_globals.go). The active check reads the same cached
+// set the .event stop command uses (commands.go). TDB 26091: 2
+// timed-action-list (src 9) rows — event 81 (Ognip Blastbolt,
+// 2821000) and event 84 (Priestess Alorah, 3610200); both ids exist
+// in game_event.
+func (s *Server) smartActionGameEventStop(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	eventID := ev.row.actionParam1
+	if _, active := s.cachedActiveGameEvents(ctx)[int64(eventID)]; !active {
+		return
+	}
+	s.luaGameEventControl(eventID, false, true)
+}
+
+// smartActionGameEventStart is SMART_ACTION_GAME_EVENT_START
+// (SmartScript.cpp:2077-2086): when the event is already active C++
+// logs a sql error and skips; otherwise StartEvent(id, true) — the
+// overwrite-true twin of the stop leg above. TDB 26091: 1
+// timed-action-list (src 9) row — event 81 (Ognip Blastbolt,
+// 2821000), the same event the stop leg above halts.
+func (s *Server) smartActionGameEventStart(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	eventID := ev.row.actionParam1
+	if _, active := s.cachedActiveGameEvents(ctx)[int64(eventID)]; active {
+		return
+	}
+	s.luaGameEventControl(eventID, true, true)
 }
 
 // smartActionSetReactState is SMART_ACTION_SET_REACT_STATE
