@@ -20,9 +20,13 @@
 // SET_INGAME_PHASE_MASK (42 rows, 36 live), 46 ATTACK_STOP (8)
 // and 51 KILL_UNIT (47 rows, 35 live) are ported below. 50
 // SUMMON_GO (226 rows, 174 live) and 52 ACTIVATE_TAXI (1 row)
-// are ported below. The next unported block is 53 WP_START
-// (930 live rows) / 54 WP_PAUSE (674) / 55 WP_STOP (12) — no
-// SmartAI StartPath/PausePath/StopPath twin in Go.
+// are ported below. 53 WP_START (930 live rows) / 54 WP_PAUSE
+// (674) / 55 WP_STOP (12) are ported below with the SmartAI
+// StartPath/PausePath/StopPath escort machine (waypoints-table
+// paths, WAYPOINT_* events, UpdatePath/UpdateDespawn ticks). The
+// next unported block is 56 ADD_ITEM / 57 REMOVE_ITEM / 58
+// INSTALL_AI_TEMPLATE / 59 SET_RUN / 60 SET_DISABLE_GRAVITY / 61
+// SET_SWIM / 62 TELEPORT / 63 SET_COUNTER.
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -89,6 +93,12 @@ const (
 	smartEventTextOver            uint32 = 52
 	smartEventTimedEventTriggered uint32 = 59 // SMART_EVENT_TIMED_EVENT_TRIGGERED (SmartScriptMgr.h:158), event_param1 = timed-event id
 	smartEventFollowCompleted     uint32 = 65 // SMART_EVENT_FOLLOW_COMPLETED (SmartScriptMgr.h:164)
+	smartEventWaypointStart       uint32 = 39 // SMART_EVENT_WAYPOINT_START (SmartScriptMgr.h:138), var0 = node id, var1 = path id
+	smartEventWaypointReached     uint32 = 40 // SMART_EVENT_WAYPOINT_REACHED (SmartScriptMgr.h:139)
+	smartEventWaypointPaused      uint32 = 55 // SMART_EVENT_WAYPOINT_PAUSED (SmartScriptMgr.h:154)
+	smartEventWaypointResumed     uint32 = 56 // SMART_EVENT_WAYPOINT_RESUMED (SmartScriptMgr.h:155)
+	smartEventWaypointStopped     uint32 = 57 // SMART_EVENT_WAYPOINT_STOPPED (SmartScriptMgr.h:156)
+	smartEventWaypointEnded       uint32 = 58 // SMART_EVENT_WAYPOINT_ENDED (SmartScriptMgr.h:157)
 	smartEventUpdate              uint32 = 60
 	smartEventLink                uint32 = 61
 	smartEventJustCreated         uint32 = 63
@@ -119,9 +129,13 @@ const (
 // SET_INGAME_PHASE_MASK (42 rows, 36 live), 46 ATTACK_STOP (8)
 // and 51 KILL_UNIT (47 rows, 35 live) are ported below. 50
 // SUMMON_GO (226 rows, 174 live) and 52 ACTIVATE_TAXI (1 row)
-// are ported below. The next unported block is 53 WP_START
-// (930 live rows) / 54 WP_PAUSE (674) / 55 WP_STOP (12) — no
-// SmartAI StartPath/PausePath/StopPath twin in Go.
+// are ported below. 53 WP_START (930 live rows) / 54 WP_PAUSE
+// (674) / 55 WP_STOP (12) are ported below with the SmartAI
+// StartPath/PausePath/StopPath escort machine (waypoints-table
+// paths, WAYPOINT_* events, UpdatePath/UpdateDespawn ticks). The
+// next unported block is 56 ADD_ITEM / 57 REMOVE_ITEM / 58
+// INSTALL_AI_TEMPLATE / 59 SET_RUN / 60 SET_DISABLE_GRAVITY / 61
+// SET_SWIM / 62 TELEPORT / 63 SET_COUNTER.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -171,6 +185,9 @@ const (
 	smartActionSummonGO                       uint32 = 50
 	smartActionKillUnit                       uint32 = 51
 	smartActionActivateTaxi                   uint32 = 52
+	smartActionWPStart                        uint32 = 53
+	smartActionWPPause                        uint32 = 54
+	smartActionWPStop                         uint32 = 55
 	smartActionStoreTargetList                uint32 = 64
 	smartActionCreateTimedEvent               uint32 = 67
 	smartActionTriggerTimedEvent              uint32 = 73
@@ -187,6 +204,21 @@ const (
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
 )
+
+// SMART_ESCORT_* state flags (SmartAI.h:30-33) and SMART_ESCORT_TARGETS
+// (SmartScriptMgr.h:38), the stored-target-list id WP_START banks the
+// escort invoker under. SMART_ESCORT_MAX_PLAYER_DIST (SmartAI.h:36) is
+// the invoker range check, doubled on instance maps.
+const (
+	smartEscortNone      uint32 = 0x00
+	smartEscortEscorting uint32 = 0x01
+	smartEscortReturning uint32 = 0x02
+	smartEscortPaused    uint32 = 0x04
+)
+
+const smartEscortTargets uint32 = 0xFFFFFF
+
+const smartEscortMaxPlayerDist float32 = 60
 
 // SMART_TARGET ids (SmartScriptMgr.h:1221-1253), AGGRO-used set. Target 8
 // (POSITION) resolves to no unit — GetTargets returns nothing for it
@@ -345,6 +377,41 @@ type smartScriptState struct {
 	followArrivedEntry uint32
 	followCreditType   uint32
 	followArrivedTimer uint32
+	// SmartAI escort state (SmartAI.h:250-278): _escortState / _path /
+	// _currentWaypointNode / _waypointPauseTimer / _waypointPauseForced /
+	// _repeatWaypointPath / _waypointPathEnded / _despawnState /
+	// _escortQuestId / _escortNPCFlags / _run /
+	// _escortInvokerCheckTimer, armed by SMART_ACTION_WP_START (53)
+	// and ticked by smartUpdatePath / smartUpdateDespawn
+	// (SmartAI::UpdatePath / UpdateDespawn). escortPath is the loaded
+	// `waypoints`-table path (SmartWaypointMgr twin); escortPathID is
+	// the script's path id (GetScript()->GetPathId()).
+	// savedPathID / savedPoints / savedNextIdx / savedOneShot bank the
+	// creature's pre-escort patrol slot: C++ keeps the escort path in
+	// SmartAI::_path apart from the creature's default waypoint path,
+	// while Go has one motion path slot, so the patrol id is parked
+	// here and re-seated by EndPath; the creature idles after the
+	// escort, like C++'s MoveIdle, instead of resuming the patrol at
+	// once (the evade/respawn legs reload it from the path id).
+	escortState             uint32
+	escortPathID            uint32
+	escortPath              []waypointPoint
+	escortNode              uint32
+	escortRepeat            bool
+	escortRun               bool
+	escortPauseTimer        uint32
+	escortPauseForced       bool
+	escortWaypointReached   bool
+	escortPathEnded         bool
+	escortDespawnTime       uint32 // ms (SmartAI.h _despawnTime)
+	escortDespawnState      uint32
+	escortQuestID           uint32
+	escortNPCFlags          uint32
+	escortInvokerCheckTimer uint32
+	savedPathID             uint32
+	savedPoints             []waypointPoint
+	savedNextIdx            int
+	savedOneShot            bool
 }
 
 // loadSmartScripts loads the creature-source smart_scripts rows into the
@@ -741,6 +808,18 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 			return
 		}
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
+	case smartEventWaypointStart, smartEventWaypointReached,
+		smartEventWaypointResumed, smartEventWaypointPaused,
+		smartEventWaypointStopped, smartEventWaypointEnded:
+		// SMART_EVENT_WAYPOINT_* (SmartScript.cpp:3228-3238): the event
+		// fires only for its (pointID, pathID) pair, 0 = any.
+		if ev.row.eventParam1 != 0 && ev.row.eventParam1 != var0 {
+			return
+		}
+		if ev.row.eventParam2 != 0 && ev.row.eventParam2 != var1 {
+			return
+		}
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
 		smartEventAIInit, smartEventJustCreated,
@@ -857,7 +936,11 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 	}
 	// SmartAI::UpdateAI (SmartAI.cpp:300) runs UpdateFollow after
 	// OnUpdate: the arrival check ticks here, on the same diff.
+	// UpdatePath runs ahead of it and UpdateDespawn after it, the
+	// C++ UpdateAI order (SmartAI.cpp:284-303).
+	s.smartUpdatePath(ctx, motion, st, diff)
 	s.smartUpdateFollow(ctx, motion, st, diff)
+	s.smartUpdateDespawn(ctx, motion, st, diff)
 }
 
 // smartCreateTimedEvent is the SMART_ACTION_CREATE_TIMED_EVENT arm
@@ -1252,6 +1335,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSummonGO(ctx, motion, st, ev, invokerGUID)
 	case smartActionActivateTaxi:
 		s.smartActionActivateTaxi(ctx, motion, st, ev, invokerGUID)
+	case smartActionWPStart:
+		s.smartActionWPStart(ctx, motion, st, ev, invokerGUID)
+	case smartActionWPPause:
+		s.smartActionWPPause(ctx, motion, st, ev, invokerGUID)
+	case smartActionWPStop:
+		s.smartActionWPStop(ctx, motion, st, ev, invokerGUID)
 	case smartActionRemoveAurasFromSpell:
 		s.smartActionRemoveAuras(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetInstData:
@@ -2452,6 +2541,602 @@ func (s *Server) smartStopFollow(ctx context.Context, motion *creatureMotion, st
 // instance). Deviation: C++ ticks UpdateFollow through evade;
 // Go's smartUpdateTimers returns early while Evading, so the
 // arrival check pauses during an evade-home walk.
+// loadSmartWaypoints is the SmartWaypointMgr::LoadSmartWaypoints twin
+// (SmartScriptMgr.cpp): the `waypoints`-table rows for one path id,
+// ordered by pointid — the WORLD_SEL_SMARTAI_WP statement's rows
+// filtered to the entry. This is NOT waypoint_data (loadWaypoints):
+// that table keys creature patrol paths by id, while `waypoints` keys
+// SmartAI escort paths by entry. A missing table or empty path loads
+// nothing, matching C++'s failed GetPath.
+func (s *Server) loadSmartWaypoints(ctx context.Context, entry uint32) []waypointPoint {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || entry == 0 {
+		return nil
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT pointid, position_x, position_y, position_z, orientation, delay FROM waypoints WHERE entry = ? ORDER BY pointid`, entry)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var points []waypointPoint
+	for rows.Next() {
+		var p waypointPoint
+		var x, y, z, orientation float64
+		var point, delay int64
+		if err := rows.Scan(&point, &x, &y, &z, &orientation, &delay); err != nil {
+			continue
+		}
+		p.Point, p.X, p.Y, p.Z, p.Orientation, p.Delay = uint32(point), float32(x), float32(y), float32(z), float32(orientation), uint32(delay)
+		points = append(points, p)
+	}
+	return points
+}
+
+// smartLoadPath is SmartAI::LoadPath (SmartAI.cpp:78-101): the escort
+// path for entry loads from the `waypoints` table; a load while
+// escorting fails, and an empty path clears the script path id and
+// fails. Nodes take the run/walk move type from the current _run
+// (SetRun re-applies it to a loaded path). Coordinate normalization
+// (Trinity::NormalizeMapCoord) has no Go twin — the DB rows load raw.
+func (s *Server) smartLoadPath(ctx context.Context, st *smartScriptState, entry uint32) bool {
+	if st == nil || st.escortState&smartEscortEscorting != 0 {
+		return false
+	}
+	points := s.loadSmartWaypoints(ctx, entry)
+	if len(points) == 0 {
+		st.escortPathID = 0
+		return false
+	}
+	moveType := uint32(0)
+	if st.escortRun {
+		moveType = 1
+	}
+	for i := range points {
+		points[i].MoveType = moveType
+	}
+	st.escortPathID = entry
+	st.escortPath = points
+	return true
+}
+
+// smartSetRun is SmartAI::SetRun (SmartAI.cpp:730-736): the _run flag
+// plus the move type on every loaded escort node, live motion points
+// included. The walk flag itself (me->SetWalk) has no Go slot — the
+// stepper reads the node move type.
+func (s *Server) smartSetRun(motion *creatureMotion, st *smartScriptState, run bool) {
+	if st == nil {
+		return
+	}
+	st.escortRun = run
+	moveType := uint32(0)
+	if run {
+		moveType = 1
+	}
+	for i := range st.escortPath {
+		st.escortPath[i].MoveType = moveType
+	}
+	if motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	if motion.PathID == st.escortPathID {
+		for i := range motion.Points {
+			motion.Points[i].MoveType = moveType
+		}
+	}
+	s.motionMu.Unlock()
+}
+
+// smartSetDespawnTime is SmartAI::SetDespawnTime (SmartAI.h:205-209):
+// the despawn timer in ms plus the state (1 = armed, 0 = none).
+func (s *Server) smartSetDespawnTime(st *smartScriptState, t uint32) {
+	if st == nil {
+		return
+	}
+	st.escortDespawnTime = t
+	if t != 0 {
+		st.escortDespawnState = 1
+	} else {
+		st.escortDespawnState = 0
+	}
+}
+
+// smartStartDespawn is SmartAI::StartDespawn (SmartAI.h:210-213).
+func (s *Server) smartStartDespawn(st *smartScriptState) {
+	if st == nil {
+		return
+	}
+	st.escortDespawnState = 2
+}
+
+// smartStartPath is SmartAI::StartPath (SmartAI.cpp:45-76): an
+// escorting creature stops its current path first; a nonzero path id
+// loads (failure returns), a zero id reuses the loaded path, and an
+// empty path returns. The escort restarts at node 1, repeats per the
+// flag, and replaces the escort state outright (not AddEscortState).
+// A player invoker stashes the creature's NPC flags and clears them
+// (restored by EndPath). The path installs on the motion's waypoint
+// slot with the startCreaturePath 1s hold; the pre-escort patrol slot
+// is banked in the state (see the escortPath field note). The invoker
+// check runs on the C++ ctor's 1000ms cadence.
+func (s *Server) smartStartPath(ctx context.Context, motion *creatureMotion, st *smartScriptState, run bool, pathID uint32, repeat bool, invokerGUID uint64) {
+	if motion == nil || st == nil {
+		return
+	}
+	if st.escortState&smartEscortEscorting != 0 {
+		s.smartStopPath(ctx, motion, st, 0, 0, false)
+	}
+	s.smartSetRun(motion, st, run)
+	if pathID != 0 {
+		if !s.smartLoadPath(ctx, st, pathID) {
+			return
+		}
+	}
+	if len(st.escortPath) == 0 {
+		return
+	}
+	st.escortNode = 1
+	st.escortPathEnded = false
+	st.escortRepeat = repeat
+	st.escortState = smartEscortEscorting
+	st.escortInvokerCheckTimer = 1000
+	if invokerGUID != 0 && s.smartIsPlayerGUID(invokerGUID) {
+		s.motionMu.Lock()
+		st.escortNPCFlags = motion.NPCFlags
+		motion.NPCFlags = 0
+		motion.NPCFlagsKnown = true
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCFlags: 0})
+	}
+	points := make([]waypointPoint, len(st.escortPath))
+	copy(points, st.escortPath)
+	s.motionMu.Lock()
+	if motion.MoveType != 2 || motion.PathID != st.escortPathID {
+		st.savedPathID, st.savedPoints, st.savedNextIdx, st.savedOneShot = motion.PathID, motion.Points, motion.NextIdx, motion.PathOneShot
+	}
+	motion.PathID = st.escortPathID
+	motion.Points = points
+	motion.NextIdx = 0
+	motion.PathOneShot = !repeat
+	motion.PathStarted = false
+	motion.MoveType = 2
+	motion.WaitUntil = time.Now().Add(time.Second)
+	s.motionMu.Unlock()
+}
+
+// smartPausePath is SmartAI::PausePath (SmartAI.cpp:103-136). Off an
+// escort it is a timed motion hold (me->PauseMovement(delay, ...)):
+// the motion waits out the delay, and a live waypoint generator fires
+// WAYPOINT_PAUSED with the current waypoint info. On an escort an
+// already-paused path ignores the call (C++ logs it); otherwise the
+// pause timer is set and a forced pause holds the motion (the
+// motion.EscortPaused launch gate is the PauseMovement() twin),
+// refreshes the run flag and re-homes the creature, while an
+// unforced pause waits for the next node arrival to latch
+// (_waypointReached). Either way the PAUSED state sets and
+// WAYPOINT_PAUSED fires with the current node and path id.
+func (s *Server) smartPausePath(ctx context.Context, motion *creatureMotion, st *smartScriptState, delay uint32, forced bool) {
+	if motion == nil || st == nil {
+		return
+	}
+	if st.escortState&smartEscortEscorting == 0 {
+		s.motionMu.Lock()
+		motion.WaitUntil = time.Now().Add(time.Duration(delay) * time.Millisecond)
+		waypoint := motion.MoveType == 2 && len(motion.Points) > 0
+		node, pathID := motion.LastWaypointID, motion.PathID
+		s.motionMu.Unlock()
+		if waypoint {
+			s.smartProcessEvents(ctx, motion, smartEventWaypointPaused, 0, node, pathID)
+		}
+		return
+	}
+	if st.escortState&smartEscortPaused != 0 {
+		return
+	}
+	st.escortPauseTimer = delay
+	if forced {
+		st.escortPauseForced = true
+		s.smartSetRun(motion, st, st.escortRun)
+		s.motionMu.Lock()
+		motion.EscortPaused = true
+		motion.HomeX, motion.HomeY, motion.HomeZ = motion.X, motion.Y, motion.Z
+		motion.HomeO = motion.Orientation
+		s.motionMu.Unlock()
+	} else {
+		st.escortWaypointReached = false
+	}
+	st.escortState |= smartEscortPaused
+	s.smartProcessEvents(ctx, motion, smartEventWaypointPaused, 0, st.escortNode, st.escortPathID)
+}
+
+// smartStopPath is SmartAI::StopPath (SmartAI.cpp:149-184). Off an
+// escort it idles the motion (MoveIdle), fires WAYPOINT_STOPPED with
+// the current waypoint info when on a waypoint generator, then
+// WAYPOINT_ENDED on a clean stop and starts the despawn when armed.
+// On an escort it keeps the escort quest id when none is passed,
+// arms the despawn time (a zero time clears the armed state — the
+// C++ StopPath() default, so a natural path end never despawns),
+// idles the motion, fires WAYPOINT_STOPPED and runs EndPath.
+func (s *Server) smartStopPath(ctx context.Context, motion *creatureMotion, st *smartScriptState, despawnTime, quest uint32, fail bool) {
+	if motion == nil || st == nil {
+		return
+	}
+	if st.escortState&smartEscortEscorting == 0 {
+		s.motionMu.Lock()
+		waypoint := motion.MoveType == 2 && len(motion.Points) > 0
+		node, pathID := motion.LastWaypointID, motion.PathID
+		motion.MoveType = 0
+		motion.Points = nil
+		motion.NextIdx = 0
+		motion.PathStarted = false
+		s.motionMu.Unlock()
+		if st.escortDespawnState != 2 {
+			s.smartSetDespawnTime(st, despawnTime)
+		}
+		if waypoint && node != 0 {
+			s.smartProcessEvents(ctx, motion, smartEventWaypointStopped, 0, node, pathID)
+		}
+		if !fail {
+			if waypoint && node != 0 {
+				s.smartProcessEvents(ctx, motion, smartEventWaypointEnded, 0, node, pathID)
+			}
+			if st.escortDespawnState == 1 {
+				s.smartStartDespawn(st)
+			}
+		}
+		return
+	}
+	if quest != 0 {
+		st.escortQuestID = quest
+	}
+	if st.escortDespawnState != 2 {
+		s.smartSetDespawnTime(st, despawnTime)
+	}
+	s.motionMu.Lock()
+	motion.MoveType = 0
+	motion.Points = nil
+	motion.NextIdx = 0
+	motion.PathStarted = false
+	s.motionMu.Unlock()
+	s.smartProcessEvents(ctx, motion, smartEventWaypointStopped, 0, st.escortNode, st.escortPathID)
+	s.smartEndPath(ctx, motion, st, fail)
+}
+
+// smartResumePath is SmartAI::ResumePath (SmartAI.cpp:260-273): the
+// WAYPOINT_RESUMED event fires, the PAUSED state clears, the pause
+// latch and timer clear, the run flag refreshes and the motion
+// resumes. No SMART_ACTION_WP_RESUME (65) dispatch yet — this is the
+// pause-timer tick's resume arm.
+func (s *Server) smartResumePath(ctx context.Context, motion *creatureMotion, st *smartScriptState) {
+	if motion == nil || st == nil {
+		return
+	}
+	s.smartProcessEvents(ctx, motion, smartEventWaypointResumed, 0, st.escortNode, st.escortPathID)
+	st.escortState &^= smartEscortPaused
+	st.escortPauseForced = false
+	st.escortWaypointReached = false
+	st.escortPauseTimer = 0
+	s.smartSetRun(motion, st, st.escortRun)
+	s.motionMu.Lock()
+	motion.EscortPaused = false
+	s.motionMu.Unlock()
+}
+
+// smartEscortRewardInRange is the Player::IsAtGroupRewardDistance
+// gate (Player.cpp:24160-24173) the EndPath quest legs share: same
+// map and instance, corpse-anchored, dungeons always, else within
+// MaxGroupXPDistance of the creature.
+func (s *Server) smartEscortRewardInRange(motion *creatureMotion, sess *session) bool {
+	if motion == nil || sess == nil || sess.player == nil {
+		return false
+	}
+	if sess.player.Map != motion.Map || sess.player.InstanceID != motion.InstanceID {
+		return false
+	}
+	if sess.isDeadOrGhost() && sess.player.hasCorpse {
+		return false
+	}
+	return dungeonMapID(s, motion.Map) || raidMapID(s, motion.Map) || distance3D(sess.player.X, sess.player.Y, sess.player.Z, motion.X, motion.Y, motion.Z) <= s.Config.MaxGroupXPDistance
+}
+
+// smartEndPath is SmartAI::EndPath (SmartAI.cpp:186-247): the escort
+// states clear, the loaded path drops, the pause timer clears, the
+// stashed NPC flags restore, and the patrol path id re-seats (the
+// creature idles — the motion slot is empty — until an evade/respawn
+// leg reloads it). A stored escort target takes the quest credit
+// (GroupEventHappens, or FailQuest on failure, fanned out to the
+// group like smartActionCallGroupEventHappens); the multi-target leg
+// credits each stored player in reward range instead. A failed stop
+// returns before WAYPOINT_ENDED; a clean stop fires it, then a
+// repeating path restarts (when still AI-controlled) or the script
+// path id clears, and an armed despawn starts.
+func (s *Server) smartEndPath(ctx context.Context, motion *creatureMotion, st *smartScriptState, fail bool) {
+	if motion == nil || st == nil {
+		return
+	}
+	st.escortState &^= smartEscortEscorting | smartEscortPaused | smartEscortReturning
+	st.escortPath = nil
+	st.escortPauseTimer = 0
+	restoredFlags := uint32(0)
+	restored := false
+	s.motionMu.Lock()
+	if st.escortNPCFlags != 0 {
+		motion.NPCFlags = st.escortNPCFlags
+		motion.NPCFlagsKnown = true
+		restoredFlags = st.escortNPCFlags
+		st.escortNPCFlags = 0
+		restored = true
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	motion.PathID = st.savedPathID
+	motion.EscortPaused = false
+	st.savedPathID, st.savedPoints, st.savedNextIdx, st.savedOneShot = 0, nil, 0, false
+	s.motionMu.Unlock()
+	if restored {
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCFlags: restoredFlags})
+	}
+	targets := st.storedTargets[smartEscortTargets]
+	questID := st.escortQuestID
+	if len(targets) > 0 && questID != 0 {
+		if len(targets) == 1 && s.smartIsPlayerGUID(targets[0]) {
+			if sess := s.findSessionByGUID(targets[0]); sess != nil {
+				if fail {
+					sess.failQuest(ctx, questID)
+					if sess.groupID != 0 {
+						for _, m := range s.getGroupSessions(sess.groupID) {
+							if m == nil || m == sess || m.player == nil {
+								continue
+							}
+							if m.player.Map == motion.Map && m.player.InstanceID == motion.InstanceID {
+								m.failQuest(ctx, questID)
+							}
+						}
+					}
+				} else if s.smartEscortRewardInRange(motion, sess) {
+					// C++ gates the GroupEventHappens call itself
+					// on the caller's reward distance + corpse;
+					// Go's groupEventHappens only gates the group
+					// members, so the caller gate sits here.
+					sess.groupEventHappens(ctx, questID, s.luaMotionCreature(motion))
+				}
+			}
+		} else {
+			for _, guid := range targets {
+				if !s.smartIsPlayerGUID(guid) {
+					continue
+				}
+				sess := s.findSessionByGUID(guid)
+				if sess == nil || sess.player == nil {
+					continue
+				}
+				if fail {
+					sess.failQuest(ctx, questID)
+					continue
+				}
+				if s.smartEscortRewardInRange(motion, sess) {
+					sess.areaExploredOrEventHappens(ctx, questID)
+				}
+			}
+		}
+	}
+	if fail {
+		return
+	}
+	node, pathID := st.escortNode, st.escortPathID
+	s.smartProcessEvents(ctx, motion, smartEventWaypointEnded, 0, node, pathID)
+	if st.escortRepeat {
+		if motion.CharmerGUID == 0 {
+			s.smartStartPath(ctx, motion, st, st.escortRun, pathID, st.escortRepeat, 0)
+		}
+	} else {
+		st.escortPathID = 0
+	}
+	if st.escortDespawnState == 1 {
+		s.smartStartDespawn(st)
+	}
+}
+
+// smartEscortInvokerInRange is SmartAI::IsEscortInvokerInRange
+// (SmartAI.cpp:313-349): no stored player invoker means no check; a
+// single stored player (or any group member) in range keeps the
+// escort alive; a multi-target list needs any stored player in range.
+// The check distance doubles on instance maps.
+func (s *Server) smartEscortInvokerInRange(motion *creatureMotion, st *smartScriptState) bool {
+	if st == nil {
+		return true
+	}
+	targets := st.storedTargets[smartEscortTargets]
+	if len(targets) == 0 {
+		return true
+	}
+	checkDist := smartEscortMaxPlayerDist
+	if dungeonMapID(s, motion.Map) || raidMapID(s, motion.Map) {
+		checkDist *= 2
+	}
+	inRange := func(guid uint64) bool {
+		sess := s.findSessionByGUID(guid)
+		if sess == nil || sess.player == nil {
+			return false
+		}
+		return sess.player.Map == motion.Map && sess.player.InstanceID == motion.InstanceID && distance3D(sess.player.X, sess.player.Y, sess.player.Z, motion.X, motion.Y, motion.Z) <= float64(checkDist)
+	}
+	if len(targets) == 1 && s.smartIsPlayerGUID(targets[0]) {
+		if inRange(targets[0]) {
+			return true
+		}
+		if sess := s.findSessionByGUID(targets[0]); sess != nil && sess.groupID != 0 {
+			_, party, raid, _ := groupMembershipSnapshot(s, sess.groupID, targets[0])
+			for guid := range party {
+				if inRange(guid) {
+					return true
+				}
+			}
+			for guid := range raid {
+				if inRange(guid) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, guid := range targets {
+		if s.smartIsPlayerGUID(guid) && inRange(guid) {
+			return true
+		}
+	}
+	return false
+}
+
+// smartWaypointReached is SmartAI::WaypointReached (SmartAI.cpp:359-394),
+// fired from waypointNodeArrival: WAYPOINT_REACHED fires for every
+// SmartAI creature arriving at a waypoint node (patrol or escort),
+// with the DB point id and path id. On an escort path the current node
+// latches first; a pending unforced pause latches _waypointReached and
+// holds the motion (PauseMovement + SetHomePosition), else a reached
+// last node ends the path — C++ compares the node id against the node
+// COUNT (SmartAI.cpp:377-380), so only contiguous 1-based point ids
+// ever end the path this way, mirrored literally. A forced pause holds
+// the motion across the arrival: the arrival's node-delay write would
+// otherwise release it.
+func (s *Server) smartWaypointReached(ctx context.Context, motion *creatureMotion, nodeID, pathID uint32) {
+	if motion == nil {
+		return
+	}
+	st := s.smartStateFor(ctx, motion)
+	if st == nil {
+		return
+	}
+	escorting := st.escortState&smartEscortEscorting != 0 && motion.PathID == st.escortPathID && len(st.escortPath) > 0
+	if escorting {
+		st.escortNode = nodeID
+	}
+	s.smartProcessEvents(ctx, motion, smartEventWaypointReached, 0, nodeID, pathID)
+	if !escorting {
+		return
+	}
+	if st.escortPauseTimer != 0 && !st.escortPauseForced {
+		st.escortWaypointReached = true
+		s.motionMu.Lock()
+		motion.EscortPaused = true
+		motion.HomeX, motion.HomeY, motion.HomeZ = motion.X, motion.Y, motion.Z
+		motion.HomeO = motion.Orientation
+		s.motionMu.Unlock()
+	} else if nodeID == uint32(len(st.escortPath)) {
+		st.escortPathEnded = true
+	}
+	if st.escortState&smartEscortPaused != 0 && st.escortPauseForced {
+		s.motionMu.Lock()
+		motion.EscortPaused = true
+		s.motionMu.Unlock()
+	}
+}
+
+// smartUpdatePath is SmartAI::UpdatePath (SmartAI.cpp:919-963): the
+// invoker range check runs every second — out of range stops the path
+// as failed, fires DEATH (the out-of-range despawn hook) and despawns
+// — then the pause leg (resume only off a set timer, out of combat,
+// not returning) and the path-ended leg (StopPath with defaults). The
+// vehicle-conditions leg and the RETURNING / ReturnToLastOOCPos leg
+// stay out: no Go vehicle-conditions engine, no OOC-return machine.
+func (s *Server) smartUpdatePath(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
+	if st == nil || motion == nil || st.escortState&smartEscortEscorting == 0 {
+		return
+	}
+	if st.escortInvokerCheckTimer < diff {
+		if !s.smartEscortInvokerInRange(motion, st) {
+			s.smartStopPath(ctx, motion, st, 0, st.escortQuestID, true)
+			s.smartProcessEvents(ctx, motion, smartEventDeath, motion.GUID, 0, 0)
+			s.despawnCreatureMotion(ctx, motion.Map, motion.InstanceID, motion.GUID)
+			return
+		}
+		st.escortInvokerCheckTimer = 1000
+	} else {
+		st.escortInvokerCheckTimer -= diff
+	}
+	if st.escortState&smartEscortPaused != 0 && (st.escortWaypointReached || st.escortPauseForced) {
+		if st.escortPauseTimer != 0 && !motion.InCombat && st.escortState&smartEscortReturning == 0 {
+			if st.escortPauseTimer <= diff {
+				s.smartResumePath(ctx, motion, st)
+			} else {
+				st.escortPauseTimer -= diff
+			}
+		}
+	} else if st.escortPathEnded {
+		st.escortPathEnded = false
+		s.smartStopPath(ctx, motion, st, 0, 0, false)
+		return
+	}
+}
+
+// smartUpdateDespawn is SmartAI::UpdateDespawn (SmartAI.cpp:987-1002):
+// state 1 (armed) never ticks — StartDespawn moves it to 2 — state 2
+// hides the creature after the despawn time, then 5s later state 3
+// despawns it. The hide leg uses motion.ScriptHidden (visible to GM
+// seers only); C++ SetVisible(false) hides from everyone.
+func (s *Server) smartUpdateDespawn(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
+	if st == nil || motion == nil || st.escortDespawnState <= 1 || st.escortDespawnState > 3 {
+		return
+	}
+	if st.escortDespawnTime < diff {
+		if st.escortDespawnState == 2 {
+			s.motionMu.Lock()
+			motion.ScriptHidden = true
+			s.motionMu.Unlock()
+			st.escortDespawnTime = 5000
+			st.escortDespawnState++
+		} else {
+			s.despawnCreatureMotion(ctx, motion.Map, motion.InstanceID, motion.GUID)
+		}
+	} else {
+		st.escortDespawnTime -= diff
+	}
+}
+
+// smartActionWPStart is SMART_ACTION_WP_START (SmartScript.cpp:1409-1435):
+// run/pathID/repeat/quest/despawnTime/reactState are action params
+// 1-6. Any player among the action targets banks the WHOLE target list
+// under SMART_ESCORT_TARGETS; the react state, path start (invoker =
+// the event invoker, for the player NPC-flags stash), escort quest
+// and despawn time all act on the script owner. TDB 26091: 930 live
+// rows.
+func (s *Server) smartActionWPStart(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
+	for _, tgt := range targets {
+		if tgt.isPlayer {
+			if st.storedTargets == nil {
+				st.storedTargets = make(map[uint32][]uint64)
+			}
+			guids := make([]uint64, 0, len(targets))
+			for _, t := range targets {
+				guids = append(guids, t.guid)
+			}
+			st.storedTargets[smartEscortTargets] = guids
+			break
+		}
+	}
+	s.motionMu.Lock()
+	motion.ReactState = uint8(ev.row.actionParam6)
+	motion.ReactStateKnown = true
+	s.motionMu.Unlock()
+	s.smartStartPath(ctx, motion, st, ev.row.actionParam1 != 0, ev.row.actionParam2, ev.row.actionParam3 != 0, invokerGUID)
+	st.escortQuestID = ev.row.actionParam4
+	s.smartSetDespawnTime(st, ev.row.actionParam5)
+}
+
+// smartActionWPPause is SMART_ACTION_WP_PAUSE (SmartScript.cpp:1436-1444):
+// the delay is action param 1, always forced (PausePath(delay, true)).
+// TDB 26091: 674 live rows.
+func (s *Server) smartActionWPPause(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	s.smartPausePath(ctx, motion, st, ev.row.actionParam1, true)
+}
+
+// smartActionWPStop is SMART_ACTION_WP_STOP (SmartScript.cpp:1445-1455):
+// despawnTime/quest/fail are action params 1-3. TDB 26091: 12 live
+// rows.
+func (s *Server) smartActionWPStop(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	s.smartStopPath(ctx, motion, st, ev.row.actionParam1, ev.row.actionParam2, ev.row.actionParam3 != 0)
+}
+
 func (s *Server) smartUpdateFollow(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
 	if st.followGUID == 0 {
 		return

@@ -6328,6 +6328,11 @@ func (s *Server) waypointNodeArrival(ctx context.Context, motion *creatureMotion
 	if point.Delay > 0 {
 		motion.WaitUntil = at.Add(time.Duration(point.Delay) * time.Millisecond)
 	}
+	// SmartAI::WaypointReached (SmartAI.cpp:359-394): the escort
+	// machine's arrival hook — WAYPOINT_REACHED fires for every
+	// SmartAI creature here, patrol or escort (see
+	// smartWaypointReached); the Lua event above already fired.
+	s.smartWaypointReached(ctx, motion, point.Point, motion.PathID)
 }
 
 // stepCreatureRegen runs the Creature::Update regen arm (Creature.cpp:887-921):
