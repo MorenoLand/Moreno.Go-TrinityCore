@@ -251,7 +251,8 @@ type Server struct {
 	bgTemplates               map[uint32]*bgTemplate // _battlegroundTemplates by type id (battleground_mgr.go), guarded by bgTemplatesMu
 	bgTemplatesLoaded         bool
 	smartScriptsMu            sync.RWMutex
-	smartScripts              map[uint32][]*smartScriptRow // smart_scripts creature-source rows by entry, guarded by smartScriptsMu (smart_ai.go)
+	smartScripts              map[int32][]*smartScriptRow    // smart_scripts creature-source rows by entryOrGuid, guarded by smartScriptsMu (smart_ai.go)
+	smartConditions           map[smartConditionKey]struct{} // conditions SourceType-22 (entry, id) skip-set, guarded by smartScriptsMu (smart_ai.go)
 	smartScriptsLoaded        bool
 	arenaMu                   sync.RWMutex
 	arenaState                map[uint64]*arenaBattlegroundState

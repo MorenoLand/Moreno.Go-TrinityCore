@@ -1557,7 +1557,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		}
 		if !ccHoldAttacks {
 			if motion.LastAttack.IsZero() || now.Sub(motion.LastAttack) >= attackTime {
-				s.executePetMeleeAttack(ctx, motion, owner.Sess, targetGUID, isTargetPlayer, targetSess, targetHealth, targetArmor, targetLevel, now)
+				s.executePetMeleeAttack(ctx, motion, owner.Sess, targetGUID, isTargetPlayer, targetSess, targetHealth, targetArmor, targetLevel, targetX, targetY, targetZ, now)
 				motion.LastAttack = now
 			}
 		}
@@ -1577,7 +1577,35 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 // executePetMeleeAttack conducts the pet's physical swing on the target.
 // owner is the pet owner's session (from the pet tick's owner lookup); it
 // runs the full death chain on a creature kill.
-func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMotion, owner *session, targetGUID uint64, isTargetPlayer bool, targetSess *session, targetHealth, targetArmor uint32, targetLevel uint8, now time.Time) {
+func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMotion, owner *session, targetGUID uint64, isTargetPlayer bool, targetSess *session, targetHealth, targetArmor uint32, targetLevel uint8, targetX, targetY, targetZ float32, now time.Time) {
+	// Unit::AttackerStateUpdate's head gate (Unit.cpp:2133-2140), the
+	// PetAI::UpdateAI -> DoMeleeAttackIfReady (UnitAI.cpp:61-83) twin of
+	// the wild-creature swing gate: a pacified pet, or one under
+	// UNIT_STATE_CANNOT_AUTOATTACK (Unit.h:253: CONTROLLED | CHARGING |
+	// CASTING), never swings, and a swing through a wall never fires.
+	// The flag alone misses aura-only pacifies: the creature aura
+	// pipeline never sets UNIT_FLAG_PACIFIED on MOD_PACIFY apply, so the
+	// live MOD_PACIFY (25) / MOD_PACIFY_SILENCE (60) aura arms carry the
+	// check, the creature-swing precedent. A blocked swing still stamps
+	// the interval — the caller sets LastAttack after this call returns
+	// (resetAttackTimer runs after AttackerStateUpdate returns,
+	// UnitAI.cpp:72-73).
+	pacified := motion.UnitFlags&unitFlagPacified != 0 ||
+		len(s.creatureCasterAuraEffectsByType(motion, spellAuraModPacify)) > 0 ||
+		len(s.creatureCasterAuraEffectsByType(motion, spellAuraModPacifySilence)) > 0
+	if pacified || s.creatureCannotAutoAttack(motion, now) || !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, targetX, targetY, targetZ) {
+		return
+	}
+	// Unit::AttackerStateUpdate (Unit.cpp:2147-2148): a creature turns
+	// to face its victim on every swing unless possessed or
+	// UNIT_FLAG2_DISABLE_TURN — the wild-creature swing arm, verbatim.
+	if motion.UnitFlags&unitFlagPossessed == 0 && motion.UnitFlags2&unitFlag2DisableTurn == 0 && (!motion.Moving || !now.Before(motion.MoveEnds)) {
+		faceAngle := float32(math.Atan2(float64(targetY-motion.Y), float64(targetX-motion.X)))
+		if faceAngle < 0 {
+			faceAngle += 2 * math.Pi
+		}
+		motion.Orientation = faceAngle
+	}
 	damage := uint32(float64(motion.MinDamage) + rand.Float64()*float64(motion.MaxDamage-motion.MinDamage))
 	if damage < 1 {
 		damage = 1

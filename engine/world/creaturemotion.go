@@ -1958,6 +1958,15 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		// event pre-arm ran inside the motion lock above.
 		s.castAggroConditionSpells(ctx, fireMotion, firePlayerGUID)
 		// SmartAI::JustEngagedWith (SmartAI.cpp:562-568) runs
+		// InterruptNonMeleeSpells(false) before ProcessEventsFor(
+		// SMART_EVENT_AGGRO, enemy); the interrupt twin
+		// (interruptCreatureNonMeleeCasts) runs here, after the motion
+		// lock, with its cancel packets on the death-state arm pattern
+		// (the unlocked call matches creaturemotion.go:4706).
+		for _, arm := range s.interruptCreatureNonMeleeCasts(fireMotion) {
+			s.sendCreatureInterruptPackets(fireMotion, arm)
+		}
+		// SmartAI::JustEngagedWith (SmartAI.cpp:562-568) runs
 		// ProcessEventsFor(SMART_EVENT_AGGRO, enemy); the SmartAI engine
 		// (smart_ai.go) dispatches it here, after the motion lock.
 		s.smartProcessEvents(ctx, fireMotion, smartEventAggro, firePlayerGUID, 0, 0)

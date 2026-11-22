@@ -2499,13 +2499,12 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		// (heirloom scaling — no Go model, documented no-bridge).
 		if state.Class == 11 && item.Class == itemClassWeapon && item.SubClass < 32 &&
 			(uint32(1)<<item.SubClass)&0x02A5F3 != 0 && item.Delay > 0 {
-			// ItemTemplate::getDPS (ItemTemplate.cpp:57-66) sums all five
-			// damage rows; getFeralBonus (ItemTemplate.cpp:68-78); the
-			// mask 0x02A5F3 is the melee-weapon ItemSubClassMask.dbc mask.
-			dps := item.MinDamage + item.MaxDamage
-			for i := 0; i < 4; i++ {
-				dps += item.ExtraMinDamage[i] + item.ExtraMaxDamage[i]
-			}
+			// ItemTemplate::getDPS (ItemTemplate.cpp:57-66) sums only
+			// MAX_ITEM_PROTO_DAMAGES = 2 rows (Damage[0..1]); getFeralBonus
+			// (ItemTemplate.cpp:68-78); the mask 0x02A5F3 is the
+			// melee-weapon ItemSubClassMask.dbc mask. ExtraMin/MaxDamage[0]
+			// is Damage[1] (dmg_min2); rows 3..5 are dead in C++.
+			dps := item.MinDamage + item.MaxDamage + item.ExtraMinDamage[0] + item.ExtraMaxDamage[0]
 			dps = dps * 500.0 / float64(item.Delay)
 			if bonus := int32(dps*14.0) - 767; bonus > 0 {
 				state.BaseFeralAP += uint32(bonus)
