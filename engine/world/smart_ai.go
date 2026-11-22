@@ -50,7 +50,8 @@
 // per-creature runtime state on the motion, and dispatches the direct events
 // (AGGRO, DEATH, DATA_SET, AI_INIT, JUST_CREATED, TEXT_OVER,
 // EVENT_PHASE_CHANGE) plus the timer events (UPDATE, UPDATE_IC, UPDATE_OOC,
-// HEALTH_PCT, TARGET_HEALTH_PCT, MANA_PCT, TARGET_MANA_PCT, RANGE) from the
+// HEALTH_PCT, TARGET_HEALTH_PCT, MANA_PCT, TARGET_MANA_PCT, RANGE,
+// HAS_AURA, TARGET_BUFFED) from the
 // creature tick. Action coverage is the AGGRO-used set (TDB 26091: 1,634
 // source_type-0 AGGRO rows over 1,426 entries): TALK, CAST, SET_FACTION,
 // PLAY_EMOTE, AUTO_ATTACK, SET_EVENT_PHASE, SET_INST_DATA (type 1),
@@ -133,6 +134,13 @@ const (
 	smartEventAcceptedQuest       uint32 = 19 // SMART_EVENT_ACCEPTED_QUEST (SmartScriptMgr.h:118), invoker = player, var0 = quest id
 	smartEventRewardQuest         uint32 = 20 // SMART_EVENT_REWARD_QUEST (SmartScriptMgr.h:119), invoker = player, var0 = quest id, var1 = reward choice
 	smartEventReceiveEmote        uint32 = 22 // SMART_EVENT_RECEIVE_EMOTE (SmartScriptMgr.h:121), invoker = player, var0 = text emote id
+	smartEventHasAura             uint32 = 23 // SMART_EVENT_HAS_AURA (SmartScriptMgr.h:122), Param1 = SpellID, Param2 = Stack amount, Param3/4 RepeatMin, RepeatMax
+	smartEventTargetBuffed        uint32 = 24 // SMART_EVENT_TARGET_BUFFED (SmartScriptMgr.h:123), same params as HAS_AURA
+	smartEventVictimCasting       uint32 = 13 // SMART_EVENT_VICTIM_CASTING (SmartScriptMgr.h:112), loader missing-repeat rule only, no dispatch arm
+	smartEventFriendlyHealth      uint32 = 14 // SMART_EVENT_FRIENDLY_HEALTH (SmartScriptMgr.h:113), loader missing-repeat rule only, no dispatch arm
+	smartEventFriendlyMissingBuff uint32 = 16 // SMART_EVENT_FRIENDLY_MISSING_BUFF (SmartScriptMgr.h:115), loader missing-repeat rule only, no dispatch arm
+	smartEventIsBehindTarget      uint32 = 67 // SMART_EVENT_IS_BEHIND_TARGET (SmartScriptMgr.h:166), loader missing-repeat rule only, no dispatch arm
+	smartEventFriendlyHealthPct   uint32 = 74 // SMART_EVENT_FRIENDLY_HEALTH_PCT (SmartScriptMgr.h:173), loader missing-repeat rule only, no dispatch arm
 	smartEventEnd                 uint32 = 83 // SMART_EVENT_END (SmartScriptMgr.h:183), loader rejects event types >= this
 )
 
@@ -625,6 +633,29 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 		if r.actionType <= 0 || r.actionType >= smartActionEnd {
 			continue
 		}
+		// SmartScriptMgr::LoadSmartAIFromDB (SmartScriptMgr.cpp:293-330):
+		// a timed event whose repeat window is 0/0 and which is not
+		// already NOT_REPEATABLE loads as NOT_REPEATABLE (timed-action-list
+		// rows exempt). TDB 26091: 2,600 src-0 rows sit on 0/0 across these
+		// types, all already flagged, so the rule is a no-op on this data
+		// — it guards custom DB rows, including the 34 zero-repeat HAS_AURA
+		// rows that would otherwise re-arm on timer 0 and fire every tick.
+		if r.sourceType != 9 && r.eventFlags&smartEventFlagNotRepeatable == 0 {
+			switch r.eventType {
+			case smartEventUpdate, smartEventUpdateIC, smartEventUpdateOOC,
+				smartEventHealthPct, smartEventTargetHealthPc, smartEventManaPct,
+				smartEventTargetManaPct, smartEventRange, smartEventFriendlyHealth,
+				smartEventFriendlyHealthPct, smartEventFriendlyMissingBuff,
+				smartEventHasAura, smartEventTargetBuffed:
+				if r.eventParam3 == 0 && r.eventParam4 == 0 {
+					r.eventFlags |= smartEventFlagNotRepeatable
+				}
+			case smartEventVictimCasting, smartEventIsBehindTarget:
+				if r.eventParam1 == 0 && r.eventParam2 == 0 {
+					r.eventFlags |= smartEventFlagNotRepeatable
+				}
+			}
+		}
 		r.targetX, r.targetY, r.targetZ, r.targetO = float32(tx), float32(ty), float32(tz), float32(to)
 		row := r
 		if row.sourceType == 9 {
@@ -884,6 +915,51 @@ func (s *Server) smartSpawnMode(invokerGUID uint64) uint32 {
 	return 0
 }
 
+// smartUnitAuraCount is Unit::GetAuraCount (Unit.cpp:4644-4656) for a
+// SmartAI target: the sum of stack amounts over every application of the
+// spell, an application with stack 0 counting 1. Player targets resolve
+// to their session's aura set (loadedAuras, castMu-guarded); creature
+// targets consult the server creature aura maps under auraMu. Standing
+// delta: Go keeps one activeAura per spell per unit, so multi-caster
+// applications of one spell collapse to a single entry and its stack
+// amount — C++ would sum each caster's application.
+func (s *Server) smartUnitAuraCount(m *creatureMotion, targetGUID uint64, spell uint32) uint32 {
+	if s == nil || m == nil || targetGUID == 0 || spell == 0 {
+		return 0
+	}
+	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		for _, aura := range targetSess.loadedAuras() {
+			if aura != nil && aura.SpellID == spell {
+				if aura.StackAmount != 0 {
+					return aura.StackAmount
+				}
+				return 1
+			}
+		}
+		if targetSess.hasAura(spell) {
+			return 1
+		}
+		return 0
+	}
+	target := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID)
+	if target == nil {
+		return 0
+	}
+	key := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: targetGUID}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	if aura := s.activeCreatureAuras[key][spell]; aura != nil {
+		if aura.StackAmount != 0 {
+			return aura.StackAmount
+		}
+		return 1
+	}
+	if _, found := s.creatureAuras[key][spell]; found {
+		return 1
+	}
+	return 0
+}
+
 // smartProcessEvent is SmartScript::ProcessEvent (:2882-...): the active,
 // phase-mask, NOT_REPEATABLE, WHILE_CHARMED and difficulty gates, then the
 // per-type dispatch — direct events run their action, timed events run
@@ -983,6 +1059,42 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		s.smartRecalcTimer(ev, 500, 500)
 		return
+	case smartEventHasAura, smartEventTargetBuffed:
+		// SMART_EVENT_HAS_AURA / TARGET_BUFFED (SmartScript.cpp:3024-3044):
+		// timed-condition events, polled from UpdateTimer — HAS_AURA reads
+		// the owner's aura count, TARGET_BUFFED the victim's. Param2 = 0
+		// fires only while the aura is ABSENT (HAS_AURA) / always while a
+		// victim exists (TARGET_BUFFED, count < 0 never true); param2 > 0
+		// fires once the count reaches it. Both re-arm on the repeat window
+		// (param3/4) via ProcessTimedAction; TARGET_BUFFED passes the victim
+		// as invoker, HAS_AURA passes none. TDB 26091: 23 = 113 src-0 rows
+		// (78 param2 0, 31 param2 1, 3 param2 2, 1 param2 8; 34 repeat 0/0),
+		// 24 = 2 src-0 rows (both param2 0, repeats 100/100, 7000/12000).
+		if motion == nil {
+			return
+		}
+		var targetGUID uint64
+		if ev.row.eventType == smartEventTargetBuffed {
+			if motion.TargetGUID == 0 {
+				return
+			}
+			victim := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.TargetGUID)
+			if victim == nil {
+				if victimSess := s.findSessionByGUID(motion.TargetGUID); victimSess == nil || victimSess.player == nil {
+					return
+				}
+			}
+			targetGUID = motion.TargetGUID
+			if s.smartUnitAuraCount(motion, targetGUID, ev.row.eventParam1) < ev.row.eventParam2 {
+				return
+			}
+		} else {
+			count := s.smartUnitAuraCount(motion, motion.GUID, ev.row.eventParam1)
+			if (ev.row.eventParam2 == 0 && count != 0) || (ev.row.eventParam2 != 0 && count < ev.row.eventParam2) {
+				return
+			}
+		}
+		s.smartProcessTimedAction(ctx, motion, st, ev, ev.row.eventParam3, ev.row.eventParam4, targetGUID, 0, 0)
 	case smartEventTimedEventTriggered:
 		// SMART_EVENT_TIMED_EVENT_TRIGGERED (SmartScript.cpp:3303-3307):
 		// the event fires only for its timed-event id, then runs its
@@ -1120,7 +1232,7 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, var1)
 	default:
 		// Timed/conditioned types with no Go condition evaluation
-		// (SPELLHIT, DAMAGED, FRIENDLY_*, HAS_AURA, ...) never fire from
+		// (SPELLHIT, DAMAGED, FRIENDLY_*, ...) never fire from
 		// the direct path; their timer arm re-arms in smartUpdateTimers.
 		return
 	}
@@ -1208,7 +1320,8 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 			switch ev.row.eventType {
 			case smartEventUpdate, smartEventUpdateOOC, smartEventUpdateIC,
 				smartEventHealthPct, smartEventTargetHealthPc, smartEventManaPct,
-				smartEventTargetManaPct, smartEventRange:
+				smartEventTargetManaPct, smartEventRange,
+				smartEventHasAura, smartEventTargetBuffed:
 				s.smartProcessEvent(ctx, motion, st, ev, 0, 0, 0)
 			}
 		} else {
