@@ -35,8 +35,12 @@
 // (0 rows) / 78 CALL_SCRIPT_RESET (50) / 79 SET_RANGED_MOVEMENT (9) are
 // ported below (the base-object override rebinds `me` for later actions,
 // the reset re-inits timers + fires RESET events, the ranged leg arms
-// the ScriptChase slot). The next unported block is 84 SIMPLE_TALK /
-// 85 SELF_CAST / 86 CROSS_CAST.
+// the ScriptChase slot). The 84 SIMPLE_TALK (4 live rows) / 85 SELF_CAST
+// (481) / 86 CROSS_CAST (127) are ported below with the VEHICLE_PASSENGER
+// (29) target arm. The 89 RANDOM_MOVE (131) / 90 SET_UNIT_FIELD_BYTES_1
+// (297) / 97 JUMP_TO_POS (12) are ported below. The next unported block
+// is 98 SEND_GOSSIP_MENU (14) / 99 GO_SET_LOOT_STATE (22) / 100
+// SEND_TARGET_TO_TARGET (155); 93/94/95/96 have zero TDB rows.
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -243,8 +247,11 @@ const (
 	smartActionCrossCast                      uint32 = 86
 	smartActionCallRandomTimedActionList      uint32 = 87
 	smartActionCallRandomRangeTimedActionList uint32 = 88
+	smartActionRandomMove                     uint32 = 89
+	smartActionSetUnitFieldBytes1             uint32 = 90
 	smartActionRemoveUnitFieldBytes1          uint32 = 91
 	smartActionInterruptSpell                 uint32 = 92
+	smartActionJumpToPos                      uint32 = 97
 	smartActionSetRoot                        uint32 = 103
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
@@ -1615,8 +1622,14 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionCallTimedActionList(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetNPCFlag, smartActionAddNPCFlag, smartActionRemoveNPCFlag:
 		s.smartActionNPCFlag(ctx, motion, st, ev, invokerGUID)
+	case smartActionRandomMove:
+		s.smartActionRandomMove(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetUnitFieldBytes1:
+		s.smartActionSetUnitFieldBytes1(ctx, motion, st, ev, invokerGUID)
 	case smartActionRemoveUnitFieldBytes1:
 		s.smartActionRemoveUnitFieldBytes1(ctx, motion, st, ev, invokerGUID)
+	case smartActionJumpToPos:
+		s.smartActionJumpToPos(ctx, motion, st, ev, invokerGUID)
 	default:
 		// Residual: the remaining AGGRO-row action (146) has no Go
 		// twin. 146 has no enum value in this C++ revision
@@ -4799,6 +4812,134 @@ func (s *Server) smartActionRemoveUnitFieldBytes1(ctx context.Context, motion *c
 		tm.StandState &^= uint8(ev.row.actionParam1)
 		tm.StandStateKnown = true
 		s.motionMu.Unlock()
+	}
+}
+
+// smartActionRandomMove is SMART_ACTION_RANDOM_MOVE (SmartScript.cpp:1818-1843):
+// param1 is the wander distance. Every creature target takes MoveRandom
+// (distance) or MoveIdle (distance 0); when no creature target resolves,
+// me takes it instead (the foundTarget fallback, :1836-1842). The random
+// leg is the Lua MoveRandom twin (lua_objects.go): one random point within
+// the distance of the creature's current position (RandomMovementGenerator
+// ::DoInitialize pins _reference to the owner's position, and SetRandomLocation
+// picks frand(0, distance) — the same uniform-radius pick), a single
+// movementGeneratorRandom spline, walk true (the template CanRun / AlwaysRun
+// walk arms have no Go model); the C++ persistent 2-10-step wander machine
+// with LOS retries and PathGenerator stays out. The idle leg is the Lua
+// MoveIdle twin (stopSessionCreatureMotion): halt at the current position
+// with the MonsterMoveStop broadcast, no combat / target / evade clearing
+// (C++ MoveIdle only swaps the default-slot generator). TDB 26091: 131
+// rows (76 src-0 + 55 src-9); 35 distance-0 rows take the idle leg.
+func (s *Server) smartActionRandomMove(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	distance := ev.row.actionParam1
+	foundCreature := false
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer || tgt.isGameObject {
+			continue
+		}
+		foundCreature = true
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.smartRandomMoveLeg(tm, distance)
+	}
+	if !foundCreature {
+		s.smartRandomMoveLeg(motion, distance)
+	}
+}
+
+// smartRandomMoveLeg is one target's RANDOM_MOVE arm: distance 0 halts,
+// anything else launches the one-shot random point.
+func (s *Server) smartRandomMoveLeg(tm *creatureMotion, distance uint32) {
+	if tm == nil {
+		return
+	}
+	if distance == 0 {
+		s.motionMu.Lock()
+		if !tm.Moving {
+			s.motionMu.Unlock()
+			return
+		}
+		mapID, instanceID, guid := tm.Map, tm.InstanceID, tm.GUID
+		phase := tm.PhaseMask
+		transportGUID := tm.TransportGUID
+		x, y, z := tm.X, tm.Y, tm.Z
+		tm.Moving = false
+		s.motionMu.Unlock()
+		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z, phase, transportGUID)
+		return
+	}
+	angle := rand.Float64() * 2 * math.Pi
+	dist := rand.Float64() * float64(distance)
+	s.motionMu.Lock()
+	fromX, fromY, fromZ := tm.X, tm.Y, tm.Z
+	s.motionMu.Unlock()
+	s.launchCreatureScriptSpline(tm, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom, 0, false)
+}
+
+// smartActionSetUnitFieldBytes1 is SMART_ACTION_SET_UNIT_FIELD_BYTES_1
+// (SmartScript.cpp:1844-1850): SetByteFlag(UNIT_FIELD_BYTES_1, type, byte1)
+// — param1 is the flag byte, param2 the byte offset. The flag ORs into the
+// byte (Object::SetByteFlag, Object.cpp:854-864); the Go twin is the same
+// OR onto motion.StandState for offset 0 (the Lua SetStandState stamp,
+// spawn-overlay applied). Live rows are near-uniformly offset 0: KNEEL 8
+// (210), SUBMERGED 9 (7), SIT 1 (25), SLEEP 3 (12), DEAD 7 (37) and the
+// small values 2/4/5; the uint8 truncation is the fidelity — the Bjorn
+// Halgurdsson hover row's param1 33554432 truncates to 0, a C++ no-op, and
+// the param1-0 row is likewise a no-op. The single offset-3 row (Razormaw,
+// anim-tier bit 2) stays out: Go has no stored anim-tier byte. Player
+// targets stay out on the REMOVE_UNIT_FIELD_BYTES_1 precedent (no live
+// player-targeted rows). TDB 26091: 297 rows (89 src-0 + 208 src-9).
+func (s *Server) smartActionSetUnitFieldBytes1(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if ev.row.actionParam2 != 0 {
+		return
+	}
+	flag := uint8(ev.row.actionParam1)
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tm.StandState |= flag
+		tm.StandStateKnown = true
+		s.motionMu.Unlock()
+	}
+}
+
+// smartMoveJumpEventID is EVENT_JUMP (SharedDefines.h:3343), the default
+// MoveJump inform id — the GenericMovementGenerator finalize informs
+// (EFFECT_MOTION_TYPE, EVENT_JUMP).
+const smartMoveJumpEventID uint32 = 1004
+
+// smartActionJumpToPos is SMART_ACTION_JUMP_TO_POS (SmartScript.cpp:1893-1899):
+// every creature target jumps to the row's target_x/y/z at speedXY param1
+// and speedZ param2 (MoveJump(x, y, z, 0.0f, speedxy, speedz) — orientation
+// 0, hasOrientation false). The launch is the Lua MoveJump twin
+// (launchCreatureJumpSpline, GenericMovementGenerator EFFECT_MOTION_TYPE 16):
+// speedXY < 0.01 launches nothing (MotionMaster.cpp:790), speedZ <= 0
+// degenerates to a flat arc (jumpParabolicParams), and the landing informs
+// (EFFECT_MOTION_TYPE, EVENT_JUMP) through the script-spline finalize gate.
+// The POSITION-target row (Haroka's Kitten) is a live C++ no-op — GetTargets
+// pushes nothing for SMART_TARGET_POSITION — and no-ops here the same way
+// (smartTargets returns nil). TDB 26091: 12 rows (9 src-0 + 3 src-9),
+// speedXY 15-109, speedZ 0-32.
+func (s *Server) smartActionJumpToPos(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	speedXY := float32(ev.row.actionParam1)
+	speedZ := float32(ev.row.actionParam2)
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer || tgt.isGameObject {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.launchCreatureJumpSpline(tm, ev.row.targetX, ev.row.targetY, ev.row.targetZ, speedXY, speedZ, smartMoveJumpEventID)
 	}
 }
 
