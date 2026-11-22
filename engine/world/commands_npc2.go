@@ -859,7 +859,7 @@ func (s *session) handleNPCSetEntry(ctx context.Context, args []string) bool {
 		s.sendSysMessage("Select a creature first.")
 		return true
 	}
-	if s.server == nil || !s.server.seatCreatureEntry(ctx, motion, entry) {
+	if s.server == nil || !s.server.seatCreatureEntry(ctx, motion, entry, true) {
 		s.sendSysMessage("Error.")
 		return true
 	}

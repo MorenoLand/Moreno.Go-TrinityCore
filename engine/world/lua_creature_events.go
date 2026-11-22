@@ -5987,7 +5987,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		ok := s.seatCreatureEntry(ctx, motion, newEntry)
+		ok := s.seatCreatureEntry(ctx, motion, newEntry, true)
 		return []any{ok}, nil
 	}
 	//
@@ -8236,7 +8236,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 // caller must hold no locks; the seating takes motionMu itself. Returns
 // false when the template is missing or defines no model (the C++
 // InitEntry false legs).
-func (s *Server) seatCreatureEntry(ctx context.Context, motion *creatureMotion, newEntry uint32) bool {
+func (s *Server) seatCreatureEntry(ctx context.Context, motion *creatureMotion, newEntry uint32, updateLevel bool) bool {
 	if s == nil || motion == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return false
 	}
@@ -8335,6 +8335,13 @@ func (s *Server) seatCreatureEntry(ctx context.Context, motion *creatureMotion, 
 		attackTime = 2000
 	}
 	motion.AttackTime = attackTime
+	// Creature::UpdateEntry(entry, data, updateLevel) (Creature.cpp:552):
+	// only SelectLevel is gated on updateLevel — with false the creature
+	// keeps its current level (SMART_ACTION_UPDATE_TEMPLATE rows all
+	// carry updateLevel=0).
+	if !updateLevel {
+		level = motion.Level
+	}
 	motion.Level = level
 	// UpdateLevelDependantStats + the previous-health preservation
 	// (Creature.cpp:597-600): the new max applies, the current health

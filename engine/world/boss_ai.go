@@ -178,6 +178,20 @@ func fireDealDamageAIHooks(ctx context.Context, s *Server, victim, attacker *cre
 	if attacker != nil && attacker.BossAI != nil {
 		attacker.BossAI.DamageDealt(ctx, s, attacker, victimGUID, damage)
 	}
+	// SmartAI::DamageTaken (SmartAI.cpp:626-636): after the DAMAGED event
+	// fire (which Go never dispatches — see the smartProcessEvent default
+	// arm), an AI-controlled creature's invincibility HP level clamps the
+	// damage to health - level. IsAIControlled is !_charmed
+	// (SmartAI.cpp:40-43); Go tracks charm as CharmerGUID. The level is
+	// set by SMART_ACTION_SET_INVINCIBILITY_HP_LEVEL on the victim's own
+	// SmartAI state; a nil state means no level was ever set. The uint32
+	// subtraction wraps exactly like C++ when health < level, so the
+	// clamp then correctly does not fire.
+	if damage != nil && victim != nil && victim.smart != nil && victim.CharmerGUID == 0 {
+		if level := victim.smart.invincibilityHPLevel; level != 0 && *damage >= victim.Health-level {
+			*damage = victim.Health - level
+		}
+	}
 }
 
 func getBossAIForCreature(motion *creatureMotion, scriptName string) BossAI {

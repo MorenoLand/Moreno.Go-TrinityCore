@@ -80,10 +80,11 @@ const (
 )
 
 // SMART_ACTION ids (SmartScriptMgr.h:457-600), AGGRO-used set. The
-// remaining AGGRO-row actions (43, 42, 146, 36, 41, 74, 133) hit
-// the default arm, matching C++'s "Unhandled Action type" log-and-skip
-// (SmartScript.cpp:2370-2372): no react-state, or template machinery
-// exists in Go to run them on.
+// remaining AGGRO-row actions (74, 146) hit the default arm: 74 needs
+// the unported timed-event store (67/73/74 + mStoredEvents, see the
+// dispatch default) and 146 has no enum value in this C++ revision
+// (SMART_ACTION_END = 140), so C++ log-and-skips it too
+// (SmartScript.cpp:2370-2372).
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -105,11 +106,13 @@ const (
 	smartActionCallForHelp                    uint32 = 39
 	smartActionForceDespawn                   uint32 = 41
 	smartActionSetInvincibilityHPLevel        uint32 = 42
+	smartActionMountToEntryOrModel            uint32 = 43
 	smartActionSetData                        uint32 = 45
 	smartActionSetVisibility                  uint32 = 47
 	smartActionSetActive                      uint32 = 48
 	smartActionAttackStart                    uint32 = 49
 	smartActionStoreTargetList                uint32 = 64
+	smartActionRemoveTimedEvent               uint32 = 74
 	smartActionCallTimedActionList            uint32 = 80
 	smartActionSetNPCFlag                     uint32 = 81
 	smartActionAddNPCFlag                     uint32 = 82
@@ -119,6 +122,7 @@ const (
 	smartActionRemoveUnitFieldBytes1          uint32 = 91
 	smartActionInterruptSpell                 uint32 = 92
 	smartActionSetRoot                        uint32 = 103
+	smartActionRespawnBySpawnID               uint32 = 133
 )
 
 // SMART_TARGET ids (SmartScriptMgr.h:1221-1253), AGGRO-used set. Target 8
@@ -1018,6 +1022,16 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		// so the emote leg stays out — the engage itself ports.
 	case smartActionSetData:
 		s.smartActionSetData(ctx, motion, st, ev, invokerGUID)
+	case smartActionUpdateTemplate:
+		s.smartActionUpdateTemplate(ctx, motion, st, ev, invokerGUID)
+	case smartActionForceDespawn:
+		s.smartActionForceDespawn(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetInvincibilityHPLevel:
+		s.smartActionSetInvincibilityHPLevel(ctx, motion, st, ev, invokerGUID)
+	case smartActionMountToEntryOrModel:
+		s.smartActionMountToEntryOrModel(ctx, motion, st, ev, invokerGUID)
+	case smartActionRespawnBySpawnID:
+		s.smartActionRespawnBySpawnID(ctx, motion, ev)
 	case smartActionStoreTargetList:
 		targets := s.smartTargets(motion, st, ev, invokerGUID)
 		guids := make([]uint64, 0, len(targets))
@@ -1035,11 +1049,18 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 	case smartActionRemoveUnitFieldBytes1:
 		s.smartActionRemoveUnitFieldBytes1(motion, st, ev, invokerGUID)
 	default:
-		// Residual: the remaining AGGRO-row actions (43, 42, 146, 36,
-		// 41, 74, 133) have no Go twin — mounts, invincibility HP,
-		// template swaps — and the event
-		// still consumed its chance roll and link below, matching
-		// C++'s log-and-skip default (SmartScript.cpp:2370-2372).
+		// Residual: the remaining AGGRO-row actions (74, 146) have no
+		// Go twin. 74 REMOVE_TIMED_EVENT needs the unported timed-event
+		// store — CREATE_TIMED_EVENT (67) / TRIGGER (73) / REMOVE (74)
+		// over mStoredEvents + mRemIDs (SmartScript.cpp:1597-1624) —
+		// and its 3 live rows (1 src-0: Terokk 21838, AGGRO, remove id
+		// 1; 2 src-9 timed-list rows) pair with 67 rows the store
+		// would own; porting 74 alone would be dead code. 146 has no
+		// enum value in this C++ revision (SMART_ACTION_END = 140,
+		// SmartScriptMgr.h:600), so its 70 TDB rows hit C++'s
+		// log-and-skip default exactly as they hit this one
+		// (SmartScript.cpp:2370-2372). The event still consumed its
+		// chance roll and link below.
 	}
 	if ev.row.link != 0 && ev.row.link != ev.row.id {
 		if st.linkDepth >= smartMaxNestedEvents {
@@ -1369,6 +1390,223 @@ func (s *Server) smartActionSetData(ctx context.Context, motion *creatureMotion,
 		tm.ScriptData[ev.row.actionParam1] = ev.row.actionParam2
 		s.motionMu.Unlock()
 	}
+}
+
+// smartActionUpdateTemplate is SMART_ACTION_UPDATE_TEMPLATE
+// (SmartScript.cpp:1055-1061): Creature::UpdateEntry(entry, nullptr,
+// updateLevel != 0) on every creature target — the seatCreatureEntry
+// twin. TDB 26091: 76 rows, all updateLevel=0 (5357->14604,
+// 5736->5742/5739/5741/5743, 8519-8521->13279), so the level roll
+// stays out and the creature keeps its level; the template's model,
+// faction, flags and stats still re-seat.
+func (s *Server) smartActionUpdateTemplate(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.seatCreatureEntry(ctx, tm, ev.row.actionParam1, ev.row.actionParam2 != 0)
+	}
+}
+
+// smartActionForceDespawn is SMART_ACTION_FORCE_DESPAWN
+// (SmartScript.cpp:1104-1131): Creature::DespawnOrUnsummon(delay,
+// forceRespawnTimer) on every target — the despawnCreatureMotion twin.
+// C++ clamps a <=0 delay to 1ms so at least a world update tick runs
+// before the despawn, keeping linked actions alive, so the despawn
+// always rides a timer (ForcedDespawnDelayEvent, Creature.cpp:2219-2225;
+// ForcedUnsummonDelayEvent, TemporarySummon.cpp:259-267). A nonzero
+// forceRespawnTimer overrides the respawn time at expiry (the
+// SaveRespawnTime leg, Creature.cpp:2258-2261). GO targets stay out:
+// smartTargets yields no gameobjects.
+func (s *Server) smartActionForceDespawn(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	delay := ev.row.actionParam1
+	if delay == 0 {
+		delay = 1
+	}
+	timer := ev.row.actionParam2
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, tgt.guid
+		time.AfterFunc(time.Duration(delay)*time.Millisecond, func() {
+			s.despawnCreatureMotion(context.Background(), mapID, instanceID, guid)
+			if timer > 0 {
+				s.overrideCreatureRespawnTime(context.Background(), uint32(guid&0x00FFFFFF), mapID, instanceID, time.Now().Add(time.Duration(timer)*time.Second))
+			}
+		})
+	}
+}
+
+// smartActionSetInvincibilityHPLevel is SMART_ACTION_SET_INVINCIBILITY_HP_LEVEL
+// (SmartScript.cpp:1155-1171): SetInvincibilityHpLevel on the target
+// creature's SmartAI — the CAST_AI(SmartAI) gate is the AIName check
+// plus a state attach, and a nonzero percent wins over the flat minHP
+// (CountPctFromMaxHealth over the target's max health). The clamp
+// itself lives in fireDealDamageAIHooks (SmartAI::DamageTaken,
+// SmartAI.cpp:626-636). TDB 26091: 69 rows (minHP=1 x47, pct rows x14:
+// pct=1 x11, 19/49/50 x1 each; 8 rows carry 0/0, which sets level 0
+// and leaves the clamp off, matching C++'s falsy-level guard).
+func (s *Server) smartActionSetInvincibilityHPLevel(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil || tm.AIName != "SmartAI" {
+			continue
+		}
+		tst := s.smartStateFor(ctx, tm)
+		if tst == nil {
+			continue
+		}
+		level := ev.row.actionParam1
+		if ev.row.actionParam2 != 0 {
+			s.motionMu.Lock()
+			maxHealth := tm.MaxHealth
+			s.motionMu.Unlock()
+			level = maxHealth * ev.row.actionParam2 / 100
+		}
+		tst.invincibilityHPLevel = level
+	}
+}
+
+// smartActionMountToEntryOrModel is SMART_ACTION_MOUNT_TO_ENTRY_OR_MODEL
+// (SmartScript.cpp:1133-1153): Unit::Mount on every target unit — the
+// Lua Mount/Dismount twin (lua_creature_events.go:7183-7221) on the
+// motion's Mount display + UNIT_FLAG_MOUNT. A nonzero creature entry
+// mounts the template's ChooseDisplayId (ObjectMgr.cpp:1581-1593);
+// a zero entry with a nonzero model mounts the model id directly;
+// both zero dismounts. A missing template skips the target outright.
+// Player targets stay out: Go has no player-side Mount twin for this
+// path. TDB 26091: 42 rows (creature-entry mounts x3, model mounts
+// x14, dismounts x25 — e.g. 19592/19594->19596, 24238->22657;
+// 18294->14375, 22448->20964; 23030, 23580, 30703, 30704).
+func (s *Server) smartActionMountToEntryOrModel(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		if ev.row.actionParam1 == 0 && ev.row.actionParam2 == 0 {
+			s.motionMu.Lock()
+			if tm.UnitFlags&0x08000000 == 0 { // not IsMounted
+				s.motionMu.Unlock()
+				continue
+			}
+			tm.Mount = 0
+			tm.UnitFlags &^= 0x08000000
+			tm.UnitFlagsKnown = true
+			tm.MountKnown = true
+			s.motionMu.Unlock()
+			continue
+		}
+		displayID := ev.row.actionParam2
+		if ev.row.actionParam1 > 0 {
+			var ok bool
+			displayID, ok = s.smartChooseDisplayID(ctx, ev.row.actionParam1)
+			if !ok {
+				continue
+			}
+		}
+		s.motionMu.Lock()
+		if displayID != 0 {
+			tm.Mount = displayID
+		}
+		tm.UnitFlags |= 0x08000000 // UNIT_FLAG_MOUNT
+		tm.UnitFlagsKnown = true
+		tm.MountKnown = true
+		s.motionMu.Unlock()
+	}
+}
+
+// smartChooseDisplayID is ObjectMgr::ChooseDisplayId (ObjectMgr.cpp:1581-1593)
+// for a creature_template entry: a trigger template
+// (CREATURE_FLAG_EXTRA_TRIGGER, 0x80) takes its first is_trigger model,
+// any other template takes a uniform random valid model
+// (CreatureTemplate::GetRandomValidModelId, Creature.cpp:112-125;
+// GetFirstInvisibleModel, Creature.cpp:134-145). False when the template
+// is missing — C++ skips the mount then — and a 0 display with true means
+// the template has no valid model, which still mounts the flag
+// (Unit::Mount(0), Unit.cpp:8310-8315).
+func (s *Server) smartChooseDisplayID(ctx context.Context, entry uint32) (uint32, bool) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0, false
+	}
+	var model1, model2, model3, model4, flagsExtra int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(modelid1, 0), COALESCE(modelid2, 0), COALESCE(modelid3, 0), COALESCE(modelid4, 0), COALESCE(flags_extra, 0) FROM creature_template WHERE entry = ?", entry).Scan(&model1, &model2, &model3, &model4, &flagsExtra); err != nil {
+		return 0, false
+	}
+	models := []int64{model1, model2, model3, model4}
+	if flagsExtra&0x80 != 0 {
+		for _, m := range models {
+			if m == 0 {
+				continue
+			}
+			var trigger int64
+			if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(is_trigger, 0) FROM creature_model_info WHERE DisplayID = ?", m).Scan(&trigger); err == nil && trigger != 0 {
+				return uint32(m), true
+			}
+		}
+		return 0, true
+	}
+	var valid []uint32
+	for _, m := range models {
+		if m > 0 {
+			valid = append(valid, uint32(m))
+		}
+	}
+	if len(valid) == 0 {
+		return 0, true
+	}
+	return valid[rand.Intn(len(valid))], true
+}
+
+// smartActionRespawnBySpawnID is SMART_ACTION_RESPAWN_BY_SPAWNID
+// (SmartScript.cpp:2313-2326): Map::Respawn(spawnType, spawnId) —
+// GetRespawnInfo, then respawnTime = now. The Go twin queues a due-now
+// creature respawn record for the spawn id, which the world tick's
+// processCreatureRespawns revives; a live motion for the spawn is a
+// no-op, matching C++ (no RespawnInfo exists for a live spawn). The
+// gameobject type stays out: Go has no GO-respawn model. TDB 26091:
+// 17 rows (15 creature-type, e.g. 18471->48191, 24023->74518/74519/
+// 74520; 2 gameobject-type, which stay out).
+func (s *Server) smartActionRespawnBySpawnID(ctx context.Context, motion *creatureMotion, ev *smartScriptEvent) {
+	if ev.row.actionParam1 != 0 {
+		return
+	}
+	spawnID := ev.row.actionParam2
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	var entry, mapID int64
+	var x, y, z float64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map, position_x, position_y, position_z FROM creature WHERE guid = ?", spawnID).Scan(&entry, &mapID, &x, &y, &z); err != nil {
+		return
+	}
+	s.motionMu.Lock()
+	live := s.findCreatureMotionLocked(uint32(mapID), 0, creatureWorldGUID(spawnID, uint32(entry)))
+	alive := live != nil && live.Health > 0
+	s.motionMu.Unlock()
+	if alive {
+		return
+	}
+	stats := s.loadCreatureStats(ctx, uint32(entry))
+	now := time.Now()
+	s.motionMu.Lock()
+	if s.creatureRespawns == nil {
+		s.creatureRespawns = make(map[uint32]creatureRespawn)
+	}
+	s.creatureRespawns[spawnID] = creatureRespawn{GUID: spawnID, At: now, Health: stats.MaxHealth, Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoved: true}
+	s.motionMu.Unlock()
+	s.saveCreatureRespawnRow(ctx, spawnID, now, uint32(mapID), 0)
 }
 
 // smartActionRemoveUnitFieldBytes1 is SMART_ACTION_REMOVE_UNIT_FIELD_BYTES_1

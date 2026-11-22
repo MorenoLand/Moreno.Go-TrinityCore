@@ -2316,7 +2316,7 @@ func (s *Server) reseatRespawnedEntry(ctx context.Context, motion *creatureMotio
 	if !overridden {
 		return
 	}
-	if s.seatCreatureEntry(ctx, motion, dbEntry) {
+	if s.seatCreatureEntry(ctx, motion, dbEntry, true) {
 		s.motionMu.Lock()
 		motion.EntryOverride = false
 		s.motionMu.Unlock()
@@ -2417,6 +2417,34 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 		s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: respawnDelay}
 		s.motionMu.Unlock()
 		s.saveCreatureRespawnRow(ctx, guid, respawnAt, target.Map, target.InstanceID)
+	}
+}
+
+// overrideCreatureRespawnTime rewrites a pending respawn record's time —
+// the SMART_ACTION_FORCE_DESPAWN forceRespawnTimer leg: C++
+// ForcedDespawn with a nonzero timer saves respawnTime = now + timer
+// (Creature.cpp:2258-2261), replacing the spawntimesecs-derived time.
+// A no-op when no record is pending (temp summons carry none, and C++
+// drops the timer for them too).
+func (s *Server) overrideCreatureRespawnTime(ctx context.Context, dbGUID, mapID, instanceID uint32, at time.Time) {
+	found := false
+	s.motionMu.Lock()
+	if instanceID == 0 {
+		if rec, ok := s.creatureRespawns[dbGUID]; ok {
+			rec.At = at
+			s.creatureRespawns[dbGUID] = rec
+			found = true
+		}
+	} else if respawns, ok := s.instanceCreatureRespawns[instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}]; ok {
+		if rec, ok := respawns[dbGUID]; ok {
+			rec.At = at
+			respawns[dbGUID] = rec
+			found = true
+		}
+	}
+	s.motionMu.Unlock()
+	if found {
+		s.saveCreatureRespawnRow(ctx, dbGUID, at, mapID, instanceID)
 	}
 }
 
