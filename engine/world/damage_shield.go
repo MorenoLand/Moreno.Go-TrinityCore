@@ -563,6 +563,24 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 				}
 				s.smartKilledUnit(ctx, attackerMotion, m.GUID)
 			}
+			// SmartAI::JustDied (SmartAI.cpp:570-575): ProcessEventsFor
+			// (SMART_EVENT_DEATH, killer) — Unit::Kill's JustDied leg
+			// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
+			// Eluna Died fire below). The dispatch no-ops for non-SmartAI
+			// victims (smartStateFor returns nil).
+			// attackerMotion is nil when the shield holder's attacker
+			// motion is gone — the invoker is 0 then, like the Lua
+			// SetDeathState fire (creaturemotion.go:1427).
+			deathKillerGUID := uint64(0)
+			if attackerMotion != nil {
+				deathKillerGUID = attackerMotion.GUID
+			}
+			s.smartProcessEvents(ctx, m, smartEventDeath, deathKillerGUID, 0, 0)
+			// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
+			// right after ai->JustDied, a dead TempSummon notifies its
+			// creature summoner's AI (SUMMONED_UNIT_DIES, 82); no-ops
+			// unless the victim is a TempSummon.
+			s.smartSummonedUnitDies(ctx, m)
 			s.fireCreatureDiedByCreature(ctx, m, attackerMotion)
 			if m.BossAI != nil {
 				m.BossAI.OnDied(ctx, s, m)

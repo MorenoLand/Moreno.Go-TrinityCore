@@ -2246,6 +2246,27 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				s.clearCreatureDeathState(victim)
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
 				s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(victim))
+				// SmartAI::KilledUnit (SmartAI.cpp:578-581): the pet-arm
+				// double dispatch (Unit.cpp:11324-11335 pet arm +
+				// 11385-11387 branch arm) — the pet killer takes both
+				// arms on itself, like the owner path's funnel; this
+				// owner-gone branch previously fired only the Eluna
+				// event-3 twin, so SMART_EVENT_KILL never fired here.
+				if motion.OwnerGUID != 0 {
+					s.smartKilledUnit(ctx, motion, targetGUID)
+				}
+				s.smartKilledUnit(ctx, motion, targetGUID)
+				// SmartAI::JustDied (SmartAI.cpp:570-575): ProcessEventsFor
+				// (SMART_EVENT_DEATH, killer) — Unit::Kill's JustDied leg
+				// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
+				// Eluna Died fire below). The dispatch no-ops for non-SmartAI
+				// victims (smartStateFor returns nil).
+				s.smartProcessEvents(ctx, victim, smartEventDeath, motion.GUID, 0, 0)
+				// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
+				// right after ai->JustDied, a dead TempSummon notifies its
+				// creature summoner's AI (SUMMONED_UNIT_DIES, 82); no-ops
+				// unless the victim is a TempSummon.
+				s.smartSummonedUnitDies(ctx, victim)
 				// BossAI::_JustDied (ScriptedCreature.cpp:512-518): this
 				// path skips onCreatureKilled, so the death hooks must fire
 				// here — Lua 23+4 first (Eluna parity, kill.go:772), then

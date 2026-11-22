@@ -11636,6 +11636,17 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 				s.smartKilledUnit(ctx, m, guid)
 			}
 			s.smartKilledUnit(ctx, m, guid)
+			// SmartAI::JustDied (SmartAI.cpp:570-575): ProcessEventsFor
+			// (SMART_EVENT_DEATH, killer) — Unit::Kill's JustDied leg
+			// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
+			// Eluna Died fire below). The dispatch no-ops for non-SmartAI
+			// victims (smartStateFor returns nil).
+			s.smartProcessEvents(ctx, live, smartEventDeath, m.GUID, 0, 0)
+			// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
+			// right after ai->JustDied, a dead TempSummon notifies its
+			// creature summoner's AI (SUMMONED_UNIT_DIES, 82); no-ops
+			// unless the victim is a TempSummon.
+			s.smartSummonedUnitDies(ctx, live)
 			s.fireCreatureDiedByCreature(ctx, live, m)
 			if live.BossAI != nil {
 				live.BossAI.OnDied(ctx, s, live)
@@ -11892,10 +11903,9 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// (SMART_EVENT_DEATH, killer) — Unit::Kill's JustDied leg
 	// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
 	// Eluna Died fire below). The dispatch no-ops for non-SmartAI
-	// victims (smartStateFor returns nil), so the Lua Kill bridge
-	// and the SmartAI DIE action both land their DEATH rows here,
-	// like every C++ Unit::Kill. The owner path (onCreatureKilled)
-	// still lacks this fire — the pre-existing combat-kill gap.
+	// victims (smartStateFor returns nil). The owner path
+	// (onCreatureKilled) and the other no-owner kill chains fire
+	// the same dispatch at their JustDied leg.
 	s.smartProcessEvents(ctx, tm, smartEventDeath, m.GUID, 0, 0)
 	// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
 	// right after ai->JustDied, a dead TempSummon notifies its

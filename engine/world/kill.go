@@ -1119,6 +1119,19 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 				s.server.fireCreatureTargetDied(ctx, pet, victim)
 				s.server.smartKilledUnit(ctx, pet, target.GUID)
 			}
+			// SmartAI::JustDied (SmartAI.cpp:570-575): ProcessEventsFor
+			// (SMART_EVENT_DEATH, killer) — Unit::Kill's JustDied leg
+			// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
+			// Eluna Died fire below). The dispatch no-ops for non-SmartAI
+			// victims (smartStateFor returns nil).
+			// killer is the killing creature motion, or nil when the
+			// session itself dealt the blow — the killer GUID is the
+			// session's on a player kill.
+			deathKillerGUID := s.playerGUID
+			if killer != nil && killer.GUID != 0 {
+				deathKillerGUID = killer.GUID
+			}
+			s.server.smartProcessEvents(ctx, motion, smartEventDeath, deathKillerGUID, 0, 0)
 			s.fireCreatureDied(ctx, motion)
 			// Death clears the assistance state with the engagement: the
 			// flag re-arms at the next engage (the Unit::AttackStop reset
