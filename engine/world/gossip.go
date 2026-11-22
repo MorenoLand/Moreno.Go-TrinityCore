@@ -410,8 +410,12 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	// a SEND_GOSSIP_MENU (98) action. A set value vetoes the native arms
 	// below, exactly like the Lua veto above; the stale-menu gate is part
 	// of Player::OnGossipSelect (Player.cpp:14565-14570), so it runs after
-	// the AI here as in C++.
-	if s.server != nil && s.player != nil {
+	// the AI here as in C++. A coded select never fires the script:
+	// HandleGossipSelectOptionOpcode (MiscHandler.cpp:175-204) routes a
+	// non-empty code to AI()->OnGossipSelectCode, and SmartAI's returns
+	// false without firing (SmartAI.cpp:772-775) — the gameobject leg's
+	// code == "" gate, applied here too.
+	if code == "" && s.server != nil && s.player != nil {
 		if motion := s.findCreatureMotion(guid); motion != nil && s.server.smartGossipSelect(ctx, motion, s.player.GUID, menuID, listID) {
 			return true
 		}
@@ -778,8 +782,8 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 	// below, exactly like the Lua veto above; the stale-menu gate is part
 	// of Player::OnGossipSelect (Player.cpp:14565-14570), so it runs after
 	// the AI here as in C++. OnGossipSelectCode returns false
-	// (SmartAI.cpp:1043-1046), so a coded select never fires the script —
-	// the creature path fires regardless, a pre-existing deviation. The
+	// (SmartAI.cpp:1043-1046), so a coded select never fires the script
+	// (the creature leg carries the same code == "" gate). The
 	// attach fires AI_INIT/JUST_CREATED/RESPAWN on first sight
 	// (smartStateForGO); a GO with no src-1 rows has no state and this
 	// is a no-op. TDB 26091: 94 src-1 rows over 68 entries, incl. 25

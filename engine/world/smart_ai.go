@@ -1042,7 +1042,7 @@ func (s *Server) smartStateFor(ctx context.Context, motion *creatureMotion) *sma
 	if len(rows) == 0 {
 		return nil
 	}
-	st := &smartScriptState{phase: 0, defaultFaction: motion.Faction}
+	st := &smartScriptState{phase: 0, defaultFaction: motion.Faction, escortRun: true}
 	for _, row := range rows {
 		ev := &smartScriptEvent{row: row}
 		s.smartInitTimer(ev)
@@ -2577,7 +2577,7 @@ func (s *Server) smartStateForTimedList(ctx context.Context, motion *creatureMot
 	if s == nil || motion == nil || motion.AIName != "SmartAI" {
 		return nil
 	}
-	st := &smartScriptState{phase: 0, defaultFaction: motion.Faction}
+	st := &smartScriptState{phase: 0, defaultFaction: motion.Faction, escortRun: true}
 	motion.smart = st
 	return st
 }
@@ -3233,17 +3233,15 @@ func (s *Server) smartActionCast(ctx context.Context, motion *creatureMotion, st
 	if len(targets) == 0 {
 		return
 	}
-	// A GO base casts from the gameobject itself (go->CastSpell,
-	// SmartScript.cpp:551-556); Go has no gameobject spell-cast twin,
-	// so the cast stays out rather than casting as a creature.
-	if motion.BaseIsGameObject {
-		return
-	}
 	if limit := ev.row.actionParam4; limit > 0 && uint32(len(targets)) > limit {
 		rand.Shuffle(len(targets), func(i, j int) { targets[i], targets[j] = targets[j], targets[i] })
 		targets = targets[:limit]
 	}
 	castFlags := ev.row.actionParam2
+	if motion.BaseIsGameObject {
+		s.smartActionCastGO(ctx, motion, ev, targets, castFlags)
+		return
+	}
 	if castFlags&smartCastInterruptPrevious != 0 {
 		for _, arm := range s.interruptCreatureNonMeleeCasts(motion) {
 			s.sendCreatureInterruptPackets(motion, arm)
@@ -3258,6 +3256,50 @@ func (s *Server) smartActionCast(ctx context.Context, motion *creatureMotion, st
 			s.castCreatureSpellTriggered(ctx, motion, ev.row.actionParam1, tgt.guid)
 		} else {
 			s.castCreatureSpell(ctx, motion, ev.row.actionParam1, tgt.guid)
+		}
+	}
+}
+
+// smartActionCastGO is the GO half of SMART_ACTION_CAST
+// (SmartScript.cpp:543-599): a gameobject casts from itself
+// (WorldObject::CastSpell, Object.cpp:2904) through the creature
+// pipeline below, with the unit-only CheckCast arms (death state,
+// Spell.cpp:5177; power, Spell.cpp:5502) exempted for a non-unit
+// caster in castCreatureSpellInternalWithBasePoints. The loop-top
+// cast fires first, ungated (SmartScript.cpp:551-556), on the target
+// unit or targetless when the target is not a unit (a GO/self
+// target's ToUnit is nil); a unit target then takes the second,
+// aura-gated cast with the row's trigger flags (SmartScript.cpp:
+// 560-583) — the C++ double fire for GO + unit targets, reproduced
+// as written. TDB 26091: 29 src-1 rows, all flags 0 (9 Ulduar
+// teleporter 194569 gossip casts, 5 Stone/Portal state-change rows,
+// 15 UPDATE/self casts); a cast-time GO spell's deferred fire drops
+// in scheduleDeferredTwinCast (creature-motion re-lookup), so only
+// instant GO casts complete — no row's cast time is in the local
+// DBC subset to verify.
+func (s *Server) smartActionCastGO(ctx context.Context, motion *creatureMotion, ev *smartScriptEvent, targets []smartTarget, castFlags uint32) {
+	spellID := ev.row.actionParam1
+	triggered := castFlags&smartCastTriggered != 0
+	for _, tgt := range targets {
+		unitGUID := uint64(0)
+		if !tgt.isGameObject {
+			unitGUID = tgt.guid
+		}
+		if triggered {
+			s.castCreatureSpellTriggered(ctx, motion, spellID, unitGUID)
+		} else {
+			s.castCreatureSpell(ctx, motion, spellID, unitGUID)
+		}
+		if unitGUID == 0 {
+			continue
+		}
+		if castFlags&smartCastAuraNotPresent != 0 && s.creatureSpellTargetHasAura(motion, unitGUID, spellID) {
+			continue
+		}
+		if triggered {
+			s.castCreatureSpellTriggered(ctx, motion, spellID, unitGUID)
+		} else {
+			s.castCreatureSpell(ctx, motion, spellID, unitGUID)
 		}
 	}
 }

@@ -4233,6 +4233,29 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 			cs.sendClientControl(lastCharmer, true)
 		}
 	}
+	// SmartAI::OnCharmed (SmartAI.cpp:672-705) uncharm arm, ahead of
+	// the last-charmer engage below: out of evade mode, a repeating
+	// waypoint path restarts (StartPath(_run, path id, true) — the
+	// repeat flag and path id survive the charm-time EndPath(true),
+	// which returns before the EndPath restart leg), else the walk
+	// flag re-applies from _run. Only SmartAI creatures take it
+	// (smartStateFor is nil otherwise); the escortRun default is
+	// true at state creation, the C++ ctor _run(true) twin, so a
+	// never-pathed creature keeps running instead of walking.
+	if m := s.findCreatureMotion(mapID, instanceID, rawGUID); m != nil {
+		s.motionMu.Lock()
+		evading := m.Evading
+		s.motionMu.Unlock()
+		if !evading {
+			if st := s.smartStateFor(context.Background(), m); st != nil {
+				if st.escortRepeat {
+					s.smartStartPath(context.Background(), m, st, st.escortRun, st.escortPathID, true, 0)
+				} else {
+					s.smartSetRun(m, st, st.escortRun)
+				}
+			}
+		}
+	}
 	// CreatureAI::OnCharmed (CreatureAI.cpp:54-70): the restored AI engages
 	// the last charmer unless passive (the EngageWithTarget 0.0f threat seed,
 	// Unit.cpp:8429-8438). ObjectAccessor::GetUnit only resolves live units

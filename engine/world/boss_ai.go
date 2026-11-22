@@ -2063,7 +2063,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// aura-triggered casts apart (the AICOND_DIE death cast rides
 		// castCreatureSpellTriggered), so the gate runs for non-triggered
 		// casts only; triggered casts keep the permissive reading.
-		if !triggered && m.Health == 0 && spellInfo.Attributes&spellAttr0Passive == 0 && spellInfo.Attributes&spellAttr0CastableWhileDead == 0 {
+		if !triggered && !m.BaseIsGameObject && m.Health == 0 && spellInfo.Attributes&spellAttr0Passive == 0 && spellInfo.Attributes&spellAttr0CastableWhileDead == 0 {
 			return
 		}
 		spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
@@ -2278,11 +2278,17 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// for the TakePower arm below — a lost explicit target (3288-3293)
 		// or failed CheckCast never drains in C++.
 		var powerCost int32
-		if !triggered {
+		// Spell::CheckPower (Spell.cpp:5502) returns SPELL_CAST_OK for
+		// a non-unit caster, so a gameobject caster skips the whole
+		// affordability arm (a zero cost would still fizzle a
+		// POWER_HEALTH spell on the Health > cost arm below).
+		if !triggered && !m.BaseIsGameObject {
 			powerCost = s.creatureSpellPowerCost(spellInfo, m)
 			if !checkCreatureSpellPower(spellInfo, m, powerCost) {
 				return
 			}
+		}
+		if !triggered {
 			// Spell::CheckCasterAuras CC-state gate (Spell.cpp:5509,
 			// gated by TRIGGERED_IGNORE_CASTER_AURAS): after CheckPower,
 			// matching the C++ CheckCast gate order; Go's triggered
