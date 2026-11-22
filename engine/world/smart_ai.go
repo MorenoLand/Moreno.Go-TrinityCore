@@ -173,11 +173,12 @@ const (
 // (14) are ported below. The 116 SET_CORPSE_DELAY (69) / 117
 // DISABLE_EVADE (20) / 127 PAUSE_MOVEMENT (8) are ported below. The
 // 118 GO_SET_GO_STATE (5) / 131 SPAWN_SPAWNGROUP (5) / 132
-// DESPAWN_SPAWNGROUP (12) are ported below. The next unported block
-// is 134 INVOKER_CAST (35) / 138 OVERRIDE_LIGHT (2) / 139
-// OVERRIDE_WEATHER (2); 119-126, 128-130, 135-137 and 140 have zero
-// TDB rows, and 141-146 have no enum value (SMART_ACTION_END = 140)
-// so their rows hit the dispatch default exactly as in C++.
+// DESPAWN_SPAWNGROUP (12) are ported below. The 134 INVOKER_CAST
+// (35) / 138 OVERRIDE_LIGHT (2) / 139 OVERRIDE_WEATHER (2) are
+// ported below; 119-126, 128-130, 135-137 and 140 have zero TDB
+// rows, and 141-146 have no enum value (SMART_ACTION_END = 140) so
+// their rows hit the dispatch default exactly as in C++ — with this
+// strip every enum action id is ported or zero-row.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -287,6 +288,9 @@ const (
 	smartActionPauseMovement                  uint32 = 127
 	smartActionSpawnSpawnGroup                uint32 = 131
 	smartActionDespawnSpawnGroup              uint32 = 132
+	smartActionInvokerCast                    uint32 = 134
+	smartActionOverrideLight                  uint32 = 138
+	smartActionOverrideWeather                uint32 = 139
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
 )
@@ -1744,6 +1748,29 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionSpawnSpawnGroup(ctx, motion, st, ev, invokerGUID)
 	case smartActionDespawnSpawnGroup:
 		s.smartActionDespawnSpawnGroup(ctx, motion, st, ev, invokerGUID)
+	case smartActionInvokerCast:
+		s.smartActionInvokerCast(ctx, motion, st, ev, invokerGUID)
+	case smartActionOverrideLight:
+		// SMART_ACTION_OVERRIDE_LIGHT (SmartScript.cpp:2350-2360):
+		// the base object's map sets the zone override light — zone
+		// (param1), area light (param2), override light (param3, 0
+		// clears), transition ms (param4). The Go twin is
+		// setZoneLightOverride (weather.go, Map::SetZoneOverrideLight
+		// Map.cpp:4802-4841): same erase-then-maybe-append store and
+		// same zone broadcast, per-zone where C++ is per-Map. TDB
+		// 26091: 2 rows, Rhonin script 3 (zone 4395, area 1802,
+		// override 1773 / 0, transition 1000 / 5000).
+		s.setZoneLightOverride(ev.row.actionParam1, ev.row.actionParam2, ev.row.actionParam3, ev.row.actionParam4)
+	case smartActionOverrideWeather:
+		// SMART_ACTION_OVERRIDE_WEATHER (SmartScript.cpp:2360-2370):
+		// the base object's map sets the zone weather — zone
+		// (param1), weather state (param2), intensity (param3, cast
+		// to float in C++). The Go twin is setZoneWeatherOverride
+		// (weather.go, Map::SetZoneWeather Map.cpp:4783-4800):
+		// same per-zone store and broadcast, per-zone where C++ is
+		// per-Map. TDB 26091: 2 rows, Mistwhisper Lightning Cloud
+		// (zone 3711, state 5 HEAVY_RAIN, intensity 1 / 0).
+		s.setZoneWeatherOverride(ev.row.actionParam1, ev.row.actionParam2, float32(ev.row.actionParam3))
 	default:
 		// Residual: the remaining AGGRO-row action (146) has no Go
 		// twin. 146 has no enum value in this C++ revision
@@ -2188,6 +2215,90 @@ func (s *Server) smartActionCrossCast(ctx context.Context, motion *creatureMotio
 			} else {
 				s.castCreatureSpell(ctx, casterMotion, ev.row.actionParam1, tgt.guid)
 			}
+		}
+	}
+}
+
+// smartActionInvokerCast is SMART_ACTION_INVOKER_CAST
+// (SmartScript.cpp:640-679): the last invoker casts the spell
+// (param1) on every target unit. The invoker is GetLastInvoker
+// (SmartScript.cpp:3984-3994) — mLastInvoker, set in ProcessAction
+// only when the event carries an invoker and cleared on reset, the
+// st.lastInvoker twin; a missing invoker breaks the action. The
+// targetsLimit (param4) randomly trims the list, TRIGGERED (param2
+// 0x02) rides the triggered cast, AURA_NOT_PRESENT (0x20) skips
+// targets that already carry the aura, and INTERRUPT_PREVIOUS (0x01)
+// interrupts the invoker's non-melee casts — per target in C++, but
+// repeat interrupts are no-ops, so Go interrupts once before the
+// first cast (the CROSS_CAST precedent). triggerFlags (param3)
+// collapses to the full-mask trigger, the SELF_CAST precedent — Go
+// has no per-flag triggered variant. Player invokers ride the
+// session cast path (castSpellDirect, the CROSS_CAST precedent); a
+// player invoker's interrupt leg has no Go twin (the
+// SMART_ACTION_INTERRUPT_SPELL precedent). TDB 26091: 35 rows, all
+// triggerFlags 0 and targetsLimit 0; castFlags 0 (23), TRIGGERED
+// (10), TRIGGERED|INTERRUPT_PREVIOUS (2); targets SELF (18) /
+// ACTION_INVOKER (17). Event coverage: LINK (14) / DEATH (2) /
+// timed UPDATE (2) fire in Go; GOSSIP_SELECT (11) has no fire path
+// yet (carried flag), nor do SPELLCLICK (2), PASSENGER_REMOVED (2)
+// or JUST_SUMMONED (2).
+func (s *Server) smartActionInvokerCast(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	invoker := st.lastInvoker
+	if invoker == 0 {
+		return
+	}
+	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
+	if len(targets) == 0 {
+		return
+	}
+	if limit := ev.row.actionParam4; limit > 0 && uint32(len(targets)) > limit {
+		rand.Shuffle(len(targets), func(i, j int) { targets[i], targets[j] = targets[j], targets[i] })
+		targets = targets[:limit]
+	}
+	castFlags := ev.row.actionParam2
+	triggered := castFlags&smartCastTriggered != 0
+	var invokerMotion *creatureMotion
+	var invokerSess *session
+	if s.smartIsPlayerGUID(invoker) {
+		invokerSess = s.findSessionByGUID(invoker)
+		if invokerSess == nil || invokerSess.player == nil {
+			return
+		}
+	} else {
+		invokerMotion = s.findCreatureMotion(motion.Map, motion.InstanceID, invoker)
+		if invokerMotion == nil {
+			return
+		}
+	}
+	interrupted := false
+	for _, tgt := range targets {
+		if tgt.isGameObject {
+			continue
+		}
+		if tgt.isPlayer {
+			if sess := s.findSessionByGUID(tgt.guid); sess == nil || sess.player == nil {
+				continue
+			}
+		} else if s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid) == nil {
+			continue
+		}
+		if castFlags&smartCastAuraNotPresent != 0 && s.creatureSpellTargetHasAura(motion, tgt.guid, ev.row.actionParam1) {
+			continue
+		}
+		if castFlags&smartCastInterruptPrevious != 0 && !interrupted {
+			if invokerMotion != nil {
+				for _, arm := range s.interruptCreatureNonMeleeCasts(invokerMotion) {
+					s.sendCreatureInterruptPackets(invokerMotion, arm)
+				}
+			}
+			interrupted = true
+		}
+		if invokerSess != nil {
+			invokerSess.castSpellDirect(ctx, ev.row.actionParam1, tgt.guid)
+		} else if triggered {
+			s.castCreatureSpellTriggered(ctx, invokerMotion, ev.row.actionParam1, tgt.guid)
+		} else {
+			s.castCreatureSpell(ctx, invokerMotion, ev.row.actionParam1, tgt.guid)
 		}
 	}
 }
