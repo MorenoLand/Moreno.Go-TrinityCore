@@ -5600,6 +5600,13 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		if s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID) == nil {
 			return
 		}
+		// BossAI::_Reset (ScriptedCreature.cpp:499-510): the native reset
+		// clears the combat-pulse delay (SetCombatPulseDelay(0)) — the
+		// 5s pulse armed by _JustEngagedWith must not survive the evade.
+		// The NOT_STARTED half needs a boss-ID model Go has none of (no
+		// BossID on motion/BossAI; Lua bosses set their own state in ev2).
+		motion.CombatPulseDelaySecs = 0
+		motion.CombatPulseTimer = 0
 	}
 	motion.InCombat = false
 	motion.TargetGUID = 0
@@ -7900,6 +7907,20 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// The list moved without a victim switch: SendThreatListToClients
 			// sends SMSG_THREAT_UPDATE (ThreatManager.cpp:524, 770-787).
 			s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, motion.ThreatMgr.SortedEntriesAvailable(), motion.PhaseMask)
+		}
+		// CreatureAI::UpdateVictim (CreatureAI.cpp:255-261): REACT_PASSIVE
+		// + !IsInCombat() -> EnterEvadeMode(EVADE_REASON_NO_HOSTILES), the
+		// full funnel. Go has no separate IsEngaged flag (engagement is
+		// InCombat), so the arm fires when a passive creature in combat
+		// has no target and an empty threat list — the victim died or the
+		// list drained, and the non-passive reselect-null arm above is
+		// !passive-gated, so without this a wipe during a scripted
+		// passive phase leaves the boss hung InCombat, victimless, never
+		// resetting. A passive phase with a live victim keeps a non-empty
+		// list and never fires.
+		if passive && motion.TargetGUID == 0 && motion.ThreatMgr.IsEmpty() {
+			s.triggerCreatureEvade(ctx, motion, now)
+			return
 		}
 	}
 	if motion.Moving {
