@@ -13,8 +13,11 @@
 // CALL_KILLEDMONSTER (410) are ported below with the
 // FOLLOW_COMPLETED event (65), the group kill-credit fan-out, and
 // the CLOSEST_PLAYER (21) + HOSTILE_RANDOM (5) target arms — the
-// latter also serves 1108 CAST rows. The next unported block
-// starts at 37 DIE (61 live rows).
+// latter also serves 1108 CAST rows. 37 DIE (61 live rows), 38
+// SET_IN_COMBAT_WITH_ZONE (34) and 40 SET_SHEATH (31) are ported
+// below (the DEATH dispatch rides the insta-kill path, the zone
+// engage is the shared creatureDoZoneInCombat helper). The next
+// unported block starts at 44 SET_INGAME_PHASE_MASK (42 live rows).
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -104,8 +107,11 @@ const (
 // 33 CALL_KILLEDMONSTER (410) are ported below with the
 // FOLLOW_COMPLETED event (65), the group kill-credit fan-out, and
 // the CLOSEST_PLAYER (21) + HOSTILE_RANDOM (5) target arms — the
-// latter also serves 1108 CAST rows.
-// The next unported block starts at 37 DIE (61 live rows).
+// latter also serves 1108 CAST rows. 37 DIE (61 live rows), 38
+// SET_IN_COMBAT_WITH_ZONE (34) and 40 SET_SHEATH (31) are ported
+// below; the DEATH dispatch rides the insta-kill path and the zone
+// engage is the shared creatureDoZoneInCombat helper.
+// The next unported block starts at 44 SET_INGAME_PHASE_MASK (42 live rows).
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -139,7 +145,10 @@ const (
 	smartActionCallKilledMonster              uint32 = 33
 	smartActionSetInstData                    uint32 = 34
 	smartActionUpdateTemplate                 uint32 = 36
+	smartActionDie                            uint32 = 37
+	smartActionSetInCombatWithZone            uint32 = 38
 	smartActionCallForHelp                    uint32 = 39
+	smartActionSetSheath                      uint32 = 40
 	smartActionForceDespawn                   uint32 = 41
 	smartActionSetInvincibilityHPLevel        uint32 = 42
 	smartActionMountToEntryOrModel            uint32 = 43
@@ -1232,6 +1241,40 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		// BROADCAST_TEXT_CALL_FOR_HELP monster emote
 		// (SmartScript.cpp:1080-1091); Go has no BroadcastText twin,
 		// so the emote leg stays out — the engage itself ports.
+	case smartActionDie:
+		// SMART_ACTION_DIE (SmartScript.cpp:1062-1070): if (me &&
+		// !me->isDead()) me->KillSelf() — Unit::Kill(this, this)
+		// (Unit.h:941). The Go twin is creatureInstaKillVictim with
+		// the creature as its own killer (the Lua Kill bridge's self
+		// leg); its Health == 0 early-out is the isDead guard, and
+		// the victim's SmartAI DEATH rows fire inside that path at
+		// the C++ JustDied position (Unit.cpp:11385-11391), so the 4
+		// DEATH rows on DIE entries run. TDB 26091: 61 rows, all
+		// params 0, SELF targets.
+		s.creatureInstaKillVictim(ctx, motion, motion.GUID)
+	case smartActionSetInCombatWithZone:
+		// SMART_ACTION_SET_IN_COMBAT_WITH_ZONE (SmartScript.cpp:
+		// 1071-1079): me->AI()->DoZoneInCombat() when me && IsAIEnabled
+		// — the dispatch only runs for SmartAI creatures, the
+		// IsAIEnabled twin. The zone engage is the shared
+		// creatureDoZoneInCombat helper (the Lua DoZoneInCombat
+		// bridge refactored onto it). TDB 26091: 34 rows, no params.
+		s.creatureDoZoneInCombat(motion.Map, motion.InstanceID, motion.GUID)
+	case smartActionSetSheath:
+		// SMART_ACTION_SET_SHEATH (SmartScript.cpp:1094-1103):
+		// Unit::SetSheath — SetByteValue(UNIT_FIELD_BYTES_2, sheath)
+		// (Unit.h:903); Creature does not override, so the byte write
+		// alone. Load-rejects sheath >= MAX_SHEATH_STATE
+		// (SmartScriptMgr.cpp:1322-1328, 0 passes); TDB 26091: 31
+		// rows, all 0-2, SELF targets. The Go twin is the motion
+		// SheathState + Known flag (the Lua SetSheath precedent);
+		// the spawn overlay applies it client-visible.
+		if ev.row.actionParam1 <= 2 {
+			s.motionMu.Lock()
+			motion.SheathState = uint8(ev.row.actionParam1)
+			motion.SheathStateKnown = true
+			s.motionMu.Unlock()
+		}
 	case smartActionSetData:
 		s.smartActionSetData(ctx, motion, st, ev, invokerGUID)
 	case smartActionUpdateTemplate:
@@ -1321,6 +1364,78 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		}
 		st.linkDepth--
 	}
+}
+
+// creatureDoZoneInCombat is CreatureAI::DoZoneInCombat
+// (CreatureAI.cpp:73-103): on a dungeon map, the creature engages every
+// alive, world-ready, non-GM player on its map/instance with a zero-threat
+// seed (Unit::EngageWithTarget, Unit.cpp:8429-8438 twin: ThreatMgr
+// AddThreat(guid, 0.0, true) + InCombat). C++ legs carried: the
+// IsDungeon gate (Go has no script logger on this path, so the
+// C++ error log becomes a silent no-op), the empty-player-list early
+// return, the dead-player skip, and CombatManager::CanBeginCombat's
+// gates as Go models them — alive, same map/instance from the session
+// enumeration (Go has no phase model, and the world-ready state is the
+// in-world twin), GM off (playerExtraGMOn) — plus the controlled-unit
+// leg: each qualifying player's pet motions (OwnerGUID,
+// creaturemotion.go:1160) are engaged too, like C++'s m_Controlled
+// loop. The vehicle-base leg has no Go twin (no vehicle model; the
+// same gap is documented on AddThreat in threat.go). EngageWithTarget
+// sends no packets in C++ (SMSG_ATTACK_START rides Unit::Attack, not
+// the engage), so this twin seeds threat and sets InCombat without
+// broadcasting. sessionsMu is never taken under motionMu: the player
+// targets resolve first, then one motion lock applies the seeds.
+// mandokir's JustEngagedWith tail ports on this, as does the SmartAI
+// SET_IN_COMBAT_WITH_ZONE action (38).
+func (s *Server) creatureDoZoneInCombat(mapID, instanceID uint32, guid uint64) {
+	if entry, found, err := s.Data.Map(mapID); err != nil || !found || !entry.IsDungeon() {
+		return
+	}
+	var players []uint64
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
+		p := sess.player
+		if p == nil || !sess.worldReady.Load() {
+			continue
+		}
+		if p.Map != mapID || p.InstanceID != instanceID || p.Health == 0 {
+			continue
+		}
+		if p.ExtraFlags&playerExtraGMOn != 0 {
+			continue
+		}
+		players = append(players, sess.playerGUID)
+	}
+	s.sessionsMu.RUnlock()
+	if len(players) == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	m := s.findCreatureMotionLocked(mapID, instanceID, guid)
+	if m != nil && m.Health > 0 {
+		wasInCombat := m.InCombat
+		if m.ThreatMgr == nil {
+			m.ThreatMgr = NewThreatManager(m)
+		}
+		for _, pg := range players {
+			s.creatureAddThreat(m, pg, 0.0, true, s.findSessionByGUID(pg), nil)
+			for _, pm := range s.motionMapLocked(mapID, instanceID) {
+				if pm != nil && pm.OwnerGUID == pg && pm.Health > 0 {
+					s.creatureAddThreat(m, pm.GUID, 0.0, true, nil, pm)
+				}
+			}
+		}
+		// CreatureAI::DoZoneInCombat (CreatureAI.cpp:75-104) engages via
+		// EngageWithTarget -> AddThreat, so a fresh zone engage dismounts
+		// and re-homes (Creature::AtEngage, Creature.cpp:3435-3436,
+		// 3446-3447); later players add no second engage.
+		if !wasInCombat {
+			atEngageDismount(m)
+			atEngageSetHomePosition(m)
+		}
+		m.InCombat = true
+	}
+	s.motionMu.Unlock()
 }
 
 // smartSetEventPhase is SmartScript::SetPhase (SmartScript.cpp:4010-4018):

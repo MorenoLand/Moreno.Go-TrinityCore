@@ -11830,6 +11830,15 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// non-pet creature attacker fires only the branch arm — the pet-arm
 	// double dispatch is pet-specific.
 	s.fireCreatureTargetDied(ctx, m, s.luaMotionCreature(tm))
+	// SmartAI::JustDied (SmartAI.cpp:570-575): ProcessEventsFor
+	// (SMART_EVENT_DEATH, killer) — Unit::Kill's JustDied leg
+	// (Unit.cpp:11389-11391, after the KilledUnit arm, before the
+	// Eluna Died fire below). The dispatch no-ops for non-SmartAI
+	// victims (smartStateFor returns nil), so the Lua Kill bridge
+	// and the SmartAI DIE action both land their DEATH rows here,
+	// like every C++ Unit::Kill. The owner path (onCreatureKilled)
+	// still lacks this fire — the pre-existing combat-kill gap.
+	s.smartProcessEvents(ctx, tm, smartEventDeath, m.GUID, 0, 0)
 	// Eluna CREATURE_EVENT_ON_DIED (4) has no session funnel on this
 	// path, so it fires through the server-side twin with the attacker
 	// motion as killer, ahead of the native hook like C++ JustDied.

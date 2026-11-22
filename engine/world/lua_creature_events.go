@@ -2725,76 +2725,12 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
-	// DoZoneInCombat is CreatureAI::DoZoneInCombat (CreatureAI.cpp:73-103):
-	// on a dungeon map, the handler creature engages every alive,
-	// world-ready, non-GM player on its map/instance with a zero-threat
-	// seed (Unit::EngageWithTarget, Unit.cpp:8429-8438 twin: ThreatMgr
-	// AddThreat(guid, 0.0, true) + InCombat). C++ legs carried: the
-	// IsDungeon gate (Go has no script logger on the handler path, so the
-	// C++ error log becomes a silent no-op), the empty-player-list early
-	// return, the dead-player skip, and CombatManager::CanBeginCombat's
-	// gates as Go models them — alive, same map/instance from the session
-	// enumeration (Go has no phase model, and the world-ready state is the
-	// in-world twin), GM off (playerExtraGMOn) — plus the controlled-unit
-	// leg: each qualifying player's pet motions (OwnerGUID,
-	// creaturemotion.go:1160) are engaged too, like C++'s m_Controlled
-	// loop. The vehicle-base leg has no Go twin (no vehicle model; the
-	// same gap is documented on AddThreat in threat.go). EngageWithTarget
-	// sends no packets in C++ (SMSG_ATTACK_START rides Unit::Attack, not
-	// the engage), so this twin seeds threat and sets InCombat without
-	// broadcasting. sessionsMu is never taken under motionMu: the player
-	// targets resolve first, then one motion lock applies the seeds.
+	// DoZoneInCombat is CreatureAI::DoZoneInCombat
+	// (CreatureAI.cpp:73-103) via the shared creatureDoZoneInCombat
+	// helper (smart_ai.go), which carries the full leg-by-leg twin;
 	// mandokir's JustEngagedWith tail ports on this.
 	methods["DoZoneInCombat"] = func(_ context.Context, _ []any) ([]any, error) {
-		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
-		if entry, found, err := s.Data.Map(mapID); err != nil || !found || !entry.IsDungeon() {
-			return nil, nil
-		}
-		var players []uint64
-		s.sessionsMu.RLock()
-		for sess := range s.sessions {
-			p := sess.player
-			if p == nil || !sess.worldReady.Load() {
-				continue
-			}
-			if p.Map != mapID || p.InstanceID != instanceID || p.Health == 0 {
-				continue
-			}
-			if p.ExtraFlags&playerExtraGMOn != 0 {
-				continue
-			}
-			players = append(players, sess.playerGUID)
-		}
-		s.sessionsMu.RUnlock()
-		if len(players) == 0 {
-			return nil, nil
-		}
-		s.motionMu.Lock()
-		m := s.findCreatureMotionLocked(mapID, instanceID, guid)
-		if m != nil && m.Health > 0 {
-			wasInCombat := m.InCombat
-			if m.ThreatMgr == nil {
-				m.ThreatMgr = NewThreatManager(m)
-			}
-			for _, pg := range players {
-				s.creatureAddThreat(m, pg, 0.0, true, s.findSessionByGUID(pg), nil)
-				for _, pm := range s.motionMapLocked(mapID, instanceID) {
-					if pm != nil && pm.OwnerGUID == pg && pm.Health > 0 {
-						s.creatureAddThreat(m, pm.GUID, 0.0, true, nil, pm)
-					}
-				}
-			}
-			// CreatureAI::DoZoneInCombat (CreatureAI.cpp:75-104) engages via
-			// EngageWithTarget -> AddThreat, so a fresh zone engage dismounts
-			// and re-homes (Creature::AtEngage, Creature.cpp:3435-3436,
-			// 3446-3447); later players add no second engage.
-			if !wasInCombat {
-				atEngageDismount(m)
-				atEngageSetHomePosition(m)
-			}
-			m.InCombat = true
-		}
-		s.motionMu.Unlock()
+		s.creatureDoZoneInCombat(motion.Map, motion.InstanceID, motion.GUID)
 		return nil, nil
 	}
 	// TeleportCheaters is BossAI::TeleportCheaters
