@@ -4908,6 +4908,10 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 				creatureKiller = s.findSessionByGUID(m.OwnerGUID)
 			}
 			vs.killPlayer(ctx, creatureKiller, false, false)
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): the player-victim
+			// branch arm's Eluna twin (Unit.cpp:11359-11361), fired beside
+			// the SmartAI KILL below like the spell-hit site.
+			s.fireCreatureTargetDied(ctx, m, vs.luaPlayer())
 			s.fireKilledByCreatureHook(ctx, m, vs)
 			// SmartAI::KilledUnit (SmartAI.cpp:578-581): the player-victim
 			// branch arm (Unit.cpp:11359-11361), pet double dispatch

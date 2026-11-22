@@ -7237,6 +7237,10 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 				creatureKiller = s.findSessionByGUID(motion.OwnerGUID)
 			}
 			target.Sess.killPlayer(ctx, creatureKiller, false, true)
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): the player-victim
+			// branch arm's Eluna twin (Unit.cpp:11359-11361), fired beside
+			// the SmartAI KILL below like the spell-hit site.
+			s.fireCreatureTargetDied(ctx, motion, target.Sess.luaPlayer())
 			// Eluna PLAYER_EVENT_ON_KILLED_BY_CREATURE (8): Unit::Kill
 			// tail (Unit.cpp:11466-11480), attacker is the creature
 			// (for pet kills C++ pushes the pet itself).

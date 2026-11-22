@@ -25960,6 +25960,10 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				// (Unit.cpp:11324-11335).
 				if pet := s.livePetMotion(); pet != nil {
 					s.server.fireCreatureTargetDied(ctx, pet, playerSess.luaPlayer())
+					// SmartAI::KilledUnit pet arm (Unit.cpp:11324-11335):
+					// the attacker is the player, so only its live pet
+					// takes KilledUnit(victim).
+					s.server.smartKilledUnit(ctx, pet, playerSess.playerGUID)
 				}
 				s.server.handleWGPlayerDeath(playerSess, s)
 			} else if damage > 0 {
@@ -46488,6 +46492,10 @@ func (ts *session) applyPeriodicTickDamageToPlayer(dmg, targetHealth uint32, aur
 			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
 				if pet := casterSess.livePetMotion(); pet != nil {
 					ts.server.fireCreatureTargetDied(context.Background(), pet, ts.luaPlayer())
+					// SmartAI::KilledUnit pet arm (Unit.cpp:11324-11335):
+					// the tick's attacker is the aura caster, so only its
+					// live pet takes KilledUnit(victim).
+					ts.server.smartKilledUnit(context.Background(), pet, ts.playerGUID)
 				}
 			}
 		}

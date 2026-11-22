@@ -322,6 +322,10 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 			// Holder is a player: PLAYER_EVENT_ON_KILL_PLAYER (6).
 			s.firePVPKillHook(ctx, attackerSess, ts)
 		} else if motion := s.findCreatureMotion(ts.player.Map, ts.player.InstanceID, attackerGUID); motion != nil {
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): the player-victim
+			// branch arm's Eluna twin (Unit.cpp:11359-11361), fired beside
+			// the SmartAI KILL below like the spell-hit site.
+			s.fireCreatureTargetDied(ctx, motion, ts.luaPlayer())
 			// Holder is a creature: PLAYER_EVENT_ON_KILLED_BY_CREATURE (8).
 			s.fireKilledByCreatureHook(ctx, motion, ts)
 			// SmartAI::KilledUnit (SmartAI.cpp:578-581): the player-victim

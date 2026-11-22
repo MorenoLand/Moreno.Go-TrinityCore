@@ -4556,6 +4556,14 @@ func (s *session) luaPlayer() *scripting.Object {
 			s.server.creditHonorableKill(s, victimSess)
 			victimSess.killPlayer(ctx, s, true, durLoss)
 			s.server.firePVPKillHook(ctx, s, victimSess)
+			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3) + SmartAI KILL:
+			// C++ Unit::Kill pet arm — attacker is the player, so only
+			// the attacker's live pet gets KilledUnit(victim)
+			// (Unit.cpp:11324-11335), like the melee/spell sites.
+			if pet := s.livePetMotion(); pet != nil {
+				s.server.fireCreatureTargetDied(ctx, pet, victimSess.luaPlayer())
+				s.server.smartKilledUnit(ctx, pet, victimSess.playerGUID)
+			}
 			return nil, nil
 		}
 		ref, ok := s.server.luaUnitRef(targetGUID, state.Map, state.InstanceID)

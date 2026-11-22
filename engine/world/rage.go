@@ -253,7 +253,25 @@ func (s *session) applySharedDamageToPlayer(ctx context.Context, victimGUID, att
 		if as := s.server.findSessionByGUID(attackerGUID); as != nil {
 			killer = as
 		}
+		// Unit::Kill player-victim branch arm (Unit.cpp:11359-11361):
+		// a creature attacker takes KilledUnit on the victim — the
+		// Eluna TargetDied twin, the KilledByCreature player hook, and
+		// the SmartAI KILL event (pet double dispatch included); the
+		// KILLED_BY_CREATURE criteria (Unit.cpp:11461) lands ahead of
+		// the kill like the melee/spell sites.
+		var killerMotion *creatureMotion
+		if killer == nil {
+			if km := s.server.findCreatureMotion(ts.player.Map, ts.player.InstanceID, attackerGUID); km != nil {
+				killerMotion = km
+				ts.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((km.GUID>>24)&0xFFFFFF), 1)
+			}
+		}
 		ts.killPlayer(ctx, killer, true, true)
+		if killerMotion != nil {
+			s.server.fireCreatureTargetDied(ctx, killerMotion, ts.luaPlayer())
+			s.server.fireKilledByCreatureHook(ctx, killerMotion, ts)
+			s.server.smartKilledUnitPlayerVictim(ctx, killerMotion, ts.playerGUID)
+		}
 		return
 	}
 	ts.player.Health -= share
@@ -362,7 +380,16 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 			unitFieldDynamicFlags: unitDynFlagLootable,
 		})
 		s.server.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, motion.PhaseMask)
-		s.onCreatureKilled(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID}, nil)
+		// Unit::Kill creature-victim branch arm (Unit.cpp:11385-11387):
+		// the share damage keeps the original attacker, so a creature
+		// attacker takes KilledUnit on the victim and the DEATH invoker
+		// is the attacker — not the session fallback. A player attacker
+		// resolves to no motion and keeps the nil-killer convention.
+		var killerMotion *creatureMotion
+		if km := s.server.findCreatureMotion(mapID, instanceID, attackerGUID); km != nil {
+			killerMotion = km
+		}
+		s.onCreatureKilled(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID}, killerMotion)
 		// Eluna PLAYER_EVENT_ON_KILL_CREATURE (7): Unit::Kill tail
 		// (Unit.cpp:11466-11480) — the shared damage keeps the original
 		// attacker (Unit.cpp:766-788); fires only for a direct player

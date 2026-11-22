@@ -2102,9 +2102,11 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// session creatures: the killer is this creature, the target is
 	// the argument — C++-exact, like the player twin, not the
 	// handler twin's receiver-as-victim idiom. A player victim takes
-	// the lethal sequence with a nil creature killer (no honorable
-	// credit, no PvP hook, non-PvP death); an already-dead victim is
-	// the C++ early return. A creature victim takes the insta-kill
+	// the lethal sequence with a nil session killer (no honorable
+	// credit, no PvP hook, non-PvP death) plus the creature-killer
+	// branch arms (TargetDied, KilledByCreature, KILL); an
+	// already-dead victim is the C++ early return. A creature victim
+	// takes the insta-kill
 	// funnel, which fires the Died chain itself — no absorb soak,
 	// unlike the player twin's DealDamage leg.
 	methods["Kill"] = func(ctx context.Context, args []any) ([]any, error) {
@@ -2126,7 +2128,18 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			}
 			victimSess.player.Health = 0
 			victimSess.sendPlayerUpdate()
+			// Unit::Kill (Unit.cpp:11461): a creature killer credits
+			// the KILLED_BY_CREATURE criteria ahead of the kill, like
+			// the melee/spell sites.
+			victimSess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((killer.GUID>>24)&0xFFFFFF), 1)
 			victimSess.killPlayer(ctx, nil, false, durLoss)
+			// Unit::Kill player-victim branch arm (Unit.cpp:11359-11361):
+			// the creature killer takes KilledUnit on the victim — the
+			// Eluna TargetDied twin, the KilledByCreature player hook,
+			// and the SmartAI KILL event (pet double dispatch included).
+			s.server.fireCreatureTargetDied(ctx, killer, victimSess.luaPlayer())
+			s.server.fireKilledByCreatureHook(ctx, killer, victimSess)
+			s.server.smartKilledUnitPlayerVictim(ctx, killer, targetGUID)
 			return nil, nil
 		}
 		s.server.creatureInstaKillVictim(ctx, killer, targetGUID)
