@@ -739,6 +739,11 @@ type creatureMotion struct {
 	ScriptMoveFromX, ScriptMoveFromY, ScriptMoveFromZ float32
 	ScriptMoveFromKnown                               bool
 	ScriptMoveParabolicAmp                            float32
+	// ScriptMoveFalling marks a MoveFall spline (MotionMaster.cpp:919-955):
+	// the Z profile is computeFallElevation, not the linear lerp, so
+	// creatureSplinePosition reads the fall elevation while it is in
+	// flight. Cleared with the other ScriptMove stamps on launch.
+	ScriptMoveFalling bool
 	// ChaseTX/ChaseTY record the victim's position when the combat pursuit
 	// spline launched — ChaseMovementGenerator's _lastTargetPosition
 	// (ChaseMovementGenerator.h): the chase re-paths whenever the target
@@ -1022,6 +1027,19 @@ func creatureSplinePosition(motion *creatureMotion, now time.Time) (x, y, z floa
 	if totalDist <= 0 || motion.MoveVelocity <= 0 {
 		return x, y, z
 	}
+	if motion.ScriptMoveFalling {
+		// MoveSpline::computeFallElevation (MovementUtil.cpp:57-82):
+		// the fall accelerates from rest, so the Z profile is not the
+		// linear lerp — elapsed time is the total duration less the
+		// remaining time, and the fallen distance comes off the launch
+		// elevation. X/Y never move on a fall spline.
+		totalDur := totalDist / float64(motion.MoveVelocity)
+		elapsed := totalDur - float64(motion.MoveEnds.Sub(now))/float64(time.Second)
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		return motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ - computeFallElevation(float32(elapsed), false)
+	}
 	remaining := float64(motion.MoveEnds.Sub(now)) / float64(time.Second) * float64(motion.MoveVelocity)
 	u := 1 - remaining/totalDist
 	if u < 0 {
@@ -1213,7 +1231,9 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 	}
 	oldVel := motion.MoveVelocity
 	motion.RunSpeed = newSpeed
-	if motion.Moving && oldVel > 0 && newSpeed > 0 {
+	// A fall spline's duration derives from its drop (computeFallTime),
+	// not run speed, so a speed change must not rescale its MoveEnds.
+	if motion.Moving && oldVel > 0 && newSpeed > 0 && !motion.ScriptMoveFalling {
 		if remaining := motion.MoveEnds.Sub(now); remaining > 0 {
 			motion.MoveEnds = now.Add(time.Duration(float64(remaining) * float64(oldVel) / float64(newSpeed)))
 			motion.MoveVelocity = newSpeed
@@ -4881,6 +4901,11 @@ const (
 	movementGeneratorFormation    = 18
 )
 
+// movementInformVehicleExit is EVENT_VEHICLE_EXIT (SharedDefines.h:3352),
+// the MovementInform id of the Unit::_ExitVehicle fall spline
+// (Unit.cpp:13249).
+const movementInformVehicleExit uint32 = 1008
+
 // launchCreatureScriptSpline is the shared atomic-spline launch for
 // script Move* legs, on the flee/waypoint precedent: the server snaps
 // to the destination at launch and broadcasts SMSG_MONSTER_MOVE, so
@@ -4979,6 +5004,7 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ = fromX, fromY, fromZ
 	motion.ScriptMoveFromKnown = true
 	motion.ScriptMoveParabolicAmp = 0
+	motion.ScriptMoveFalling = false
 	motion.ScriptMoveType = moveType
 	motion.ScriptMovePointID = pointID
 	motion.ScriptMoveDestX = destX
@@ -5246,6 +5272,7 @@ func (s *Server) launchCreatureParabolicSpline(motion *creatureMotion, destX, de
 	motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ = fromX, fromY, fromZ
 	motion.ScriptMoveFromKnown = true
 	motion.ScriptMoveParabolicAmp = amplitude
+	motion.ScriptMoveFalling = false
 	motion.ScriptMoveType = movementGeneratorEffect
 	motion.ScriptMovePointID = id
 	motion.ScriptMoveDestX = destX
@@ -5260,6 +5287,102 @@ func (s *Server) launchCreatureParabolicSpline(motion *creatureMotion, destX, de
 	motion.ScriptFollowAngle = 0
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveJumpInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, verticalAccel, phase, transportGUID, orientationFixed)
+	return true
+}
+
+// computeFallTime is Movement::computeFallTime (MovementUtil.cpp:35-56):
+// seconds to fall path_length under gravity (19.29110527,
+// MovementUtil.cpp:23) with terminal velocity 60.148003 (7.0 with safe
+// fall): sqrt(2*length/gravity) below the terminal length, linear at
+// terminal velocity above it. A negative length falls in 0.
+func computeFallTime(pathLength float32, safeFall bool) float32 {
+	if pathLength < 0 {
+		return 0
+	}
+	terminalVelocity := float32(60.148003)
+	if safeFall {
+		terminalVelocity = 7.0
+	}
+	terminalLength := terminalVelocity * terminalVelocity / (2 * jumpToGravity)
+	terminalFallTime := terminalVelocity / jumpToGravity
+	if pathLength >= terminalLength {
+		return (pathLength-terminalLength)/terminalVelocity + terminalFallTime
+	}
+	return float32(math.Sqrt(float64(2 * pathLength / jumpToGravity)))
+}
+
+// computeFallElevation is Movement::computeFallElevation
+// (MovementUtil.cpp:57-82): distance fallen after tPassed seconds from
+// rest (start_velocity 0): accelerating at gravity until terminal time,
+// then linear at terminal velocity.
+func computeFallElevation(tPassed float32, safeFall bool) float32 {
+	termVel := float32(60.148003)
+	if safeFall {
+		termVel = 7.0
+	}
+	terminalTime := termVel / jumpToGravity
+	if tPassed > terminalTime {
+		return termVel*(tPassed-terminalTime) + jumpToGravity*terminalTime*terminalTime*0.5
+	}
+	return tPassed * (tPassed * jumpToGravity * 0.5)
+}
+
+// launchCreatureFallSpline is MotionMaster::MoveFall
+// (MotionMaster.cpp:919-955) via a GenericMovementGenerator
+// (EFFECT_MOTION_TYPE 16): a falling-flag spline straight down to destZ
+// from the launch position, duration computeFallTime(drop) * 1000
+// (FallInitializer, MoveSpline.cpp:94-101) with the 1ms minimal
+// duration (MoveSpline.cpp:145-149). The fall takes the ACTIVE slot, so
+// it clears any chase/follow slot; its id is recorded on the motion
+// (ScriptMovePointID/dest) so the prologue landing gate can fire the
+// MovementInform EFFECT arrival (event 28). A drop under 0.1 launches
+// nothing (MotionMaster.cpp:931-933), and a dead creature launches
+// nothing, like the parabolic core.
+func (s *Server) launchCreatureFallSpline(motion *creatureMotion, destX, destY, destZ float32, id uint32) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	if motion.Health == 0 {
+		s.motionMu.Unlock()
+		return false
+	}
+	now := time.Now()
+	fromX, fromY, fromZ := creatureSplinePosition(motion, now)
+	drop := fromZ - destZ
+	if drop < 0.1 {
+		s.motionMu.Unlock()
+		return false
+	}
+	duration := uint32(computeFallTime(drop, false) * 1000)
+	if duration == 0 {
+		duration = 1
+	}
+	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
+	phase := motion.PhaseMask
+	transportGUID := motion.TransportGUID
+	motion.X, motion.Y, motion.Z = destX, destY, destZ
+	motion.Moving = true
+	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+	motion.MoveVelocity = drop / (float32(duration) / 1000)
+	motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ = fromX, fromY, fromZ
+	motion.ScriptMoveFromKnown = true
+	motion.ScriptMoveParabolicAmp = 0
+	motion.ScriptMoveFalling = true
+	motion.ScriptMoveType = movementGeneratorEffect
+	motion.ScriptMovePointID = id
+	motion.ScriptMoveDestX = destX
+	motion.ScriptMoveDestY = destY
+	motion.ScriptMoveDestZ = destZ
+	motion.ScriptFollowInformed = false
+	motion.ScriptChaseTargetGUID = 0
+	motion.ScriptChaseDist = 0
+	motion.ScriptChaseAngle = 0
+	motion.ScriptFollowTargetGUID = 0
+	motion.ScriptFollowDist = 0
+	motion.ScriptFollowAngle = 0
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveFallInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, phase, transportGUID)
 	return true
 }
 

@@ -779,6 +779,7 @@ type session struct {
 	lastBreathTick            time.Time
 	inDarkWater               bool
 	darkWaterCell             int64
+	lastLiquidEntry           uint32 // LiquidType entry of the liquid the player last swam in (Unit::_lastLiquid, Unit.cpp:3307-3318)
 	fatigueTimer              int32
 	lastFatigueTick           time.Time
 	lastRegenTick             time.Time

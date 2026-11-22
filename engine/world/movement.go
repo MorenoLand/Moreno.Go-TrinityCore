@@ -966,12 +966,29 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		isSwimming := info.Flags&movementSwimming != 0
 		s.isSwimming = isSwimming
 		if isSwimming && !wasSwimming {
+			// Player::SetInWater (Player.cpp:2401-2415): entering
+			// water strips NOT_ABOVEWATER auras — flying mounts
+			// carry it, ground mounts do not (post-3.1). The strip
+			// reads AuraInterruptFlags from the deployed Spell.dbc
+			// (disk wins over seed); the embedded seed Spell.dbc
+			// holds no mount spells, so in a seed-only deployment
+			// there is nothing to strip.
+			s.removeAurasWithInterruptFlags(auraInterruptFlagNotAboveWater)
 			s.handleEnterSwimming()
 			s.darkWaterCell = -1
+			if info.Flags&movementFlying == 0 {
+				s.updateLiquidSpell(ctx)
+			}
 		} else if !isSwimming && wasSwimming {
+			// Player::SetInWater exit arm: leaving water strips
+			// NOT_UNDERWATER auras.
+			s.removeAurasWithInterruptFlags(auraInterruptFlagNotUnderwater)
 			s.handleExitSwimming()
 			s.setInDarkWater(false)
 			s.darkWaterCell = -1
+			if info.Flags&movementFlying == 0 {
+				s.updateLiquidSpell(ctx)
+			}
 		}
 	}
 
@@ -987,6 +1004,9 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 			s.darkWaterCell = key
 			status, data := s.server.mapLiquidStatus(s.player.Map, s.player.X, s.player.Y, s.player.Z, liquidTypeAll, terrainDefaultCollisionHeight)
 			s.setInDarkWater(status != liquidStatusNoWater && data.typeFlags&liquidTypeDarkWater != 0)
+			if info.Flags&movementFlying == 0 {
+				s.updateLiquidSpell(ctx)
+			}
 		}
 	}
 

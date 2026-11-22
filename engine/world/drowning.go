@@ -107,6 +107,47 @@ func (s *session) handleExitSwimming() {
 	}
 }
 
+// updateLiquidSpell is the liquid-aura leg of
+// Unit::ProcessTerrainStatusUpdate (Unit.cpp:3294-3320): when the liquid
+// the player swims in changes, the old liquid's spell is removed and
+// the new liquid's SpellID is cast (triggered, on self), skipping the
+// cast for game masters. _lastLiquid is set before the cast to avoid
+// infinite loops. The strip half of that function lives on the swim
+// transitions in handleMovement (Player::SetInWater, Player.cpp:2401).
+// Only the deployed LiquidType.dbc carries SpellID (disk wins over the
+// seed store), so in a seed-only deployment no liquid spell exists to
+// cast and the entry still tracks for the remove leg.
+func (s *session) updateLiquidSpell(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	var curEntry uint32
+	if s.isSwimming {
+		if status, data := s.server.mapLiquidStatus(s.player.Map, s.player.X, s.player.Y, s.player.Z, liquidTypeAll, terrainDefaultCollisionHeight); status&(liquidStatusInWater|liquidStatusUnderWater) != 0 {
+			curEntry = data.entry
+		}
+	}
+	if curEntry == s.lastLiquidEntry {
+		return
+	}
+	if s.lastLiquidEntry != 0 {
+		if oldSpell, ok := s.server.Data.LiquidTypeSpellID(s.lastLiquidEntry); ok && oldSpell != 0 {
+			s.removeAura(oldSpell)
+		}
+	}
+	// Unit.cpp:3313: set _lastLiquid before casting to avoid loops.
+	s.lastLiquidEntry = curEntry
+	if curEntry == 0 {
+		return
+	}
+	if (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0 {
+		return
+	}
+	if spellID, ok := s.server.Data.LiquidTypeSpellID(curEntry); ok && spellID != 0 {
+		s.castSpellDirect(ctx, spellID, s.playerGUID)
+	}
+}
+
 // refreshBreathMirrorTimer mirrors the HandleWaterBreathing arm of
 // Player::UpdateMirrorTimers (Player.cpp:841-846): a water-breathing aura
 // apply/remove desyncs the mirror timers so the next HandleDrowning resends

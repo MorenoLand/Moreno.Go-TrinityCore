@@ -6215,10 +6215,9 @@ func (s *session) luaPlayer() *scripting.Object {
 	// MoveTo+SetFacing spline, but Go has no player spline, so the twin
 	// writes state.Orientation and replays the current position with the
 	// new facing as a MSG_MOVE_HEARTBEAT to self and the visible set —
-	// the sendTransportMovement precedent (transports.go) for
-	// server-driven player movement. DELTA: the C++ IsStopped gate is
-	// ungated, same delta as the creature twin; the spline turn is a
-	// snap, not an interpolated turn.
+	// the heartbeat replay for server-driven player movement. DELTA: the
+	// C++ IsStopped gate is ungated, same delta as the creature twin; the
+	// spline turn is a snap, not an interpolated turn.
 	applyPlayerFacing := func(ori float32) {
 		s.player.Orientation = ori
 		info := s.movementInfoForCreate(*s.player)

@@ -2020,6 +2020,29 @@ func (s *Store) AreaNames() ([]AreaNameEntry, error) {
 	return entries, nil
 }
 
+// LiquidTypeSpellID mirrors LiquidTypeEntry::SpellID
+// (DBCStructure.h:1036): field 5 of LiquidType.dbc. The second return is
+// false when the store, the file, or the entry is missing, in which case
+// Unit::ProcessTerrainStatusUpdate casts nothing for the liquid.
+func (s *Store) LiquidTypeSpellID(id uint32) (uint32, bool) {
+	if s == nil {
+		return 0, false
+	}
+	file, err := s.File("LiquidType")
+	if err != nil {
+		return 0, false
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false
+	}
+	spell, err := record.Uint32(5)
+	if err != nil {
+		return 0, false
+	}
+	return spell, true
+}
+
 // LiquidTypeSoundBank mirrors LiquidTypeEntry::SoundBank
 // (DBCStructure.h:1034): field 3 of LiquidType.dbc. The second return is
 // false when the store, the file, or the entry is missing, in which case

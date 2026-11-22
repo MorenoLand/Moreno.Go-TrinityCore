@@ -15,6 +15,8 @@ const (
 	auraInterruptFlagTurning               uint32 = 0x00000010 // removed by turning
 	auraInterruptFlagJump                  uint32 = 0x00000020 // removed by jumping
 	auraInterruptFlagNotMounted            uint32 = 0x00000040 // removed by dismounting
+	auraInterruptFlagNotAboveWater         uint32 = 0x00000080 // removed by entering water (AURA_INTERRUPT_FLAG_NOT_ABOVEWATER, SpellDefines.h:54)
+	auraInterruptFlagNotUnderwater         uint32 = 0x00000100 // removed by leaving water (AURA_INTERRUPT_FLAG_NOT_UNDERWATER, SpellDefines.h:55)
 	auraInterruptFlagNotSeated             uint32 = 0x00040000 // removed by standing up (AURA_INTERRUPT_FLAG_NOT_SEATED, SpellDefines.h:65)
 	auraInterruptFlagTalk                  uint32 = 0x00000400 // removed by talking to an npc (AURA_INTERRUPT_FLAG_TALK, SpellDefines.h:57)
 	auraInterruptFlagChangeMap             uint32 = 0x00080000 // removed by changing map (AURA_INTERRUPT_FLAG_CHANGE_MAP, SpellDefines.h:66)

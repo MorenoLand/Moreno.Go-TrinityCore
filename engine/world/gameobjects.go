@@ -761,9 +761,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	if s.server == nil {
 		return true
 	}
-	if spawn, ok := s.server.transportSpawnForGUID(guid); ok {
-		return s.handleTransportUse(spawn)
-	}
+	// GameObject::Use (GameObject.cpp:1484-2087) has no MO_TRANSPORT
+	// case, so a transport click does nothing: boarding rides the
+	// movement packets (MovementHandler.cpp:330-343), never
+	// CMSG_GAMEOBJ_USE. The spawn is not a `gameobject`-table row,
+	// so the load below finds nothing and drops the click.
 
 	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, lowGUID, entry, s.player.Map, s.player.InstanceID)
 	if err != nil || goState == nil {

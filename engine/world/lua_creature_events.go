@@ -4334,13 +4334,34 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		s.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s, mapID: mapID, instanceID: instanceID, baseGUID: baseGUID}, guid)
 		s.motionMu.Lock()
-		if m2, ok := s.motionMapLocked(mapID, instanceID)[guid]; ok {
+		m2, m2ok := s.motionMapLocked(mapID, instanceID)[guid]
+		canFly := false
+		if m2ok {
 			m2.X, m2.Y, m2.Z, m2.Orientation = x, y, z, o
 			m2.Moving = false
+			canFly = m2.CanFly || m2.Flying
 		}
 		s.motionMu.Unlock()
-		_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
-		s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, x, y, z, nearby, phase)
+		// Unit::_ExitVehicle (Unit.cpp:13244-13249): a creature that
+		// cannot fly falls from the exit position to the ground on a
+		// SetFall spline (EVENT_VEHICLE_EXIT, id 1008) instead of
+		// teleporting there. C++ compares the exit height plus the
+		// base's collision height against the ground; Go has no
+		// creature collision-height model, so the exit Z itself is
+		// compared — a creature exiting exactly at ground level keeps
+		// the teleport. The launch starts at the exit position (the
+		// horizontal base-to-exit leg rides the position write above,
+		// not a spline).
+		falling := false
+		if m2ok && !canFly {
+			if ground, ok := s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch); ok && z > ground {
+				falling = s.launchCreatureFallSpline(m2, x, y, ground, movementInformVehicleExit)
+			}
+		}
+		if !falling {
+			_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
+			s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, x, y, z, nearby, phase)
+		}
 		s.syncCreatureVehiclePassengers(m)
 		return nil, nil
 	}
@@ -4433,16 +4454,30 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// MoveFall is MotionMaster::MoveFall (MotionMaster.cpp:919-955)
 	// for creatures: AddUnitMovementFlag(MOVEMENTFLAG_FALLING) plus a
-	// fall spline to the ground height. The ground half resolves via
-	// Server.mapHeight (Map::GetHeight twin); a failed lookup keeps the
-	// fire-and-forget fall packet only. MOVEMENTFLAG_FALLING is transient
+	// fall spline to the ground height (SetFall, MoveSplineInit.h:150),
+	// duration computeFallTime(drop) (FallInitializer,
+	// MoveSpline.cpp:94-101). The ground resolves via Server.mapHeight
+	// (Map::GetHeight twin); a failed lookup launches nothing, like
+	// C++ (MotionMaster.cpp:923-929). MOVEMENTFLAG_FALLING is transient
 	// in C++ (cleared on landing), so no latch is kept on the motion.
 	// Rooted units do not fall in C++ (MotionMaster.cpp:937-939); the
 	// ScriptRooted gate is the Go twin, and the stunned half rides the
-	// ScriptStunned slot (same HasUnitState(ROOT|STUNNED) gate).
-	methods["MoveFall"] = func(_ context.Context, _ []any) ([]any, error) {
+	// ScriptStunned slot (same HasUnitState(ROOT|STUNNED) gate). The
+	// optional id is the GenericMovementGenerator id, the MovementInform
+	// id arg on landing (MoveJump precedent). No
+	// SMSG_SPLINE_MOVE_NORMAL_FALL here: that opcode is the feather-fall
+	// mode packet (Creature::SetFeatherFall, Creature.cpp:3099), not
+	// part of MoveFall.
+	methods["MoveFall"] = func(_ context.Context, args []any) ([]any, error) {
 		if motion == nil {
 			return nil, nil
+		}
+		var id uint32
+		if len(args) >= 1 {
+			var err error
+			if id, err = luaUint32Arg(args, 0); err != nil {
+				return nil, err
+			}
 		}
 		s.motionMu.Lock()
 		m, ok := s.motionMapLocked(motion.Map, motion.InstanceID)[motion.GUID]
@@ -4450,15 +4485,12 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.motionMu.Unlock()
 			return nil, nil
 		}
-		mapID, instanceID, x, y, z, guid := m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID
-		phase := m.PhaseMask
-		// MotionMaster.cpp:919-955: the fall spline ends at the ground
-		// height, so the motion settles there with the fall packet.
-		if ground, ok := s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch); ok && z > ground {
-			m.Z = ground
-		}
+		mapID, x, y, z := m.Map, m.X, m.Y, m.Z
+		ground, groundOK := s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
 		s.motionMu.Unlock()
-		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, protocol.OpcodeSMSG_SPLINE_MOVE_NORMAL_FALL, phase)
+		if groundOK {
+			s.launchCreatureFallSpline(m, x, y, ground, id)
+		}
 		return nil, nil
 	}
 	// GetBaseSpellPower is Unit::GetBaseSpellPower (UnitMethods.h:743):
