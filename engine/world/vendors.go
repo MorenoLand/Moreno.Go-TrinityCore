@@ -374,6 +374,12 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	}
 	// ItemHandler.cpp:622-623 (SendListInventory) — listing a vendor's stock strips a faked death.
 	s.removeFakeDeath()
+	// ItemHandler.cpp:626-627 (SendListInventory) — the vendor stops
+	// moving for CONFIG_CREATURE_STOP_FOR_PLAYER (3 min) and re-bases its
+	// home at the current spot, on every list — not just the gossip-hello
+	// pause (NPCHandler.cpp:168-169), which a direct CMSG_LIST_INVENTORY
+	// never takes and which expires 3 min after hello.
+	s.pauseCreatureMotionForHello(vendorGUID)
 	creatureEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
 	// ObjectMgr::LoadVendors (ObjectMgr.cpp:9404): rows load in slot order with
 	// reference rows (negative item) expanded inline; rows without an item
