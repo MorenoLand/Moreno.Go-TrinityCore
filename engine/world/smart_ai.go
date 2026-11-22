@@ -128,6 +128,9 @@ const (
 	smartEventPassengerRemoved    uint32 = 28 // SMART_EVENT_PASSENGER_REMOVED (SmartScriptMgr.h:127), var0 = seat id
 	smartEventJustSummoned        uint32 = 54 // SMART_EVENT_JUST_SUMMONED (SmartScriptMgr.h:153)
 	smartEventOnSpellClick        uint32 = 73 // SMART_EVENT_ON_SPELLCLICK (SmartScriptMgr.h:172), invoker = clicker
+	smartEventSummonedUnit        uint32 = 17 // SMART_EVENT_SUMMONED_UNIT (SmartScriptMgr.h:116), invoker = summoned creature
+	smartEventSummonedUnitDies    uint32 = 82 // SMART_EVENT_SUMMONED_UNIT_DIES (SmartScriptMgr.h:181), invoker = dead summoned creature
+	smartEventEnd                 uint32 = 83 // SMART_EVENT_END (SmartScriptMgr.h:183), loader rejects event types >= this
 )
 
 // SMART_ACTION ids (SmartScriptMgr.h:457-600), ported set. Actions
@@ -607,6 +610,15 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 		// 528 of those fire on their own events and 208 src-0 link
 		// chains fire an invalid LINK row, where C++ fires nothing
 		// (105 of the 208 are LINK-to-LINK chains).
+		// SmartScriptMgr::IsEventValid (SmartScriptMgr.cpp:668-674):
+		// an event type >= SMART_EVENT_END (83) is load-rejected the
+		// same way — the row never reaches dispatch, and links into it
+		// never fire. TDB 26091: 12 such rows (83:5 / 86:1 / 89:1 /
+		// 90:5), all src 0. The type-mask and phase-mask checks below
+		// it stay out (Go loads creature + timed-list sources only).
+		if r.eventType >= smartEventEnd {
+			continue
+		}
 		if r.actionType <= 0 || r.actionType >= smartActionEnd {
 			continue
 		}
@@ -1039,6 +1051,26 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 			return
 		}
 		s.smartRecalcTimer(ev, ev.row.eventParam1, ev.row.eventParam2)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
+	case smartEventSummonedUnit, smartEventSummonedUnitDies:
+		// SMART_EVENT_SUMMONED_UNIT / SUMMONED_UNIT_DIES
+		// (SmartScript.cpp:3193-3201): the event needs its summoned
+		// creature (unit), fires only when its entry matches
+		// event_param1 (0 = any), then re-arms on the cooldown window
+		// (event_param2/3) and runs its action with the summoned
+		// creature as invoker. TDB 26091: 17 = 13 rows (6 entry-0, 7
+		// entry-specific, all cooldowns 0/0), 82 = 7 rows (4 entry-0,
+		// 3 entry-specific, all cooldowns 0/0).
+		if invokerGUID == 0 {
+			return
+		}
+		if ev.row.eventParam1 != 0 {
+			summoned := s.findCreatureMotion(motion.Map, motion.InstanceID, invokerGUID)
+			if summoned == nil || summoned.Entry != ev.row.eventParam1 {
+				return
+			}
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam2, ev.row.eventParam3)
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
@@ -5271,6 +5303,41 @@ func (s *Server) smartJustSummoned(ctx context.Context, summoned *creatureMotion
 		return
 	}
 	s.smartProcessEvents(ctx, summoned, smartEventJustSummoned, summonerGUID, 0, 0)
+}
+
+// smartSummonedUnit is SmartAI::JustSummoned (SmartAI.cpp:583-586):
+// the summoner's SUMMONED_UNIT (17) event fires with the summoned
+// creature as invoker. TempSummon::InitSummon (TemporarySummon.cpp:231-
+// 247) calls it on the owner's AI for every temp summon whose owner is
+// a creature with AI enabled (a GO owner fires SmartGameObjectAI::
+// JustSummoned instead — no Go script state, stays out); the summoned
+// creature's own IsSummonedBy (54) fires right after, matching the
+// C++ order.
+func (s *Server) smartSummonedUnit(ctx context.Context, summoner, summoned *creatureMotion) {
+	if s == nil || summoner == nil || summoned == nil {
+		return
+	}
+	s.smartProcessEvents(ctx, summoner, smartEventSummonedUnit, summoned.GUID, 0, 0)
+}
+
+// smartSummonedUnitDies is SmartAI::SummonedCreatureDies
+// (SmartAI.cpp:588-591): the summoner's SUMMONED_UNIT_DIES (82) event
+// fires with the dead summoned creature as invoker. Unit::Kill
+// (Unit.cpp:11393-11401) calls it right after ai->JustDied, only when
+// the victim is a TempSummon whose summoner is a creature with AI
+// enabled (a GO summoner fires SmartGameObjectAI::SummonedCreatureDies
+// instead — no Go script state, stays out); a player summoner never
+// qualifies, so a creature summoner is resolved here from the dead
+// motion's CreatedByGUID stamp.
+func (s *Server) smartSummonedUnitDies(ctx context.Context, dead *creatureMotion) {
+	if s == nil || dead == nil || !dead.IsTempSummon || dead.CreatedByGUID == 0 {
+		return
+	}
+	summoner := s.findCreatureMotion(dead.Map, dead.InstanceID, dead.CreatedByGUID)
+	if summoner == nil {
+		return
+	}
+	s.smartProcessEvents(ctx, summoner, smartEventSummonedUnitDies, dead.GUID, 0, 0)
 }
 
 // smartGossipSelect is SmartAI::OnGossipSelect (SmartAI.cpp:765-770):

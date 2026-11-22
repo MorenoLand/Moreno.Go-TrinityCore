@@ -250,6 +250,16 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 			s.fireCreaturePetSummoned(ctx, summoned, player)
 		}
 	}
+	// SmartAI::JustSummoned (SmartAI.cpp:583-586): the summoner's
+	// SUMMONED_UNIT (17) event — TempSummon::InitSummon
+	// (TemporarySummon.cpp:231-247) fires it on the owner's AI before
+	// the summoned creature's own IsSummonedBy below, so the order
+	// matches C++; only a creature summoner qualifies (a GO owner has
+	// no Go script state, a player owner has no SmartAI). TDB 26091:
+	// 13 rows.
+	if origin.SummonerMotion != nil {
+		s.smartSummonedUnit(ctx, origin.SummonerMotion, summoned)
+	}
 	// SmartAI::IsSummonedBy (SmartAI.cpp:647-650): the summoned
 	// creature's own JUST_SUMMONED (54) event — TempSummon::InitSummon
 	// (TemporarySummon.cpp:231-247) fires it for every temp summon, so

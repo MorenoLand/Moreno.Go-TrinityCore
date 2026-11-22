@@ -1166,6 +1166,13 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 					s.server.broadcastZoneUnderAttack(teamForRace(s.player.Race), areaID)
 				}
 			}
+			// Unit::Kill's SummonedCreatureDies leg
+			// (Unit.cpp:11393-11401): the owner-path twin of the
+			// no-owner fire in creatureInstaKillVictim — a dead
+			// TempSummon notifies its creature summoner's AI
+			// (SUMMONED_UNIT_DIES, 82), right after the JustDied
+			// hooks above. TDB 26091: 7 rows.
+			s.server.smartSummonedUnitDies(ctx, motion)
 		}
 	}
 

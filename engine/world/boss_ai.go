@@ -11839,6 +11839,11 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 	// like every C++ Unit::Kill. The owner path (onCreatureKilled)
 	// still lacks this fire — the pre-existing combat-kill gap.
 	s.smartProcessEvents(ctx, tm, smartEventDeath, m.GUID, 0, 0)
+	// Unit::Kill's SummonedCreatureDies leg (Unit.cpp:11393-11401):
+	// right after ai->JustDied, a dead TempSummon notifies its
+	// creature summoner's AI (SUMMONED_UNIT_DIES, 82). TDB 26091:
+	// 7 rows.
+	s.smartSummonedUnitDies(ctx, tm)
 	// Eluna CREATURE_EVENT_ON_DIED (4) has no session funnel on this
 	// path, so it fires through the server-side twin with the attacker
 	// motion as killer, ahead of the native hook like C++ JustDied.
