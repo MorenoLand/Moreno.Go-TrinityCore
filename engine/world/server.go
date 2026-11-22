@@ -250,6 +250,9 @@ type Server struct {
 	bgTemplatesMu             sync.Mutex
 	bgTemplates               map[uint32]*bgTemplate // _battlegroundTemplates by type id (battleground_mgr.go), guarded by bgTemplatesMu
 	bgTemplatesLoaded         bool
+	smartScriptsMu            sync.RWMutex
+	smartScripts              map[uint32][]*smartScriptRow // smart_scripts creature-source rows by entry, guarded by smartScriptsMu (smart_ai.go)
+	smartScriptsLoaded        bool
 	arenaMu                   sync.RWMutex
 	arenaState                map[uint64]*arenaBattlegroundState
 	arenaTickLast             time.Time
@@ -1137,6 +1140,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadContinentTransports(ctx)
 	s.loadWorldStates(ctx)
 	s.loadBattlegroundTemplates(ctx)
+	s.loadSmartScripts(ctx)
 	s.initializeMailState(ctx)
 	s.seedItemGUID(ctx)
 	s.loadStoredContainerLoot(ctx)

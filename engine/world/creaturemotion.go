@@ -158,6 +158,9 @@ type creatureMotion struct {
 	CreatureType uint32
 	// AIName mirrors creature_template.AIName (TurretAI, CombatAI.cpp:231-265).
 	AIName string
+	// smart is the per-creature SmartAI runtime state (smart_ai.go); nil
+	// unless AIName is SmartAI and the entry has smart_scripts rows.
+	smart *smartScriptState
 	// VehicleCondKnown / VehicleHasConditions cache VehicleAI::LoadConditions
 	// (CombatAI.cpp:308-311: HasConditionsForNotGroupedEntry for
 	// CONDITION_SOURCE_TYPE_CREATURE_TEMPLATE_VEHICLE, entry): resolved once
@@ -1336,6 +1339,13 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 		motion.DeathState = creatureDeathAlive
 	}
 	s.motionMu.Unlock()
+	// SmartAI::JustDied (SmartAI.cpp:570-575) runs
+	// ProcessEventsFor(SMART_EVENT_DEATH, killer); the SmartAI engine
+	// (smart_ai.go) dispatches it here, after the motion lock. The killer
+	// GUID is not carried by the death-state arm, so the invoker is 0.
+	if state == creatureDeathJustDied {
+		s.smartProcessEvents(ctx, motion, smartEventDeath, 0, 0, 0)
+	}
 	for _, arm := range interrupted {
 		s.sendCreatureInterruptPackets(motion, arm)
 	}
@@ -1947,6 +1957,10 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		// cast once at the engage victim, non-triggered; the AICOND_COMBAT
 		// event pre-arm ran inside the motion lock above.
 		s.castAggroConditionSpells(ctx, fireMotion, firePlayerGUID)
+		// SmartAI::JustEngagedWith (SmartAI.cpp:562-568) runs
+		// ProcessEventsFor(SMART_EVENT_AGGRO, enemy); the SmartAI engine
+		// (smart_ai.go) dispatches it here, after the motion lock.
+		s.smartProcessEvents(ctx, fireMotion, smartEventAggro, firePlayerGUID, 0, 0)
 	}
 	// Unit::Attack (Unit.cpp:5737) fires Creature::CallAssistance on every
 	// attack — the flag gates it to once per engagement — so the radius
@@ -7018,6 +7032,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.ScriptFollowAngle = 0
 		return
 	}
+	// SmartAI::UpdateAI (SmartAI.cpp:284-303) runs GetScript()->OnUpdate
+	// (SmartScript.cpp:3676) every tick; the SmartAI engine (smart_ai.go)
+	// drives the UPDATE/UPDATE_IC/UPDATE_OOC/HEALTH_PCT/RANGE timers here.
+	// motionMu is not held on this path.
+	s.smartUpdateTimers(ctx, motion, now)
 	// TempSummon::Update timed arms (TemporarySummon.cpp:66-170): the
 	// script-summon bridge stamps the timer only for the timed family
 	// (0/1/2/3) — the corpse/dead legs run in checkDeadTempSummon via
