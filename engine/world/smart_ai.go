@@ -1,6 +1,11 @@
 // SmartAI engine — item-6 census Axis1#2 (slice 1: engine + hooks + TALK /
 // SET_FACTION / PLAY_EMOTE / CAST / AUTO_ATTACK / SET_EVENT_PHASE;
-// slice 2: the remaining AGGRO-used actions and targets).
+// slice 2: the remaining AGGRO-used actions and targets; slice 3:
+// timed-action lists (CALL_TIMED_ACTIONLIST / RANDOM / RANGE + the
+// list engine below), the phase actions (INC/RANDOM/RANDOM_RANGE) and
+// the small state actions (SET_REACT_STATE, ALLOW_COMBAT_MOVEMENT,
+// REMOVE_NPC_FLAG, SET_ROOT, SET_VISIBILITY, SET_ACTIVE, ATTACK_START,
+// INTERRUPT_SPELL).
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -15,12 +20,16 @@
 // source_type-0 AGGRO rows over 1,426 entries): TALK, CAST, SET_FACTION,
 // PLAY_EMOTE, AUTO_ATTACK, SET_EVENT_PHASE, SET_INST_DATA (type 1),
 // CALL_FOR_HELP, SET_DATA, SOUND, STORE_TARGET_LIST, REMOVEAURASFROMSPELL,
-// REMOVE_UNIT_FIELD_BYTES_1 (byte 0 only), SUMMON_CREATURE. RESET wiring
+// REMOVE_UNIT_FIELD_BYTES_1 (byte 0 only), SUMMON_CREATURE,
+// CALL_TIMED_ACTIONLIST + CALL_RANDOM_TIMED_ACTIONLIST +
+// CALL_RANDOM_RANGE_TIMED_ACTIONLIST (source_type-9 timed-action lists,
+// installed per target creature, stepped from smartUpdateTimers), and
+// SET_REACT_STATE + the SET/ADD/REMOVE_NPC_FLAG family. RESET wiring
 // landed with smartReset / smartJustReachedHome (evade-follow legs, home
 // arrival, spawn): the EVADE event fires from triggerCreatureEvade, RESPAWN +
 // OnReset from fireCreatureSpawned. `.reload smart_scripts` re-runs the
-// loader (reloadSmartScripts). Everything else (timed-action lists,
-// GO/instance/area-trigger sources) is a documented residual in
+// loader (reloadSmartScripts). Everything else (GO/instance/area-trigger
+// sources) is a documented residual in
 // smartProcessAction / the call sites below, not a silent gap.
 //
 // Locking: every entry point assumes motionMu is NOT held (the Nov-17
@@ -64,26 +73,33 @@ const (
 )
 
 // SMART_ACTION ids (SmartScriptMgr.h:457-600), AGGRO-used set. The
-// remaining AGGRO-row actions (80, 31, 21, 83, 8, 88, 43, 42, 146, 103,
-// 23, 49, 36, 41, 87, 25, 47, 5, 74, 92, 133, 30) hit the default arm,
-// matching C++'s "Unhandled Action type" log-and-skip
-// (SmartScript.cpp:2370-2372): no timed-actionlist, react-state, or
-// template machinery exists in Go to run them on.
+// remaining AGGRO-row actions (31, 21, 43, 42, 146, 103, 23, 49, 36, 41,
+// 25, 47, 5, 74, 92, 133, 30) hit the default arm, matching C++'s
+// "Unhandled Action type" log-and-skip
+// (SmartScript.cpp:2370-2372): no react-state, or template machinery
+// exists in Go to run them on.
 const (
-	smartActionTalk                  uint32 = 1
-	smartActionSetFaction            uint32 = 2
-	smartActionSound                 uint32 = 4
-	smartActionPlayEmote             uint32 = 5
-	smartActionCast                  uint32 = 11
-	smartActionSummonCreature        uint32 = 12
-	smartActionAutoAttack            uint32 = 20
-	smartActionSetEventPhase         uint32 = 22
-	smartActionRemoveAurasFromSpell  uint32 = 28
-	smartActionSetInstData           uint32 = 34
-	smartActionCallForHelp           uint32 = 39
-	smartActionSetData               uint32 = 45
-	smartActionStoreTargetList       uint32 = 64
-	smartActionRemoveUnitFieldBytes1 uint32 = 91
+	smartActionTalk                           uint32 = 1
+	smartActionSetFaction                     uint32 = 2
+	smartActionSound                          uint32 = 4
+	smartActionPlayEmote                      uint32 = 5
+	smartActionSetReactState                  uint32 = 8
+	smartActionCast                           uint32 = 11
+	smartActionSummonCreature                 uint32 = 12
+	smartActionAutoAttack                     uint32 = 20
+	smartActionSetEventPhase                  uint32 = 22
+	smartActionRemoveAurasFromSpell           uint32 = 28
+	smartActionSetInstData                    uint32 = 34
+	smartActionCallForHelp                    uint32 = 39
+	smartActionSetData                        uint32 = 45
+	smartActionStoreTargetList                uint32 = 64
+	smartActionCallTimedActionList            uint32 = 80
+	smartActionSetNPCFlag                     uint32 = 81
+	smartActionAddNPCFlag                     uint32 = 82
+	smartActionRemoveNPCFlag                  uint32 = 83
+	smartActionCallRandomTimedActionList      uint32 = 87
+	smartActionCallRandomRangeTimedActionList uint32 = 88
+	smartActionRemoveUnitFieldBytes1          uint32 = 91
 )
 
 // SMART_TARGET ids (SmartScriptMgr.h:1221-1253), AGGRO-used set. Target 8
@@ -174,11 +190,14 @@ type smartScriptRow struct {
 
 // smartScriptEvent is a row plus its runtime state (SmartScriptHolder:
 // timer, active, runOnce; SmartScript.cpp InitTimer/RecalcTimer).
+// enableTimed is the timed-action-list chaining flag (SmartScriptMgr.h:1573):
+// only the enabled list event ticks, and firing it enables the next one.
 type smartScriptEvent struct {
-	row     *smartScriptRow
-	timer   uint32
-	active  bool
-	runOnce bool
+	row         *smartScriptRow
+	timer       uint32
+	active      bool
+	runOnce     bool
+	enableTimed bool
 }
 
 // smartScriptState is the per-creature SmartScript (SmartScript.h): the
@@ -186,27 +205,38 @@ type smartScriptEvent struct {
 // ctor sets mEventPhase = 0, so a nonzero phase mask matches nothing until
 // a SET_EVENT_PHASE arm runs), last invoker, the TALK duration timer that
 // fires SMART_EVENT_TEXT_OVER, and the stored-target lists
-// (SmartScript::_storedTargets, SmartScript.cpp:108-121).
+// (SmartScript::_storedTargets, SmartScript.cpp:108-121). timedList is the
+// installed SMART_SCRIPT_TYPE_TIMED_ACTIONLIST (SmartScript.h:109): its
+// events run one at a time, chained by enableTimed, with timedListInvoker
+// as their invoker; processingTimedList is the isProcessingTimedActionList
+// guard (SmartScript.cpp:3952-3958) that refuses a list overwrite from
+// inside a list event's own action.
 type smartScriptState struct {
-	events         []*smartScriptEvent
-	phase          uint32
-	nested         int
-	linkDepth      int
-	lastInvoker    uint64
-	defaultFaction uint32
-	textTimer      uint32
-	useTextTimer   bool
-	lastTextID     uint32
-	talkerEntry    uint32
-	lastTick       time.Time
-	firedInit      bool
-	storedTargets  map[uint32][]uint64
+	events              []*smartScriptEvent
+	phase               uint32
+	nested              int
+	linkDepth           int
+	lastInvoker         uint64
+	defaultFaction      uint32
+	textTimer           uint32
+	useTextTimer        bool
+	lastTextID          uint32
+	talkerEntry         uint32
+	lastTick            time.Time
+	firedInit           bool
+	storedTargets       map[uint32][]uint64
+	timedList           []*smartScriptEvent
+	timedListInvoker    uint64
+	processingTimedList bool
 }
 
 // loadSmartScripts loads the creature-source smart_scripts rows into the
-// server store (SmartScriptMgr::LoadSmartScripts). The repo placeholder
-// world.db carries zero rows, so this is a no-op there; a populated world DB
-// fills the map. GO/instance/area-trigger sources are out of scope. The
+// server store (SmartScriptMgr::LoadSmartScripts), plus the source_type-9
+// timed-action-list rows into their own map (SmartAIMgr::GetScript,
+// SmartScriptMgr.cpp:380-391: lists are keyed by entryOrGuid alone).
+// The repo placeholder world.db carries zero rows, so this is a no-op
+// there; a populated world DB fills the maps. GO/instance/area-trigger
+// sources are out of scope. The
 // conditions table is loaded alongside as a skip-set: TDB 26091 carries
 // 1,205 SourceType-22 (smart event) condition rows, 69 of them on AGGRO
 // events (18 distinct events), and Go has no conditions engine, so an event
@@ -231,21 +261,27 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 	}
 	defer rows.Close()
 	byEntry := make(map[int32][]*smartScriptRow)
+	byList := make(map[int32][]*smartScriptRow)
 	for rows.Next() {
 		var r smartScriptRow
 		var tx, ty, tz, to float64
 		if err := rows.Scan(&r.entryOrGUID, &r.sourceType, &r.id, &r.link, &r.eventType, &r.eventPhaseMask, &r.eventChance, &r.eventFlags, &r.eventParam1, &r.eventParam2, &r.eventParam3, &r.eventParam4, &r.eventParam5, &r.actionType, &r.actionParam1, &r.actionParam2, &r.actionParam3, &r.actionParam4, &r.actionParam5, &r.actionParam6, &r.targetType, &r.targetParam1, &r.targetParam2, &r.targetParam3, &r.targetParam4, &tx, &ty, &tz, &to); err != nil {
 			continue
 		}
-		if r.sourceType != 0 {
+		if r.sourceType != 0 && r.sourceType != 9 {
 			continue
 		}
 		r.targetX, r.targetY, r.targetZ, r.targetO = float32(tx), float32(ty), float32(tz), float32(to)
 		row := r
+		if row.sourceType == 9 {
+			byList[row.entryOrGUID] = append(byList[row.entryOrGUID], &row)
+			continue
+		}
 		byEntry[row.entryOrGUID] = append(byEntry[row.entryOrGUID], &row)
 	}
 	s.smartScriptsMu.Lock()
 	s.smartScripts = byEntry
+	s.smartTimedActionLists = byList
 	s.smartScriptsMu.Unlock()
 	s.loadSmartConditions(ctx)
 }
@@ -327,6 +363,19 @@ func (s *Server) smartRowsFor(entry int32) []*smartScriptRow {
 	s.smartScriptsMu.RLock()
 	defer s.smartScriptsMu.RUnlock()
 	return s.smartScripts[entry]
+}
+
+// smartTimedActionListRows is SmartAIMgr::GetScript (SmartScriptMgr.cpp:
+// 380-391) for SMART_SCRIPT_TYPE_TIMED_ACTIONLIST: the list rows by id,
+// or nil when the list does not exist (C++ logs at debug and returns an
+// empty list; the install then clears and stops).
+func (s *Server) smartTimedActionListRows(listID int32) []*smartScriptRow {
+	if s == nil {
+		return nil
+	}
+	s.smartScriptsMu.RLock()
+	defer s.smartScriptsMu.RUnlock()
+	return s.smartTimedActionLists[listID]
 }
 
 // smartStateFor returns the creature's SmartScript state, attaching it on
@@ -605,6 +654,22 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 		return
 	}
 	if motion.Evading {
+		// SmartScript::OnUpdate's evade branch (SmartScript.cpp:3685-3696):
+		// a finished list (no enabled event left) clears so a later
+		// CALL_TIMED_ACTIONLIST can install; a running list survives the
+		// evade and resumes on return.
+		if len(st.timedList) > 0 {
+			running := false
+			for _, ev := range st.timedList {
+				if ev.enableTimed {
+					running = true
+					break
+				}
+			}
+			if !running {
+				st.timedList = nil
+			}
+		}
 		return
 	}
 	diff := uint32(0)
@@ -652,6 +717,122 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 			ev.timer -= diff
 		}
 	}
+	s.smartUpdateTimedActionList(ctx, motion, st, diff)
+}
+
+// smartUpdateTimedActionList is SmartScript::OnUpdate's timed-action-list
+// leg (SmartScript.cpp:3713-3739) plus the UpdateTimer timed branch
+// (:3541-3570): only enabled list events tick; the IC/OOC gates hold the
+// timer while the combat state mismatches (the same gate as the main
+// loop, mirroring UpdateTimer's early return); on expiry the event fires
+// with the list invoker, then disables itself and enables the next
+// higher-id event — the advance is unconditional, matching C++ (a gated
+// action still moves the list on). When no event is enabled the list is
+// finished and clears. The UpdateTimer CAST-delay and root arms have no
+// Go twin in the main loop either and stay out here too.
+func (s *Server) smartUpdateTimedActionList(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
+	if len(st.timedList) == 0 {
+		return
+	}
+	st.processingTimedList = true
+	needCleanup := true
+	for _, ev := range st.timedList {
+		if !ev.enableTimed {
+			continue
+		}
+		needCleanup = false
+		// UpdateTimer's phase gate (:3502-3503) sits ahead of the timer:
+		// a phase-mismatched list event holds its timer AND its place
+		// in the list — unlike the gates inside ProcessEvent (runOnce,
+		// WHILE_CHARMED, difficulty), which still advance the list.
+		if ev.row.eventPhaseMask != 0 && !st.inPhase(ev.row.eventPhaseMask) {
+			continue
+		}
+		if ev.row.eventType == smartEventUpdateIC && !motion.InCombat {
+			continue
+		}
+		if ev.row.eventType == smartEventUpdateOOC && motion.InCombat {
+			continue
+		}
+		if ev.timer < diff {
+			ev.active = true
+			s.smartProcessEvent(ctx, motion, st, ev, st.timedListInvoker, 0, 0)
+			ev.enableTimed = false
+			for _, next := range st.timedList {
+				if next.row.id > ev.row.id {
+					next.enableTimed = true
+					break
+				}
+			}
+		} else {
+			ev.timer -= diff
+		}
+	}
+	st.processingTimedList = false
+	if needCleanup {
+		st.timedList = nil
+	}
+}
+
+// smartStateForTimedList attaches the SmartScript state for a timed-list
+// install on a creature with no creature-source rows: C++ installs the
+// list on any SmartAI creature (SetTimedActionList needs only IsSmart),
+// so a row-less SmartAI still runs its list. No init events fire —
+// there are no rows to fire them from.
+func (s *Server) smartStateForTimedList(ctx context.Context, motion *creatureMotion) *smartScriptState {
+	if st := s.smartStateFor(ctx, motion); st != nil {
+		return st
+	}
+	if s == nil || motion == nil || motion.AIName != "SmartAI" {
+		return nil
+	}
+	st := &smartScriptState{phase: 0, defaultFaction: motion.Faction}
+	motion.smart = st
+	return st
+}
+
+// smartSetTimedActionList is SmartScript::SetTimedActionList
+// (SmartScript.cpp:3950-3977): a running list blocks a new install
+// unless allowOverride is set, and a list started from inside a list
+// event's own action is refused (the isProcessingTimedActionList guard
+// — overwriting mid-iteration would invalidate the holder the caller
+// is running from). The install clears first, so an unknown id empties
+// the running list and stops. Each row is copied before its event type
+// is forced — the stored rows are shared — and the timer type picks the
+// forced type: 0 OOC, 1 IC, anything else UPDATE. Only the first event
+// is enabled; InitTimer rolls its initial window (event_param1/2), the
+// repeat window (param3/4) re-arms on fire.
+func (s *Server) smartSetTimedActionList(ctx context.Context, motion *creatureMotion, listID, timerType uint32, allowOverride bool, invokerGUID uint64) {
+	st := s.smartStateForTimedList(ctx, motion)
+	if st == nil {
+		return
+	}
+	if st.processingTimedList {
+		return
+	}
+	if !allowOverride && len(st.timedList) > 0 {
+		return
+	}
+	rows := s.smartTimedActionListRows(int32(listID))
+	st.timedList = nil
+	if len(rows) == 0 {
+		return
+	}
+	st.timedListInvoker = invokerGUID
+	forced := smartEventUpdate
+	switch timerType {
+	case 0:
+		forced = smartEventUpdateOOC
+	case 1:
+		forced = smartEventUpdateIC
+	}
+	for i, row := range rows {
+		rc := *row
+		rc.eventType = forced
+		ev := &smartScriptEvent{row: &rc, enableTimed: i == 0}
+		s.smartInitTimer(ev)
+		st.timedList = append(st.timedList, ev)
+	}
 }
 
 // smartProcessAction is SmartScript::ProcessAction (:255-2379), AGGRO-used
@@ -692,6 +873,8 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		packet.WriteU32(ev.row.actionParam1)
 		packet.WriteU64(motion.GUID)
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+	case smartActionSetReactState:
+		s.smartActionSetReactState(ctx, motion, st, ev, invokerGUID)
 	case smartActionCast:
 		s.smartActionCast(ctx, motion, st, ev, invokerGUID)
 	case smartActionSummonCreature:
@@ -726,13 +909,16 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 			st.storedTargets = make(map[uint32][]uint64)
 		}
 		st.storedTargets[ev.row.actionParam1] = guids
+	case smartActionCallTimedActionList, smartActionCallRandomTimedActionList, smartActionCallRandomRangeTimedActionList:
+		s.smartActionCallTimedActionList(ctx, motion, st, ev, invokerGUID)
+	case smartActionSetNPCFlag, smartActionAddNPCFlag, smartActionRemoveNPCFlag:
+		s.smartActionNPCFlag(ctx, motion, st, ev, invokerGUID)
 	case smartActionRemoveUnitFieldBytes1:
 		s.smartActionRemoveUnitFieldBytes1(motion, st, ev, invokerGUID)
 	default:
-		// Residual: the remaining AGGRO-row actions (80, 31, 21, 83, 8,
-		// 88, 43, 42, 146, 103, 23, 49, 36, 41, 87, 25, 47, 5, 74,
-		// 92, 133, 30) have no Go twin — timed-action lists, react
-		// state, mounts, invincibility HP, visibility — and the event
+		// Residual: the remaining AGGRO-row actions (31, 21, 43, 42, 146,
+		// 103, 23, 49, 36, 41, 25, 47, 5, 74, 92, 133, 30) have no Go twin
+		// — mounts, invincibility HP, visibility — and the event
 		// still consumed its chance roll and link below, matching
 		// C++'s log-and-skip default (SmartScript.cpp:2370-2372).
 	}
@@ -1077,6 +1263,115 @@ func (s *Server) smartActionRemoveUnitFieldBytes1(motion *creatureMotion, st *sm
 		tm.StandState &^= uint8(ev.row.actionParam1)
 		tm.StandStateKnown = true
 		s.motionMu.Unlock()
+	}
+}
+
+// smartActionSetReactState is SMART_ACTION_SET_REACT_STATE
+// (SmartScript.cpp:464-472): every creature target takes the param1
+// react state (Creature.h:117: a plain setter, no broadcast). The
+// ReactStateKnown stamp keeps the sweep from re-affirming the template
+// value (creaturemotion.go:5945) — the same latch the Lua SetReactState
+// bridge stamps. The Go react values match C++'s ReactStates order
+// (UnitDefines.h:340-342: passive 0, defensive 1, aggressive 2).
+func (s *Server) smartActionSetReactState(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tm.ReactState = uint8(ev.row.actionParam1)
+		tm.ReactStateKnown = true
+		s.motionMu.Unlock()
+	}
+}
+
+// smartActionNPCFlag is SMART_ACTION_SET_NPC_FLAG / ADD_NPC_FLAG /
+// REMOVE_NPC_FLAG (SmartScript.cpp:1700-1720): SetUInt32Value /
+// SetFlag / RemoveFlag on UNIT_NPC_FLAGS (field 82) for creature
+// targets — whole-value / OR / AND-NOT. The motion value plus the
+// NPCFlagsKnown latch (the Lua SetNPCFlags bridge's twin) and the
+// field-82 values broadcast carry it to clients.
+func (s *Server) smartActionNPCFlag(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		switch ev.row.actionType {
+		case smartActionSetNPCFlag:
+			tm.NPCFlags = ev.row.actionParam1
+		case smartActionAddNPCFlag:
+			tm.NPCFlags |= ev.row.actionParam1
+		default:
+			tm.NPCFlags &^= ev.row.actionParam1
+		}
+		tm.NPCFlagsKnown = true
+		flags := tm.NPCFlags
+		mapID, instanceID, guid := tm.Map, tm.InstanceID, tm.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCFlags: flags})
+	}
+}
+
+// smartActionCallTimedActionList is SMART_ACTION_CALL_TIMED_ACTIONLIST
+// (SmartScript.cpp:1677-1700) plus the RANDOM (87, :1763-1792) and
+// RANDOM_RANGE (88, :1794-1814) twins: each target creature that IsSmart
+// installs the list with the calling script's last invoker. TARGET_NONE
+// installs nothing (C++ logs the bad row and breaks; Go resolves no
+// targets for it). The random twins share the calling row's param2/3 as
+// timerType/allowOverride through the C++ action union overlap
+// (SmartScriptMgr.h:977-983: randTimedActionList.actionLists[1..2] are
+// timedActionList.timerType/allowOverride), so 87 reads its ids from
+// params 1-6 and 88 its range from params 1-2 at the same positions.
+func (s *Server) smartActionCallTimedActionList(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if ev.row.targetType == smartTargetNone {
+		return
+	}
+	listID := ev.row.actionParam1
+	switch ev.row.actionType {
+	case smartActionCallRandomTimedActionList:
+		var ids []uint32
+		for _, p := range []uint32{ev.row.actionParam1, ev.row.actionParam2, ev.row.actionParam3, ev.row.actionParam4, ev.row.actionParam5, ev.row.actionParam6} {
+			if p != 0 {
+				ids = append(ids, p)
+			}
+		}
+		if len(ids) == 0 {
+			return
+		}
+		listID = ids[rand.Intn(len(ids))]
+	case smartActionCallRandomRangeTimedActionList:
+		min, max := ev.row.actionParam1, ev.row.actionParam2
+		if max < min {
+			max = min
+		}
+		if max == min {
+			listID = min
+		} else {
+			listID = min + uint32(rand.Int63n(int64(max-min+1)))
+		}
+	}
+	invoker := invokerGUID
+	if invoker == 0 {
+		invoker = st.lastInvoker
+	}
+	for _, tgt := range s.smartTargets(motion, st, ev, invokerGUID) {
+		if tgt.isPlayer {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil || tm.AIName != "SmartAI" {
+			continue
+		}
+		s.smartSetTimedActionList(ctx, tm, listID, ev.row.actionParam2, ev.row.actionParam3 != 0, invoker)
 	}
 }
 
