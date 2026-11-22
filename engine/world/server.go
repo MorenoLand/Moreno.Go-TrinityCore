@@ -1721,6 +1721,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			}
 			s.updateShutdownTimer(ctx, now)
 			s.updateContinentTransports(now)
+			s.updateGameObjectSmartAI(ctx, now)
 			s.updateWeather(ctx, now)
 			s.updateTimeSync(now)
 			s.updateMailDeliveries(ctx, now.Unix())

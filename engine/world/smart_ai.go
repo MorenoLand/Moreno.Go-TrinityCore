@@ -847,10 +847,10 @@ func (s *Server) smartRowsForGO(entry int32) []*smartScriptRow {
 // GO record itself, so timers, phase, counters and the nested guard
 // persist across fires; the attach write rides objectsMu so two
 // concurrent fires cannot attach twice, and only the attaching call
-// fires the init events. No GO tick exists in Go (no UpdateAI twin),
-// so timed lists installed on the state and UPDATE-type GO rows stay
-// dormant until one lands — the dispatch and install legs are live,
-// the tick leg is the documented residual.
+// fires the init events. The tick leg is updateGameObjectSmartAI
+// (SmartGameObjectAI::UpdateAI twin, driven from runWorldTick), so
+// timed lists installed on the state and UPDATE-type GO rows run
+// once attached.
 func (s *Server) smartStateForGO(ctx context.Context, mapID, instanceID uint32, guid uint64) (*creatureMotion, *smartScriptState) {
 	if s == nil || guid == 0 {
 		return nil, nil
@@ -910,6 +910,15 @@ func (s *Server) smartStateForGO(ctx context.Context, mapID, instanceID uint32, 
 		st.firedInit = true
 		s.smartProcessEvents(ctx, motion, smartEventAIInit, 0, 0, 0)
 		s.smartProcessEvents(ctx, motion, smartEventJustCreated, 0, 0, 0)
+		// SmartGameObjectAI::InitializeAI (SmartAI.cpp:1015-1018)
+		// fires RESPAWN after OnInitialize when the GO is spawned
+		// (spawned-by-default); a runtime summon (IsRuntimeSpawn)
+		// skips it, like C++'s isSpawned gate. TDB 26091: 14
+		// RESPAWN rows, all "On Spawn" (TALK / SET_DATA /
+		// SUMMON_CREATURE; the 147 row is load-dead).
+		if !goState.IsRuntimeSpawn {
+			s.smartProcessEvents(ctx, motion, smartEventRespawn, 0, 0, 0)
+		}
 	}
 	return motion, st
 }
@@ -978,6 +987,10 @@ func (s *Server) smartStateForTransport(ctx context.Context, guid uint64) (*crea
 		st.firedInit = true
 		s.smartProcessEvents(ctx, motion, smartEventAIInit, 0, 0, 0)
 		s.smartProcessEvents(ctx, motion, smartEventJustCreated, 0, 0, 0)
+		// Transports are static spawns, so InitializeAI's RESPAWN
+		// fires (SmartAI.cpp:1015-1018); no RESPAWN rows key on a
+		// transport entry in TDB 26091, so this is a no-op today.
+		s.smartProcessEvents(ctx, motion, smartEventRespawn, 0, 0, 0)
 	}
 	return motion, st
 }
@@ -2205,7 +2218,30 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 		s.smartUpdateDespawn(ctx, motion, st, diff)
 		return
 	}
-	if st.useTextTimer {
+	s.smartUpdateScriptOnUpdate(ctx, motion, st, diff)
+	// SmartAI::UpdateAI (SmartAI.cpp:300) runs UpdateFollow after
+	// OnUpdate: the arrival check ticks here, on the same diff.
+	// UpdatePath runs ahead of it and UpdateDespawn after it, the
+	// C++ UpdateAI order (SmartAI.cpp:284-303).
+	s.smartUpdatePath(ctx, motion, st, diff)
+	s.smartUpdateFollow(ctx, motion, st, diff)
+	s.smartUpdateDespawn(ctx, motion, st, diff)
+}
+
+// smartUpdateScriptOnUpdate is the shared SmartScript::OnUpdate core
+// (SmartScript.cpp:3676-3752) minus the evade branch: the text timer,
+// the timed-event loop (UpdateTimer :3499-3597), the stored-event and
+// timed-action-list legs, and the mRemIDs drain. The creature tick
+// (smartUpdateTimers) and the gameobject tick (smartUpdateGOTimers)
+// both run it; the creature-only legs (evade branch, UpdatePath,
+// UpdateFollow, UpdateDespawn) stay in SmartAI::UpdateAI's half.
+func (s *Server) smartUpdateScriptOnUpdate(ctx context.Context, motion *creatureMotion, st *smartScriptState, diff uint32) {
+	// OnUpdate's text-timer leg is gated on `me` (SmartScript.cpp:3753:
+	// `mUseTextTimer && me`) — me is null for GO scripts, so a GO TALK
+	// never yields TEXT_OVER even though the TALK arm sets the timer.
+	// Vacuous on TDB 26091 (132 TEXT_OVER rows, all src-0, 0 src-1),
+	// but the guard keeps the GO tick C++-exact.
+	if st.useTextTimer && !motion.BaseIsGameObject {
 		if st.textTimer < diff {
 			textID, entry := st.lastTextID, st.talkerEntry
 			st.lastTextID, st.talkerEntry, st.textTimer, st.useTextTimer = 0, 0, 0, false
@@ -2254,13 +2290,133 @@ func (s *Server) smartUpdateTimers(ctx context.Context, motion *creatureMotion, 
 		}
 		st.remTimedEventIDs = nil
 	}
-	// SmartAI::UpdateAI (SmartAI.cpp:300) runs UpdateFollow after
-	// OnUpdate: the arrival check ticks here, on the same diff.
-	// UpdatePath runs ahead of it and UpdateDespawn after it, the
-	// C++ UpdateAI order (SmartAI.cpp:284-303).
-	s.smartUpdatePath(ctx, motion, st, diff)
-	s.smartUpdateFollow(ctx, motion, st, diff)
-	s.smartUpdateDespawn(ctx, motion, st, diff)
+}
+
+// smartUpdateGOTimers is SmartGameObjectAI::UpdateAI
+// (SmartAI.cpp:1007-1010): GetScript()->OnUpdate(diff) — the OnUpdate
+// core only, no creature legs (a GO never evades, paths, follows or
+// despawns by the escort machine). UPDATE_IC never fires for a GO
+// (UpdateTimer :3505 returns when me is null); UPDATE_OOC fires (a GO
+// is never engaged). The state must already be attached — attach is
+// spawn/fire driven (smartStateForGO, called by the driver on first
+// sight), never done here.
+func (s *Server) smartUpdateGOTimers(ctx context.Context, motion *creatureMotion, now time.Time) {
+	st := motion.smart
+	if st == nil {
+		return
+	}
+	diff := uint32(0)
+	if !st.lastTick.IsZero() {
+		d := now.Sub(st.lastTick)
+		if d > 0 {
+			diff = uint32(d.Milliseconds())
+			if diff > 60000 {
+				diff = 60000
+			}
+		}
+	}
+	st.lastTick = now
+	s.smartUpdateScriptOnUpdate(ctx, motion, st, diff)
+}
+
+// updateGameObjectSmartAI is the SmartGameObjectAI::UpdateAI tick for
+// live gameobjects (SmartAI.cpp:1007-1010), driven from runWorldTick:
+// every dynamic gameobject with an attached SmartScript state ticks
+// its OnUpdate core, plus continent transports with an attached state
+// (their 71 timed-list rows install on node arrival). A state with no
+// attached script attaches here on first sight (smartStateForGO:
+// AI_INIT, JUST_CREATED, then RESPAWN when spawned by default) so
+// UPDATE/UPDATE_OOC rows and the 14 RESPAWN rows run from spawn
+// instead of waiting for a fire. The tick is proximity gated on the
+// active-creature band (Config.VisibilityDistanceContinents, default
+// 100y, the updateActiveCreatures twin): C++ only updates a GO while
+// its grid is active, so a distant GO's UPDATE rows hold their timers
+// instead of summoning or talking into an empty map. Transports gate
+// on their live spawn position the same way.
+func (s *Server) updateGameObjectSmartAI(ctx context.Context, now time.Time) {
+	if s == nil {
+		return
+	}
+	var players []playerPos
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil {
+			players = append(players, playerPos{Map: sess.player.Map, InstanceID: sess.player.InstanceID, X: sess.player.X, Y: sess.player.Y})
+		}
+	}
+	s.sessionsMu.RUnlock()
+	if len(players) == 0 {
+		return
+	}
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 100.0
+	}
+	near := func(mapID, instanceID uint32, x, y float32) bool {
+		for _, p := range players {
+			if p.Map != mapID || p.InstanceID != instanceID {
+				continue
+			}
+			if math.Abs(float64(x-p.X)) <= distance && math.Abs(float64(y-p.Y)) <= distance {
+				return true
+			}
+		}
+		return false
+	}
+	type goRef struct {
+		guid       uint64
+		mapID      uint32
+		instanceID uint32
+		x, y       float32
+	}
+	var refs []goRef
+	s.objectsMu.RLock()
+	for _, st := range s.dynamicGameObjects {
+		if st != nil {
+			refs = append(refs, goRef{st.GUID, st.Map, st.InstanceID, st.X, st.Y})
+		}
+	}
+	for _, m := range s.instanceGameObjects {
+		for _, st := range m {
+			if st != nil {
+				refs = append(refs, goRef{st.GUID, st.Map, st.InstanceID, st.X, st.Y})
+			}
+		}
+	}
+	s.objectsMu.RUnlock()
+	for _, r := range refs {
+		if !near(r.mapID, r.instanceID, r.x, r.y) {
+			continue
+		}
+		motion, state := s.smartStateForGO(ctx, r.mapID, r.instanceID, r.guid)
+		if motion == nil || state == nil {
+			continue
+		}
+		s.smartUpdateGOTimers(ctx, motion, now)
+	}
+	type transportRef struct {
+		guid  uint64
+		x, y  float32
+		mapID uint32
+	}
+	var transportRefs []transportRef
+	s.transportMu.Lock()
+	for _, transport := range s.transports {
+		if transport != nil {
+			transportRefs = append(transportRefs, transportRef{transportGUID(transport.Spawn.GUID), transport.Spawn.X, transport.Spawn.Y, transport.Spawn.Map})
+		}
+	}
+	s.transportMu.Unlock()
+	for _, r := range transportRefs {
+		if !near(r.mapID, 0, r.x, r.y) {
+			continue
+		}
+		motion, state := s.smartStateForTransport(ctx, r.guid)
+		if motion == nil || state == nil {
+			continue
+		}
+		s.smartUpdateGOTimers(ctx, motion, now)
+	}
 }
 
 // smartCreateTimedEvent is the SMART_ACTION_CREATE_TIMED_EVENT arm
@@ -4135,10 +4291,11 @@ func (s *Server) smartActionKillUnit(ctx context.Context, motion *creatureMotion
 // has no Go twin (no summoner-death GO sweep) — both types take
 // the same timed path. TDB 26091: 226 rows, 174 live (src0+9);
 // targets POSITION (154), SELF (18), CLOSEST_GAMEOBJECT (2);
-// summonType 0 on 172 live rows, 1 on 2; despawn 3-30000s. The
-// 52 src1 GO-source rows stay residual (GO smart scripts do not
-// attach); the ev54 JUST_SUMMONED rows (2) never fire until that
-// dispatch exists (same family as the KILL / GOSSIP_SELECT gaps).
+// summonType 0 on 172 live rows, 1 on 2; despawn 0-999990s. The
+// 52 src-1 GO-source rows fire from GO SmartAI states now that GO
+// scripts attach (updateGameObjectSmartAI strip); the ev54
+// JUST_SUMMONED rows (2) never fire until that dispatch exists
+// (same family as the KILL / GOSSIP_SELECT gaps).
 func (s *Server) smartActionSummonGO(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
@@ -4158,7 +4315,8 @@ func (s *Server) smartActionSummonGO(ctx context.Context, motion *creatureMotion
 		if size <= 0 {
 			size = 1.0
 		}
-		dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: ev.row.actionParam1, OwnerGUID: ownerGUID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: o, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, PhaseMask: phaseMask, IsRuntimeSpawn: true}
+		rx, ry, rz, rw := gobjectQuatFromEulerZYX(float64(o), 0, 0)
+		dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: ev.row.actionParam1, OwnerGUID: ownerGUID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: o, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, LocalRotation: [4]float32{rx, ry, rz, rw}, PhaseMask: phaseMask, IsRuntimeSpawn: true}
 		if ev.row.actionParam2 > 0 {
 			dyn.DespawnTimer = time.AfterFunc(time.Duration(ev.row.actionParam2)*time.Second, func() {
 				s.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
