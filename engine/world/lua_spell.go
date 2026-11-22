@@ -968,6 +968,18 @@ func (s *session) fireSpellCheckCast(ctx context.Context, spellID uint32, spell 
 		return 0, 0
 	}
 	results, _ := s.server.Features.Scripts.TriggerSpellEvent2(ctx, spellID, scripting.SpellEventOnCheckCast, scripting.SpellEventOnCheckCast, spellObj)
+	return parseSpellCheckCastResults(results)
+}
+
+// parseSpellCheckCastResults folds TriggerSpellEvent2 returns into the
+// SpellCastResult the cast fails with plus the custom-error id, or
+// (0, 0) when no handler vetoes it. All registered handlers run and
+// the first non-OK numeric result wins, mirroring
+// CallScriptCheckCastHandlers (Spell.cpp:7977-7996); non-numeric,
+// negative, and >254 returns pass. The second return is the
+// custom-error id (SpellCustomError, C++ SetCustomCastResultMessage)
+// and only rides a SPELL_FAILED_CUSTOM_ERROR (172) failure.
+func parseSpellCheckCastResults(results [][]any) (uint8, uint32) {
 	for _, result := range results {
 		if len(result) == 0 {
 			continue
@@ -1011,6 +1023,29 @@ func (s *session) fireSpellCheckCast(ctx context.Context, spellID uint32, spell 
 		}
 	}
 	return 0, 0
+}
+
+// fireCreatureSpellCheckCast is the creature-path twin of the session
+// fireSpellCheckCast: same hook (SpellEventOnCheckCast, event 8),
+// same first-non-OK-wins fold, but the spell object is built from the
+// creature motion (luaCreatureSpellObject — GetCaster resolves to the
+// creature itself, GetTarget to the explicit target) and there is no
+// cast item (creatures never cast from an item, m_CastItem is nil on
+// the creature path). Skipped entirely when no handler is registered,
+// so unscripted creature casts pay only the HasHook lookup.
+func (s *Server) fireCreatureSpellCheckCast(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, dest [3]float32, hasDest bool) (uint8, uint32) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil {
+		return 0, 0
+	}
+	if !s.Features.Scripts.HasHook("spell:"+strconv.FormatUint(uint64(spellID), 10), scripting.SpellEventOnCheckCast) {
+		return 0, 0
+	}
+	spellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{dest: dest, hasDest: hasDest})
+	if spellObj == nil {
+		return 0, 0
+	}
+	results, _ := s.Features.Scripts.TriggerSpellEvent2(ctx, spellID, scripting.SpellEventOnCheckCast, scripting.SpellEventOnCheckCast, spellObj)
+	return parseSpellCheckCastResults(results)
 }
 
 // fireSpellHit dispatches the RegisterSpellEvent OnHit hook for one hit

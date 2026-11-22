@@ -90,9 +90,12 @@
 -- triggered (self-cast twin) + Talk(1) in C++ order + target self-casts
 -- PRESENCE 70994 + PRESENCE_2 71952 triggered (player:CastSpell
 -- bridged, freya/vezax precedent). The SpellScript IsVampire
--- CheckTarget fizzle leg has no bridge (a re-bite applies where C++
--- would fizzle the bite cast only; Talk/presence legs still fire in
--- C++ on that path). The _vampires set (GuidSet, :508) is PORTED
+-- CheckTarget fizzle leg does NOT apply to the boss cast: TDB
+-- spell_script_names binds spell_blood_queen_vampiric_bite to
+-- 70946/71475/71476/71477 only, NOT 71726 (verified 2026-11-22) —
+-- the boss-cast 71726 loads no script in C++, so a re-bite on a
+-- vampire applies; Talk/presence/dummy legs fire regardless. The
+-- _vampires set (GuidSet, :508) is PORTED
 -- tick 417 as per-player "vampire_<guidLow>" keys in the shared
 -- instanceData table (see recordVampire / clearVampireMarks below)
 -- for the achievement_once_bitten_twice_shy_n/_v gates
@@ -726,8 +729,9 @@ local VAMPIRE_AURAS = {
 -- (lua_spell.go fireSpellCheckCast). The script binds in C++ via
 -- spell_script_names to 70946/71475/71476/71477 (the player-castable
 -- bite variants), NOT 71726 — the boss-cast 71726 carries no script
--- binding in C++, and creature casts run no CheckCast gauntlet in Go,
--- so only the four bound IDs register here. The difficulty index is
+-- binding in C++ (TDB-verified 2026-11-22), so only the four bound
+-- IDs register here; the creature-cast gauntlet fires ev8 since the
+-- 2026-11-22 wire (boss_ai.go), but no hook exists for 71726. The difficulty index is
 -- the caster's raid difficulty: caster and target share the ICC map,
 -- so it equals the C++ target-map spawn mode. A nil target fails
 -- BAD_TARGETS (oozeZap precedent); C++ would dereference it. The

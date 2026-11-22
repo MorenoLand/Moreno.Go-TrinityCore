@@ -2304,6 +2304,23 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				return
 			}
 		}
+		// SpellScript OnCheckCast (Spell.cpp:5515, script hook): the
+		// hook fires here, after CheckCasterAuras and before the
+		// per-effect switch — the C++-exact position. It runs for
+		// triggered casts too (no triggered gate at 5515;
+		// TRIGGERED_IGNORE_CAST_CHECK does not exist in this tree —
+		// CheckCast runs for triggered casts with individually-gated
+		// arms). A veto fizzles silently: the caster has no client to
+		// report to (the disabled-gate convention above). Until this
+		// tick no creature cast ever fired it — fireSpellCheckCast is
+		// session-only, called from the player paths (spells.go:4138,
+		// items.go:4888) — so the wire changes no live behavior: every
+		// ev8 hook registered today is a player-cast spell, and the one
+		// creature-cast script (marrowgar 69057) rides its Lua
+		// #picks>0 guard with no hook registered.
+		if failure, _ := s.fireCreatureSpellCheckCast(ctx, m, spellID, targetGUID, [3]float32{destX, destY, destZ}, hasDest); failure != 0 {
+			return
+		}
 		// SPELL_EFFECT_DISPEL arm (Spell.cpp:5517-5562): a pure-dispel spell
 		// with a non-empty mask fizzles on a target with nothing dispellable
 		// (SPELL_FAILED_NOTHING_TO_DISPEL). Placed before the steal arm,

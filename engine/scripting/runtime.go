@@ -712,6 +712,8 @@ const (
 // m_casttime only after the first CheckCast (Spell.cpp:3130-3136) — and
 // m_CastItem is nil on this path, so GetCastItem reads nil. Triggered
 // casts never reach handleCastSpell, matching C++
+// TRIGGERED_IGNORE_CAST_CHECK; creature casts fire the same hook from
+// their own gauntlet (fireCreatureSpellCheckCast, boss_ai.go).
 // AfterCast mirrors the SpellScript hook of the same name
 // (SpellScript.h:390, fired from Spell::_cast, Spell.cpp:3501, after
 // the immediate/launch legs and before the spell_linked tail), fired
@@ -736,8 +738,6 @@ const (
 // Creature path (boss_ai.go launch pre-pass) and player path
 // (finishSpellCast, at _cast time ahead of the delayed/immediate
 // split); the triggered funnel runs no launch-target fire yet.
-// TRIGGERED_IGNORE_CAST_CHECK, and creature casts run no CheckCast
-// gauntlet in Go, so neither path fires it yet.
 const (
 	SpellEventOnCast                   = 1
 	SpellEventOnHit                    = 2
