@@ -1067,24 +1067,29 @@ func (s *session) loadMountDisplay(ctx context.Context, state *playerState) {
 		// (SpellAuraEffects.cpp:2605-2611): a mount spell whose own
 		// SPELL_EFFECT_SUMMON misc equals the mount misc shows no model
 		// at login either — the flag above still sets.
+		summonVehicle := false
 		if s.server != nil && s.server.Data != nil {
 			if sp, found, _ := s.server.Data.Spell(aura.SpellID); found {
-				summonVehicle := false
 				for _, eff := range sp.Effects {
 					if eff.Effect == spellEffectSummon && eff.MiscValue == aura.MiscValue {
 						summonVehicle = true
 						break
 					}
 				}
-				if summonVehicle {
-					continue
-				}
 			}
 		}
-		var displayID int64
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID); err == nil && displayID > 0 {
+		// Last mounted aura wins the display: C++ _LoadAuras
+		// (Player.cpp:18183) applies every stored mounted aura in row
+		// order with no dedup, each Mount overwriting the display, so
+		// a trailing summon-vehicle mount zeroes it rather than falling
+		// through to an earlier mount. Rows load ORDER BY spell, so
+		// Slot order is the application order.
+		if summonVehicle {
+			state.MountDisplayID = 0
+			continue
+		}
+		if displayID, _, ok := s.mountTemplateDisplayAndVehicle(ctx, entry); ok {
 			state.MountDisplayID = uint32(displayID)
-			return
 		}
 	}
 }

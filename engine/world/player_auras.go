@@ -54,7 +54,6 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		offlineMs = (time.Now().Unix() - state.LogoutTime) * 1000
 	}
 	var periodic []*activeAura
-	mountedAuraLoaded := false
 	for rows.Next() {
 		var casterValue, itemValue any
 		var spellID, effectMask, recalculateMask, stackCount, maxDuration, remainTime, remainCharges int64
@@ -211,10 +210,6 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				}
 				aura.Positive = !isHarmfulAura(aura.AuraType)
 				if aura.AuraType == spellAuraMounted {
-					if mountedAuraLoaded {
-						continue
-					}
-					mountedAuraLoaded = true
 					aura.DurationMs = 0
 					aura.RemainingMs = 0
 					aura.StackCount = 1
@@ -271,9 +266,8 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		// AuraEffect::HandleAuraModSchoolImmunity apply leg
 		// (SpellAuraEffects.cpp:3191-3192): a restored 39 effect sets
 		// UNIT_FLAG_IMMUNE, like the live funnels. Placed here, after
-		// every continue that can still drop the row (offline fade,
-		// duplicate mount), so only auras that actually land set the
-		// bit. The bit is a fold over live 39 auras, so it is
+		// every continue that can still drop the row (offline fade), so
+		// only auras that actually land set the bit. The bit is a fold over live 39 auras, so it is
 		// order-independent across the restore rows — unlike the dispel
 		// and flag-aura strip arms, which C++ runs per aura at its own
 		// _AddAura position and therefore cannot be swept after the
