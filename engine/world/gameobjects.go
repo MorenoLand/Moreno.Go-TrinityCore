@@ -614,7 +614,15 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 			}
 		}
 	}
-	// The eventId script-start arm has no Go event-script model (documented).
+	// The eventId arm (GameObject.cpp:1653-1656): a goober with an
+	// eventId informs its SmartAI (GO_EVENT_INFORM, 71) before the
+	// quest gate — the inform fires even when the gate then blocks
+	// the use. The event-script start (ScriptsStart) has no Go
+	// model; the SmartAI leg fires with no invoker, like
+	// SmartGameObjectAI::EventInform (SmartAI.cpp:1094-1095).
+	if tpl.eventID != 0 {
+		s.server.smartProcessGOEvents(ctx, goState.Map, goState.InstanceID, guid, smartEventGOEventInform, 0, tpl.eventID, 0)
+	}
 	// The quest gate: with a questId and no incomplete quest, C++ breaks
 	// out of the switch — no kill credit, no state change, no spell. The
 	// gate only applies when the quest template exists (GameObject.cpp:1658:
@@ -975,8 +983,12 @@ func (s *session) useGameObjectTypeArms(ctx context.Context, payload []byte, goS
 			buf.WriteU32(tpl[1])
 			_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), buf.Bytes(), true)
 		}
-		// camera.eventID (data2) starts event scripts; Go has no event-script
-		// model (documented).
+		// camera.eventID (data2) informs the GO SmartAI
+		// (GO_EVENT_INFORM, 71, GameObject.cpp:1711-1715); the
+		// event-script start has no Go model.
+		if tpl[2] != 0 {
+			s.server.smartProcessGOEvents(ctx, goState.Map, goState.InstanceID, guid, smartEventGOEventInform, 0, tpl[2], 0)
+		}
 
 	case GameObjectTypeSpellCaster:
 		// GameObject::Use GAMEOBJECT_TYPE_SPELLCASTER arm

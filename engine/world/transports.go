@@ -25,6 +25,12 @@ type continentTransport struct {
 	// holds the path position instead of stepping it, and resumes from the
 	// held position when cleared (LastUpdate refreshes so no jump accrues).
 	MovementPaused bool
+	// smart is the transport's SmartGameObjectAI script state
+	// (smartStateForTransport): the MO_TRANSPORT rows (GO_EVENT_INFORM
+	// 71 on the node arrival/departure events) hang off the transport
+	// record itself, since transports carry no dynamic gameobject
+	// record. Guarded by transportMu, like the rest of the struct.
+	smart *smartScriptState
 }
 
 type continentTransportMovement struct {
@@ -343,6 +349,17 @@ func (s *Server) reviveTransportPassengerRespawn(ctx context.Context, respawn cr
 	return nil, 0
 }
 
+// transportNodeFire is one collected Transport::DoEventIfAny fire
+// (Transport.cpp:748-755): a node arrival/departure event id, with the
+// map the trajectory reports at that progress. Collected under
+// transportMu and dispatched after it is released — SmartAI actions
+// take motionMu, and the transport lock must never be held under them.
+type transportNodeFire struct {
+	guid    uint64
+	mapID   uint32
+	eventID uint32
+}
+
 func (t *continentTransport) updatePosition() {
 	if t == nil || t.Path == nil {
 		return
@@ -352,27 +369,65 @@ func (t *continentTransport) updatePosition() {
 	t.Spawn.TransportPeriod = t.Path.Period()
 }
 
-func (t *continentTransport) advance(now time.Time) bool {
+func (t *continentTransport) advance(now time.Time) (bool, []transportNodeFire) {
 	if t == nil || t.Path == nil || t.Path.Period() == 0 {
-		return false
+		return false, nil
 	}
 	if t.LastUpdate.IsZero() {
 		t.LastUpdate = now
 		t.updatePosition()
-		return false
+		return false, nil
 	}
 	if t.MovementPaused {
 		t.LastUpdate = now
-		return false
+		return false, nil
 	}
 	delta := now.Sub(t.LastUpdate).Milliseconds()
 	t.LastUpdate = now
 	if delta <= 0 {
-		return false
+		return false, nil
 	}
+	oldProgress := t.PathProgress
 	t.PathProgress += uint32(delta)
 	t.updatePosition()
-	return true
+	return true, t.crossedNodeEvents(oldProgress, t.PathProgress)
+}
+
+// crossedNodeEvents is the Transport::DoEventIfAny leg (Transport.cpp:
+// 149/:170): the node arrival/departure event ids whose frame times
+// fall in (oldProgress, newProgress] modulo the route period. Stop
+// frames (Flags 2) carry distinct arrival/departure times;
+// pass-through frames share one time and fire both ids at once, in
+// C++ order (arrival, then departure). A tick is ~100ms against a
+// period of minutes, so at most one period boundary can fall in the
+// window.
+func (t *continentTransport) crossedNodeEvents(oldProgress, newProgress uint32) []transportNodeFire {
+	if t == nil || t.Path == nil || t.Path.Period() == 0 {
+		return nil
+	}
+	period := t.Path.Period()
+	oldMod := oldProgress % period
+	newMod := newProgress % period
+	crossed := func(at uint32) bool {
+		if newMod >= oldMod {
+			return at > oldMod && at <= newMod
+		}
+		return at > oldMod || at <= newMod
+	}
+	guid := transportGUID(t.Spawn.GUID)
+	var out []transportNodeFire
+	for i := range t.Path.frames {
+		frame := &t.Path.frames[i]
+		if frame.point.ArrivalEventID != 0 && crossed(frame.arrival) {
+			mapID, _, _, _, _ := t.Path.Position(frame.arrival)
+			out = append(out, transportNodeFire{guid: guid, mapID: mapID, eventID: frame.point.ArrivalEventID})
+		}
+		if frame.point.DepartureEventID != 0 && crossed(frame.departure) {
+			mapID, _, _, _, _ := t.Path.Position(frame.departure)
+			out = append(out, transportNodeFire{guid: guid, mapID: mapID, eventID: frame.point.DepartureEventID})
+		}
+	}
+	return out
 }
 
 func (s *Server) updateContinentTransports(now time.Time) {
@@ -380,15 +435,18 @@ func (s *Server) updateContinentTransports(now time.Time) {
 		return
 	}
 	changes := make([]continentTransportMovement, 0)
+	nodeFires := make([]transportNodeFire, 0)
 	s.transportMu.Lock()
 	for _, transport := range s.transports {
 		if transport == nil {
 			continue
 		}
 		oldSpawn := transport.Spawn
-		if transport.advance(now) {
+		moved, events := transport.advance(now)
+		if moved {
 			changes = append(changes, continentTransportMovement{OldSpawn: oldSpawn, Spawn: transport.Spawn, Passengers: transport.passengerCreatures()})
 		}
+		nodeFires = append(nodeFires, events...)
 	}
 	s.transportMu.Unlock()
 	for _, change := range changes {
@@ -400,6 +458,15 @@ func (s *Server) updateContinentTransports(now time.Time) {
 		}
 		s.relocateTransportCreatureMotions(context.Background(), change.Passengers)
 		s.broadcastTransportMovement(change)
+	}
+	// Transport::DoEventIfAny (Transport.cpp:748-755): the node
+	// arrival/departure events crossed by the advance inform the
+	// transport's SmartAI (GO_EVENT_INFORM, 71) — the Thundercaller /
+	// Iron Eagle / Purple Princess / Cloudkisser / Mighty Wind / Zephyr
+	// TALK + timed-list rows. Fired after transportMu is released:
+	// SmartAI actions take motionMu.
+	for _, fire := range nodeFires {
+		s.smartProcessGOEvents(context.Background(), fire.mapID, 0, fire.guid, smartEventGOEventInform, 0, fire.eventID, 0)
 	}
 }
 

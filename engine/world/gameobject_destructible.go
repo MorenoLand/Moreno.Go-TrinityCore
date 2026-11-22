@@ -50,11 +50,14 @@ type goDestructibleHealth struct {
 // goDestructibleTemplate carries the gameobject_template columns the
 // destructible-building spell effects read (GameObjectData.h:376-400).
 type goDestructibleTemplate struct {
-	Entry       uint32
-	DisplayID   uint32
-	IntactHits  uint32 // building.intactNumHits (Data0)
-	DamagedHits uint32 // building.damagedNumHits (Data5)
-	Faction     uint32 // template_addon faction
+	Entry           uint32
+	DisplayID       uint32
+	IntactHits      uint32 // building.intactNumHits (Data0)
+	DamagedHits     uint32 // building.damagedNumHits (Data5)
+	DamagedEvent    uint32 // building.damagedEvent (Data9)
+	DestroyedEvent  uint32 // building.destroyedEvent (Data14)
+	RebuildingEvent uint32 // building.rebuildingEvent (Data19)
+	Faction         uint32 // template_addon faction
 }
 
 // destructibleBuildingTemplate fetches the template row for a gameobject
@@ -64,11 +67,12 @@ func (s *Server) destructibleBuildingTemplate(ctx context.Context, entry uint32)
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || entry == 0 {
 		return tpl, false
 	}
-	var typ, displayID, intact, damaged int64
+	var typ, displayID, intact, damaged, damagedEvent, destroyedEvent, rebuildingEvent int64
 	err := s.WorldStore.DB.QueryRowContext(ctx,
-		`SELECT t.type, t.displayId, COALESCE(t.Data0, 0), COALESCE(t.Data5, 0)
+		`SELECT t.type, t.displayId, COALESCE(t.Data0, 0), COALESCE(t.Data5, 0),
+			COALESCE(t.Data9, 0), COALESCE(t.Data14, 0), COALESCE(t.Data19, 0)
 		FROM gameobject_template AS t WHERE t.entry = ? LIMIT 1`, entry).
-		Scan(&typ, &displayID, &intact, &damaged)
+		Scan(&typ, &displayID, &intact, &damaged, &damagedEvent, &destroyedEvent, &rebuildingEvent)
 	if err != nil || typ != int64(GameObjectTypeDestructibleBuilding) {
 		return tpl, false
 	}
@@ -77,11 +81,14 @@ func (s *Server) destructibleBuildingTemplate(ctx context.Context, entry uint32)
 		`SELECT COALESCE(faction, 0) FROM gameobject_template_addon WHERE entry = ? LIMIT 1`, entry).
 		Scan(&faction)
 	tpl = goDestructibleTemplate{
-		Entry:       entry,
-		DisplayID:   uint32(displayID),
-		IntactHits:  uint32(intact),
-		DamagedHits: uint32(damaged),
-		Faction:     uint32(faction),
+		Entry:           entry,
+		DisplayID:       uint32(displayID),
+		IntactHits:      uint32(intact),
+		DamagedHits:     uint32(damaged),
+		DamagedEvent:    uint32(damagedEvent),
+		DestroyedEvent:  uint32(destroyedEvent),
+		RebuildingEvent: uint32(rebuildingEvent),
+		Faction:         uint32(faction),
 	}
 	return tpl, true
 }
@@ -250,11 +257,14 @@ func (s *Server) modifyDestructibleHealth(ctx context.Context, mapID, instanceID
 // setDestructibleBuildingState mirrors GameObject::SetDestructibleState
 // (GameObject.cpp:2274-2362): the flag flips, the display-id swap, and the
 // optional health reset for the target state. Documented no-bridge:
-// EnableCollision (no Go collision model), EventInform + AI()->Damaged/
-// AI()->Destroyed (no Go GO-AI model — the Eluna ON_DAMAGED/ON_DESTROYED
-// legs fire below), Battleground::DestroyGate (no Go battleground model),
-// and the DestructibleModelData State1/2/3Wmo display ids (no Go DBC
-// model — the template displayId stands in).
+// EnableCollision (no Go collision model), AI()->Damaged/AI()->Destroyed
+// (no Go GO-AI model — the Eluna ON_DAMAGED/ON_DESTROYED legs fire
+// below), Battleground::DestroyGate (no Go battleground model), and the
+// DestructibleModelData State1/2/3Wmo display ids (no Go DBC model —
+// the template displayId stands in). EventInform fires below, after
+// objectsMu is released like the Eluna legs (C++ fires it first in
+// each case arm, before the flags — the order is unobservable here:
+// no 71 row sits on a destructible-building entry in TDB 26091).
 func (s *Server) setDestructibleBuildingState(ctx context.Context, mapID, instanceID uint32, goGUID uint64, state uint8, setHealth bool, attackerGUID uint64) {
 	rec, tpl, ok := s.destructibleHealthFor(ctx, mapID, instanceID, goGUID)
 	if !ok {
@@ -332,6 +342,30 @@ func (s *Server) setDestructibleBuildingState(ctx context.Context, mapID, instan
 		s.triggerGameObjectEvent(ctx, goGUID, scripting.GameObjectEventOnDamaged, s.luaUnitObjectForGUID(mapID, instanceID, attackerGUID))
 	case goDestructibleDestroyed:
 		s.triggerGameObjectEvent(ctx, goGUID, scripting.GameObjectEventOnDestroyed, s.luaUnitObjectForGUID(mapID, instanceID, attackerGUID))
+	}
+	// GameObject::SetDestructibleState (GameObject.cpp:2296/:2324/
+	// :2350): each transition informs the GO AI with the template
+	// event for the new state — damagedEvent Data9, destroyedEvent
+	// Data14, rebuildingEvent Data19; the intact arm informs nothing,
+	// and a zero event id informs nothing (GameObject::EventInform
+	// :2131-2134). The fire rides the same materialization rule as
+	// setGameObjectLootState: a static GO with no live record is
+	// materialized first, and a GO that cannot materialize fires
+	// nothing (the script state lives on the record).
+	var informEvent uint32
+	switch state {
+	case goDestructibleDamaged:
+		informEvent = tpl.DamagedEvent
+	case goDestructibleDestroyed:
+		informEvent = tpl.DestroyedEvent
+	case goDestructibleRebuilding:
+		informEvent = tpl.RebuildingEvent
+	}
+	if informEvent != 0 {
+		if s.gameObjectState(mapID, instanceID, goGUID) == nil && s.materializeStaticGameObjectState(mapID, instanceID, goGUID) == nil {
+			return
+		}
+		s.smartProcessGOEvents(ctx, mapID, instanceID, goGUID, smartEventGOEventInform, 0, informEvent, 0)
 	}
 }
 
