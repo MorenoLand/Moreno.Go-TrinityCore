@@ -1140,19 +1140,13 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 		for relAngle >= 2*math.Pi {
 			relAngle -= 2 * math.Pi
 		}
-		// ChaseAngle::IsAngleOkay (MovementDefines.cpp:43-48):
-		// PositionOkay (FollowMovementGenerator.cpp:43-50) needs
-		// the distance AND the relative angle inside PI/4 of the
-		// PET_FOLLOW_ANGLE center (PI/2, PetDefines.h:85). In range
-		// at a bad angle the generator does not inform and does
-		// re-path (:117-119), so the stand branch below needs the
-		// angle leg too — the old distance-only stand let a pet sit
-		// in front of its owner instead of circling behind.
-		followAngleDiff := math.Abs(relAngle - math.Pi/2)
-		if followAngleDiff > math.Pi {
-			followAngleDiff = 2*math.Pi - followAngleDiff
-		}
-		followAngleOkay := followAngleDiff <= math.Pi/4
+		// The ChaseAngle gates only the check-timer inform
+		// (FollowMovementGenerator.cpp:96-104: PositionOkay with
+		// the _angle arg); the re-path check (:117-119) passes NO
+		// angle, so it is distance-only — in range at a bad angle
+		// C++ stands still, it does not re-path. The standing
+		// branch below is the spline-finalize inform twin
+		// (:110-116), which fires on landing regardless of angle.
 		if dist > 45.0 {
 			// Teleport directly to owner if too far
 			motion.X = owner.X + 1.5
@@ -1163,7 +1157,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			}
 			motion.Moving = false
 			s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PhaseMask, motion.TransportGUID)
-		} else if dist > petFollowDist+petFollowRangeTolerance+ownerReach+petReach || !followAngleOkay {
+		} else if dist > petFollowDist+petFollowRangeTolerance+ownerReach+petReach {
 			// Run to catch up with owner.
 			// FollowMovementGenerator (FollowMovementGenerator.cpp:57-140):
 			// the pet holds ChaseAngle(PI/2, PI/4) relative to the owner
@@ -1243,7 +1237,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 			}
 		} else {
-			// In range at a good angle: the pet stands. This is the
+			// In range: the pet stands. This is the
 			// FollowMovementGenerator arrival — the spline-finalize
 			// inform (FollowMovementGenerator.cpp:110-116) lands the
 			// pet at the near point inside this same band, so the
