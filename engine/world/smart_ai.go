@@ -1290,9 +1290,13 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		// zero damage, exactly like C++), then re-arms on the cooldown
 		// window (event_param3/4) and runs its action with the attacker
 		// (DAMAGED) or the damaged unit (DAMAGED_TARGET) as invoker.
-		// The fire rides fireDealDamageAIHooks (Unit::DealDamage,
-		// Unit.cpp:701-704), ahead of the health change, so lethal blows
-		// still fire. TDB 26091: 32 = 7 src-0 rows (min 1/50/0, max
+		// DISPATCH-ONLY for now: the fire belongs before each
+		// fireDealDamageAIHooks call site's motionMu.Lock() (Unit::
+		// DealDamage, Unit.cpp:701-704 — ahead of the health change, so
+		// lethal blows still fire; 32 on pre-clamp damage, 33 on
+		// post-clamp), because the hook itself runs under held motionMu
+		// at 7 of 9 sites and the actions take motionMu (deadlock).
+		// TDB 26091: 32 = 7 src-0 rows (min 1/50/0, max
 		// 100000/20000/10000), 33 = 1 src-0 row (Spire Frostwyrm,
 		// 100-30000, flags 31).
 		if var0 < ev.row.eventParam1 || var0 > ev.row.eventParam2 {

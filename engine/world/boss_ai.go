@@ -172,29 +172,27 @@ func fireDealHealAIHooks(ctx context.Context, s *Server, victim, healer *creatur
 // carries no AI model, so the hook is skipped there (C++ always has an
 // AI; players and pet motions have none in Go).
 func fireDealDamageAIHooks(ctx context.Context, s *Server, victim, attacker *creatureMotion, attackerGUID, victimGUID uint64, damage *uint32) {
-	// SmartAI::DamageTaken / DamageDealt (SmartAI.cpp:626-636, 652-655):
-	// the victim's DAMAGED (32) event fires first (invoker = attacker),
-	// then the attacker's DAMAGED_TARGET (33) event (invoker = victim),
-	// both on the pre-clamp damage — the same C++ order as the BossAI
-	// hooks below (a creature carries one AI or the other; the smart
-	// fire is a no-op for non-SmartAI motions).
-	if damage != nil && victim != nil {
-		s.smartProcessEvents(ctx, victim, smartEventDamaged, attackerGUID, *damage, 0)
-	}
 	if victim != nil && victim.BossAI != nil {
 		victim.BossAI.OnDamageTaken(ctx, s, victim, attackerGUID, damage)
-	}
-	if damage != nil && attacker != nil {
-		s.smartProcessEvents(ctx, attacker, smartEventDamagedTarget, victimGUID, *damage, 0)
 	}
 	if attacker != nil && attacker.BossAI != nil {
 		attacker.BossAI.DamageDealt(ctx, s, attacker, victimGUID, damage)
 	}
 	// SmartAI::DamageTaken (SmartAI.cpp:626-636): after the DAMAGED event
 	// fire, an AI-controlled creature's invincibility HP level clamps the
-	// damage to health - level. IsAIControlled is !_charmed
-	// (SmartAI.cpp:40-43); Go tracks charm as CharmerGUID. The level is
-	// set by SMART_ACTION_SET_INVINCIBILITY_HP_LEVEL on the victim's own
+	// damage to health - level. The DAMAGED (32) / DAMAGED_TARGET (33)
+	// dispatch exists (smartProcessEvent) but has NO fire site here: this
+	// hook runs under held motionMu at 7 of its 9 call sites, while the
+	// SmartAI actions it would run take motionMu (findCreatureMotion,
+	// the cast pipeline) — firing here deadlocks the server goroutine
+	// (the Nov-17 motionMu self-deadlock class; smart_ai.go header: every
+	// entry point assumes motionMu NOT held). Dispatch-only, the
+	// SMART_EVENT_KILL precedent. The fire belongs before each call
+	// site's motionMu.Lock(), on the pre-clamp damage for 32 and the
+	// post-clamp damage for 33 (C++ DamageDealt sees the clamped value,
+	// Unit.cpp:701-704) — queued as the next unit.
+	// IsAIControlled is !_charmed (SmartAI.cpp:40-43); Go tracks charm
+	// as CharmerGUID. The level is set by SMART_ACTION_SET_INVINCIBILITY_HP_LEVEL on the victim's own
 	// SmartAI state; a nil state means no level was ever set. The uint32
 	// subtraction wraps exactly like C++ when health < level, so the
 	// clamp then correctly does not fire.
