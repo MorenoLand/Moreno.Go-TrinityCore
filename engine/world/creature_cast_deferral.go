@@ -35,11 +35,23 @@ func (s *Server) cancelPendingCreatureCast(m *creatureMotion) {
 // the deferral decision, the START snapshot, and the cast-time
 // CastingUntil stamp. The time.AfterFunc shape mirrors the aura-expiry
 // and reflect-proc timers already in this package.
+// A gameobject-base cast takes the rebuild leg instead of the
+// re-lookup: the GO motion is synthetic and never stored
+// (smartStateForGO builds a fresh one per fire), so findCreatureMotion
+// can never resolve it and the fire would drop. No token or health
+// gate on that leg: C++ GO casts are independent SpellEvents on the
+// GO's own m_Events (GameObject::Update, GameObject.cpp:437;
+// Spell::prepare, Spell.cpp:3072-3075), and prepare's in-progress
+// check is ToUnit-gated, so a second GO cast never cancels the first;
+// a despawned GO drops via the nil rebuild (its m_Events die with it
+// in C++). Transports ride the same leg (smartStateForGO routes the
+// 0x1FC0 GUID mark to smartStateForTransport).
 func (s *Server) scheduleDeferredTwinCast(m *creatureMotion, spellID uint32, targetGUID uint64, basePointOverrides map[int]int32, explicitDest *[3]float32, castMs uint32, token uint64, radiusMod float32, maxTargets int32) {
 	if s == nil || m == nil || castMs == 0 {
 		return
 	}
 	mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
+	isGameObject := m.BaseIsGameObject
 	var bpCopy map[int]int32
 	if basePointOverrides != nil {
 		bpCopy = make(map[int]int32, len(basePointOverrides))
@@ -54,10 +66,20 @@ func (s *Server) scheduleDeferredTwinCast(m *creatureMotion, spellID uint32, tar
 	}
 	time.AfterFunc(time.Duration(castMs)*time.Millisecond, func() {
 		motion := s.findCreatureMotion(mapID, instanceID, guid)
-		if motion == nil || motion.Health == 0 || motion.PendingCastToken != token {
-			return
+		if motion == nil {
+			if !isGameObject {
+				return
+			}
+			motion, _ = s.smartStateForGO(context.Background(), mapID, instanceID, guid)
+			if motion == nil {
+				return
+			}
+		} else {
+			if motion.Health == 0 || motion.PendingCastToken != token {
+				return
+			}
+			motion.PendingCastSpellID = 0
 		}
-		motion.PendingCastSpellID = 0
 		s.castCreatureSpellInternalWithBasePoints(context.Background(), motion, spellID, targetGUID, false, bpCopy, destCopy, true, radiusMod, maxTargets)
 	})
 }

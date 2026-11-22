@@ -194,7 +194,7 @@ const (
 	smartEventGameEventStart        uint32 = 68 // SMART_EVENT_GAME_EVENT_START (SmartScriptMgr.h:167), Param1 = game_event.Entry
 	smartEventGameEventEnd          uint32 = 69 // SMART_EVENT_GAME_EVENT_END (SmartScriptMgr.h:168), Param1 = game_event.Entry
 	smartEventGOEventInform         uint32 = 71 // SMART_EVENT_GO_EVENT_INFORM (SmartScriptMgr.h:170), Param1 = eventId; GO-source only (48 rows, 18 live after the action-147 load rejection), dispatch + GO state ported, fire sites in the goober/camera Use arms, the destructible-building transitions and the transport node events
-	smartEventActionDone            uint32 = 72 // SMART_EVENT_ACTION_DONE (SmartScriptMgr.h:171), Param1 = eventId; 1 src-0 row (Michael Belfast 30571, DoAction 100, EVENT_BELFAST_MOVE); dispatch arm + Lua DoAction fire site (smartDoAction); the CoS intro machine itself is unported (Lua-side future work)
+	smartEventActionDone            uint32 = 72 // SMART_EVENT_ACTION_DONE (SmartScriptMgr.h:171), Param1 = eventId; 1 src-0 row (Michael Belfast 30571, DoAction 100, EVENT_BELFAST_MOVE); dispatch arm + Lua DoAction fire site (smartDoAction); the CoS intro machine is PORTED in npc_hearthsinger_forresten_cot.lua (ev27 MIOS chain + ev41 SetData chain)
 	smartEventDistanceCreature      uint32 = 75 // SMART_EVENT_DISTANCE_CREATURE (SmartScriptMgr.h:174), Param1 = guid, Param2 = entry, Param3 = distance, Param4 = repeat; 31 src-0 rows, fired by the OnUpdate distance scan
 	smartEventDistanceGameObject    uint32 = 76 // SMART_EVENT_DISTANCE_GAMEOBJECT (SmartScriptMgr.h:175), same params as DISTANCE_CREATURE; 1 src-0 row (Plump Turkey 32818), fired by the OnUpdate distance scan
 	smartEventSceneStart            uint32 = 78 // SMART_EVENT_SCENE_START (SmartScriptMgr.h:177), don't use on 3.3.5a; dead, no dispatch arm
@@ -3439,10 +3439,13 @@ func (s *Server) smartActionCast(ctx context.Context, motion *creatureMotion, st
 // 560-583) — the C++ double fire for GO + unit targets, reproduced
 // as written. TDB 26091: 29 src-1 rows, all flags 0 (9 Ulduar
 // teleporter 194569 gossip casts, 5 Stone/Portal state-change rows,
-// 15 UPDATE/self casts); a cast-time GO spell's deferred fire drops
-// in scheduleDeferredTwinCast (creature-motion re-lookup), so only
-// instant GO casts complete — no row's cast time is in the local
-// DBC subset to verify.
+// 15 UPDATE/self casts); a cast-time GO spell's deferred fire rides
+// the scheduleDeferredTwinCast rebuild leg (the GO motion is synthetic
+// and never stored, so the creature re-lookup cannot resolve it).
+// All 29 rows are instant-cast spells (Wowhead 2026-11-22: 17 checked
+// directly, the rest same-family Shackle Shatter / Ulduar teleport
+// variants), so the leg is engine completeness, unreachable from TDB
+// rows today.
 func (s *Server) smartActionCastGO(ctx context.Context, motion *creatureMotion, ev *smartScriptEvent, targets []smartTarget, castFlags uint32) {
 	spellID := ev.row.actionParam1
 	triggered := castFlags&smartCastTriggered != 0
@@ -4055,9 +4058,10 @@ func (s *Server) smartActionSetInstData(ctx context.Context, motion *creatureMot
 // SmartAI.cpp:718-721); gameobject targets fire the GO twin
 // (SmartGameObjectAI::SetData, SmartAI.cpp:1073-1076); any other creature
 // target latches the pair into its ScriptData store (the map Lua creature
-// SetData/GetData reads) — a Go-side latch with no C++ twin, since base
-// CreatureAI::SetData is a no-op and only SmartAI overrides it. The
-// invoker both SetData twins pass on is `me`, the script owner
+// SetData/GetData reads) and fires CreatureEventOnSetData (41) — the
+// C++ ai->SetData(field, data) call on a non-Smart target, whose Lua
+// override is the ported AI's SetData switch. The invoker both SetData
+// twins pass on is `me`, the script owner
 // (SmartScript.h:112; OnInitialize :3842-3844 sets it only for
 // TYPEID_UNIT, so a GO-base delivery passes none), not the event that
 // fired this action — a DATA_SET handler reading ACTION_INVOKER gets the
@@ -4091,6 +4095,20 @@ func (s *Server) smartActionSetData(ctx context.Context, motion *creatureMotion,
 		}
 		tm.ScriptData[ev.row.actionParam1] = ev.row.actionParam2
 		s.motionMu.Unlock()
+		// SmartScript.cpp:1173-1195 calls ai->SetData(field, data) on a
+		// non-Smart creature target too — the target AI's own SetData
+		// override, which for a Lua-registered creature is its ev41
+		// handler. Fire CreatureEventOnSetData (41) like the Lua
+		// SetData method (lua_creature_events.go:1052), so a ported AI
+		// runs its SetData switch (npc_hearthsinger_forresten_cot,
+		// culling_of_stratholme.cpp:178-180).
+		if s.Features != nil && s.Features.Scripts != nil {
+			if creature := s.luaMotionCreature(tm); creature != nil {
+				setArgs := []any{scripting.CreatureEventOnSetData, creature, ev.row.actionParam1, ev.row.actionParam2}
+				_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, tm.Entry, scripting.CreatureEventOnSetData, setArgs...)
+				_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, tm.GUID, tm.InstanceID, scripting.CreatureEventOnSetData, setArgs...)
+			}
+		}
 	}
 }
 

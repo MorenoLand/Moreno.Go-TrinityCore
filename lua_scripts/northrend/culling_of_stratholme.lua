@@ -57,25 +57,22 @@
 -- EXPLAIN_1 (1003) -> menu 9595 opt 0 + text 12950; each clears the
 -- menu first (C++ ClearGossipMenuFor, :352). Texts from the same TDB
 -- 335.26091 gossip_menu_option rows.
--- Documented-only (nearest-creature axis): npc_hearthsinger_forresten_cot
--- (entry 30551 — inn cinematic, culling_of_stratholme.cpp:118/153/166):
--- FindNearestCreature(talkerEntry, 80.0f, true) (:153) and
--- FindNearestCreature(NPC_BELFAST, 80.0f, true) (:118) both ride
--- npc_hearthsinger_forresten_cotAI::UpdateAI's EventMap, whose events
--- are scheduled from MoveInLineOfSight / SetData — and the :118 arm
--- ends in a cross-creature DoAction leg. The AI is not registered in
--- boss_ai.go; the UpdateAI machine stays out as unregistered AI.
--- RE-CHECKED 2026-11-07 (tick 402) against the tick-398 spline-chain
--- bridge: Forresten has no spline chain at all (Belfast's waypoint
--- walk is DB SmartAI, not C++), and none of its three triggers is
--- bridged — ev27 is engage-only (Forresten never engages) and the
--- SetData sender is Belfast's SmartAI — so the machine stay-out
--- stands. CORRECTION 2026-11-15 (at_* census): "SetGUID has no
+-- PORTED 2026-11-22: npc_hearthsinger_forresten_cot (entry 30551 —
+-- inn cinematic, culling_of_stratholme.cpp:91-211) in
+-- npc_hearthsinger_forresten_cot.lua: the UpdateAI/SetData machine
+-- (MoveInLineOfSight RP chain + Belfast SetData talk chain + the
+-- :118 DoAction leg) plus the SetGUID Belfast-takeover leg. The
+-- 2026-11-07 stay-out ("ev27 is engage-only", "SetData sender is
+-- Belfast's SmartAI") is stale: ev27 fires from the proximity arm
+-- (stepCreatureMoveInLOSProximity, creaturemotion.go) and SmartAI
+-- SET_DATA on non-SmartAI targets fires ev41 (smartActionSetData,
+-- smart_ai.go). The AI is not registered in boss_ai.go (Lua
+-- registration). CORRECTION 2026-11-15 (at_* census): "SetGUID has no
 -- dispatch" is retracted — creature:SetGUID fires ev40
 -- (lua_creature_events.go:889-916) and the trigger-fed SetGUID leg
 -- (:161-176, Belfast takeover) is PORTED in
 -- npc_hearthsinger_forresten_cot.lua with its at_stratholme_inn_stairs_cot
--- sender; only the UpdateAI/SetData machine above stays out.
+-- sender.
 -- Ported (crate fluff event #3, tick 402): npc_malcolm_moore (entry
 -- 27891 — crate event #3 cinematic, culling_of_stratholme.cpp:945-1081):
 -- the FindNearestCreature(NPC_SCRUFFY, 100.0f, true) arms now ride the
