@@ -6569,7 +6569,7 @@ func (s *Server) stepCreatureMoveInLOSProximity(ctx context.Context, motion *cre
 	scripts := s.Features.Scripts
 	entryKind := "creature:" + strconv.FormatUint(uint64(motion.Entry), 10)
 	uniqueKind := "creature_unique:" + strconv.FormatUint(motion.GUID, 10) + ":" + strconv.FormatUint(uint64(motion.InstanceID), 10)
-	if !scripts.HasHook(entryKind, scripting.CreatureEventOnMoveInLOS) && !scripts.HasHook(uniqueKind, scripting.CreatureEventOnMoveInLOS) {
+	if !scripts.HasHook(entryKind, scripting.CreatureEventOnMoveInLOS) && !scripts.HasHook(uniqueKind, scripting.CreatureEventOnMoveInLOS) && !s.smartHasEventType(ctx, motion, smartEventOocLos) && !s.smartHasEventType(ctx, motion, smartEventIcLos) {
 		return
 	}
 	if s.creatureSightlessScanner(motion, now) {
@@ -6596,6 +6596,11 @@ func (s *Server) stepCreatureMoveInLOSProximity(ctx context.Context, motion *cre
 			continue
 		}
 		s.fireCreatureMoveInLOS(ctx, motion, p.Sess)
+		// SmartScript::OnMoveInLineOfSight (SmartScript.cpp:3885-3891):
+		// the same sighting fires the OOC_LOS / IC_LOS SmartAI events
+		// with the player as invoker; the case re-checks combat state,
+		// range, hostility and playerOnly.
+		s.smartMoveInLOS(ctx, motion, p.GUID)
 	}
 	s.motionMu.Lock()
 	registry := s.motionMapLocked(motion.Map, motion.InstanceID)
@@ -6622,6 +6627,9 @@ func (s *Server) stepCreatureMoveInLOSProximity(ctx context.Context, motion *cre
 			continue
 		}
 		s.fireCreatureMoveInLOSProximity(ctx, motion, victim)
+		// SmartAI OOC_LOS / IC_LOS twin of the player arm above, with
+		// the sighted creature as invoker.
+		s.smartMoveInLOS(ctx, motion, victim.GUID)
 	}
 }
 

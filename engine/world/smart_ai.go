@@ -49,7 +49,7 @@
 // silently dead. This file loads the creature-source rows (source_type 0), keeps
 // per-creature runtime state on the motion, and dispatches the direct events
 // (AGGRO, DEATH, DATA_SET, AI_INIT, JUST_CREATED, TEXT_OVER,
-// EVENT_PHASE_CHANGE) plus the timer events (UPDATE, UPDATE_IC, UPDATE_OOC,
+// EVENT_PHASE_CHANGE, OOC_LOS, IC_LOS) plus the timer events (UPDATE, UPDATE_IC, UPDATE_OOC,
 // HEALTH_PCT, TARGET_HEALTH_PCT, MANA_PCT, TARGET_MANA_PCT, RANGE,
 // HAS_AURA, TARGET_BUFFED) from the
 // creature tick. Action coverage is the AGGRO-used set (TDB 26091: 1,634
@@ -136,6 +136,9 @@ const (
 	smartEventReceiveEmote        uint32 = 22 // SMART_EVENT_RECEIVE_EMOTE (SmartScriptMgr.h:121), invoker = player, var0 = text emote id
 	smartEventHasAura             uint32 = 23 // SMART_EVENT_HAS_AURA (SmartScriptMgr.h:122), Param1 = SpellID, Param2 = Stack amount, Param3/4 RepeatMin, RepeatMax
 	smartEventTargetBuffed        uint32 = 24 // SMART_EVENT_TARGET_BUFFED (SmartScriptMgr.h:123), same params as HAS_AURA
+	smartEventOocLos              uint32 = 10 // SMART_EVENT_OOC_LOS (SmartScriptMgr.h:109), Param1 = NoHostile, Param2 = MaxDist, Param3/4 CooldownMin/Max, Param5 = PlayerOnly
+	smartEventIcLos               uint32 = 26 // SMART_EVENT_IC_LOS (SmartScriptMgr.h:125), same params as OOC_LOS
+	smartEventFriendlyIsCC        uint32 = 15 // SMART_EVENT_FRIENDLY_IS_CC (SmartScriptMgr.h:114), loader missing-repeat rule only, no dispatch arm
 	smartEventVictimCasting       uint32 = 13 // SMART_EVENT_VICTIM_CASTING (SmartScriptMgr.h:112), loader missing-repeat rule only, no dispatch arm
 	smartEventFriendlyHealth      uint32 = 14 // SMART_EVENT_FRIENDLY_HEALTH (SmartScriptMgr.h:113), loader missing-repeat rule only, no dispatch arm
 	smartEventFriendlyMissingBuff uint32 = 16 // SMART_EVENT_FRIENDLY_MISSING_BUFF (SmartScriptMgr.h:115), loader missing-repeat rule only, no dispatch arm
@@ -636,7 +639,7 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 		// SmartScriptMgr::LoadSmartAIFromDB (SmartScriptMgr.cpp:293-330):
 		// a timed event whose repeat window is 0/0 and which is not
 		// already NOT_REPEATABLE loads as NOT_REPEATABLE (timed-action-list
-		// rows exempt). TDB 26091: 2,600 src-0 rows sit on 0/0 across these
+		// rows exempt). TDB 26091: 2,602 src-0 rows sit on 0/0 across these
 		// types, all already flagged, so the rule is a no-op on this data
 		// — it guards custom DB rows, including the 34 zero-repeat HAS_AURA
 		// rows that would otherwise re-arm on timer 0 and fire every tick.
@@ -652,6 +655,14 @@ func (s *Server) loadSmartScripts(ctx context.Context) {
 				}
 			case smartEventVictimCasting, smartEventIsBehindTarget:
 				if r.eventParam1 == 0 && r.eventParam2 == 0 {
+					r.eventFlags |= smartEventFlagNotRepeatable
+				}
+			case smartEventFriendlyIsCC:
+				// FRIENDLY_IS_CC reads its repeat window from the
+				// friendlyCC union member (radius, repeatMin, repeatMax),
+				// so the check is param2/param3, not the minMaxRepeat
+				// param3/param4 above (SmartScriptMgr.cpp:324-330).
+				if r.eventParam2 == 0 && r.eventParam3 == 0 {
 					r.eventFlags |= smartEventFlagNotRepeatable
 				}
 			}
@@ -917,12 +928,18 @@ func (s *Server) smartSpawnMode(invokerGUID uint64) uint32 {
 
 // smartUnitAuraCount is Unit::GetAuraCount (Unit.cpp:4644-4656) for a
 // SmartAI target: the sum of stack amounts over every application of the
-// spell, an application with stack 0 counting 1. Player targets resolve
-// to their session's aura set (loadedAuras, castMu-guarded); creature
-// targets consult the server creature aura maps under auraMu. Standing
-// delta: Go keeps one activeAura per spell per unit, so multi-caster
-// applications of one spell collapse to a single entry and its stack
-// amount — C++ would sum each caster's application.
+// spell, an application with stack 0 counting 1. The live stack amount is
+// activeAura.StackCount — Aura::GetStackAmount() (lua_creature_events.go:
+// 2377, auraWireStackCount) — while StackAmount is the DBC max stack
+// (dispel.go:1273/2484 use it as maxStack); a fresh Flare aura (44944,
+// max 8) carries StackCount 0 and StackAmount 8, so reading StackAmount
+// would report 8 stacks on first application and fire the p2=8 event
+// a stack early. Player targets resolve to their session's aura set
+// (loadedAuras, castMu-guarded); creature targets consult the server
+// creature aura maps under auraMu. Standing delta: Go keeps one activeAura
+// per spell per unit, so multi-caster applications of one spell collapse
+// to a single entry and its stack amount — C++ would sum each caster's
+// application.
 func (s *Server) smartUnitAuraCount(m *creatureMotion, targetGUID uint64, spell uint32) uint32 {
 	if s == nil || m == nil || targetGUID == 0 || spell == 0 {
 		return 0
@@ -930,8 +947,8 @@ func (s *Server) smartUnitAuraCount(m *creatureMotion, targetGUID uint64, spell 
 	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
 		for _, aura := range targetSess.loadedAuras() {
 			if aura != nil && aura.SpellID == spell {
-				if aura.StackAmount != 0 {
-					return aura.StackAmount
+				if aura.StackCount != 0 {
+					return uint32(aura.StackCount)
 				}
 				return 1
 			}
@@ -949,8 +966,8 @@ func (s *Server) smartUnitAuraCount(m *creatureMotion, targetGUID uint64, spell 
 	s.auraMu.Lock()
 	defer s.auraMu.Unlock()
 	if aura := s.activeCreatureAuras[key][spell]; aura != nil {
-		if aura.StackAmount != 0 {
-			return aura.StackAmount
+		if aura.StackCount != 0 {
+			return uint32(aura.StackCount)
 		}
 		return 1
 	}
@@ -1222,6 +1239,57 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 			return
 		}
 		s.smartRecalcTimer(ev, ev.row.eventParam2, ev.row.eventParam3)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
+	case smartEventOocLos, smartEventIcLos:
+		// SMART_EVENT_OOC_LOS / IC_LOS (SmartScript.cpp:3138-3180): the
+		// event fires from OnMoveInLineOfSight (SmartScript.cpp:3885-3891:
+		// engaged ? IC_LOS : OOC_LOS) when the sighted unit (invoker) is
+		// within event_param2 yards and in line of sight, its hostility
+		// matches event_param1 (0 = hostile, nonzero = non-hostile), and
+		// event_param5 (playerOnly) is unset or the unit is a player;
+		// then it re-arms on the cooldown window (event_param3/4) and
+		// runs its action with the sighted unit as invoker. The
+		// proximity scan already range/LOS-gates at the 50yd sight
+		// distance (Creature.cpp:271, CONFIG_SIGHT_MONSTER), so rows
+		// with maxDist over 50 never fire — in C++ the relocation
+		// worker notifies only inside CanSeeOrDetect's sight range too
+		// (GridNotifiers.cpp:128-141). TDB 26091: 10 = 131 src-0 rows
+		// (102 friendly / 28 hostile / 1 p1=2; 101 playerOnly), 26 = 4
+		// src-0 rows (land mines 10yd, Draenei Youngling 15yd friendly
+		// 60s, Crazed Apothecary 3yd).
+		if motion == nil || invokerGUID == 0 || invokerGUID == motion.GUID {
+			return
+		}
+		if ev.row.eventType == smartEventIcLos && !motion.InCombat {
+			return
+		}
+		if ev.row.eventType == smartEventOocLos && motion.InCombat {
+			return
+		}
+		var whoX, whoY, whoZ float32
+		var whoIsPlayer bool
+		if ps := s.findSessionByGUID(invokerGUID); ps != nil && ps.player != nil {
+			whoIsPlayer = true
+			whoX, whoY, whoZ = ps.player.X, ps.player.Y, ps.player.Z
+		} else if victim := s.findCreatureMotion(motion.Map, motion.InstanceID, invokerGUID); victim != nil {
+			whoX, whoY, whoZ = victim.X, victim.Y, victim.Z
+		} else {
+			return
+		}
+		if ev.row.eventParam5 != 0 && !whoIsPlayer {
+			return
+		}
+		noHostile := ev.row.eventParam1 != 0
+		if noHostile == s.creatureRangeTargetHostile(motion, invokerGUID) {
+			return
+		}
+		if float32(distance3D(motion.X, motion.Y, motion.Z, whoX, whoY, whoZ)) > float32(ev.row.eventParam2) {
+			return
+		}
+		if !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, whoX, whoY, whoZ) {
+			return
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam3, ev.row.eventParam4)
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
@@ -5522,6 +5590,39 @@ func (s *Server) smartQuestRewarded(ctx context.Context, giver *creatureMotion, 
 		return
 	}
 	s.smartProcessEvents(ctx, giver, smartEventRewardQuest, playerGUID, questID, reward)
+}
+
+// smartHasEventType reports whether the creature's SmartAI script holds
+// any event of the given type — the pre-check that keeps the proximity
+// sighting pass a no-op for creatures with no such rows (the ev27 HasHook
+// idiom in stepCreatureMoveInLOSProximity).
+func (s *Server) smartHasEventType(ctx context.Context, motion *creatureMotion, eventType uint32) bool {
+	st := s.smartStateFor(ctx, motion)
+	if st == nil {
+		return false
+	}
+	for _, ev := range st.events {
+		if ev.row.eventType == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+// smartMoveInLOS is SmartScript::OnMoveInLineOfSight (SmartScript.cpp:
+// 3885-3891): the relocation worker's sighting dispatches IC_LOS while
+// engaged, OOC_LOS otherwise, with the sighted unit as invoker. The
+// proximity scan already sight/LOS-gates; the case re-checks combat
+// state, range, hostility and playerOnly.
+func (s *Server) smartMoveInLOS(ctx context.Context, motion *creatureMotion, whoGUID uint64) {
+	if s == nil || motion == nil || whoGUID == 0 {
+		return
+	}
+	if motion.InCombat {
+		s.smartProcessEvents(ctx, motion, smartEventIcLos, whoGUID, 0, 0)
+	} else {
+		s.smartProcessEvents(ctx, motion, smartEventOocLos, whoGUID, 0, 0)
+	}
 }
 
 // smartReceiveEmote is SmartAI::ReceiveEmote (SmartAI.cpp:642-645):
