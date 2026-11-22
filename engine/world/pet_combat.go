@@ -1067,7 +1067,11 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 
 	// 4. Follow Owner
 	if motion.PetCommand == PetCommandFollow {
-		dist := float32(math.Hypot(float64(owner.X-motion.X), float64(owner.Y-motion.Y)))
+		// PositionOkay measures GetExactDistSq — 3D — as stepScriptFollow
+		// does; the old 2D hypot understated the distance whenever owner
+		// and pet sat at different Z, so a pet below a flying owner could
+		// sit idle inside the 2D stop range while C++ kept re-pathing.
+		dist := float32(distance3D(motion.X, motion.Y, motion.Z, owner.X, owner.Y, owner.Z))
 		// Follow stop/resume distances use both combat reaches
 		// (GetNearPoint / PositionOkay, Object.cpp:3307 /
 		// FollowMovementGenerator.cpp:43-50).
@@ -1164,7 +1168,13 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 				motion.Moving = false
 			} else {
 				motion.Orientation = ownerOrient
-				duration := splineDurationMs(float64(dist), speed)
+				// MoveSpline duration is the spline path length over
+				// velocity (MoveSpline.cpp) — the single-point path runs
+				// pet to destination, not pet to owner center: dist
+				// overstates it by up to the near-point offset
+				// (petFollowDist + both reaches). Same distance3D-to-dest
+				// form as the pet chase leg below.
+				duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)), speed)
 				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, ownerWalking, ownerOrient, true, motion.PhaseMask, motion.TransportGUID)
 				motion.X = destX
 				motion.Y = destY

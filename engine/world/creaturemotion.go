@@ -1212,7 +1212,11 @@ func (s *Server) creatureIsMounted(key creatureAuraKey, motion *creatureMotion) 
 // speed_run. GetOwnerGUID is UNIT_FIELD_SUMMONEDBY (Unit.h:1147), which
 // charm never touches — so a charmed unit keeps its pre-charm owner
 // (motion.CharmOwnerGUID), while Go's OwnerGUID is overwritten with the
-// charmer on charm.
+// charmer on charm. The player-owner test is the GUID type
+// (ObjectGuid::IsPlayer — HighGuid::Player, zero high word,
+// procActorIsPlayerGUID), not session resolvability: a player-owned pet
+// whose owner is offline still floors at 1.0, where the old live-session
+// check wrongly returned the template speed_run.
 func (s *Server) creatureMinSpeedBase(motion *creatureMotion, base float32) float32 {
 	if motion == nil {
 		return base
@@ -1224,7 +1228,7 @@ func (s *Server) creatureMinSpeedBase(motion *creatureMotion, base float32) floa
 	if motion.Charmed {
 		ownerGUID = motion.CharmOwnerGUID
 	}
-	if ownerGUID != 0 && s != nil && s.findSessionByGUID(ownerGUID) != nil {
+	if procActorIsPlayerGUID(ownerGUID) {
 		return 1.0
 	}
 	return base
