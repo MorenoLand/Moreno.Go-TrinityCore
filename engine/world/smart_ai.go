@@ -18,8 +18,11 @@
 // below (the DEATH dispatch rides the insta-kill path, the zone
 // engage is the shared creatureDoZoneInCombat helper). 44
 // SET_INGAME_PHASE_MASK (42 rows, 36 live), 46 ATTACK_STOP (8)
-// and 51 KILL_UNIT (47 rows, 35 live) are ported below. The next
-// unported block is 50 SUMMON_GO (226 rows, 174 live).
+// and 51 KILL_UNIT (47 rows, 35 live) are ported below. 50
+// SUMMON_GO (226 rows, 174 live) and 52 ACTIVATE_TAXI (1 row)
+// are ported below. The next unported block is 53 WP_START
+// (930 live rows) / 54 WP_PAUSE (674) / 55 WP_STOP (12) — no
+// SmartAI StartPath/PausePath/StopPath twin in Go.
 //
 // C++: SmartScript / SmartAI (src/server/game/AI/SmartScripts/SmartScript.cpp,
 // SmartAI.cpp, SmartScriptMgr.h). Go had no SmartAI engine and no smart_scripts
@@ -114,8 +117,11 @@ const (
 // below; the DEATH dispatch rides the insta-kill path and the zone
 // engage is the shared creatureDoZoneInCombat helper. 44
 // SET_INGAME_PHASE_MASK (42 rows, 36 live), 46 ATTACK_STOP (8)
-// and 51 KILL_UNIT (47 rows, 35 live) are ported below.
-// The next unported block is 50 SUMMON_GO (226 rows, 174 live).
+// and 51 KILL_UNIT (47 rows, 35 live) are ported below. 50
+// SUMMON_GO (226 rows, 174 live) and 52 ACTIVATE_TAXI (1 row)
+// are ported below. The next unported block is 53 WP_START
+// (930 live rows) / 54 WP_PAUSE (674) / 55 WP_STOP (12) — no
+// SmartAI StartPath/PausePath/StopPath twin in Go.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -162,7 +168,9 @@ const (
 	smartActionSetVisibility                  uint32 = 47
 	smartActionSetActive                      uint32 = 48
 	smartActionAttackStart                    uint32 = 49
+	smartActionSummonGO                       uint32 = 50
 	smartActionKillUnit                       uint32 = 51
+	smartActionActivateTaxi                   uint32 = 52
 	smartActionStoreTargetList                uint32 = 64
 	smartActionCreateTimedEvent               uint32 = 67
 	smartActionTriggerTimedEvent              uint32 = 73
@@ -1240,6 +1248,10 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		}
 	case smartActionKillUnit:
 		s.smartActionKillUnit(ctx, motion, st, ev, invokerGUID)
+	case smartActionSummonGO:
+		s.smartActionSummonGO(ctx, motion, st, ev, invokerGUID)
+	case smartActionActivateTaxi:
+		s.smartActionActivateTaxi(ctx, motion, st, ev, invokerGUID)
 	case smartActionRemoveAurasFromSpell:
 		s.smartActionRemoveAuras(ctx, motion, st, ev, invokerGUID)
 	case smartActionSetInstData:
@@ -1546,7 +1558,7 @@ func (s *Server) smartActionSummonCreature(ctx context.Context, motion *creature
 		return
 	}
 	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
-		x, y, z, o, ok := s.smartTargetPosition(motion, tgt)
+		x, y, z, o, ok := s.smartTargetPosition(ctx, motion, tgt)
 		if !ok {
 			continue
 		}
@@ -1555,8 +1567,23 @@ func (s *Server) smartActionSummonCreature(ctx context.Context, motion *creature
 }
 
 // smartTargetPosition resolves one SmartAI target to its world position:
-// a player reads the session state, a creature its motion.
-func (s *Server) smartTargetPosition(motion *creatureMotion, tgt smartTarget) (x, y, z, o float32, ok bool) {
+// a player reads the session state, a creature its motion, a gameobject
+// its live dynamic state (Orientation included) or, for static spawns,
+// the gameobject DB row (commands.go:2155 precedent).
+func (s *Server) smartTargetPosition(ctx context.Context, motion *creatureMotion, tgt smartTarget) (x, y, z, o float32, ok bool) {
+	if tgt.isGameObject {
+		if st := s.gameObjectState(motion.Map, motion.InstanceID, tgt.guid); st != nil {
+			return st.X, st.Y, st.Z, st.Orientation, true
+		}
+		if s.WorldStore != nil && s.WorldStore.DB != nil {
+			var goMap uint32
+			var gx, gy, gz, gori float32
+			if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM gameobject WHERE guid = ?", uint32(tgt.guid&0xFFFFFF)).Scan(&goMap, &gx, &gy, &gz, &gori); err == nil && goMap == motion.Map {
+				return gx, gy, gz, gori, true
+			}
+		}
+		return 0, 0, 0, 0, false
+	}
 	if tgt.isPlayer {
 		sess := s.findSessionByGUID(tgt.guid)
 		if sess == nil || sess.player == nil {
@@ -2193,6 +2220,91 @@ func (s *Server) smartActionKillUnit(ctx context.Context, motion *creatureMotion
 			continue
 		}
 		s.creatureInstaKillVictim(ctx, tm, tgt.guid)
+	}
+}
+
+// smartActionSummonGO is SMART_ACTION_SUMMON_GO
+// (SmartScript.cpp:1278-1296): WorldObject::SummonGameObject per
+// target — the position is the target position with the row's
+// target_x/y/z/o applied as a facing-frame offset
+// (Position::RelocateOffset, Position.cpp:36-42), the rotation
+// from the resulting orientation (QuaternionData::fromEulerAnglesZYX);
+// a POSITION target summons once at the row's absolute target
+// position. Param mapping (SmartScriptMgr.h:509: GameObjectID,
+// DespawnTime in s): param1 entry, param2 despawn seconds,
+// param3 GOSummonType (0 TIMED_OR_CORPSE_DESPAWN, 1 TIMED_DESPAWN).
+// The spawn rides the Lua SummonGameObject funnel
+// (lua_creature_events.go:4854): template lookup (a missing
+// template logs and returns nil in C++, Object.cpp:2071-2075),
+// the dynamic-GO allocator, the summoner's phase mask, the timed
+// despawn (time.AfterFunc, the gobject-add-temp precedent),
+// OwnerGUID on the dyn state. The summonType-0 corpse-despawn leg
+// has no Go twin (no summoner-death GO sweep) — both types take
+// the same timed path. TDB 26091: 226 rows, 174 live (src0+9);
+// targets POSITION (154), SELF (18), CLOSEST_GAMEOBJECT (2);
+// summonType 0 on 172 live rows, 1 on 2; despawn 3-30000s. The
+// 52 src1 GO-source rows stay residual (GO smart scripts do not
+// attach); the ev54 JUST_SUMMONED rows (2) never fire until that
+// dispatch exists (same family as the KILL / GOSSIP_SELECT gaps).
+func (s *Server) smartActionSummonGO(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	tmpl, err := gobjectTemplateByEntry(ctx, s.WorldStore.DB, ev.row.actionParam1)
+	if err != nil || tmpl == nil {
+		return
+	}
+	summonAt := func(x, y, z, o float32) {
+		s.motionMu.Lock()
+		mapID, instanceID, ownerGUID := motion.Map, motion.InstanceID, motion.GUID
+		phaseMask := motion.PhaseMask
+		s.motionMu.Unlock()
+		lowGUID := s.nextDynamicGameObjectLowGUID()
+		newGUID := gameObjectGUID(lowGUID, ev.row.actionParam1)
+		size := tmpl.size
+		if size <= 0 {
+			size = 1.0
+		}
+		dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: ev.row.actionParam1, OwnerGUID: ownerGUID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: o, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, PhaseMask: phaseMask, IsRuntimeSpawn: true}
+		if ev.row.actionParam2 > 0 {
+			dyn.DespawnTimer = time.AfterFunc(time.Duration(ev.row.actionParam2)*time.Second, func() {
+				s.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+			})
+		}
+		s.spawnDynamicGameObject(dyn)
+	}
+	if ev.row.targetType == smartTargetPosition {
+		summonAt(ev.row.targetX, ev.row.targetY, ev.row.targetZ, ev.row.targetO)
+		return
+	}
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		x, y, z, o, ok := s.smartTargetPosition(ctx, motion, tgt)
+		if !ok {
+			continue
+		}
+		ox, oy, oz, oo := ev.row.targetX, ev.row.targetY, ev.row.targetZ, ev.row.targetO
+		cosO, sinO := math.Cos(float64(o)), math.Sin(float64(o))
+		summonAt(x+ox*float32(cosO)-oy*float32(sinO), y+oy*float32(cosO)+ox*float32(sinO), z+oz, o+oo)
+	}
+}
+
+// smartActionActivateTaxi is SMART_ACTION_ACTIVATE_TAXI
+// (SmartScript.cpp:1811-1817): every player target takes
+// Player::ActivateTaxiPathTo(taxi.id) — the path-id overload,
+// the Lua StartTaxi twin (lua_player.go:1210), with no
+// flightmaster interact or taximask gates. TDB 26091: 1 row
+// (18417 Altruis, GOSSIP_SELECT, path 532, ACTION_INVOKER).
+// The row cannot fire until the GOSSIP_SELECT (62) dispatch
+// exists (same residual as the OFFER_QUEST row, 23:17 flag 1);
+// the arm is wired so it fires when that dispatch lands.
+func (s *Server) smartActionActivateTaxi(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if !tgt.isPlayer {
+			continue
+		}
+		if sess := s.findSessionByGUID(tgt.guid); sess != nil {
+			sess.startTaxiByPathID(ctx, ev.row.actionParam1)
+		}
 	}
 }
 
