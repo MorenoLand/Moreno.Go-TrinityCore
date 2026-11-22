@@ -132,6 +132,7 @@ const (
 	smartEventSummonedUnitDies    uint32 = 82 // SMART_EVENT_SUMMONED_UNIT_DIES (SmartScriptMgr.h:181), invoker = dead summoned creature
 	smartEventAcceptedQuest       uint32 = 19 // SMART_EVENT_ACCEPTED_QUEST (SmartScriptMgr.h:118), invoker = player, var0 = quest id
 	smartEventRewardQuest         uint32 = 20 // SMART_EVENT_REWARD_QUEST (SmartScriptMgr.h:119), invoker = player, var0 = quest id, var1 = reward choice
+	smartEventReceiveEmote        uint32 = 22 // SMART_EVENT_RECEIVE_EMOTE (SmartScriptMgr.h:121), invoker = player, var0 = text emote id
 	smartEventEnd                 uint32 = 83 // SMART_EVENT_END (SmartScriptMgr.h:183), loader rejects event types >= this
 )
 
@@ -1092,6 +1093,24 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		}
 		s.smartRecalcTimer(ev, ev.row.eventParam2, ev.row.eventParam3)
 		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, var0, 0)
+	case smartEventReceiveEmote:
+		// SMART_EVENT_RECEIVE_EMOTE (SmartScript.cpp:3106-3111): the
+		// event fires only for its exact text emote id (event_param1 ==
+		// var0 — no 0=any wildcard, unlike the quest/summoned cases),
+		// then re-arms on the cooldown window (event_param2/3) and
+		// runs its action with the player as invoker — the text emote
+		// id (var0) is dropped by the case's ProcessAction(e, unit)
+		// call. TDB 26091: 164 src-0 rows (all action NONE, link-driven
+		// timed action lists; param4 condition all 0; 125 carry 5000/5000
+		// cooldowns, 27 carry 0/0; 2 rows chance 30, 1 row NOT_REPEATABLE).
+		if invokerGUID == 0 {
+			return
+		}
+		if ev.row.eventParam1 != var0 {
+			return
+		}
+		s.smartRecalcTimer(ev, ev.row.eventParam2, ev.row.eventParam3)
+		s.smartProcessAction(ctx, motion, st, ev, invokerGUID, 0, 0)
 	case smartEventAggro, smartEventKill, smartEventDeath, smartEventEvade,
 		smartEventRespawn, smartEventReachedHome, smartEventReset,
 		smartEventAIInit, smartEventJustCreated,
@@ -5390,6 +5409,23 @@ func (s *Server) smartQuestRewarded(ctx context.Context, giver *creatureMotion, 
 		return
 	}
 	s.smartProcessEvents(ctx, giver, smartEventRewardQuest, playerGUID, questID, reward)
+}
+
+// smartReceiveEmote is SmartAI::ReceiveEmote (SmartAI.cpp:642-645):
+// the target creature's RECEIVE_EMOTE (22) event fires with the emoting
+// player as invoker and the text emote id as var0. ChatHandler::
+// HandleTextEmoteOpcode (ChatHandler.cpp:740-742) calls it on the target
+// creature's AI after the achievement criteria update, only for a
+// TYPEID_UNIT target with an AI — the session call site resolves the
+// live creature motion, so a non-creature target never reaches here.
+// The state-emote switch (SLEEP/SIT/KNEEL/NONE) gates only
+// HandleEmoteCommand, not this call, and an invalid text emote id
+// returns before it, matching C++.
+func (s *Server) smartReceiveEmote(ctx context.Context, target *creatureMotion, playerGUID uint64, textEmote uint32) {
+	if s == nil || target == nil || playerGUID == 0 {
+		return
+	}
+	s.smartProcessEvents(ctx, target, smartEventReceiveEmote, playerGUID, textEmote, 0)
 }
 
 // smartGossipSelect is SmartAI::OnGossipSelect (SmartAI.cpp:765-770):
