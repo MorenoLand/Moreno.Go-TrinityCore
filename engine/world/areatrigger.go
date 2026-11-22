@@ -208,7 +208,7 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 		// TELE_TO_NOT_LEAVE_TRANSPORT, so a passenger keeps the transport
 		// across the trigger (the LFG battleground redirect above is the
 		// plain TeleportToBGEntryPoint leg and stays a plain teleport).
-		s.teleportToStayOnTransport(uint32(targetMap), float32(targetX), float32(targetY), float32(targetZ), float32(targetOri), true)
+		s.teleportToStayOnTransport(uint32(targetMap), float32(targetX), float32(targetY), float32(targetZ), float32(targetOri), true, false, false)
 		return true
 	}
 

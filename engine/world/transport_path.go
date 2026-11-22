@@ -90,6 +90,43 @@ func (t *TransportTrajectory) Period() uint32 {
 	return t.period
 }
 
+// crossedSameMapTeleport reports whether the progress window crossed the
+// snap of a same-map teleport frame: Transport::Update calls
+// TeleportTransport when the current frame IsTeleportFrame
+// (Transport.cpp:191), and the transport sits at the teleport frame
+// until the next frame's arrival (TransportTrajectory.Position's
+// stop-frame arm), so the jump lands exactly at next.arrival. A
+// cross-map teleport frame is not a snap in this sense — the map change
+// is the cross-map arm's signal, and the transport is re-created on the
+// new map by DelayedTeleportTransport.
+func (t *TransportTrajectory) crossedSameMapTeleport(oldProgress, newProgress uint32) bool {
+	if t == nil || len(t.frames) < 2 || t.period == 0 {
+		return false
+	}
+	period := t.period
+	oldMod := oldProgress % period
+	newMod := newProgress % period
+	crossed := func(at uint32) bool {
+		if newMod >= oldMod {
+			return at > oldMod && at <= newMod
+		}
+		return at > oldMod || at <= newMod
+	}
+	for i := range t.frames {
+		if !t.frames[i].teleport {
+			continue
+		}
+		next := &t.frames[(i+1)%len(t.frames)]
+		if transportPointMap(next.point) != transportPointMap(t.frames[i].point) {
+			continue
+		}
+		if crossed(next.arrival) {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *TransportTrajectory) Position(progress uint32) (uint32, float32, float32, float32, float32) {
 	if t == nil || len(t.frames) == 0 || t.period == 0 {
 		return 0, 0, 0, 0, 0

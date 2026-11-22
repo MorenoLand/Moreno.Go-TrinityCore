@@ -189,17 +189,24 @@ func (s *session) isBeingTeleported() bool {
 // teleportToStayOnTransport for the transport's own map-change teleport,
 // which keeps passengers attached (Transport.cpp:676).
 func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) bool {
-	return s.teleportToStayOnTransport(mapID, x, y, z, orientation, false)
+	return s.teleportToStayOnTransport(mapID, x, y, z, orientation, false, false, false)
 }
 
-func (s *session) teleportToStayOnTransport(mapID uint32, x, y, z, orientation float32, stayOnTransport bool) bool {
-	return s.teleportToOptions(mapID, x, y, z, orientation, stayOnTransport, false)
+func (s *session) teleportToStayOnTransport(mapID uint32, x, y, z, orientation float32, stayOnTransport, notLeaveCombat, notUnsummonPet bool) bool {
+	return s.teleportToOptions(mapID, x, y, z, orientation, stayOnTransport, false, notLeaveCombat, notUnsummonPet)
 }
 
 // teleportToOptions is the full Player::TeleportTo twin: stayOnTransport
-// carries TELE_TO_NOT_LEAVE_TRANSPORT (Transport.cpp:676) and teleToSpell
+// carries TELE_TO_NOT_LEAVE_TRANSPORT (Transport.cpp:676), teleToSpell
 // carries TELE_TO_SPELL (SpellEffects.cpp:1227-1228) — a teleport spell's own
-// far teleport must not interrupt its caster's cast (Player.cpp:1841-1842).
+// far teleport must not interrupt its caster's cast (Player.cpp:1841-1842) —
+// and notLeaveCombat / notUnsummonPet carry TELE_TO_NOT_LEAVE_COMBAT /
+// TELE_TO_NOT_UNSUMMON_PET. Both flags gate only the near branch
+// (Player.cpp:1742, :1751-1752): the far branch CombatStops (:1802) and
+// temp-unsummons (:1824-1825) unconditionally, so a cross-map transport
+// teleport (DelayedTeleportTransport, Transport.cpp:676, which passes only
+// NOT_LEAVE_TRANSPORT) still stops combat and blinks the pet out, with the
+// resummon on the far-teleport ack.
 // drainPendingTeleport executes a teleport deferred while the session was
 // inside a delay window (Player::Update, Player.cpp:1376-1377: only for
 // alive players). The request is cleared before executing so a nested
@@ -217,10 +224,10 @@ func (s *session) drainPendingTeleport() {
 		s.nearTeleportMove(req.x, req.y, req.z, req.orientation, req.stayOnTransport)
 		return
 	}
-	s.teleportToOptions(req.mapID, req.x, req.y, req.z, req.orientation, req.stayOnTransport, req.teleToSpell)
+	s.teleportToOptions(req.mapID, req.x, req.y, req.z, req.orientation, req.stayOnTransport, req.teleToSpell, req.notLeaveCombat, req.notUnsummonPet)
 }
 
-func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, stayOnTransport, teleToSpell bool) bool {
+func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, stayOnTransport, teleToSpell, notLeaveCombat, notUnsummonPet bool) bool {
 	if s.player == nil {
 		return false
 	}
@@ -230,7 +237,7 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 	// validity gates below re-run at drain time. A later request in
 	// the same window overwrites, as C++ keeps a single dest.
 	if s.delayTeleportDepth > 0 {
-		s.pendingTeleport = &pendingTeleportRequest{mapID: mapID, x: x, y: y, z: z, orientation: orientation, stayOnTransport: stayOnTransport, teleToSpell: teleToSpell}
+		s.pendingTeleport = &pendingTeleportRequest{mapID: mapID, x: x, y: y, z: z, orientation: orientation, stayOnTransport: stayOnTransport, teleToSpell: teleToSpell, notLeaveCombat: notLeaveCombat, notUnsummonPet: notUnsummonPet}
 		return true
 	}
 	if s.server != nil && !s.validTrinityMapLocation(mapID, x, y, z, orientation) {
@@ -362,7 +369,7 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 	}
 	if !sameMap && s.player.PetGUID != 0 {
 		s.temporarilyUnsummonPet(context.Background())
-	} else if sameMap && s.server != nil && s.player.PetGUID != 0 {
+	} else if sameMap && !notUnsummonPet && s.server != nil && s.player.PetGUID != 0 {
 		visibilityDistance := s.server.Config.VisibilityDistanceContinents
 		if visibilityDistance <= 0 {
 			visibilityDistance = 150
@@ -379,7 +386,13 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		}
 	}
 	movement := s.movementInfoForCreate(*s.player)
-	s.stopPlayerCombat(context.Background())
+	// Player::TeleportTo: the far branch CombatStops unconditionally
+	// (:1802); the near branch only when TELE_TO_NOT_LEAVE_COMBAT is
+	// absent (:1751-1752) — a chair/barber/transport-frame teleport
+	// must not drop combat.
+	if !sameMap || !notLeaveCombat {
+		s.stopPlayerCombat(context.Background())
+	}
 	// Player::TeleportTo (Player.cpp:1711-1716): a teleport leaves the
 	// transport unless TELE_TO_NOT_LEAVE_TRANSPORT — the detach arm sits
 	// ahead of the same-map/far branch, so a same-map teleport drops a

@@ -94,6 +94,8 @@ type pendingTeleportRequest struct {
 	orientation     float32
 	stayOnTransport bool
 	teleToSpell     bool
+	notLeaveCombat  bool
+	notUnsummonPet  bool
 	near            bool
 }
 

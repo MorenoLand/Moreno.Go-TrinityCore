@@ -56297,7 +56297,7 @@ func (s *session) teleportSpellEffectCaster(mapID uint32, x, y, z, ori float32) 
 		s.isMoving = false
 		return
 	}
-	s.teleportToOptions(mapID, x, y, z, ori, false, true)
+	s.teleportToOptions(mapID, x, y, z, ori, false, true, false, false)
 }
 
 // handleEffectTeleUnitsFaceCaster mirrors Spell::EffectTeleUnitsFaceCaster

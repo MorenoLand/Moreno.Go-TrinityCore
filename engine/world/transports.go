@@ -46,15 +46,46 @@ type continentTransportMovement struct {
 	// continent transport): the broadcast fan-out below only streams
 	// the movement to sessions in the same instance.
 	InstanceID uint32
+	// Teleported is set when the progress window crossed a same-map
+	// teleport frame (TransportTrajectory.crossedSameMapTeleport):
+	// passengers snap with the transport instead of riding the
+	// segment, and the broadcast must send them a teleport packet
+	// rather than silently rewriting their coordinates.
+	Teleported bool
 }
 
 func (s *Server) loadContinentTransports(ctx context.Context) {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
 		return
 	}
-	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), COALESCE(gt.data6, 0), COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0), COALESCE(ta.flags, 0), COALESCE(ta.faction, 0) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry LEFT JOIN gameobject_template_addon AS ta ON ta.entry = gt.entry WHERE gt.type = 15 ORDER BY tr.guid`)
+	// Transport::Create applies the per-spawn override first
+	// (GameObject::GetGameObjectOverride, GameObject.cpp:876-884:
+	// override row wins over the template addon; ObjectMgr.cpp:7755
+	// loads gameobject_overrides, empty on schemas that lack it).
+	// The override join degrades to the addon-only read when the
+	// table is absent, so an older world schema still loads.
+	transportLoadQuery := func(withOverride, withData6 bool) string {
+		data6 := "COALESCE(gt.data6, 0)"
+		if !withData6 {
+			data6 = "0"
+		}
+		flags, faction := "COALESCE(ta.flags, 0)", "COALESCE(ta.faction, 0)"
+		overrideJoin := ""
+		if withOverride {
+			flags, faction = "COALESCE(ov.flags, ta.flags, 0)", "COALESCE(ov.faction, ta.faction, 0)"
+			overrideJoin = " LEFT JOIN gameobject_overrides AS ov ON ov.spawnId = tr.guid"
+		}
+		return "SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), " + data6 + ", COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0), " + flags + ", " + faction + " FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry LEFT JOIN gameobject_template_addon AS ta ON ta.entry = gt.entry" + overrideJoin + " WHERE gt.type = 15 ORDER BY tr.guid"
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, transportLoadQuery(true, true))
 	if err != nil && isMissingColumn(err) {
-		rows, err = s.WorldStore.DB.QueryContext(ctx, `SELECT tr.guid, tr.entry, COALESCE(gt.name, ''), COALESCE(gt.data0, 0), COALESCE(gt.data1, 0), COALESCE(gt.data2, 0), 0, COALESCE(gt.displayId, 0), COALESCE(gt.size, 1), COALESCE(gt.data8, 0), COALESCE(ta.flags, 0), COALESCE(ta.faction, 0) FROM transports AS tr JOIN gameobject_template AS gt ON gt.entry = tr.entry LEFT JOIN gameobject_template_addon AS ta ON ta.entry = gt.entry WHERE gt.type = 15 ORDER BY tr.guid`)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, transportLoadQuery(true, false))
+	}
+	if err != nil && missingTable(err) {
+		rows, err = s.WorldStore.DB.QueryContext(ctx, transportLoadQuery(false, true))
+		if err != nil && isMissingColumn(err) {
+			rows, err = s.WorldStore.DB.QueryContext(ctx, transportLoadQuery(false, false))
+		}
 	}
 	if err != nil {
 		if !missingTable(err) && s.Logger != nil {
@@ -510,28 +541,28 @@ func (t *continentTransport) updatePosition() {
 	t.Spawn.TransportPeriod = t.Path.Period()
 }
 
-func (t *continentTransport) advance(now time.Time) (bool, []transportNodeFire) {
+func (t *continentTransport) advance(now time.Time) (bool, []transportNodeFire, bool) {
 	if t == nil || t.Path == nil || t.Path.Period() == 0 {
-		return false, nil
+		return false, nil, false
 	}
 	if t.LastUpdate.IsZero() {
 		t.LastUpdate = now
 		t.updatePosition()
-		return false, nil
+		return false, nil, false
 	}
 	if t.MovementPaused {
 		t.LastUpdate = now
-		return false, nil
+		return false, nil, false
 	}
 	delta := now.Sub(t.LastUpdate).Milliseconds()
 	t.LastUpdate = now
 	if delta <= 0 {
-		return false, nil
+		return false, nil, false
 	}
 	oldProgress := t.PathProgress
 	t.PathProgress += uint32(delta)
 	t.updatePosition()
-	return true, t.crossedNodeEvents(oldProgress, t.PathProgress)
+	return true, t.crossedNodeEvents(oldProgress, t.PathProgress), t.Path.crossedSameMapTeleport(oldProgress, t.PathProgress)
 }
 
 // crossedNodeEvents is the Transport::DoEventIfAny leg (Transport.cpp:
@@ -550,6 +581,16 @@ func (t *continentTransport) crossedNodeEvents(oldProgress, newProgress uint32) 
 	oldMod := oldProgress % period
 	newMod := newProgress % period
 	crossed := func(at uint32) bool {
+		// Transport::Update (Transport.cpp:149-175) fires the frame-0
+		// arrival on the first tick: GeneratePath sets
+		// keyFrames[0].ArriveTime = 0 (TransportMgr.cpp:325) and the
+		// first Update runs with timer 0. PathProgress starts at 0 and
+		// only grows, so the first advance is the only window whose
+		// old progress is 0 — a 0-time event belongs to it and to no
+		// later window, which requires at > oldMod.
+		if oldProgress == 0 && at == 0 {
+			return true
+		}
 		if newMod >= oldMod {
 			return at > oldMod && at <= newMod
 		}
@@ -583,9 +624,9 @@ func (s *Server) updateContinentTransports(now time.Time) {
 			continue
 		}
 		oldSpawn := transport.Spawn
-		moved, events := transport.advance(now)
+		moved, events, teleported := transport.advance(now)
 		if moved {
-			changes = append(changes, continentTransportMovement{OldSpawn: oldSpawn, Spawn: transport.Spawn, Passengers: transport.passengerCreatures(), InstanceID: transport.InstanceID})
+			changes = append(changes, continentTransportMovement{OldSpawn: oldSpawn, Spawn: transport.Spawn, Passengers: transport.passengerCreatures(), InstanceID: transport.InstanceID, Teleported: teleported})
 		}
 		nodeFires = append(nodeFires, events...)
 	}
@@ -1377,6 +1418,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		x, y, z, o float32
 	}
 	teleports := make([]passengerTeleport, 0)
+	sameMapTeleports := make([]passengerTeleport, 0)
 	vehicleCrossTeleports := make([]passengerTeleport, 0)
 	pendingVehicleRiders := make([]*session, 0)
 	refresh := make([]*session, 0)
@@ -1402,6 +1444,21 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			// relocation below; the update block below still runs.
 			if sess.player.VehicleGUID != 0 {
 				vehicleRiders = append(vehicleRiders, sess)
+			} else if change.Teleported {
+				// Transport::TeleportTransport, same-map branch
+				// (Transport.cpp:625-652): a teleport frame relocates
+				// passengers with TeleportTo(..., NOT_LEAVE_TRANSPORT |
+				// NOT_LEAVE_COMBAT | NOT_UNSUMMON_PET |
+				// TRANSPORT_TELEPORT) — MSG_MOVE_TELEPORT_ACK, not a
+				// silent coordinate rewrite. The vehicle-rider skip
+				// above is C++'s GetVehicleBase arm (:633-636): riders
+				// relocate with the vehicle below. A failed teleport
+				// leaves the session un-pending (validity gates return
+				// before setting it), so the next tick's direct arm
+				// resyncs it; C++ likewise ignores TeleportTo's return
+				// here, so there is no detach leg.
+				x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
+				sameMapTeleports = append(sameMapTeleports, passengerTeleport{session: sess, x: x, y: y, z: z, o: o})
 			} else {
 				x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, sess.player.TransportX, sess.player.TransportY, sess.player.TransportZ, sess.player.TransportO)
 				sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation = x, y, z, o
@@ -1571,7 +1628,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			continue
 		}
 		passenger.session.resetTransportPassengerVisibility()
-		if !passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true) {
+		if !passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true, false, false) {
 			failedDirect[passenger.session.playerGUID] = struct{}{}
 			// DelayedTeleportTransport (Transport.cpp:676) removes a
 			// passenger whose TeleportTo fails; without this the
@@ -1583,6 +1640,15 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			passenger.session.player.TransportX, passenger.session.player.TransportY, passenger.session.player.TransportZ, passenger.session.player.TransportO = 0, 0, 0, 0
 			passenger.session.player.TransportSeat = 0
 		}
+	}
+	// Same-map teleport-frame passengers (arm above): the near branch
+	// of teleportToOptions sends MSG_MOVE_TELEPORT_ACK and the client's
+	// ack applies the destination, as in C++ (Player.cpp:1763-1764).
+	for _, passenger := range sameMapTeleports {
+		if passenger.session == nil || passenger.session.player == nil {
+			continue
+		}
+		passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true, true, true)
 	}
 	// Cross-map steady-state vehicle riders (arm above): teleportToOptions
 	// exits the vehicle (Player.cpp:1703-1704) and, with stayOnTransport,
@@ -1624,7 +1690,7 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		passenger.session.player.TransportGUID = rawGUID
 		passenger.session.player.TransportX, passenger.session.player.TransportY, passenger.session.player.TransportZ, passenger.session.player.TransportO = CalculatePassengerOffset(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, passenger.x, passenger.y, passenger.z, passenger.o)
 		passenger.session.player.TransportSeat = -1
-		if !passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true) {
+		if !passenger.session.teleportToStayOnTransport(change.Spawn.Map, passenger.x, passenger.y, passenger.z, passenger.o, true, false, false) {
 			passenger.session.player.TransportGUID = 0
 			passenger.session.player.TransportX, passenger.session.player.TransportY, passenger.session.player.TransportZ, passenger.session.player.TransportO = 0, 0, 0, 0
 			passenger.session.player.TransportSeat = 0
