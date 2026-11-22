@@ -141,6 +141,30 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 		if !boundMismatch && !groupBoundMismatch {
 			return selection, false, nil
 		}
+		// MapInstanced::CreateInstanceForPlayer (MapInstanced.cpp:155-161):
+		// at login the selection is the saved instance only — the
+		// group/solo/fresh selection below is the teleport-ack path, and
+		// InstanceMap::Add rejects a login whose binds disagree with it
+		// (Map.cpp:3903-3945: permanent solo bind to another save, a solo
+		// bind to another save while grouped, or the group bound
+		// elsewhere) — so a mismatch falls back to homebind instead of
+		// taking the group or solo instance. The one exception is a
+		// non-permanent solo-bind mismatch with no group while the saved
+		// map is still loaded (FindInstanceMap hit): Add's solo arm is
+		// only an ASSERT there (Map.cpp:3955-3960), so the player enters
+		// the saved instance.
+		if groupBoundMismatch || (boundMismatch && group != nil) {
+			return selection, false, nil
+		}
+		if boundMismatch && characterPermanent == 0 && group == nil && active && ((err == nil && savedMap == int64(state.Map)) || errors.Is(err, sql.ErrNoRows)) {
+			difficulty := playerDifficulty
+			if err == nil {
+				difficulty = uint32(savedDifficulty)
+			}
+			selection.InstanceID, selection.Difficulty = state.InstanceID, difficulty
+			return selection, true, nil
+		}
+		return selection, false, nil
 	}
 	var groupInstanceID, groupBoundDifficulty, groupPermanent int64
 	groupBound := false
