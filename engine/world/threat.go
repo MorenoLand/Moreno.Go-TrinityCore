@@ -1609,8 +1609,8 @@ func (s *Server) threatVictimOffline(motion *creatureMotion, victimGUID uint64, 
 			return true
 		}
 		// Attack arm (Creature.cpp:2560-2608): valid target, accessible
-		// place, turret band, evade, home distance (mirror; the charmer
-		// arm stays tick-only).
+		// place, turret band, evade, home distance (mirror, charmer/
+		// owner arm included via creatureSightHomeDistanceOK).
 		if playerSightVictimBlocked(motion, sess.player.UnitFlags, sess.player.UnitFlags&unitFlagPlayerControlled != 0) {
 			return true
 		}

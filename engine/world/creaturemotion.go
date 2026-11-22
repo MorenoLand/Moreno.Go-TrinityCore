@@ -89,6 +89,7 @@ type creatureMotion struct {
 	DynamicFlags          uint32
 	DynamicFlagsKnown     bool // set by the SetFlag/RemoveFlag(79) bridges and the indexed SetUInt32Value(79) twin; gates the sweep re-affirm so scripted UNIT_DYNAMIC_FLAGS survive until respawn (FactionKnown precedent)
 	FlagsExtra            uint32
+	ControlledByPlayer    bool   // Unit::m_ControlledByPlayer (Unit.h:1168/1716) WITHOUT the UNIT_FLAG_PLAYER_CONTROLLED flag: TempSummon::InitStats (TemporarySummon.cpp:190-198) sets it for a trigger (flags_extra 0x80) temp summon with a first template spell (m_spells[0]) summoned by a player; charm (Unit.cpp:6219-6224) and SetMinion (Unit.cpp:6056-6057) set the flag alongside it, so they need no separate bit. Read only by the crush gate (RollMeleeOutcomeAgainst, Unit.cpp:2312)
 	TypeFlags             uint32 // creature_template.type_flags (CreatureData.h:180); the BOSS_MOB bit (0x4, SharedDefines.h:2731) feeds Creature::isWorldBoss (Creature.cpp:2353) gates
 	Rank                  uint32 // creature_template.rank (SharedDefines.h CreatureEliteType: 0 NORMAL, 4 RARE); feeds Creature::isElite (Creature.cpp:2344-2350), banked at spawn via loadCreatureStats
 	UnitClass             uint32 // creature_template.unit_class: Creature::InitEntry SetClass (Creature.cpp:494); backs Lua Unit::GetClassMask; motions built without stats (pets, totems) read 0
@@ -2483,12 +2484,37 @@ func (s *Server) creatureNeutralToAll(faction uint32) bool {
 // live creature auras); the
 // isInAccessiblePlaceFor victim-in-water leg rides the grid-liquid
 // twin (mapIsInWater, the IsInWater binding's helper), not per-unit
-// liquid status; CanAIAttack is the TurretAI band only
-// (turretCanAIAttack returns true for every other AI, and creature
-// victims carry no spell-band model); the home gate's charmer/owner
+// liquid status; CanAIAttack is the TurretAI band plus the BossAI
+// boundary gate (below); every other AI passes, and creature
+// victims carry no spell-band model; the home gate's charmer/owner
 // arm measures from a resolvable owner motion, else the caller home;
 // the NPC-bot GM-controlled faction-35 arm is vacuous (no bots in
 // the motion map); GetLevelForTarget is the identity (Unit.h:845).
+// creatureBossBoundaryOK mirrors BossAI::CanAIAttack
+// (ScriptedCreature.cpp:591-594) via Creature::CanCreatureAttack
+// (Creature.cpp:2571-2574): a boss stops attacking the instant its
+// victim leaves the room. It is gated on the registered instance
+// boundary row for the motion's (map, entry), NOT on motion.BossAI —
+// BossAI is assigned lazily at engage (triggerCreatureAggro), so a
+// pre-engage sight scan or CanStartAttack query would see nil and
+// skip the gate; C++ sets the boundary in the BossAI ctor
+// (ScriptedCreature.cpp:486-488), so a row exists exactly for the
+// creatures C++ gates. The motion's own boundary (applied at engage
+// by applyBossBoundary) wins when set; no row means no boundary, and
+// IsInBoundary over an empty boundary returns true
+// (CreatureAI.cpp:399-408). The negate form (SetBoundary(&b, true),
+// e.g. Thorim's arena flip) has no Go model and stays out.
+func creatureBossBoundaryOK(motion *creatureMotion, x, y, z float32) bool {
+	if motion == nil {
+		return true
+	}
+	boundary := motion.Boundary
+	if len(boundary) == 0 {
+		boundary, _ = instanceBossBoundaries[bossBoundaryKey{mapID: motion.Map, entry: motion.Entry}]
+	}
+	return pointWithinBoundary(boundary, x, y, z)
+}
+
 func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMotion, target creatureAttackTarget, force bool) bool {
 	if s == nil || caller == nil || !target.ok {
 		return false
@@ -2615,8 +2641,16 @@ func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMot
 	}
 	// AI::CanAIAttack: the TurretAI spell band (CombatAI.cpp:245-251
 	// via turretCanAIAttack); every other AI passes, and creature
-	// victims carry no band model.
+	// victims carry no band model. BossAI::CanAIAttack
+	// (ScriptedCreature.cpp:591-594) returns IsInBoundary(target),
+	// consulted on every target validation (CanCreatureAttack,
+	// Creature.cpp:2571-2574) ahead of the evade arms below, so a boss
+	// stops attacking the instant its victim leaves the room instead
+	// of swinging until the 2.5s CheckInRoom tick evades it.
 	if target.isPlayer && !s.turretCanAIAttack(caller, target.pos, dist3D) {
+		return false
+	}
+	if !creatureBossBoundaryOK(caller, target.x, target.y, target.z) {
 		return false
 	}
 	// Evade arms (Creature.cpp:2577-2582).
@@ -6771,8 +6805,12 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// requires !IsControlledByPlayer() — a player-charmed creature
 	// never crushes. The flag twin is UNIT_FLAG_PLAYER_CONTROLLED,
 	// set by the charm apply leg only when the charmer is a player;
-	// the pet path passes false for the same reason.
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, motion.UnitFlags&unitFlagPlayerControlled == 0, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
+	// the pet path passes false for the same reason. A player-summoned
+	// trigger temp summon with a first template spell carries
+	// m_ControlledByPlayer with no flag (TempSummon::InitStats,
+	// TemporarySummon.cpp:190-198), so ControlledByPlayer joins the
+	// gate — the flag alone would let it crush.
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, motion.UnitFlags&unitFlagPlayerControlled == 0 && !motion.ControlledByPlayer, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
 	if isPlayerVictim && target.Sess != nil {
 		if target.Sess.isImmuneToDamage(1) {
 			outcome = protocol.MeleeHitImmune
@@ -7798,6 +7836,35 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					return
 				}
 			}
+			// Creature::SelectVictim tail (Creature.cpp:1240-1249): a
+			// permanently invisible creature with no acceptable target
+			// evades (EVADE_REASON_OTHER — the reason is inert,
+			// _EnterEvadeMode ignores it, CreatureAI.cpp:294), and a
+			// creature with no invisibility aura evades NO_HOSTILES;
+			// both ride the evade below. A creature carrying only
+			// temporary invisibility auras does NOT evade — the
+			// non-empty list returns nullptr without an evade, so it
+			// hangs in combat, victimless, until the aura lapses and
+			// the next UpdateVictim evades it. Go's no-target path
+			// evades unconditionally, so the temporary-only case
+			// skips the evade here (the tick returns, as C++'s
+			// UpdateVictim-false early return does).
+			if anyInvis, permanentInvis := s.creatureInvisibilityAuraState(creatureAuraKeyForMotion(motion)); anyInvis && !permanentInvis {
+				return
+			}
+			s.triggerCreatureEvade(ctx, motion, now)
+			return
+		}
+		// BossAI::CanAIAttack (ScriptedCreature.cpp:591-594) returns
+		// IsInBoundary(target), consulted on every target validation
+		// (CanCreatureAttack, Creature.cpp:2571-2574) ahead of the leash
+		// legs below — a boss stops attacking the instant its victim
+		// leaves the room. The Lua CanStartAttack twin already carries
+		// this gate (creatureCanStartAttack), but the engine tick never
+		// calls it, so the victim is validated here: an out-of-room
+		// victim evades like SelectVictim's failed CanCreatureAttack
+		// (Creature.cpp:1228-1252).
+		if !creatureBossBoundaryOK(motion, target.X, target.Y, target.Z) {
 			s.triggerCreatureEvade(ctx, motion, now)
 			return
 		}
@@ -7841,10 +7908,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// creature-wide, not per victim. World bosses (Creature.cpp:2353:
 		// type_flags & CREATURE_TYPE_FLAG_BOSS_MOB, SharedDefines.h:2731)
 		// leash regardless of recent damage. The charmer/player gate
-		// (!GetCharmerOrOwnerGUID().IsPlayer(), :2583) is vacuous:
-		// OwnerGUID != 0 motions return through updatePetMotion ahead of
-		// the combat tick and never reach this site. The config-overridable
-		// visibility distances are unmodeled; the C++ defaults are used.
+		// (!GetCharmerOrOwnerGUID().IsPlayer(), :2583) is not vacuous
+		// for summoned guardians: charmed creatures divert to
+		// updatePetMotion, but a summoned guardian steps with
+		// summoned=true and reaches this tick with its summoner as
+		// owner. The config-overridable visibility distances are
+		// unmodeled; the C++ defaults are used.
 		inDungeon := false
 		leashBase := float32(100.0)
 		if s != nil && s.Data != nil {
@@ -7855,9 +7924,44 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 		}
-		leashDist := leashBase
-		if motion.AIName == "TurretAI" {
-			leashDist += combatDistanceSpellRange(s, motion)
+		// Creature::CanCreatureAttack (Creature.cpp:2595-2599): a creature
+		// with a charmer or owner leashes around the OWNER
+		// (victim->IsWithinDist(unit, dist)) — the home leg below is the
+		// ownerless else arm (:2601-2607). IsWithinDist is 3D with no
+		// flight 2D form, but it DOES add both combat reaches:
+		// _IsWithinDist defaults incOwnRadius+incTargetRadius
+		// (Object.cpp:1147-1155), so the owner leg is dist plus the
+		// victim's and the owner's reaches, exactly like the home leg.
+		// The recently-damaged/taunt skips do not apply to a
+		// player-owned creature (:2583). The owner position resolves
+		// from the nearby player rows or the owner's motion; an
+		// unresolvable owner falls back to the home leg, matching
+		// C++'s null-owner else arm.
+		ownerGUID := creatureCharmerOrOwnerGUID(motion)
+		var ownerX, ownerY, ownerZ, ownerReach float32
+		ownerFound, ownerIsPlayer := false, false
+		if ownerGUID != 0 {
+			for i := range players {
+				if players[i].GUID == ownerGUID && players[i].Map == motion.Map && players[i].InstanceID == motion.InstanceID {
+					ownerX, ownerY, ownerZ = players[i].X, players[i].Y, players[i].Z
+					ownerReach = 1.5
+					if players[i].Sess != nil && players[i].Sess.player != nil && players[i].Sess.player.CombatReach > 0 {
+						ownerReach = players[i].Sess.player.CombatReach
+					}
+					ownerFound, ownerIsPlayer = true, true
+					break
+				}
+			}
+			if !ownerFound {
+				if ownerMotion := s.findCreatureMotion(motion.Map, motion.InstanceID, ownerGUID); ownerMotion != nil {
+					ownerX, ownerY, ownerZ = ownerMotion.X, ownerMotion.Y, ownerMotion.Z
+					ownerReach = ownerMotion.CombatReach
+					if ownerReach <= 0 {
+						ownerReach = 1.5
+					}
+					ownerFound = true
+				}
+			}
 		}
 		leashVictimReach := float32(1.5)
 		if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
@@ -7865,37 +7969,50 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		} else if victimMotion != nil && victimMotion.CombatReach > 0 {
 			leashVictimReach = victimMotion.CombatReach
 		}
-		leashCReach := motion.CombatReach
-		if leashCReach <= 0 {
-			leashCReach = 1.5
-		}
-		leashDist += leashCReach + leashVictimReach
+		leashDist := leashBase
 		var homeDist float32
-		if motion.CanFly {
-			homeDist = float32(math.Hypot(float64(target.X-motion.HomeX), float64(target.Y-motion.HomeY)))
+		if ownerFound {
+			homeDist = float32(distance3D(target.X, target.Y, target.Z, ownerX, ownerY, ownerZ))
+			leashDist += leashVictimReach + ownerReach
 		} else {
-			homeDist = float32(distance3D(target.X, target.Y, target.Z, motion.HomeX, motion.HomeY, motion.HomeZ))
+			if motion.AIName == "TurretAI" {
+				leashDist += combatDistanceSpellRange(s, motion)
+			}
+			leashCReach := motion.CombatReach
+			if leashCReach <= 0 {
+				leashCReach = 1.5
+			}
+			leashDist += leashCReach + leashVictimReach
+			if motion.CanFly {
+				homeDist = float32(math.Hypot(float64(target.X-motion.HomeX), float64(target.Y-motion.HomeY)))
+			} else {
+				homeDist = float32(distance3D(target.X, target.Y, target.Z, motion.HomeX, motion.HomeY, motion.HomeZ))
+			}
 		}
-		if !inDungeon && homeDist > leashDist {
+		leashBreach := false
+		if ownerFound && ownerIsPlayer {
+			leashBreach = homeDist > leashDist
+		} else if !inDungeon && homeDist > leashDist {
 			taunted := motion.ThreatMgr != nil && motion.ThreatMgr.HasAnyTaunt()
 			recentlyDamaged := !motion.LastDamaged.IsZero() && now.Sub(motion.LastDamaged) < 10*time.Second
 			bossMob := motion.TypeFlags&creatureTypeFlagBossMob != 0
-			if bossMob || (!recentlyDamaged && !taunted) {
-				// Evade / drop combat if player ran too far: reset health, stop attack, and run back home
-				if motion.ThreatMgr != nil {
-					motion.ThreatMgr.RemoveThreat(motion.TargetGUID)
-				}
-				if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
-					nextVictim := motion.ThreatMgr.GetCurrentVictim()
-					motion.TargetGUID = nextVictim
-					entries := motion.ThreatMgr.SortedEntriesAvailable()
-					s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries, motion.PhaseMask)
-					s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, nextVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
-					return
-				}
-				s.triggerCreatureEvade(ctx, motion, now)
+			leashBreach = bossMob || (!recentlyDamaged && !taunted)
+		}
+		if leashBreach {
+			// Evade / drop combat if player ran too far: reset health, stop attack, and run back home
+			if motion.ThreatMgr != nil {
+				motion.ThreatMgr.RemoveThreat(motion.TargetGUID)
+			}
+			if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
+				nextVictim := motion.ThreatMgr.GetCurrentVictim()
+				motion.TargetGUID = nextVictim
+				entries := motion.ThreatMgr.SortedEntriesAvailable()
+				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries, motion.PhaseMask)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, nextVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 				return
 			}
+			s.triggerCreatureEvade(ctx, motion, now)
+			return
 		}
 
 		if motion.BossAI != nil {
@@ -11771,56 +11888,93 @@ func (s *Server) creatureSightAccessiblePlaceOK(caller *creatureMotion, victimX,
 }
 
 // creatureSightHomeDistanceOK is the home-distance gate of
-// Creature::CanCreatureAttack (Creature.cpp:2582-2608): skipped for
-// player-charmed/owned callers, dungeon maps, world bosses (rank 3),
-// recently damaged callers (LastDamaged is stamped now +
-// MAX_AGGRO_RESET_TIME), and taunted callers; otherwise the victim
-// must sit within min(map visibility, 2*cell = 133.3333yd) plus both
-// combat reaches of the charmer/owner motion when resolvable, else
-// the caller home - 2D when the caller can fly (the query's
-// CanFly||Flying reading of the template IsFlightAllowed arm), else
-// 3D. Shared by both sight scans and the CanStartAttack query.
+// Creature::CanCreatureAttack (Creature.cpp:2582-2608). The skips
+// (dungeon map, recently-damaged or taunted non-world-boss) apply only
+// when the caller has no player charmer/owner
+// (!GetCharmerOrOwnerGUID().IsPlayer(), :2583) — a player-charmed or
+// player-owned caller is always leash-checked, around its owner. With
+// a resolvable charmer/owner the victim must sit within min(map
+// visibility, 2*cell = 133.3333yd) plus the victim's and the owner's
+// combat reaches of the OWNER (victim->IsWithinDist(unit, dist),
+// :2595-2599, 3D, both radii via _IsWithinDist, Object.cpp:1147);
+// an unresolvable owner falls to the home arm, where the reaches are
+// the caller's and the victim's and flight measures 2D (:2601-2607).
+// isWorldBoss is type_flags BOSS_MOB (Creature.cpp:2353), not rank;
+// LastDamaged is stamped at the damage time (combat.go:1819), so
+// recently-damaged is elapsed < 10s, the tick leash's reading — the
+// old time.Now().Before(LastDamaged) test never fired, and the old
+// Rank == 3 skip wrongly exempted every world boss from the distance
+// check outright. Shared by both sight scans, the CanStartAttack
+// query, and the threat-offline attack arms.
 func (s *Server) creatureSightHomeDistanceOK(caller *creatureMotion, victimX, victimY, victimZ, victimReach float32) bool {
 	if caller == nil {
 		return false
 	}
+	// GetCharmerOrOwner (Unit.h:1175): charmer first, else owner.
+	// IsPlayer is a GUID-type test (HighGuid::HIGHGUID_PLAYER, zero
+	// high word — procActorIsPlayerGUID), not session resolvability:
+	// a logged-out player owner is still a player GUID, so the skips
+	// below still do not apply to its creature.
 	ownerGUID := caller.CharmerGUID
 	if ownerGUID == 0 {
 		ownerGUID = caller.OwnerGUID
 	}
-	ownerIsPlayer := false
-	if ownerGUID != 0 {
-		if sess := s.findSessionByGUID(ownerGUID); sess != nil && sess.player != nil {
-			ownerIsPlayer = true
+	ownerIsPlayer := procActorIsPlayerGUID(ownerGUID)
+	// The dungeon / recently-damaged / taunt skips live inside the
+	// !IsPlayer() gate (Creature.cpp:2583-2592): a player-owned caller
+	// never skips, it leashes around its owner below.
+	if !ownerIsPlayer {
+		dungeon := false
+		if s.Data != nil {
+			if entry, found, err := s.Data.Map(caller.Map); err == nil && found && entry.IsDungeon() {
+				dungeon = true
+			}
 		}
-	}
-	dungeon := false
-	if s.Data != nil {
-		if entry, found, err := s.Data.Map(caller.Map); err == nil && found && entry.IsDungeon() {
-			dungeon = true
+		if dungeon {
+			return true
 		}
-	}
-	if ownerIsPlayer || dungeon || caller.Rank == 3 || time.Now().Before(caller.LastDamaged) || s.creatureHasAuraType(creatureAuraKeyForMotion(caller), spellAuraModTaunt) {
-		return true
+		worldBoss := caller.TypeFlags&creatureTypeFlagBossMob != 0
+		recentlyDamaged := !caller.LastDamaged.IsZero() && time.Since(caller.LastDamaged) < 10*time.Second
+		taunted := s.creatureHasAuraType(creatureAuraKeyForMotion(caller), spellAuraModTaunt)
+		if !worldBoss && (recentlyDamaged || taunted) {
+			return true
+		}
 	}
 	limit := float32(s.Config.VisibilityDistanceContinents)
 	if limit > 133.3333 {
 		limit = 133.3333
 	}
-	limit += caller.CombatReach + victimReach
-	homeX, homeY, homeZ := caller.HomeX, caller.HomeY, caller.HomeZ
+	// Charmer/owner arm (Creature.cpp:2595-2599): the victim must be
+	// within dist of the owner — 3D, both radii (the victim's and the
+	// owner's). A player owner resolves through its session; a creature
+	// owner through the motion map; an unresolvable owner falls through
+	// to the home arm, as C++ does when GetCharmerOrOwner() is null.
 	if ownerGUID != 0 {
+		if sess := s.findSessionByGUID(ownerGUID); sess != nil && sess.player != nil {
+			ownerReach := sess.player.CombatReach
+			if ownerReach <= 0 {
+				ownerReach = 1.5
+			}
+			return float32(distance3D(victimX, victimY, victimZ, sess.player.X, sess.player.Y, sess.player.Z)) <= limit+victimReach+ownerReach
+		}
 		if owner := s.findCreatureMotion(caller.Map, caller.InstanceID, ownerGUID); owner != nil {
 			s.motionMu.Lock()
-			homeX, homeY, homeZ = owner.X, owner.Y, owner.Z
+			ox, oy, oz, ownerReach := owner.X, owner.Y, owner.Z, owner.CombatReach
 			s.motionMu.Unlock()
+			if ownerReach <= 0 {
+				ownerReach = 1.5
+			}
+			return float32(distance3D(victimX, victimY, victimZ, ox, oy, oz)) <= limit+victimReach+ownerReach
 		}
 	}
+	// Home arm (Creature.cpp:2601-2607): dist plus the caller's and the
+	// victim's reaches; flight measures 2D.
+	limit += caller.CombatReach + victimReach
 	var homeDist float32
 	if caller.CanFly || caller.Flying {
-		homeDist = float32(math.Hypot(float64(victimX-homeX), float64(victimY-homeY)))
+		homeDist = float32(math.Hypot(float64(victimX-caller.HomeX), float64(victimY-caller.HomeY)))
 	} else {
-		homeDist = float32(distance3D(victimX, victimY, victimZ, homeX, homeY, homeZ))
+		homeDist = float32(distance3D(victimX, victimY, victimZ, caller.HomeX, caller.HomeY, caller.HomeZ))
 	}
 	return homeDist <= limit
 }

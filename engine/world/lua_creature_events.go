@@ -134,11 +134,60 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 	if summoned == nil {
 		return nil
 	}
+	// TempSummon::InitStats (TemporarySummon.cpp:190-198): a trigger
+	// temp summon with a first template spell (m_spells[0],
+	// creature_template_spell Index 0), summoned by a player, is
+	// player-controlled (m_ControlledByPlayer = true) — without the
+	// UNIT_FLAG_PLAYER_CONTROLLED flag, which C++ sets only via SetMinion
+	// (Unit.cpp:6056-6057, Minion class) and charm (Unit.cpp:6219-6224).
+	// The summoner must be a player directly: a creature summoner never
+	// qualifies, even a player-controlled one (GetSummonerUnit type test).
+	// SetFaction/SetLevel (TemporarySummon.cpp:192-193) run for any
+	// owner, creature or player; only the m_ControlledByPlayer bit
+	// needs a player owner (:195). A gameobject summoner resolves to
+	// neither (C++ owner is null), so all three arms stay out for it.
+	// The raw template value is read here, not loadCreatureSpells —
+	// InitStats reads m_spells[0] with no DBC gate (CombatAI's gate,
+	// Creature.cpp:58, applies to the rotation list only).
+	// GetSummonerUnit resolves to a player session or a creature
+	// motion; a gameobject summoner resolves to neither (C++ owner
+	// is null), so the arms below stay out for it.
+	summonerSess := (*session)(nil)
+	if origin.SummonerMotion == nil {
+		summonerSess = s.findSessionByGUID(origin.GUID)
+	}
+	summonerIsPlayer := summonerSess != nil
+	triggerHasSpell := false
+	if (summonerIsPlayer || origin.SummonerMotion != nil) && summoned.FlagsExtra&creatureFlagExtraTrigger != 0 && s.WorldStore != nil && s.WorldStore.DB != nil {
+		var spell1 int64
+		if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT Spell FROM creature_template_spell WHERE CreatureID = ? AND `Index` = 0", entry).Scan(&spell1); err == nil && spell1 != 0 {
+			triggerHasSpell = true
+		}
+	}
 	s.motionMu.Lock()
 	summoned.OwnerGUID = ownerGUID
 	summoned.CreatedByGUID = ownerGUID // TempSummon::InitStats (TemporarySummon.cpp:356): creator is the owner
 	summoned.IsTempSummon = true
 	summoned.TempSummonType = summonType
+	if triggerHasSpell {
+		// FactionKnown/LevelKnown keep the sweep from re-affirming
+		// the template values (commands_wp.go:728 precedent); the
+		// summoner motion reads ride the motionMu lock held here.
+		if summonerIsPlayer {
+			summoned.ControlledByPlayer = true
+			if summonerSess.player != nil {
+				summoned.Faction = summonerSess.effectiveFactionTemplate(summonerSess.player.Race)
+				summoned.Level = uint32(summonerSess.player.Level)
+				summoned.FactionKnown = true
+				summoned.LevelKnown = true
+			}
+		} else if origin.SummonerMotion != nil {
+			summoned.Faction = origin.SummonerMotion.Faction
+			summoned.Level = origin.SummonerMotion.Level
+			summoned.FactionKnown = true
+			summoned.LevelKnown = true
+		}
+	}
 	// InitStats (TemporarySummon.cpp:168-183) stamps m_lifetime from
 	// the summon duration for every type: the timed family (0/1/2/3)
 	// arms the timer at spawn, CORPSE_TIMED_DESPAWN (5) carries the

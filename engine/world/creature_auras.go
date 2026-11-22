@@ -1514,6 +1514,30 @@ func (s *Server) recomputeCreatureArmorOnAuraChange(key creatureAuraKey, spellID
 // Unit::MeleeSpellMissChance victim arm (Unit.cpp:12425):
 // SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE (184) and
 // SPELL_AURA_MOD_ATTACKER_RANGED_HIT_CHANCE (185) are summed on the victim.
+// creatureInvisibilityAuraState mirrors the SelectVictim tail
+// (Creature.cpp:1240-1249): the live SPELL_AURA_MOD_INVISIBILITY (18)
+// auras on the creature, split into any-live vs permanent.
+// Aura::IsPermanent (SpellAuras.h:152) is max duration -1, which Go
+// stores as DurationMs == 0 (arena-strip precedent,
+// battleground_arena.go:892).
+func (s *Server) creatureInvisibilityAuraState(key creatureAuraKey) (anyInvis, permanentInvis bool) {
+	if s == nil || key.GUID == 0 {
+		return false, false
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraModInvisibility {
+			continue
+		}
+		anyInvis = true
+		if aura.DurationMs == 0 {
+			permanentInvis = true
+		}
+	}
+	return anyInvis, permanentInvis
+}
+
 func (s *Server) creatureAuraTypeSum(key creatureAuraKey, auraType uint32) int32 {
 	if s == nil || key.GUID == 0 || s.Data == nil {
 		return 0
