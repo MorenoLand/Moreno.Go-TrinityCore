@@ -1109,6 +1109,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		doArgs := []any{scripting.CreatureEventOnDoAction, creature, action}
 		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDoAction, doArgs...)
 		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDoAction, doArgs...)
+		// A SmartAI-driven target takes the C++ dispatch as well:
+		// AI()->DoAction is SmartAI::DoAction (SmartAI.cpp:708-711),
+		// the ACTION_DONE fire — the event-38 hook above is Go's own
+		// extension for Lua-driven AIs, and a SmartAI creature with
+		// no Lua binding hears nothing from it. smartDoAction
+		// no-ops when the target has no SmartAI state.
+		s.smartDoAction(ctx, motion, action)
 		return nil, nil
 	}
 	// SetGUID is the CreatureAI::SetGUID dispatch twin (CreatureAI.h):

@@ -194,7 +194,7 @@ const (
 	smartEventGameEventStart        uint32 = 68 // SMART_EVENT_GAME_EVENT_START (SmartScriptMgr.h:167), Param1 = game_event.Entry
 	smartEventGameEventEnd          uint32 = 69 // SMART_EVENT_GAME_EVENT_END (SmartScriptMgr.h:168), Param1 = game_event.Entry
 	smartEventGOEventInform         uint32 = 71 // SMART_EVENT_GO_EVENT_INFORM (SmartScriptMgr.h:170), Param1 = eventId; GO-source only (48 rows, 18 live after the action-147 load rejection), dispatch + GO state ported, fire sites in the goober/camera Use arms, the destructible-building transitions and the transport node events
-	smartEventActionDone            uint32 = 72 // SMART_EVENT_ACTION_DONE (SmartScriptMgr.h:171), Param1 = eventId; 1 src-0 row (Michael Belfast 30571, DoAction 100, EVENT_BELFAST_MOVE); dispatch arm only — the sole C++ caller is the CoS intro machine (culling_of_stratholme.cpp:119), no Go twin
+	smartEventActionDone            uint32 = 72 // SMART_EVENT_ACTION_DONE (SmartScriptMgr.h:171), Param1 = eventId; 1 src-0 row (Michael Belfast 30571, DoAction 100, EVENT_BELFAST_MOVE); dispatch arm + Lua DoAction fire site (smartDoAction); the CoS intro machine itself is unported (Lua-side future work)
 	smartEventDistanceCreature      uint32 = 75 // SMART_EVENT_DISTANCE_CREATURE (SmartScriptMgr.h:174), Param1 = guid, Param2 = entry, Param3 = distance, Param4 = repeat; 31 src-0 rows, fired by the OnUpdate distance scan
 	smartEventDistanceGameObject    uint32 = 76 // SMART_EVENT_DISTANCE_GAMEOBJECT (SmartScriptMgr.h:175), same params as DISTANCE_CREATURE; 1 src-0 row (Plump Turkey 32818), fired by the OnUpdate distance scan
 	smartEventSceneStart            uint32 = 78 // SMART_EVENT_SCENE_START (SmartScriptMgr.h:177), don't use on 3.3.5a; dead, no dispatch arm
@@ -1713,11 +1713,10 @@ func (s *Server) smartProcessEvent(ctx context.Context, motion *creatureMotion, 
 		// event fires only for its event id (event_param1 == var0),
 		// then runs its action with no invoker (SmartAI::DoAction
 		// passes nullptr, SmartAI.cpp:708-711) and the id as var0.
-		// No Go fire site: the sole C++ caller is the Culling of
-		// Stratholme intro machine — belfast->AI()->DoAction(
-		// EVENT_BELFAST_MOVE) (culling_of_stratholme.cpp:119,
-		// EVENT_BELFAST_MOVE = 100) — and Go has no CoS intro
-		// machine. TDB 26091: 72 = 1 src-0 row (Michael Belfast
+		// Fire site: Lua creature:DoAction via smartDoAction
+		// (SmartAI::DoAction twin, SmartAI.cpp:708-711); the CoS intro
+		// machine itself is unported — Lua-side future work.
+		// TDB 26091: 72 = 1 src-0 row (Michael Belfast
 		// 30571, p1 100, action 17 SET_EMOTE_STATE, NOT_REPEATABLE,
 		// link 1).
 		if ev.row.eventParam1 != var0 {
@@ -6924,6 +6923,25 @@ func (s *Server) smartJustDied(ctx context.Context, motion *creatureMotion, kill
 		s.smartEndPath(ctx, motion, st, true)
 	}
 	s.smartProcessEvents(ctx, motion, smartEventDeath, killerGUID, 0, 0)
+}
+
+// smartDoAction is SmartAI::DoAction (SmartAI.cpp:708-711):
+// ProcessEventsFor(SMART_EVENT_ACTION_DONE, nullptr, param) — the
+// event fires only for its event id (event_param1 == var0) with no
+// invoker. The sole C++ caller is the Culling of Stratholme inn
+// machine — belfast->AI()->DoAction(EVENT_BELFAST_MOVE)
+// (culling_of_stratholme.cpp:119, EVENT_BELFAST_MOVE = 100) — whose
+// row (30571, p1 100, SET_EMOTE_STATE + LINK SetRun + MoveToPos 42,
+// then MOVEMENTINFORM SET_DATA on Forresten 30551) runs through the
+// already-dispatched action legs. The Go caller surface is Lua
+// creature:DoAction, which dispatches to the creature's real AI; the
+// SmartAI state gate inside smartProcessEvents keeps this a no-op
+// for Lua-driven AIs.
+func (s *Server) smartDoAction(ctx context.Context, motion *creatureMotion, action int32) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.smartProcessEvents(ctx, motion, smartEventActionDone, 0, uint32(action), 0)
 }
 
 // smartKilledUnit is SmartAI::KilledUnit (SmartAI.cpp:578-581):
