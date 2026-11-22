@@ -167,8 +167,12 @@ const (
 // The 98 SEND_GOSSIP_MENU (14) / 99 GO_SET_LOOT_STATE (22) / 100
 // SEND_TARGET_TO_TARGET (155) are ported below. The 101 SET_HOME_POS
 // (102) / 102 SET_HEALTH_REGEN (23) / 107 SUMMON_CREATURE_GROUP (231)
-// are ported below. The next unported block is 108 SET_POWER (3) / 111
-// GAME_EVENT_STOP (2) / 112 GAME_EVENT_START (1).
+// are ported below. The 108 SET_POWER (3) / 111 GAME_EVENT_STOP (2) /
+// 112 GAME_EVENT_START (1) are ported below. The 113
+// START_CLOSEST_WAYPOINT (2) / 114 MOVE_OFFSET (76) / 115 RANDOM_SOUND
+// (14) are ported below. The next unported block is 116 SET_CORPSE_DELAY
+// (69) / 117 DISABLE_EVADE (20) / 127 PAUSE_MOVEMENT (8); 118-126 have
+// zero TDB rows.
 const (
 	smartActionTalk                           uint32 = 1
 	smartActionSetFaction                     uint32 = 2
@@ -269,6 +273,9 @@ const (
 	smartActionSetPower                       uint32 = 108
 	smartActionGameEventStop                  uint32 = 111
 	smartActionGameEventStart                 uint32 = 112
+	smartActionStartClosestWaypoint           uint32 = 113
+	smartActionMoveOffset                     uint32 = 114
+	smartActionRandomSound                    uint32 = 115
 	smartActionTriggerRandomTimedEvent        uint32 = 125
 	smartActionRespawnBySpawnID               uint32 = 133
 )
@@ -290,6 +297,12 @@ const smartEscortTargets uint32 = 0xFFFFFF
 // escort's return-to-OOC MovePoint carries; its arrival clears the
 // evade state (SmartAI::MovementInform, SmartAI.cpp:396-410).
 const smartEscortLastOOCPoint uint32 = 0xFFFFFF
+
+// SMART_RANDOM_POINT (SmartScriptMgr.h:37): the point id MOVE_OFFSET
+// MovePoints carry; its arrival fires SMART_EVENT_MOVEMENTINFORM (34)
+// with (POINT_MOTION_TYPE, 0xFFFFFE) — the CAGED_NPC template's
+// credit/despawn/talk legs match on it.
+const smartRandomPoint uint32 = 0xFFFFFE
 
 const smartEscortMaxPlayerDist float32 = 60
 
@@ -1687,6 +1700,12 @@ func (s *Server) smartProcessAction(ctx context.Context, motion *creatureMotion,
 		s.smartActionGameEventStop(ctx, motion, st, ev, invokerGUID)
 	case smartActionGameEventStart:
 		s.smartActionGameEventStart(ctx, motion, st, ev, invokerGUID)
+	case smartActionStartClosestWaypoint:
+		s.smartActionStartClosestWaypoint(ctx, motion, st, ev, invokerGUID)
+	case smartActionMoveOffset:
+		s.smartActionMoveOffset(ctx, motion, st, ev, invokerGUID)
+	case smartActionRandomSound:
+		s.smartActionRandomSound(ctx, motion, st, ev, invokerGUID)
 	default:
 		// Residual: the remaining AGGRO-row action (146) has no Go
 		// twin. 146 has no enum value in this C++ revision
@@ -2154,36 +2173,55 @@ func (s *Server) smartVehiclePassengerTargets(motion *creatureMotion, seatMask u
 	return out
 }
 
+// smartPlaySound is the shared WorldObject::PlayDirectSound /
+// PlayDistanceSound send (Object.cpp:3488-3494; SOUND at
+// SmartScript.cpp:346-361, RANDOM_SOUND at :2128-2150): distance sends
+// SMSG_PLAY_OBJECT_SOUND with the target's GUID (distance-attenuated
+// client-side), otherwise SMSG_PLAY_SOUND. onlySelf sends to the target
+// player alone — a creature target's ToPlayer() is nil, so onlySelf only
+// ever directs a player target; otherwise the packet goes to the visible
+// set around the target. GameObject targets are not units and are skipped.
+func (s *Server) smartPlaySound(motion *creatureMotion, tgt smartTarget, sound uint32, onlySelf, distance bool) {
+	if tgt.isGameObject {
+		return
+	}
+	var opcode uint16
+	var payload []byte
+	if distance {
+		opcode = uint16(protocol.OpcodeSMSG_PLAY_OBJECT_SOUND)
+		payload = buildPlayObjectSound(sound, tgt.guid)
+	} else {
+		opcode = uint16(protocol.OpcodeSMSG_PLAY_SOUND)
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(sound)
+		payload = packet.Bytes()
+	}
+	if tgt.isPlayer {
+		sess := s.findSessionByGUID(tgt.guid)
+		if sess == nil || sess.player == nil {
+			return
+		}
+		if onlySelf {
+			_ = sess.write(opcode, payload, true)
+			return
+		}
+		s.broadcastToVisibleSetFromPhase(opcode, payload, sess.player.Map, sess.player.InstanceID, sess.player.X, sess.player.Y, sess.player.Z, motion.PhaseMask)
+		return
+	}
+	tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+	if tm == nil {
+		return
+	}
+	s.broadcastToVisibleSetFromPhase(opcode, payload, tm.Map, tm.InstanceID, tm.X, tm.Y, tm.Z, tm.PhaseMask)
+}
+
 // smartActionSound is SMART_ACTION_SOUND (SmartScript.cpp:346-361):
 // param1 sound, param2 onlySelf, param3 distance (1 = distance sound).
-// onlySelf sends to the target player alone; otherwise the sound goes to
-// the visibility set around the target (Unit::PlayDirectSound). The
-// distance variant has no Go packet twin — it rides the same send, so
-// its 2 AGGRO rows play at full volume instead of distance-attenuated.
+// The send rides smartPlaySound; the distance leg is SMSG_PLAY_OBJECT_SOUND
+// with the target GUID, not the plain SMSG_PLAY_SOUND the old code sent.
 func (s *Server) smartActionSound(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
-	targets := s.smartTargets(ctx, motion, st, ev, invokerGUID)
-	onlySelf := ev.row.actionParam2 != 0
-	for _, tgt := range targets {
-		packet := protocol.NewBuffer(4)
-		packet.WriteU32(ev.row.actionParam1)
-		payload := packet.Bytes()
-		if tgt.isPlayer {
-			sess := s.findSessionByGUID(tgt.guid)
-			if sess == nil || sess.player == nil {
-				continue
-			}
-			if onlySelf {
-				_ = sess.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), payload, true)
-				continue
-			}
-			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_PLAY_SOUND), payload, sess.player.Map, sess.player.InstanceID, sess.player.X, sess.player.Y, sess.player.Z, motion.PhaseMask)
-			continue
-		}
-		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
-		if tm == nil {
-			continue
-		}
-		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_PLAY_SOUND), payload, tm.Map, tm.InstanceID, tm.X, tm.Y, tm.Z, tm.PhaseMask)
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		s.smartPlaySound(motion, tgt, ev.row.actionParam1, ev.row.actionParam2 != 0, ev.row.actionParam3 == 1)
 	}
 }
 
@@ -5330,6 +5368,127 @@ func (s *Server) smartActionGameEventStart(ctx context.Context, motion *creature
 		return
 	}
 	s.luaGameEventControl(eventID, true, true)
+}
+
+// smartActionStartClosestWaypoint is SMART_ACTION_START_CLOSEST_WAYPOINT
+// (SmartScript.cpp:2088-2126): action params 1-6 are SmartAI waypoint path
+// ids; the closest node across all listed paths (3D distance from the
+// target creature, strict < so ties keep the first path/node in param
+// order) starts an escort — walk, repeat, no invoker — on that creature.
+// The closest pair is one accumulator shared across targets (declared
+// outside the C++ target loop), and StartPath runs per target with the
+// running closest. Only SmartAI creatures start (IsSmart; smartStateFor
+// is nil otherwise); player and GO targets are skipped, as is a path
+// that loads no nodes. StartPath's nodeId only seeds the AI's
+// current-waypoint bookkeeping (_currentWaypointNode, SmartAI.cpp:61):
+// the waypoint generator itself always starts at nodes[0]
+// (PathMovementBase::_currentNode starts 0), so the escort walks from
+// node 1 and escortNode is seeded with the closest node id. TDB 26091:
+// 2 rows, both SELF — Skyguard Prisoner (23383, paths 18706401/18706409/
+// 18706417) and Injured Goblin Miner (2943401, 23547201/23547209/23547217)
+// — the paths resolve in waypoint_data via the loadSmartWaypoints
+// fallback (the `waypoints` table has no CREATE TABLE in TDB 26091).
+func (s *Server) smartActionStartClosestWaypoint(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	waypoints := [6]uint32{ev.row.actionParam1, ev.row.actionParam2, ev.row.actionParam3, ev.row.actionParam4, ev.row.actionParam5, ev.row.actionParam6}
+	bestDist := math.MaxFloat64
+	var closestPath, closestNode uint32
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer || tgt.isGameObject {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		tst := s.smartStateFor(ctx, tm)
+		if tst == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		tx, ty, tz := tm.X, tm.Y, tm.Z
+		s.motionMu.Unlock()
+		for _, pathID := range waypoints {
+			if pathID == 0 {
+				continue
+			}
+			for _, p := range s.loadSmartWaypoints(ctx, pathID) {
+				dx := float64(tx - p.X)
+				dy := float64(ty - p.Y)
+				dz := float64(tz - p.Z)
+				if d := dx*dx + dy*dy + dz*dz; d < bestDist {
+					bestDist = d
+					closestPath, closestNode = pathID, p.Point
+				}
+			}
+		}
+		if closestPath != 0 {
+			s.smartStartPath(ctx, tm, tst, false, closestPath, true, 0)
+			tst.escortNode = closestNode
+		}
+	}
+}
+
+// smartActionMoveOffset is SMART_ACTION_MOVE_OFFSET (SmartScript.cpp:1203-1225):
+// every creature target steps by the row's target_x/y/z offset in its own
+// facing frame — x strafes (cos(o-pi/2)), y advances (cos(o)), z rises —
+// via MovePoint(SMART_RANDOM_POINT, ...). A charmed target is skipped
+// unless the event carries WHILE_CHARMED (0x200); players and GOs are not
+// creatures and are skipped. The arrival fires SMART_EVENT_MOVEMENTINFORM
+// (34) with (POINT_MOTION_TYPE, 0xFFFFFE) through the script-spline
+// finalize leg — the CAGED_NPC template's credit/despawn/talk legs match
+// on it, and its synthetic MOVE_OFFSET rows carry target offsets 0, so
+// they step in place and arrive immediately, exactly as in C++. TDB
+// 26091: 76 rows, all action params 0 — the offsets live in target_x/y/z
+// (forward 1-200, strafe 30x2, rise 3/12/25/90) — 72 SELF + 4
+// ACTION_INVOKER.
+func (s *Server) smartActionMoveOffset(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	ox, oy, oz := ev.row.targetX, ev.row.targetY, ev.row.targetZ
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isPlayer || tgt.isGameObject {
+			continue
+		}
+		tm := s.findCreatureMotion(motion.Map, motion.InstanceID, tgt.guid)
+		if tm == nil {
+			continue
+		}
+		s.motionMu.Lock()
+		px, py, pz, po := tm.X, tm.Y, tm.Z, tm.Orientation
+		charmed := tm.CharmerGUID != 0
+		s.motionMu.Unlock()
+		if ev.row.eventFlags&smartEventFlagWhileCharmed == 0 && charmed {
+			continue
+		}
+		o := float64(po)
+		nx := px + float32(math.Cos(o-math.Pi/2)*float64(ox)+math.Cos(o)*float64(oy))
+		ny := py + float32(math.Sin(o-math.Pi/2)*float64(ox)+math.Sin(o)*float64(oy))
+		s.launchCreatureScriptSpline(tm, nx, ny, pz+oz, false, movementGeneratorPoint, smartRandomPoint, true)
+	}
+}
+
+// smartActionRandomSound is SMART_ACTION_RANDOM_SOUND (SmartScript.cpp:2128-2150):
+// one sound picked uniformly per unit target from the non-zero action
+// params 1-4 (the struct is sounds[4] + onlySelf + distance, so param5 is
+// onlySelf and param6 is distance — the enum comment's "soundId1..5,
+// onlySelf" is stale), played via the shared PlayDirectSound /
+// PlayDistanceSound send. TDB 26091: 14 rows, all Lazy Peon (src 9),
+// sounds 6292/6294, onlySelf 0, distance 1 — distance-attenuated
+// SMSG_PLAY_OBJECT_SOUND to the visible set.
+func (s *Server) smartActionRandomSound(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
+	sounds := make([]uint32, 0, 4)
+	for _, snd := range [4]uint32{ev.row.actionParam1, ev.row.actionParam2, ev.row.actionParam3, ev.row.actionParam4} {
+		if snd != 0 {
+			sounds = append(sounds, snd)
+		}
+	}
+	if len(sounds) == 0 {
+		return
+	}
+	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
+		if tgt.isGameObject {
+			continue
+		}
+		s.smartPlaySound(motion, tgt, sounds[rand.Intn(len(sounds))], ev.row.actionParam5 != 0, ev.row.actionParam6 == 1)
+	}
 }
 
 // smartActionSetReactState is SMART_ACTION_SET_REACT_STATE
