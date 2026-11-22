@@ -1872,6 +1872,21 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			s.motionMu.Unlock()
 			return
 		}
+		// CombatManager::CanBeginCombat (CombatManager.cpp:31-65): the
+		// AddThreat gate above stops the threat ref, but this funnel
+		// also sets InCombat and fires the engage arms itself, so the
+		// same gate runs here first — otherwise a NO_COMBAT creature
+		// would still enter combat from the assist radius. The
+		// attacker resolves from the already-held lock when it is a
+		// creature (playerSess == nil); a player attacker rides sess.
+		var attackerVM *creatureMotion
+		if playerSess == nil {
+			attackerVM = s.findCreatureMotionLocked(mapID, instanceID, playerGUID)
+		}
+		if !s.canBeginCombatWith(motion, playerGUID, playerSess, attackerVM) {
+			s.motionMu.Unlock()
+			return
+		}
 		if motion.ThreatMgr == nil {
 			motion.ThreatMgr = NewThreatManager(motion)
 		}

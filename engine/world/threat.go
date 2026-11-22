@@ -1897,9 +1897,87 @@ func (s *Server) creatureAddThreat(motion *creatureMotion, victimGUID uint64, am
 // map, per the deadlock rule in splitCreatureThreatRedirects — so a
 // nested vehicle (base seated on a further base) stops after one level,
 // and the recursive base add carries vm=nil.
+// creatureFlagExtraNoCombat is CREATURE_FLAG_EXTRA_NO_COMBAT
+// (CreatureData.h:50): the creature is not allowed to enter combat;
+// Creature::SetIgnoringCombat reads it (Creature.cpp:640).
+const creatureFlagExtraNoCombat uint32 = 0x00002000
+
+// canBeginCombatWith is CombatManager::CanBeginCombat
+// (CombatManager.cpp:31-65), the SetInCombatWith validity gate
+// ThreatManager::AddThreat requires before creating a combat reference
+// (ThreatManager.cpp:379-381). It runs on already-resolved state only —
+// the motion, the player session, or the creature victim motion — never
+// through the motion map (creatureAddThreat has no motionMu contract,
+// and triggerCreatureAggro calls it while holding the lock). An
+// existing threat ref exempts the pair: SetInCombatWith returns true
+// for a pair already in combat. Legs Go cannot check stay out: in-flight
+// has no player model, and friendliness is gated upstream by the engage
+// call sites (no in-tree AddThreat caller passes a friendly victim).
+// A nil ThreatMgr means no existing ref, not a refusal — the gate runs
+// ahead of the manager's creation in triggerCreatureAggro.
+func (s *Server) canBeginCombatWith(motion *creatureMotion, victimGUID uint64, sess *session, vm *creatureMotion) bool {
+	if motion == nil {
+		return false
+	}
+	if motion.ThreatMgr != nil && motion.ThreatMgr.HasThreatEntry(victimGUID) {
+		return true
+	}
+	if motion.Health == 0 || motion.Evading || motion.FlagsExtra&creatureFlagExtraNoCombat != 0 {
+		return false
+	}
+	mPhase := motion.PhaseMask
+	if mPhase == 0 {
+		mPhase = 1
+	}
+	if sess != nil {
+		if sess.player == nil || sess.isDeadOrGhost() || sessionIsGameMaster(sess) {
+			return false
+		}
+		if sess.player.Map != motion.Map || sess.currentPlayerPhaseMask()&mPhase == 0 {
+			return false
+		}
+	} else if vm != nil {
+		if vm.Health == 0 || vm.Evading || vm.FlagsExtra&creatureFlagExtraNoCombat != 0 {
+			return false
+		}
+		if vm.Map != motion.Map {
+			return false
+		}
+		vPhase := vm.PhaseMask
+		if vPhase == 0 {
+			vPhase = 1
+		}
+		if vPhase&mPhase == 0 {
+			return false
+		}
+	}
+	// Attacker-side GM (CanBeginCombat's playerA leg): a creature owned
+	// or charmed by a GM player never begins combat. The charmer wins
+	// over the owner, matching GetCharmerOrOwnerPlayerOrPlayerItself.
+	ownerGUID := motion.CharmerGUID
+	if ownerGUID == 0 {
+		ownerGUID = motion.OwnerGUID
+	}
+	if ownerGUID != 0 {
+		if os := s.findSessionByGUID(ownerGUID); os != nil && sessionIsGameMaster(os) {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) creatureAddThreatWithRedirect(motion *creatureMotion, victimGUID uint64, amount float32, inMelee bool, sess *session, vm *creatureMotion, ignoreRedirects bool) (switched bool, newVictim uint64) {
 	if motion == nil || motion.ThreatMgr == nil {
 		return false, 0
+	}
+	// ThreatManager::AddThreat (ThreatManager.cpp:379-381) requires
+	// SetInCombatWith success before creating a combat reference, so a
+	// NO_COMBAT / dead / evading / cross-phase / GM pair takes no threat
+	// here — the live case is a NO_COMBAT quest creature engaging from
+	// the assist radius. An already-listed victim passes (see
+	// canBeginCombatWith).
+	if !s.canBeginCombatWith(motion, victimGUID, sess, vm) {
+		return false, motion.ThreatMgr.GetCurrentVictim()
 	}
 	baseSwitched, baseVictim := false, uint64(0)
 	if baseGUID, accessory := s.threatVehicleBaseGUID(sess, vm); baseGUID != 0 {
