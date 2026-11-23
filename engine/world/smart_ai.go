@@ -5916,8 +5916,9 @@ func (s *Server) smartSetFacing(motion *creatureMotion, ori float32) {
 // dist from the target along the target-to-me angle, z pinned to the
 // target's z. A creature target reads its live combat reach, a player
 // target the 1.5 UNIT_FIELD_COMBATREACH default, a GO target 0
-// (Object.h:313). The hover-offset correction, UpdateAllowedPositionZ
-// and the LoS sweep stay out, the Lua GetContactPoint deltas.
+// (Object.h:313). The hover-offset correction and
+// UpdateAllowedPositionZ stay out; the LoS sweep runs through
+// sweepNearPointLOS below, the Lua GetContactPoint deltas.
 func (s *Server) smartContactPoint(motion *creatureMotion, tgt smartTarget, tx, ty, tz float32, dist float32) (float32, float32, float32) {
 	targetReach := float32(1.5)
 	if tgt.isGameObject {
@@ -5935,7 +5936,10 @@ func (s *Server) smartContactPoint(motion *creatureMotion, tgt smartTarget, tx, 
 	s.motionMu.Unlock()
 	angle := math.Atan2(float64(my-ty), float64(mx-tx))
 	d := float64(targetReach + meReach + dist)
-	return tx + float32(d*math.Cos(angle)), ty + float32(d*math.Sin(angle)), tz
+	// GetContactPoint is a GetNearPoint call (Object.cpp:3334-3338),
+	// so the point takes the LoS sweep (Object.cpp:3272-3309).
+	sx, sy := s.sweepNearPointLOS(motion.Map, tx, ty, tz, float32(d), float32(angle))
+	return sx, sy, tz
 }
 
 // smartActionSetOrientation is SMART_ACTION_SET_ORIENTATION

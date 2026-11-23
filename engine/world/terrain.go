@@ -1129,6 +1129,38 @@ func (s *Server) hasLineOfSight(mapID uint32, x1, y1, z1, x2, y2, z2 float32) bo
 	return s.hasLineOfSightFlags(mapID, x1, y1, z1, x2, y2, z2, false)
 }
 
+// sweepNearPointLOS is the WorldObject::GetNearPoint LoS walk
+// (Object.cpp:3272-3309): the first point is GetNearPoint2D at
+// absAngle (radius already folds both combat reaches, the caller's
+// distance2d), z pinned to the anchor's z; when the anchor-to-point
+// segment clears LOS it stands. Otherwise the angle sweeps
+// absAngle + k*pi/8 for k=1..15 (the C++ loop runs angle=pi/8 while
+// angle < 2*pi), returning the first point in LoS, else the
+// remembered first point. The C++ CONFIG_DETECT_POS_COLLISION gate
+// (default true, World.cpp:1157) has no Go config model, so the
+// sweep always runs — matching the C++ default. The
+// UpdateAllowedPositionZ ground clamp inside GetNearPoint has no Go
+// model on this path, so z stays the anchor's z throughout. With no
+// terrain/VMAP data hasLineOfSight fails open, so the first point
+// stands exactly as before on such maps.
+func (s *Server) sweepNearPointLOS(mapID uint32, anchorX, anchorY, anchorZ, radius, absAngle float32) (float32, float32) {
+	x := anchorX + radius*float32(math.Cos(float64(absAngle)))
+	y := anchorY + radius*float32(math.Sin(float64(absAngle)))
+	if s.hasLineOfSight(mapID, anchorX, anchorY, anchorZ, x, y, anchorZ) {
+		return x, y
+	}
+	firstX, firstY := x, y
+	for k := 1; k <= 15; k++ {
+		a := absAngle + float32(k)*float32(math.Pi)/8
+		x = anchorX + radius*float32(math.Cos(float64(a)))
+		y = anchorY + radius*float32(math.Sin(float64(a)))
+		if s.hasLineOfSight(mapID, anchorX, anchorY, anchorZ, x, y, anchorZ) {
+			return x, y
+		}
+	}
+	return firstX, firstY
+}
+
 // hasLineOfSightSpellCheck mirrors the spell CheckCast LOS arms
 // (Spell.cpp:5394, 5406-5411): C++ passes VMAP::ModelIgnoreFlags::M2, so
 // doodad (M2) geometry — trees, fences, tents — never fails a spell's line

@@ -56785,7 +56785,8 @@ func (s *session) teleportSpellEffectCaster(mapID uint32, x, y, z, ori float32) 
 // effectiveReach is the caster's own GetCombatReach (Object.cpp:3243-3270,
 // searcher=nullptr so no addition). z is the caster's z; the vmap
 // UpdateAllowedPositionZ ground clamp (Object.cpp:3272-3277) has no Go
-// model on this path. Creature unit targets have no Go teleport arm here
+// model on this path (the LoS sweep runs through sweepNearPointLOS).
+// Creature unit targets have no Go teleport arm here
 // (no per-target session); only player targets teleport.
 func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUID uint64, eff wotlk.SpellEffect) {
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
@@ -56803,10 +56804,12 @@ func (s *session) handleEffectTeleUnitsFaceCaster(ctx context.Context, targetGUI
 	}
 	// Object.cpp:3307-3310: distance2d = dis + size(targetCombatReach),
 	// effectiveReach = caster's GetCombatReach, angle = caster orientation.
+	// The point takes the GetNearPoint LoS sweep (sweepNearPointLOS).
 	dist := s.player.CombatReach + dis + targetSess.player.CombatReach
+	sx, sy := s.server.sweepNearPointLOS(s.player.Map, s.player.X, s.player.Y, s.player.Z, dist, s.player.Orientation)
 	targetSess.nearTeleportMove(
-		s.player.X+dist*float32(math.Cos(float64(s.player.Orientation))),
-		s.player.Y+dist*float32(math.Sin(float64(s.player.Orientation))),
+		sx,
+		sy,
 		s.player.Z,
 		-s.player.Orientation,
 		true,

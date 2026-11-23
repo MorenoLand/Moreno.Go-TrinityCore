@@ -3182,8 +3182,9 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// (WorldObjectMethods.h:630-646): WorldObject::GetClosePoint(x, y, z,
 	// 0, dist, relAngle) = GetNearPoint with absAngle = orientation +
 	// relAngle at (combatReach + dist) (Object.cpp:3307-3311, 3272-3269).
-	// The height-collision re-solve (UpdateAllowedPositionZ/IsWithinLOS)
-	// has no Go model, so z stays the creature's z.
+	// The point takes the GetNearPoint LoS sweep (sweepNearPointLOS);
+	// the UpdateAllowedPositionZ ground clamp has no Go model, so z
+	// stays the creature's z.
 	methods["GetRelativePoint"] = func(_ context.Context, args []any) ([]any, error) {
 		dist, err := luaFloat32Arg(args, 0)
 		if err != nil {
@@ -3199,7 +3200,8 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		r := motion.CombatReach + dist
 		a := motion.Orientation + rad
-		return []any{motion.X + r*float32(math.Cos(float64(a))), motion.Y + r*float32(math.Sin(float64(a))), motion.Z}, nil
+		sx, sy := s.server.sweepNearPointLOS(state.Map, motion.X, motion.Y, motion.Z, r, a)
+		return []any{sx, sy, motion.Z}, nil
 	}
 	// GetMap is WorldObjectMethods::GetMap: the DBC-backed Map object for
 	// the creature's map/instance (NewMapObject + mapLive, the
@@ -4293,10 +4295,8 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	// UNIT_FIELD_COMBATREACH default. DELTAS: the hover-offset reach
 	// correction (both legs 0 here — a GO is not a unit, and no hover
 	// applies) and UpdateAllowedPositionZ (no terrain-height query on this
-	// path) are out; the LoS sweep (16 angles around the first point) is
-	// out — Go returns the first point, which C++ also returns when LoS
-	// passes or when the sweep exhausts. Backs the scarlet courier stage
-	// machine (chapter2.cpp:405-411).
+	// path) are out; the LoS sweep runs through sweepNearPointLOS below.
+	// Backs the scarlet courier stage machine (chapter2.cpp:405-411).
 	methods["GetContactPoint"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("GetContactPoint requires a WorldObject target")
@@ -4324,10 +4324,9 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 			}
 		}
 		angle := math.Atan2(float64(sy-state.Y), float64(sx-state.X))
-		dist := float64(reach) + 0.5
-		x := float64(state.X) + dist*math.Cos(angle)
-		y := float64(state.Y) + dist*math.Sin(angle)
-		return []any{float32(x), float32(y), state.Z}, nil
+		dist := float32(reach) + 0.5
+		px, py := srv.sweepNearPointLOS(state.Map, state.X, state.Y, state.Z, dist, float32(angle))
+		return []any{px, py, state.Z}, nil
 	}
 	// AddUse/GetUseCount are GameObject::AddUse/GetUseCount
 	// (GameObject.h:202-204): the soulwell charge counter. Static DB

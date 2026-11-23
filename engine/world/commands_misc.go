@@ -571,8 +571,8 @@ func (s *session) miscResolvePlayerTarget(ctx context.Context, args []string) (o
 // (Player::LoadPositionFromDB) keeping the invoker's orientation.
 // Documented fidelity gaps (not stubs): the battleground/dungeon group and
 // instance-bind gates have no Go bridge (no BG model, no instance-save
-// manager), and the GetNearPoint LoS sweep and ground clamp have none
-// either, so the first close point stands.
+// manager), and the GetNearPoint ground clamp has no Go model (the LoS
+// sweep runs through miscClosePoint/sweepNearPointLOS).
 func (s *session) handleCmdAppear(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAppear) {
 		return false
@@ -601,7 +601,7 @@ func (s *session) handleCmdAppear(ctx context.Context, args []string) bool {
 		// position toward the target.
 		facing := normalizeScriptAngle(float32(math.Atan2(float64(p.Y-s.player.Y), float64(p.X-s.player.X))))
 		targetPhase := target.currentPlayerPhaseMask()
-		cx, cy := miscClosePoint(p.X, p.Y, p.Orientation, miscPlayerCombatReach(p), miscPlayerCombatReach(s.player), 1)
+		cx, cy := s.server.miscClosePoint(p.Map, p.X, p.Y, p.Z, p.Orientation, miscPlayerCombatReach(p), miscPlayerCombatReach(s.player), 1)
 		// goDoTeleport carries the C++ flight-stop-or-recall branch.
 		if s.goDoTeleport(ctx, p.Map, cx, cy, p.Z, facing) {
 			miscSetPhaseMask(s, targetPhase)
@@ -780,11 +780,11 @@ func miscPlayerCombatReach(p *playerState) float32 {
 // miscClosePoint mirrors WorldObject::GetClosePoint (Object.cpp:3307) with
 // a nil searcher: GetNearPoint2D adds the anchor's own combat reach to the
 // size+distance argument, along the anchor's orientation, at the anchor's Z.
-// The LoS sweep and UpdateAllowedPositionZ ground clamp inside GetNearPoint
-// have no Go bridge, so the first point stands.
-func miscClosePoint(anchorX, anchorY, anchorOrientation, anchorReach, size, distance float32) (float32, float32) {
-	dist := float64(anchorReach) + float64(size) + float64(distance)
-	return anchorX + float32(dist*math.Cos(float64(anchorOrientation))), anchorY + float32(dist*math.Sin(float64(anchorOrientation)))
+// The point takes the GetNearPoint LoS sweep (sweepNearPointLOS); the
+// UpdateAllowedPositionZ ground clamp inside GetNearPoint has no Go model.
+func (s *Server) miscClosePoint(mapID uint32, anchorX, anchorY, anchorZ, anchorOrientation, anchorReach, size, distance float32) (float32, float32) {
+	dist := anchorReach + size + distance
+	return s.sweepNearPointLOS(mapID, anchorX, anchorY, anchorZ, dist, anchorOrientation)
 }
 
 // miscSetPhaseMask mirrors Player::SetPhaseMask(mask, true) through the

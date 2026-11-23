@@ -2317,8 +2317,9 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) bool {
 // 528): teleport the target player to the GM's close point (Object.cpp:3307)
 // keeping the target's orientation, and set the target's phase to the GM's.
 // Documented fidelity gaps (not stubs): the battleground gate has no Go
-// bridge (no BG model), and the GetNearPoint LoS sweep and ground clamp
-// have none either, so the first close point stands. The instance gate
+// bridge (no BG model), and the GetNearPoint ground clamp has no Go
+// model (the LoS sweep runs through miscClosePoint/sweepNearPointLOS).
+// The instance gate
 // below ports cs_misc.cpp:540-560; the offline leg
 // (Player::SavePositionInDB) is native via the characters table except the
 // zone column (see commands_tele.go).
@@ -2383,7 +2384,7 @@ func (s *session) handleCmdSummon(ctx context.Context, args []string) bool {
 		} else {
 			s.saveRecallPosition()
 		}
-		cx, cy := miscClosePoint(s.player.X, s.player.Y, s.player.Orientation, miscPlayerCombatReach(s.player), miscPlayerCombatReach(target.player), 0)
+		cx, cy := s.server.miscClosePoint(s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, miscPlayerCombatReach(s.player), miscPlayerCombatReach(target.player), 0)
 		gmPhase := s.currentPlayerPhaseMask()
 		if target.teleportTo(s.player.Map, cx, cy, s.player.Z, target.player.Orientation) {
 			miscSetPhaseMask(target, gmPhase)

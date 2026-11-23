@@ -2118,12 +2118,13 @@ func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellT
 // (DEFAULT_PLAYER_BOUNDING_RADIUS) (Object.cpp:3307-3311) for the no-dest
 // legs of Spell::EffectTransmitted (SpellEffects.cpp:4949-4965): GetNearPoint
 // with a nil searcher puts the point at casterCombatReach + dis + size along
-// the caster's orientation, at the caster's z. The UpdateAllowedPositionZ
-// ground clamp and the LoS walk (Object.cpp:3272-3305) have no Go model on
-// this path, matching the TeleUnitsFaceCaster precedent.
-func transmittedClosePoint(cx, cy, cz, ori, combatReach, dis float32) (float32, float32, float32) {
+// the caster's orientation, at the caster's z. The point takes the
+// GetNearPoint LoS sweep (sweepNearPointLOS); the UpdateAllowedPositionZ
+// ground clamp has no Go model on this path.
+func (s *Server) transmittedClosePoint(mapID uint32, cx, cy, cz, ori, combatReach, dis float32) (float32, float32, float32) {
 	offset := combatReach + dis + defaultPlayerBoundingRadius
-	return cx + offset*float32(math.Cos(float64(ori))), cy + offset*float32(math.Sin(float64(ori))), cz
+	sx, sy := s.sweepNearPointLOS(mapID, cx, cy, cz, offset, ori)
+	return sx, sy, cz
 }
 
 // transmittedNoDestDistance mirrors the no-dest legs of
@@ -2214,7 +2215,7 @@ func (s *session) handleEffectTransmitted(ctx context.Context, target protocol.S
 		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
 			x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
 		} else {
-			x, y, z = transmittedClosePoint(s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.CombatReach, s.transmittedNoDestDistance(spell, eff))
+			x, y, z = s.server.transmittedClosePoint(s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.CombatReach, s.transmittedNoDestDistance(spell, eff))
 		}
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
@@ -2281,7 +2282,7 @@ func (s *Server) creatureEffectTransmitted(ctx context.Context, m *creatureMotio
 		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
 			x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
 		} else {
-			x, y, z = transmittedClosePoint(m.X, m.Y, m.Z, m.Orientation, m.CombatReach, s.transmittedNoDestDistance(spell, eff, uint32(m.Level)))
+			x, y, z = s.transmittedClosePoint(m.Map, m.X, m.Y, m.Z, m.Orientation, m.CombatReach, s.transmittedNoDestDistance(spell, eff, uint32(m.Level)))
 		}
 	}
 	lowGUID := s.nextDynamicGameObjectLowGUID()

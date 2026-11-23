@@ -13507,6 +13507,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						// the target center.
 						_, minTarget, _, _ := chaseRangeBounds(scriptChase, motion.ScriptChaseDist, cReach+victimReach, contactDist)
 						nearPoint := false
+						nearRadius, nearAngle := float32(0), float32(0)
 						if dist > shorten {
 							// ChaseMovementGenerator.cpp:120: on a mutual
 							// chase the fixed angle is suppressed (angle
@@ -13523,9 +13524,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 									tOrient = victimMotion.Orientation
 								}
 								absAngle := normalizeScriptAngle(tOrient + motion.ScriptChaseAngle)
+								nearRadius, nearAngle = shorten, absAngle
 								destX = target.X + shorten*float32(math.Cos(float64(absAngle)))
 								destY = target.Y + shorten*float32(math.Sin(float64(absAngle)))
 							} else {
+								nearRadius, nearAngle = shorten, float32(math.Atan2(float64(motion.Y-target.Y), float64(motion.X-target.X)))
 								destX = target.X + (motion.X-target.X)/dist*shorten
 								destY = target.Y + (motion.Y-target.Y)/dist*shorten
 							}
@@ -13547,6 +13550,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							}
 							destX = target.X + minTarget*float32(math.Cos(float64(ringAngle)))
 							destY = target.Y + minTarget*float32(math.Sin(float64(ringAngle)))
+							nearRadius, nearAngle = minTarget, ringAngle
+						}
+						// ChaseMovementGenerator.cpp:189: the near-point
+						// arm is target->GetNearPoint, so the ring point
+						// takes the LoS sweep (Object.cpp:3272-3309) when
+						// it is the destination; the moveToward center
+						// path above never does. A mutual chase suppresses
+						// the fixed angle (:120), so a scripted chase on a
+						// mutual target takes the center path too — the
+						// scriptChase arm is gated on !mutualChase.
+						if (scriptChase && !mutualChase) || nearPoint {
+							destX, destY = s.sweepNearPointLOS(motion.Map, target.X, target.Y, target.Z, nearRadius, nearAngle)
 						}
 						// init.SetFacing(target) (ChaseMovementGenerator.cpp:217):
 						// face the victim for the whole spline.

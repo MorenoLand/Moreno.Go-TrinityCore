@@ -130,20 +130,24 @@
 -- boss_illidan_stormrageAI::MovementInform — POINT_THROW_GLAIVE /
 -- POINT_RANDOM_PILLAR / POINT_ILLIDAN_MIDDLE (glaive-returns leg) —
 -- no-motion / no-cast bridges — documented-only.
--- npc_akama_illidan (NOT registered — boss companion-AI precedent) —
--- gossip handlers (GOSSIP_START_INTRO/FIGHT — stale 'no-gossip bridge'
--- retracted, bridged),
+-- npc_akama_illidan (REGISTERED — RegisterLuaBoss 23089,
+-- boss_ai.go:15512; the "NOT registered" claim is stale — the live
+-- Akama arms live in blacktemple/boss_illidan.lua: healing-potion
+-- loop, DamageTaken health-lock, and the outro motion chain
+-- (:1336-1352 — MOVE_BACK / MOVE_TO_ILLIDAN / LIGHT_TEXT / salute /
+-- despawn 41242, PORTED strip 26, dormant on unseeded SPLINE_MOVE_BACK
+-- chain rows)) — gossip handlers (GOSSIP_START_INTRO/FIGHT —
+-- stale 'no-gossip bridge' retracted, bridged),
 -- MovementInform Talks (SAY_AKAMA_FINISH 8 / SAY_AKAMA_BETRAYER 3 —
 -- no-motion bridge), timer Talks (EVENT_AKAMA_SAY_DOOR 0 / SAY_ALONE 1 /
 -- spirit ALONE Talks / SAY_SALUTE 2 / SAY_FREE 4 / SAY_TIME_HAS_COME 5 /
--- SAY_MINIONS 6 / SAY_LIGHT 7 :1232-1300 — companion not registered),
+-- SAY_MINIONS 6 :1232-1300 — intro/outro machine, unported),
 -- teleport/minions legs (:1318-1329 — POINT_TELEPORT + DoCastSelf 41077
 -- SpellScript-delivered), EVENT_HEALING_POTION (:1309-1312 health-gated
--- ACTION chain), EVENT_CHAIN_LIGHTNING (:1332-1334 PHASE_MINIONS
--- action-gated), outro motion chain (:1336-1352 Talk 7 + DoCastSelf
--- 41242 SpellScript-delivered), DamageTaken health-lock, ACTION legs
--- (OPEN_DOOR/FREE/START_ENCOUNTER/START_MINIONS/START_OUTRO —
--- no-action bridge) — documented-only.
+-- ACTION chain — ported in blacktemple), EVENT_CHAIN_LIGHTNING
+-- (:1332-1334 PHASE_MINIONS action-gated), DamageTaken health-lock
+-- (ported in blacktemple), ACTION legs (OPEN_DOOR/FREE/START_ENCOUNTER/
+-- START_MINIONS/START_OUTRO — no-action bridge) — documented-only.
 -- npc_parasitic_shadowfiend / npc_blade_of_azzinoth / npc_flame_of_azzinoth
 -- (JustDied ACTION_FLAME_DEAD leg) / npc_illidan_db_target /
 -- npc_shadow_demon / npc_cage_trap_trigger / npc_illidari_elite /

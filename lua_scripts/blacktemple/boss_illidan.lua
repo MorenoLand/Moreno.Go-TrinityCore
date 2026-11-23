@@ -197,8 +197,13 @@
 -- emote / passive legs would strand Akama passive without the
 -- spline teleport that follows them) and the outro arms
 -- (DoAction(ACTION_START_OUTRO) from illidan's quiet-suicide)
--- are PART-PORTED in the quiet-suicide callback (react passive +
--- AttackStop + timer reset; the MOVE_BACK spline chain stays out;
+-- are PORTED in the quiet-suicide callback (react passive +
+-- AttackStop + timer reset + MOVE_BACK chain launch, with the
+-- MOVE_TO_ILLIDAN / LIGHT_TEXT / FINAL_SALUTE / DESPAWN followers
+-- below, strip 26); the SPLINE_MOVE_BACK chain rows (entry 23089,
+-- chain 7) are not seeded in the repo world SQL, so the chain
+-- launch returns false and the followers stay dormant until the
+-- data lands (data-blocked, 74399 precedent);
 -- stale 'no gossip bridge' retracted — bridged);
 -- the CanAIAttack illidan gate has no attack-gating
 -- bridge. OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel timers.
@@ -340,6 +345,13 @@ local SAY_AKAMA_SALUTE = 2 -- boss_illidan.cpp:69
 local SPELL_AKAMA_DOOR_CHANNEL = 41268 -- boss_illidan.cpp:94
 local SPELL_ARCANE_EXPLOSION = 35426 -- boss_illidan.cpp:105
 local ENTRY_AKAMA = 23089
+-- Akama outro chain constants (boss_illidan.cpp): IllidanPoints
+-- POINT_MOVE_BACK = 11, POINT_ILLIDAN = 12 (enum from 1);
+-- SPLINE_MOVE_BACK = 7; SAY_AKAMA_LIGHT = 7 (:74);
+-- SPELL_AKAMA_DESPAWN = 41242 (:99); EMOTE_ONESHOT_SALUTE = 66
+-- (SharedDefines; fizzule/shenthul precedent). One table local
+-- (the file sits near the 200-local main-chunk limit).
+local AKAMA_OUTRO = { moveBack = 11, illidan = 12, light = 7, despawn = 41242, chain = 7, salute = 66 }
 local ENTRY_FLAME_OF_AZZINOTH = 22997
 local ENTRY_DB_TARGET = 23070
 local ENTRY_MAIEV = 23197
@@ -1366,17 +1378,23 @@ onQuietSuicide = function(creature, guid)
     -- passive + AttackStop + events reset in
     -- C++ arm order, via FindNearestCreature
     -- (23089, 100.0), nil-guarded like the C++
-    -- if; the MOVE_BACK spline chain (and its
-    -- MOVE_TO_ILLIDAN/LIGHT_TEXT/FINAL_SALUTE/
-    -- DESPAWN followers, all MovementInform /
-    -- spline legs) and the summons DespawnIf
-    -- leg (no summons-list bridge) stay out.
+    -- if; the summons DespawnIf leg (no
+    -- summons-list bridge) stays out.
     local akama = creature:FindNearestCreature(
         ENTRY_AKAMA, 100.0)
     if akama then
         akama:SetReactState(0)
         akama:AttackStop()
         cancelTimers(akama:GetGUIDLow())
+        -- C++ DoAction(ACTION_START_OUTRO) (:1142-1147):
+        -- EVENT_AKAMA_MOVE_BACK in 2s (MoveAlongSplineChain
+        -- POINT_MOVE_BACK 11, SPLINE_MOVE_BACK 7, false — the
+        -- chain rows are unseeded, so this returns false and
+        -- the followers below stay dormant until the data lands).
+        local akamaGuid = akama:GetGUIDLow()
+        schedule(akamaGuid, "moveBack", 2000, function()
+            akama:MoveAlongSplineChain(AKAMA_OUTRO.moveBack, AKAMA_OUTRO.chain, false)
+        end)
     end
 end
 
@@ -1763,6 +1781,73 @@ RegisterCreatureEvent(ENTRY_ILLIDAN, 28, illidanMovementInform)
 -- Akama (23089)
 --
 
+-- C++ EVENT_AKAMA_MOVE_TO_ILLIDAN (boss_illidan.cpp:1339-1341):
+-- instance GetCreature(DATA_ILLIDAN_STORMRAGE) -> MoveCloserAndStop
+-- (POINT_ILLIDAN 12, illidan, 5.0f). The instance-creature fetch
+-- rides the FindNearestCreature entry-scan twin (no instance
+-- registry in Go — the onQuietSuicide precedent above). 500ms
+-- IsCasting defer (the file's Akama-tick idiom; C++ UpdateAI
+-- pre-loop casting gate).
+-- The three outro handlers live as fields of one table local:
+-- the file sits at the 200-local main-chunk limit, so three
+-- separate `local function` declarations overflow it (luacheck
+-- "too many local variables" at the 201st, eyeBlastRemove).
+local akamaOutro = {}
+akamaOutro.moveToIllidan = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "moveToIllidan", 500, function()
+            akamaOutro.moveToIllidan(creature, guid)
+        end)
+        return
+    end
+    local illidan = creature:FindNearestCreature(ENTRY_ILLIDAN, 100.0)
+    if illidan ~= nil then
+        creature:MoveCloserAndStop(AKAMA_OUTRO.illidan, illidan, 5.0)
+    end
+end
+
+-- C++ EVENT_AKAMA_LIGHT_TEXT (boss_illidan.cpp:1343-1345): Talk
+-- SAY_AKAMA_LIGHT (7) + EVENT_FINAL_SALUTE in 4s; the salute
+-- (boss_illidan.cpp:1346-1348, PerformEmote twin) schedules
+-- EVENT_AKAMA_DESPAWN in 5s (DoCastSelf 41242, triggered).
+akamaOutro.lightText = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lightText", 500, function()
+            akamaOutro.lightText(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(AKAMA_OUTRO.light)
+    schedule(guid, "finalSalute", 4000, function()
+        creature:PerformEmote(AKAMA_OUTRO.salute)
+        schedule(guid, "despawn", 5000, function()
+            creature:CastSpell(creature, AKAMA_OUTRO.despawn, true)
+        end)
+    end)
+end
+
+-- C++ npc_akama_illidan::MovementInform (boss_illidan.cpp:1159-1199):
+-- only POINT (8) and SPLINE_CHAIN (17) types reach the switch;
+-- POINT_MOVE_BACK schedules MOVE_TO_ILLIDAN in 1ms, POINT_ILLIDAN
+-- schedules LIGHT_TEXT in 1s. The EFFECT inform a too-close
+-- MoveCloserAndStop fires (MotionMaster.cpp:665-670) is filtered
+-- out exactly as C++ filters it.
+akamaOutro.movementInform = function(event, creature, moveType, pointId)
+    if moveType ~= 8 and moveType ~= 17 then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if pointId == AKAMA_OUTRO.moveBack then
+        schedule(guid, "moveToIllidan", 1, function()
+            akamaOutro.moveToIllidan(creature, guid)
+        end)
+    elseif pointId == AKAMA_OUTRO.illidan then
+        schedule(guid, "lightText", 1000, function()
+            akamaOutro.lightText(creature, guid)
+        end)
+    end
+end
+
 -- C++ DoAction(ACTION_START_ENCOUNTER) -> EVENT_HEALING_POTION:
 -- health strictly below 20% -> non-triggered self-cast 40535,
 -- re-arm 1s. Modeled on pull (the DoAction delivery has no
@@ -1809,6 +1894,7 @@ RegisterCreatureEvent(ENTRY_AKAMA, 2, akamaCleanup)
 RegisterCreatureEvent(ENTRY_AKAMA, 4, akamaCleanup)
 RegisterCreatureEvent(ENTRY_AKAMA, 9, akamaDamageTaken)
 RegisterCreatureEvent(ENTRY_AKAMA, 23, akamaCleanup)
+RegisterCreatureEvent(ENTRY_AKAMA, 28, akamaOutro.movementInform)
 
 -- C++ spell_illidan_akama_door_channel::OnRemoveDummy
 -- (boss_illidan.cpp:1867-1891): AfterEffectRemove, EFFECT_0

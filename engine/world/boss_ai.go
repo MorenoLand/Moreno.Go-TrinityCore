@@ -21695,29 +21695,29 @@ func init() {
 	// EMOTE_BERSERKER 4) + DoCastSelf(BERSERK 26662) 8min/5min;
 	// EVENT_DECIMATE DoCastAOE(28374) ported as self-cast (20x
 	// multi-search machine stays out). The
-	// STATE_GLUTH_EATING deferral arms (3s/5s/4s repeats) have no state
-	// bridge — documented in the lua. EVENT_DECIMATE 25-man twin
-	// 54426 rides the Is25ManRaid branch (GetSpellIdForDifficulty has
-	// no Go model); spell_gluth_decimate PORTED (ev5 damage 28375 BP0
-	// + ev4 DoAction dispatch, ev38 receiver no-op until the zombie
-	// machine ports); spell_gluth_zombiechow_search PORTED (ev3 5%
-	// heal, dormant on the unported zombie-eat cast sites);
-	// EVENT_SUMMON creature groups PORTED (summonTick, Is25ManRaid
-	// branch, SummonCreatureGroup bridged 2026-11-05); Reset
-	// react-state + speed legs PORTED (SetReactState + SetSpeedRate);
-	// EMOTE_DECIMATE rides the ported decimate tick. Unmodeled:
-	// SummonedCreatureDies despawn (no summon bridge), zombie
-	// single/multi search + kill legs + MovementInform (no summon/
-	// cross-AI / react-state / motion bridges), EMOTE_SPOTS_ONE/
-	// DEVOURS_ALL Talks (vortex — not ported orphaned), npc_zombie_chow
-	// (entry-unverifiable from C++ evidence — no registration; ctor
-	// DoCastSelf(INFECTED_WOUND 29307) joins the
-	// bridgeable-but-entry-blocked queue).
+	// STATE_GLUTH_EATING deferral arms (3s/5s/4s repeats) PORTED
+	// 2026-11-23 (strip 26, Lua state machine). EVENT_DECIMATE 25-man
+	// twin 54426 rides the Is25ManRaid branch (GetSpellIdForDifficulty
+	// has no Go model); spell_gluth_decimate PORTED (ev5 damage 28375
+	// BP0 + ev4 DoAction dispatch, ev38 receiver PORTED strip 26);
+	// spell_gluth_zombiechow_search PORTED (ev3 5% heal, live on the
+	// ported zombie-eat cast sites); EVENT_SUMMON creature groups
+	// PORTED (summonTick, Is25ManRaid branch, SummonCreatureGroup
+	// bridged 2026-11-05); Reset react-state + speed legs PORTED
+	// (SetReactState + SetSpeedRate); EMOTE_DECIMATE rides the ported
+	// decimate tick. Zombie-eat machine PORTED strip 26 (ev19/ev21
+	// tracked summons, single/multi search + kill legs, MovementInform
+	// id 1, DoAction decimate receiver, EMOTE_SPOTS_ONE/DEVOURS_ALL);
+	// npc_zombie_chow PORTED strip 26
+	// (lua_scripts/northrend/npc_zombie_chow.lua: entries 16360/30303
+	// from the C++ comment only; ctor self-cast, ev41 SetData receiver,
+	// ev7 decimated walk tick).
 	// CASTING gates PORTED (500ms IsCasting defer): boss UpdateAI
 	// pre-loop :139 + in-loop :264 gates cover wound/enrage/decimate/
-	// berserk; zombie-chow UpdateAI :409 ungated (zero hits there) but
-	// chow unported.
+	// berserk; zombie-chow UpdateAI :409 ungated (zero hits there).
 	RegisterLuaBoss("boss_gluth", 15932)
+	RegisterLuaBoss("npc_zombie_chow", 16360)
+	RegisterLuaBoss("npc_zombie_chow", 30303)
 
 	// Sapphiron (15989, Naxxramas) — lua_scripts/northrend/boss_sapphiron.lua.
 	// Ported arms (C++-exact): JustEngagedWith CastSpell(self,

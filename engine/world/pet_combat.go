@@ -1379,6 +1379,10 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			nearDist := float64(petFollowDist + ownerReach + petReach)
 			destX := owner.X + float32(nearDist*math.Cos(absAngle))
 			destY := owner.Y + float32(nearDist*math.Sin(absAngle))
+			// FollowMovementGenerator.cpp:140: the follow destination is
+			// target->GetNearPoint, so the ring point takes the LoS
+			// sweep (Object.cpp:3272-3309).
+			destX, destY = s.sweepNearPointLOS(motion.Map, owner.X, owner.Y, owner.Z, float32(nearDist), float32(absAngle))
 			destZ := owner.Z
 			ownerWalking := false
 			if owner.Sess != nil {

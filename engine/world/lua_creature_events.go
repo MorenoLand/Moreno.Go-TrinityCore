@@ -125,10 +125,10 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 		// GetClosePoint(x,y,z,GetCombatReach()) ->
 		// GetNearPoint(nullptr,x,y,z,R,O) -> GetNearPoint2D adds
 		// effectiveReach (R) on top of distance2d (R): 2*R in facing
-		// direction (Object.cpp:2059,3307-3311). The collision/ground
-		// folds and the LoS retry loop have no Go model, documented.
-		x = sx + float32(2*reach*math.Cos(float64(summonerO)))
-		y = sy + float32(2*reach*math.Sin(float64(summonerO)))
+		// direction (Object.cpp:2059,3307-3311). The point takes the
+		// GetNearPoint LoS sweep (sweepNearPointLOS); the ground clamp
+		// has no Go model, documented.
+		x, y = s.sweepNearPointLOS(mapID, sx, sy, sz, float32(2*reach), summonerO)
 		z = sz
 	}
 	if o == 0 {
@@ -4638,10 +4638,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// (WorldObjectMethods.h:630-646): WorldObject::GetClosePoint(x, y, z,
 	// 0, dist, relAngle) = GetNearPoint with absAngle = orientation +
 	// relAngle at (combatReach + dist) (Object.cpp:3307-3311, 3272-3269).
-	// The height-collision re-solve (UpdateAllowedPositionZ/IsWithinLOS)
-	// has no Go model, so z stays the creature's z. Same twin as the
-	// session-creature surface (lua_objects.go); the motion builder never
-	// had it, so king_dred's raptor-call summon point died on the call.
+	// The point takes the GetNearPoint LoS sweep (sweepNearPointLOS);
+	// the UpdateAllowedPositionZ ground clamp has no Go model, so z
+	// stays the creature's z. Same twin as the session-creature
+	// surface (lua_objects.go); the motion builder never had it, so
+	// king_dred's raptor-call summon point died on the call.
 	methods["GetRelativePoint"] = func(_ context.Context, args []any) ([]any, error) {
 		dist, err := luaFloat32Arg(args, 0)
 		if err != nil {
@@ -4652,11 +4653,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, err
 		}
 		s.motionMu.Lock()
+		mapID := motion.Map
 		reach, orientation, x, y, z := motion.CombatReach, motion.Orientation, motion.X, motion.Y, motion.Z
 		s.motionMu.Unlock()
 		r := reach + dist
 		a := orientation + rad
-		return []any{x + r*float32(math.Cos(float64(a))), y + r*float32(math.Sin(float64(a))), z}, nil
+		sx, sy := s.sweepNearPointLOS(mapID, x, y, z, r, a)
+		return []any{sx, sy, z}, nil
 	}
 	// SetHover is Creature::SetHover (Creature.cpp:3105): flips
 	// MOVEMENTFLAG_HOVER with the C++ no-op-on-unchanged early-out, then
@@ -5006,9 +5009,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			// -> GetNearPoint2D adds effectiveReach (R) on top of distance2d
 			// (R) (Object.cpp:2095-2099,3307-3311). ang falls back to the
 			// summoner orientation only in the all-zero branch (Object.cpp:
-			// 2099), twinned here. Collision/ground folds unmodeled.
-			x = sx + float32(2*reach*math.Cos(float64(so)))
-			y = sy + float32(2*reach*math.Sin(float64(so)))
+			// 2099), twinned here. The point takes the GetNearPoint LoS sweep
+			// (sweepNearPointLOS); the ground clamp stays unmodeled.
+			x, y = s.sweepNearPointLOS(mapID, sx, sy, sz, float32(2*reach), so)
 			z, o = sz, so
 		}
 		lowGUID := s.nextDynamicGameObjectLowGUID()
