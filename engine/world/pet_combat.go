@@ -270,21 +270,46 @@ func (s *Server) onPetCommandAttack(ctx context.Context, mapID, instanceID uint3
 	if s.gmAttackTargetBlocked(targetGUID) {
 		return
 	}
+	// PetAI::CanAttack owner-selected-unit arm (PetAI.cpp:525-535): the
+	// owner's current selection, read before the motion lock
+	// (handleSetSelection banks it on the session, chat.go:55-62). The
+	// explicit attack order reaches _AttackStart directly
+	// (PetHandler.cpp:210), bypassing AttackStart's victim-alive guard,
+	// so a switch onto the selected unit is allowed mid-fight.
+	ownerSelection := uint64(0)
+	var ownerSess *session
+	if ownerSess = s.findSessionByGUID(motion.OwnerGUID); ownerSess != nil {
+		ownerSelection = ownerSess.selection
+	}
+	// PetHandler.cpp COMMAND_ATTACK (PetHandler.cpp:191): the owner must
+	// be able to attack the target themselves
+	// (owner->IsValidAttackTarget) or the order is dropped — the
+	// hostility tail (friendly refusal, reputation/at-war, duel/FFA,
+	// PvP terms, Object.cpp:3028-3080) via playerExplicitAttackPasses
+	// with the owner as caster. The GM leg above still carries the
+	// GM arm and the dead/flag/detect arms stay with the pursuit tick:
+	// no player-caster flag/detect helper exists for this site.
+	if ownerSess != nil && !s.playerExplicitAttackPasses(ownerSess, targetGUID) {
+		return
+	}
 	s.motionMu.Lock()
 	enteredCombat := false
 	refused := false
+	var switchedFrom uint64
+	var switchX, switchY, switchZ float32
+	var switchPhase uint32
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil && motion.Health > 0 {
 		// PetAI::AttackStart (PetAI.cpp:254-257): the command never
-		// switches the pet off a live victim — the guard runs before
-		// _AttackStart, so it also covers the CanAttack
-		// owner-selected-unit arm below it (PetAI.cpp:530-541), which
-		// Go has no twin for. The defensive twins carry the same guard
-		// (triggerPetDefensive / triggerPetOwnerAttacked); the attack
-		// command was the one entry point missing it. TargetGUID != 0
-		// && InCombat is the live-victim proxy the pet tick maintains:
-		// its disengage clears both together on victim death/loss
-		// (petCombatPursuitAndAttack).
-		if motion.TargetGUID != 0 && motion.InCombat {
+		// switches the pet off a live victim — except through the
+		// CanAttack owner-selected-unit arm (PetAI.cpp:525-535): a
+		// mid-fight switch is allowed when the owner selected this
+		// target and ordered the attack. The defensive twins carry
+		// the same refusal guard, but they carry no attack order, so
+		// the arm cannot fire there — this site is where it lives.
+		// TargetGUID != 0 && InCombat is the live-victim proxy the
+		// pet tick maintains: its disengage clears both together on
+		// victim death/loss (petCombatPursuitAndAttack).
+		if motion.TargetGUID != 0 && motion.InCombat && (ownerSelection == 0 || targetGUID != ownerSelection) {
 			refused = true
 		}
 		// PetAI::CanAttack returning arm (PetAI.cpp:514-515) via
@@ -295,6 +320,16 @@ func (s *Server) onPetCommandAttack(ctx context.Context, mapID, instanceID uint3
 		}
 		if !refused {
 			enteredCombat = !motion.InCombat
+			// PetHandler.cpp COMMAND_ATTACK (PetHandler.cpp:198):
+			// the order AttackStops the old victim before _AttackStart
+			// switches — Unit::AttackStop emits SMSG_ATTACK_STOP
+			// (Unit.cpp:5763-5789). The stop broadcasts after the
+			// unlock, from the position captured here.
+			if motion.TargetGUID != 0 && motion.TargetGUID != targetGUID {
+				switchedFrom = motion.TargetGUID
+				switchX, switchY, switchZ = motion.X, motion.Y, motion.Z
+				switchPhase = motion.PhaseMask
+			}
 			motion.TargetGUID = targetGUID
 			motion.InCombat = true
 			motion.PetCommand = PetCommandAttack
@@ -311,6 +346,10 @@ func (s *Server) onPetCommandAttack(ctx context.Context, mapID, instanceID uint3
 	s.motionMu.Unlock()
 	if refused {
 		return
+	}
+	if switchedFrom != 0 {
+		stopPkt := buildAttackStop(petGUID, switchedFrom, false)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, switchX, switchY, switchZ, switchPhase)
 	}
 	// Eluna CREATURE_EVENT_ON_ENTER_COMBAT (1): C++ PetAI::AttackStart
 	// reaches it via ElunaCreatureAI::JustEngagedWith for
@@ -758,6 +797,11 @@ func (s *Server) triggerPetDefensive(ctx context.Context, mapID, instanceID uint
 	if s == nil || ownerGUID == 0 || targetGUID == 0 || ownerGUID == targetGUID {
 		return
 	}
+	// PetAI::CanAttack stay leg (PetAI.cpp:518-519) needs the target's
+	// position before either motionMu pass below — resolved once here,
+	// outside both locks, so the per-pet range test never takes a
+	// session/motion lookup under motionMu.
+	tx, ty, tz, tReach, tFound := s.petTargetPosition(mapID, instanceID, targetGUID)
 	var cands []uint64
 	s.motionMu.Lock()
 	for _, m := range s.motionMapLocked(mapID, instanceID) {
@@ -777,6 +821,14 @@ func (s *Server) triggerPetDefensive(ctx context.Context, mapID, instanceID uint
 		// _AttackStart (PetAI.cpp:268): a pet returning to its owner
 		// on a follow command cannot start an attack.
 		if m.PetReturning && m.PetCommand == PetCommandFollow {
+			continue
+		}
+		// PetAI::CanAttack stay leg (PetAI.cpp:518-519) via _AttackStart
+		// (PetAI.cpp:268): a stay-commanded pet engages only a target
+		// within melee range; out of range it never acquires the victim
+		// (an explicit attack order replaces Stay with PetCommandAttack
+		// in Go, so IsCommandAttack never reaches this gate).
+		if m.PetCommand == PetCommandStay && tFound && float32(distance3D(m.X, m.Y, m.Z, tx, ty, tz)) > float32(calcMeleeRange(m.CombatReach, tReach)) {
 			continue
 		}
 		cands = append(cands, m.GUID)
@@ -821,6 +873,11 @@ func (s *Server) triggerPetDefensive(ctx context.Context, mapID, instanceID uint
 		if m.PetReturning && m.PetCommand == PetCommandFollow {
 			continue
 		}
+		// PetAI::CanAttack stay leg (PetAI.cpp:518-519), re-validated
+		// at engage time like every guard above it.
+		if m.PetCommand == PetCommandStay && tFound && float32(distance3D(m.X, m.Y, m.Z, tx, ty, tz)) > float32(calcMeleeRange(m.CombatReach, tReach)) {
+			continue
+		}
 		if !m.InCombat {
 			entered = append(entered, petEngage{motion: m, targetGUID: targetGUID})
 		}
@@ -862,6 +919,11 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 	if s == nil || ownerGUID == 0 || targetGUID == 0 || ownerGUID == targetGUID {
 		return
 	}
+	// PetAI::CanAttack stay leg (PetAI.cpp:518-519) needs the target's
+	// position before either motionMu pass below — resolved once here,
+	// outside both locks, so the per-pet range test never takes a
+	// session/motion lookup under motionMu.
+	tx, ty, tz, tReach, tFound := s.petTargetPosition(mapID, instanceID, targetGUID)
 	var cands []uint64
 	s.motionMu.Lock()
 	for _, m := range s.motionMapLocked(mapID, instanceID) {
@@ -881,6 +943,14 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 		// _AttackStart (PetAI.cpp:268): a pet returning to its owner
 		// on a follow command cannot start an attack.
 		if m.PetReturning && m.PetCommand == PetCommandFollow {
+			continue
+		}
+		// PetAI::CanAttack stay leg (PetAI.cpp:518-519) via _AttackStart
+		// (PetAI.cpp:268): a stay-commanded pet engages only a target
+		// within melee range; out of range it never acquires the victim
+		// (an explicit attack order replaces Stay with PetCommandAttack
+		// in Go, so IsCommandAttack never reaches this gate).
+		if m.PetCommand == PetCommandStay && tFound && float32(distance3D(m.X, m.Y, m.Z, tx, ty, tz)) > float32(calcMeleeRange(m.CombatReach, tReach)) {
 			continue
 		}
 		cands = append(cands, m.GUID)
@@ -919,12 +989,23 @@ func (s *Server) triggerPetOwnerAttacked(ctx context.Context, mapID, instanceID 
 		if m.PetReturning && m.PetCommand == PetCommandFollow {
 			continue
 		}
+		// PetAI::CanAttack stay leg (PetAI.cpp:518-519), re-validated
+		// at engage time like every guard above it.
+		if m.PetCommand == PetCommandStay && tFound && float32(distance3D(m.X, m.Y, m.Z, tx, ty, tz)) > float32(calcMeleeRange(m.CombatReach, tReach)) {
+			continue
+		}
 		if !m.InCombat {
 			entered = append(entered, m)
 		}
 		m.TargetGUID = targetGUID
 		m.InCombat = true
-		m.Moving = true
+		// PetAI::DoAttack chase=false (PetAI.cpp:433-447): a
+		// stay-commanded pet engages in place (MoveIdle), so Moving
+		// stays false — the triggerPetDefensive form, not an
+		// unconditional true (the next pursuit tick corrected this
+		// transiently, but anything reading Moving between the trigger
+		// and the tick saw a chase that never happens).
+		m.Moving = m.PetCommand != PetCommandStay
 	}
 	s.motionMu.Unlock()
 	// Eluna CREATURE_EVENT_ON_ENTER_COMBAT (1): pets engage via
@@ -1222,27 +1303,34 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 		// PetAI::UpdateAI victimless branch (PetAI.cpp:94-111): a pet at
 		// stay (or aggressive) re-runs SelectNextTarget every tick — its
 		// own attacker first, then the owner's attacker, then the owner's
-		// victim. A defensive stay pet re-engages this way when the owner
-		// gains a new attacker after the pet's victim died; an aggressive
-		// stay pet also auto-selects the nearest hostile (the :349-354
-		// tail, via findNearbyPetHostile, which section 1's early return
-		// otherwise leaves unreachable for stay pets).
-		if motion.PetAtStay && motion.TargetGUID == 0 && !motion.InCombat && motion.PetReact != PetReactPassive {
-			if next := s.petSelectNextTarget(motion, owner.GUID); next != 0 {
+		// victim. The C++ gate is aggressive OR IsAtStay (:95), not
+		// IsAtStay alone: an aggressive stay pet still returning to its
+		// stay point re-runs selection too. A defensive stay pet
+		// re-engages this way when the owner gains a new attacker after
+		// the pet's victim died; an aggressive stay pet also auto-selects
+		// the nearest hostile (the :349-354 tail, via findNearbyPetHostile,
+		// which section 1's early return otherwise leaves unreachable
+		// for stay pets).
+		if (motion.PetAtStay || motion.PetReact == PetReactAggressive) && motion.TargetGUID == 0 && !motion.InCombat && motion.PetReact != PetReactPassive {
+			if next := s.petSelectNextTarget(motion, owner.GUID); next != 0 && s.petStayCanEngage(motion, next) {
 				// AttackStart -> CanAttack stay leg (PetAI.cpp:518-519):
 				// a stay pet engages only within melee range; DoAttack
 				// chase=false keeps it at stay (MoveIdle), so Moving
-				// stays false — the pursuit arm below holds an
-				// out-of-range stay pet in place with the victim kept.
+				// stays false. A target outside melee range is refused
+				// here and the aggressive tail below does not run for
+				// it — C++ AttackStart refuses inside _AttackStart and
+				// UpdateAI moves on (PetAI.cpp:100-105).
 				motion.TargetGUID = next
 				motion.InCombat = true
 				s.firePetEnterCombat(ctx, motion, next)
 				s.petCombatPursuitAndAttack(ctx, motion, owner, now)
-			} else if motion.PetReact == PetReactAggressive && !motion.PetReturning {
-				if hostileGUID := s.findNearbyPetHostile(motion, players); hostileGUID != 0 {
+			} else if next == 0 && motion.PetReact == PetReactAggressive && !motion.PetReturning {
+				if hostileGUID := s.findNearbyPetHostile(motion, players); hostileGUID != 0 && s.petStayCanEngage(motion, hostileGUID) {
+					// DoAttack chase=false (PetAI.cpp:433-447): the
+					// stay pet engages in place (MoveIdle).
 					motion.TargetGUID = hostileGUID
 					motion.InCombat = true
-					motion.Moving = true
+					motion.Moving = false
 					s.firePetEnterCombat(ctx, motion, hostileGUID)
 					s.petCombatPursuitAndAttack(ctx, motion, owner, now)
 				}
@@ -1731,6 +1819,98 @@ func (s *Server) petChaseDistance(motion *creatureMotion) float32 {
 	return chase
 }
 
+// petTargetPosition resolves a pet engage target's live position and
+// combat reach — player sessions directly, creature motions under
+// motionMu. Unresolvable targets report found=false; callers fail open
+// and let the pursuit tick disengage on the missing victim.
+func (s *Server) petTargetPosition(mapID, instanceID uint32, targetGUID uint64) (x, y, z, reach float32, found bool) {
+	if s == nil || targetGUID == 0 {
+		return 0, 0, 0, 1.5, false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		reach = ts.player.CombatReach
+		if reach <= 0 {
+			reach = 1.5
+		}
+		return ts.player.X, ts.player.Y, ts.player.Z, reach, true
+	}
+	s.motionMu.Lock()
+	vm := s.findCreatureMotionLocked(mapID, instanceID, targetGUID)
+	if vm == nil {
+		s.motionMu.Unlock()
+		return 0, 0, 0, 1.5, false
+	}
+	x, y, z = vm.X, vm.Y, vm.Z
+	reach = vm.CombatReach
+	s.motionMu.Unlock()
+	if reach <= 0 {
+		reach = 1.5
+	}
+	return x, y, z, reach, true
+}
+
+// petStayCanEngage ports the PetAI::CanAttack stay leg (PetAI.cpp:518-519):
+// a stay-commanded pet engages only a target within melee range (or on an
+// explicit attack order, which Go models as PetCommandAttack, not Stay).
+// Unresolvable targets fail open — the pursuit tick disengages on a missing
+// victim — so the gate never refuses an engage the tick would keep.
+func (s *Server) petStayCanEngage(motion *creatureMotion, targetGUID uint64) bool {
+	if s == nil || motion == nil || targetGUID == 0 {
+		return false
+	}
+	x, y, z, reach, found := s.petTargetPosition(motion.Map, motion.InstanceID, targetGUID)
+	if !found {
+		return true
+	}
+	return float32(distance3D(motion.X, motion.Y, motion.Z, x, y, z)) <= float32(calcMeleeRange(motion.CombatReach, reach))
+}
+
+// petNeedToStopDisengage runs the PetAI::StopAttack disengage sequence
+// (PetAI.cpp:583-601) shared by the NeedToStop arms: clear the victim
+// and combat state, drop a command-attack order, and let the next tick's
+// follow arm return the pet (HandleReturnMovement analog). It is the
+// owner-distance arm's inline twin, factored so the charmed-victim and
+// validity arms reuse the identical sequence instead of a third copy.
+// Tick path: motionMu is not held here.
+func (s *Server) petNeedToStopDisengage(ctx context.Context, motion *creatureMotion, targetGUID uint64) {
+	if s == nil || motion == nil {
+		return
+	}
+	motion.TargetGUID = 0
+	leftCombat := motion.InCombat
+	motion.InCombat = false
+	motion.Moving = false
+	if leftCombat {
+		// Eluna CREATURE_EVENT_ON_LEAVE_COMBAT (2) + On_Reset (23):
+		// the StopAttack drops combat.
+		s.firePetLeaveCombat(ctx, motion)
+	}
+	if motion.PetCommand == PetCommandAttack {
+		// The C++ command state survives the attack order
+		// (PetHandler.cpp COMMAND_ATTACK sets only IsCommandAttack;
+		// COMMAND_STAY is untouched), so a stay-commanded pet returns
+		// to stay on disengage instead of following — HandleReturnMovement's
+		// stay arm (PetAI.cpp:377-390) runs the return; PetAtStay stays
+		// false (cleared on the attack order) until the stay branch
+		// re-sets it on arrival. A follow click clears the stay record,
+		// so only a live stay order restores here.
+		if motion.PetStaySet {
+			motion.PetCommand = PetCommandStay
+		} else {
+			motion.PetCommand = PetCommandFollow
+		}
+	}
+	if motion.PetCommand == PetCommandFollow {
+		// StopAttack with no next target returns via HandleReturnMovement
+		// (PetAI.cpp:392-402): the follow arm sets IsReturning (DoAttack
+		// cleared IsFollowing, :420-421), so the pet walks back before
+		// the aggressive arm may re-engage it (:351).
+		motion.PetReturning = true
+	}
+	stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+}
+
 // petCombatPursuitAndAttack handles pathing towards and attacking the pet's target.
 func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creatureMotion, owner *playerPos, now time.Time) {
 	// Look up target
@@ -1742,6 +1922,8 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	targetFound := false
 	isTargetPlayer := false
 	var targetSess *session
+	var victimMotion *creatureMotion
+	var victimCreatureType uint32
 
 	// Check if target is player
 	if pSess := s.findSessionByGUID(targetGUID); pSess != nil && pSess.player != nil {
@@ -1761,6 +1943,8 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
 		if cMotion != nil {
 			targetFound = true
+			victimMotion = cMotion
+			victimCreatureType = uint32(cMotion.CreatureType)
 			targetX, targetY, targetZ = cMotion.X, cMotion.Y, cMotion.Z
 			targetHealth = cMotion.Health
 			targetArmor = cMotion.Armor
@@ -1770,6 +1954,40 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			}
 		}
 		s.motionMu.Unlock()
+	}
+
+	// PetAI::NeedToStop validity arm (PetAI.cpp:580): the victim-side
+	// legs of WorldObject::IsValidAttackTarget (Object.cpp:2930-3080)
+	// evaluated per tick — the hostility tail runs below via
+	// creatureExplicitAttackPasses, after the dead gate. A player victim
+	// fails on the GM leg (Object.cpp:2949-2951, ExtraFlags twin of
+	// gmAttackTargetBlocked), the NOT_SELECTABLE/NON_ATTACKABLE flag set
+	// and immunity pairings (Object.cpp:2977-3003, via
+	// playerSightVictimBlocked), and CanSeeOrDetect invisibility
+	// (Object.cpp:2956-2962, no LOS: C++ checks detect ranges only).
+	// A creature victim fails the same flag/immunity set plus the
+	// CanDetect leg (creatureSightCanDetectCreature) — read after the
+	// unlock, the MoveInLOS scan's pattern (creaturemotion.go:8926),
+	// never under motionMu: the detect seer resolves through
+	// findCreatureMotion, which would deadlock on the held lock. The
+	// sight helper's non-combat-pet leg (CreatureType 12, CanStartAttack
+	// Creature.cpp:1971-1973) is NOT an IsValidAttackTarget arm, so it
+	// is carved out: a pet ordered onto a non-combat pet keeps
+	// attacking it, as in C++.
+	victimInvalid := false
+	if targetFound && isTargetPlayer && targetSess != nil && targetSess.player != nil {
+		if targetSess.player.ExtraFlags&(playerExtraGMInvisible|playerExtraGMOn) != 0 {
+			victimInvalid = true
+		} else if playerSightVictimBlocked(motion, targetSess.player.UnitFlags, targetSess.player.UnitFlags&unitFlagPlayerControlled != 0) {
+			victimInvalid = true
+		} else if s.creatureSightInvisibilityBlocked(motion, targetSess) {
+			victimInvalid = true
+		}
+	}
+	if targetFound && !isTargetPlayer && victimMotion != nil && victimCreatureType != 12 {
+		if creatureSightVictimBlocked(motion, victimMotion) || !s.creatureSightCanDetectCreature(motion, victimMotion) {
+			victimInvalid = true
+		}
 	}
 
 	// If target is missing or dead, disengage
@@ -1782,12 +2000,17 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		// before returning — its own attacker first, then the owner's
 		// attacker, then the owner's victim — instead of disengaging.
 		if targetFound && targetHealth == 0 && owner != nil {
-			if next := s.petSelectNextTarget(motion, owner.GUID); next != 0 {
+			// PetAI::KilledUnit re-engages through AttackStart
+			// (PetAI.cpp:232-248 -> :254-272), so the CanAttack stay
+			// leg (PetAI.cpp:518-519) gates a stay-commanded pet's
+			// re-engage on melee range, and DoAttack chase=false
+			// (PetAI.cpp:433-447) keeps it in place (MoveIdle).
+			if next := s.petSelectNextTarget(motion, owner.GUID); next != 0 && (motion.PetCommand != PetCommandStay || s.petStayCanEngage(motion, next)) {
 				stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
 				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 				motion.TargetGUID = next
 				motion.InCombat = true
-				motion.Moving = true
+				motion.Moving = motion.PetCommand != PetCommandStay
 				startPkt := buildAttackStart(motion.GUID, next)
 				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 				return
@@ -1833,13 +2056,37 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		return
 	}
 
+	// PetAI::NeedToStop (PetAI.cpp:569-581) charmed-victim and validity
+	// arms: a charmed pet whose victim is its charmer stops attacking,
+	// and so does a pet whose victim is no longer a valid attack target
+	// (victimInvalid above, plus the hostility tail — friendly refusal,
+	// reputation/at-war, contested-guard, duel/FFA and PvP terms,
+	// Object.cpp:3028-3080 — via creatureExplicitAttackPasses with the
+	// owner's session as the affecting player). CanAttack
+	// (PetAI.cpp:483-540) never calls IsValidAttackTarget, so this
+	// per-tick check is the only enforcement point: a victim that
+	// becomes invalid mid-fight otherwise keeps being attacked until it
+	// dies or despawns. The UNIT_STATE_UNATTACKABLE arm has no Go model
+	// (no such state) and the sanctuary arm none creature-side, so both
+	// stay unmodeled; the event-driven ValidateAttackersAndOwnTarget
+	// sweep (Unit.cpp:5791-5807, on immunity-flag sets) has no Go model
+	// at all.
+	var ownerSess *session
+	if owner != nil {
+		ownerSess = owner.Sess
+	}
+	if (motion.Charmed && motion.TargetGUID == motion.CharmerGUID) || victimInvalid || !s.creatureExplicitAttackPasses(motion, ownerSess, targetGUID) {
+		s.petNeedToStopDisengage(ctx, motion, targetGUID)
+		return
+	}
+
 	// PetAI::NeedToStop owner-distance arm (PetAI.cpp:575-578): a pet stops
 	// attacking when it strays beyond the owner's visibility range minus 10
 	// yards. C++ GetVisibilityRange on continents is 100 (ObjectDefines.h:35),
 	// matching Go's VisibilityDistanceContinents default; the per-map-type
 	// C++ ranges (instances/BGs) have no Go config analog. The charmed-victim
-	// arm (PetAI.cpp:572-573) is unmodeled — charmed creatures are
-	// player-driven in Go with no victim-vs-charmer tracking.
+	// arm (PetAI.cpp:572-573) and the validity arm (:580) run above this
+	// block, ahead of the distance check as in C++ NeedToStop's order.
 	if owner != nil {
 		visRange := float32(100)
 		if s != nil && s.Config.VisibilityDistanceContinents > 0 {
