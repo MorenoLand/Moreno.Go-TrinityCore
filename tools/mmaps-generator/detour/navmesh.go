@@ -80,7 +80,7 @@ type BVNode struct {
 // written by dtCreateNavMeshData: the region is zeroed and links are
 // rebuilt when the tile is loaded.
 type Link struct {
-	Ref  uint64
+	Ref  PolyRef
 	Next uint32
 	Edge uint8
 	Side uint8
