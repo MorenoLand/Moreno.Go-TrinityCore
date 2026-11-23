@@ -7890,7 +7890,8 @@ func (s *Server) spellIsGroupBuff(spellID uint32) bool {
 		return false
 	}
 	for _, eff := range spell.Effects {
-		if isGroupTarget(eff.ImplicitTargetA) || isGroupTarget(eff.ImplicitTargetB) {
+		// SpellInfo::IsGroupBuff (SpellInfo.cpp:1186) checks TargetA only.
+		if isGroupTarget(eff.ImplicitTargetA) {
 			return true
 		}
 	}

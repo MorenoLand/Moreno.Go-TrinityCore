@@ -981,10 +981,9 @@ func (s *Server) updateGroupLeaderOfflineTimers(now time.Time) {
 		if candidate != 0 {
 			// setGroupLeader runs the full Group::ChangeLeader arm and
 			// broadcasts the updated list (Group::SelectNewPartyOrRaidLeader
-			// calls ChangeLeader then SendUpdate, Group.cpp:141-143).
+			// calls ChangeLeader then SendUpdate, Group.cpp:141-143). With
+			// nobody connected C++ finds no newLeader and sends nothing.
 			s.setGroupLeader(g, candidate)
-		} else {
-			s.broadcastGroupList(g)
 		}
 	}
 }
@@ -1686,19 +1685,10 @@ func (s *session) kickOfflineGroupMember(ctx context.Context, g *groupState, nam
 		}
 	}
 	refreshGroupMaxEnchantingLevel(srv, g)
-	// Group::RemoveMember (Group.cpp:571-585) strips group buffs both
-	// directions; the offline victim's own auras are not loaded, so only
-	// the victim's buffs on the connected remaining members can come off.
-	stripGUIDs := make([]uint64, 0, len(g.Members))
-	for _, m := range g.Members {
-		stripGUIDs = append(stripGUIDs, m.GUID)
-	}
+	// No group-buff strip here: Group::RemoveMember's strip
+	// (Group.cpp:571-585) runs only when the removed player is connected
+	// (FindConnectedPlayer + if (player)); an offline kick strips nothing.
 	srv.groupsMu.Unlock()
-	for _, rguid := range stripGUIDs {
-		if sess := srv.findSessionByGUID(rguid); sess != nil {
-			sess.removeAllGroupBuffsFromCaster(memberGUID)
-		}
-	}
 	srv.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, memberGUID, groupRemoveMethodKick)
 	// Group::RemoveMember (Group.cpp:731): fewer than 2 slots left disbands.
 	var remaining int64
@@ -1941,19 +1931,10 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 			}
 		}
 	}
-	// Group::RemoveMember (Group.cpp:571-585) strips group buffs both
-	// directions; the offline victim's own auras are not loaded, so only
-	// the victim's buffs on the connected remaining members can come off.
-	stripGUIDs := make([]uint64, 0, len(g.Members))
-	for _, m := range g.Members {
-		stripGUIDs = append(stripGUIDs, m.GUID)
-	}
+	// No group-buff strip here: Group::RemoveMember's strip
+	// (Group.cpp:571-585) runs only when the removed player is connected;
+	// this GUID path removes an offline member, so nothing is stripped.
 	s.groupsMu.Unlock()
-	for _, rguid := range stripGUIDs {
-		if sess := s.findSessionByGUID(rguid); sess != nil {
-			sess.removeAllGroupBuffsFromCaster(guid)
-		}
-	}
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
 	}
@@ -2081,11 +2062,9 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 	// for non-BG/non-BF groups before persisting the new leader: permanent
 	// binds for instances nobody entered drop, then the new leader's binds
 	// are copied to the group (ConvertLeaderInstancesToGroup, switchLeader).
-	// The leader-offline timer lapses with the promotion: the new leader is
-	// online by the ChangeLeader gate above.
-	s.groupsMu.Lock()
-	g.leaderOfflineSince = time.Time{}
-	s.groupsMu.Unlock()
+	// ChangeLeader never touches m_isLeaderOffline (only Group::Update
+	// clears it, Group.cpp:109, and StopLeaderOfflineTimer at login), so
+	// the leader-offline timer is left alone here.
 	if g.DBID != 0 && !g.isBGGroup() && s.CharactersStore != nil && s.CharactersStore.DB != nil {
 		s.dropUnenteredGroupPermanentBinds(context.Background(), g)
 		s.convertLeaderInstancesToGroup(context.Background(), guid, g, true, nil)
