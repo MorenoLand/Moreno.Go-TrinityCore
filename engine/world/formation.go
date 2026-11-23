@@ -290,6 +290,7 @@ func (s *Server) formationLeaderStartedMoving(ctx context.Context, motion *creat
 		member.FormationPoint2 = row.point2
 		member.FormationLeaderMoveEnds = motion.MoveEnds
 		member.FormationLeaderX, member.FormationLeaderY = motion.X, motion.Y
+		member.FormationLeaderZ, member.FormationLeaderO = motion.Z, motion.Orientation
 		member.FormationNextCheck = now.Add(1200 * time.Millisecond)
 		if pending := s.planFormationLeg(member, motion, now); pending != nil {
 			pendingMoves = append(pendingMoves, pending)
@@ -347,12 +348,16 @@ func (s *Server) stepFormationMember(ctx context.Context, motion *creatureMotion
 		return true
 	}
 	// DoUpdate: FORMATION_MOVEMENT_INTERVAL (1200ms) re-check — relaunch when
-	// the leader's position changed since the last check.
+	// the leader's position changed since the last check. The comparison is
+	// the full position (FormationMovementGenerator.cpp:122, Position::
+	// operator==, Position.cpp:28-34), so a leader turning in place or
+	// changing height relaunches members too — the slot destination is
+	// oriented off the leader's facing.
 	if now.Before(motion.FormationNextCheck) {
 		return true
 	}
 	motion.FormationNextCheck = now.Add(1200 * time.Millisecond)
-	if leader.X != motion.FormationLeaderX || leader.Y != motion.FormationLeaderY {
+	if leader.X != motion.FormationLeaderX || leader.Y != motion.FormationLeaderY || leader.Z != motion.FormationLeaderZ || leader.Orientation != motion.FormationLeaderO {
 		s.launchFormationLeg(motion, leader, now)
 	}
 	return true
@@ -446,6 +451,7 @@ func (s *Server) planFormationLeg(motion, leader *creatureMotion, now time.Time)
 	slotDist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, leader.Z)
 	if slotDist < 0.5 {
 		motion.FormationLeaderX, motion.FormationLeaderY = leader.X, leader.Y
+		motion.FormationLeaderZ, motion.FormationLeaderO = leader.Z, leader.Orientation
 		motion.FormationLeaderMoveEnds = leader.MoveEnds
 		motion.FormationPredicted = leaderMoving
 		return nil
@@ -522,6 +528,7 @@ func (s *Server) planFormationLeg(motion, leader *creatureMotion, now time.Time)
 	motion.FormationPredicted = leaderMoving
 	motion.FormationLeaderMoveEnds = leader.MoveEnds
 	motion.FormationLeaderX, motion.FormationLeaderY = leader.X, leader.Y
+	motion.FormationLeaderZ, motion.FormationLeaderO = leader.Z, leader.Orientation
 	motion.FormationNextCheck = now.Add(1200 * time.Millisecond)
 	return pending
 }

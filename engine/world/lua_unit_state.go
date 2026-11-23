@@ -60,7 +60,7 @@ const (
 //   - DIED (fake-death aura): no feign-death model on either surface.
 //   - ROAMING / FOLLOW / FOLLOW_MOVE / ROAMING_MOVE: no live generator
 //     tracking; motion.MoveType is the spawn template (1 random,
-//     2 waypoint), not the running generator, and ChaseTX/TY/TZ are
+//     2 waypoint), not the running generator, and ChaseTX/TY/TZ/TO are
 //     a Known-guarded last-position record (reset on pause, MoveChase
 //     install, and speed change), so CHASE and CHASE_MOVE are
 //     mask-only too — the record alone cannot say a chase is live.

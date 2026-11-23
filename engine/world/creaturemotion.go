@@ -927,19 +927,19 @@ type creatureMotion struct {
 	// creatureSplinePosition reads the fall elevation while it is in
 	// flight. Cleared with the other ScriptMove stamps on launch.
 	ScriptMoveFalling bool
-	// ChaseTX/TY/TZ + ChaseTargetKnown are ChaseMovementGenerator's
+	// ChaseTX/TY/TZ/TO + ChaseTargetKnown are ChaseMovementGenerator's
 	// _lastTargetPosition (ChaseMovementGenerator.h, an
 	// Optional<Position>): the victim's position at the last chase
 	// re-path evaluation. The chase re-paths whenever the target moves
-	// (exact-equality test, X/Y/Z — Position::operator==,
-	// Position.cpp:28-34, compares x, y, z and orientation; Go tracks
-	// position only, a victim turning in place does not force a Go
-	// re-path evaluation), so a spline whose victim left the launch
-	// point is relaunched. Known is false when no pursuit is armed;
-	// the coordinates are stale then, never a (0, 0) sentinel — a
-	// victim standing at the map origin is a real position.
-	ChaseTX, ChaseTY, ChaseTZ float32
-	ChaseTargetKnown          bool
+	// (Position::operator==, Position.cpp:28-34, compares x, y, z and
+	// orientation with G3D::fuzzyEq, so a victim turning in place
+	// forces the re-path evaluation at ChaseMovementGenerator.cpp:154;
+	// Go uses exact !=, matching the XYZ style strip 15 chose).
+	// Known is false when no pursuit is armed; the coordinates are
+	// stale then, never a (0, 0) sentinel — a victim standing at the
+	// map origin is a real position.
+	ChaseTX, ChaseTY, ChaseTZ, ChaseTO float32
+	ChaseTargetKnown                   bool
 	// ChaseArrived latches the once-per-arrival SetInFront
 	// (ChaseMovementGenerator.cpp:127-151): the range-check and
 	// spline-finalize arms face the target once, when INFORM_ENABLED
@@ -1039,6 +1039,8 @@ type creatureMotion struct {
 	FormationNextCheck      time.Time // next FORMATION_MOVEMENT_INTERVAL (1200ms) re-check
 	FormationLeaderX        float32   // leader X at last re-check (DoUpdate's _lastLeaderPosition)
 	FormationLeaderY        float32   // leader Y at last re-check
+	FormationLeaderZ        float32   // leader Z at last re-check
+	FormationLeaderO        float32   // leader orientation at last re-check (Position::operator==, Position.cpp:28-34, compares the full position, so a leader turning in place relaunches members — FormationMovementGenerator.cpp:122)
 	MoveHeading             float32   // travel heading of the current leg, recorded at launch (FormationMovementGenerator's relativeAngle)
 	MoveVelocity            float32   // speed of the current leg, recorded at launch (movespline Velocity analog for catchup)
 	// BaseMaxHealth / BaseMaxPowers bank the aura-free maxima feeding the
@@ -6806,6 +6808,16 @@ func scriptFollowAngle(curRel, wantRel float32) float32 {
 	return lower
 }
 
+// scriptAngleOkay is ChaseAngle::IsAngleOkay (MovementDefines.cpp:43-48):
+// the current relative bearing sits within the tolerance band (pi/4)
+// around the wanted angle. FollowMovementGenerator::PositionOkay
+// (FollowMovementGenerator.cpp:48-55) gates its inform arm on it.
+func scriptAngleOkay(curRel, wantRel float32) bool {
+	const tolerance = math.Pi / 4
+	diff := normalizeScriptAngle(curRel - wantRel)
+	return diff <= tolerance || diff >= 2*math.Pi-tolerance
+}
+
 // jumpParabolicParams is MotionMaster::MoveJump's vertical profile
 // (MotionMaster.cpp:785-824 + MoveSpline.cpp:181-184): the Eluna 5th
 // arg arrives as speedZ (see launchCreatureJumpSpline), the apex is
@@ -7106,21 +7118,37 @@ func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, p
 	}
 	reachSum := ownerReach + tReach
 	dist := float32(distance3D(motion.X, motion.Y, motion.Z, tx, ty, tz))
-	if dist <= reachSum+motion.ScriptFollowDist+1.0 {
+	// The owner's current relative bearing as seen from the target
+	// (target->GetRelativeAngle(owner), Position.h:136-139); the
+	// inform check below and the re-path destination share it.
+	curRel := normalizeScriptAngle(float32(math.Atan2(float64(motion.Y-ty), float64(motion.X-tx))) - tOrient)
+	// FollowMovementGenerator::PositionOkay (FollowMovementGenerator.cpp:48-55)
+	// gates the inform arm on range WITHOUT tolerance and on the angle:
+	// dist <= reachSum + range and the bearing inside the ChaseAngle
+	// tolerance (pi/4) of ScriptFollowAngle. The +1.0
+	// FOLLOW_RANGE_TOLERANCE (FollowMovementGenerator.h:31) belongs only
+	// to the re-path gate below (:115-117), never to the inform check.
+	if dist <= reachSum+motion.ScriptFollowDist && scriptAngleOkay(curRel, motion.ScriptFollowAngle) {
 		// FollowMovementGenerator::Update (FollowMovementGenerator.cpp:96-104):
 		// in range on the check timer, once per generator
-		// (INFORM_ENABLED clears after the first inform) —
+		// (INFORM_ENABLED clears after the first inform) — the arm also
+		// drops the path and stops moving, so a follower entering range
+		// mid-spline halts instead of riding to the near point.
 		// AI()->MovementInform(FOLLOW_MOTION_TYPE, target GUID
 		// counter), Eluna CREATURE_EVENT_ON_MOVEMENT_INFORM (28).
 		// The Go check runs every tick, so ScriptFollowInformed is
 		// the INFORM_ENABLED twin; MoveFollow clears it on
 		// assignment. The spline-finalize inform (:110-116) is the
-		// same single inform, already covered when the re-path
-		// spline lands in range on a later tick.
+		// same single inform.
 		if !motion.ScriptFollowInformed {
 			motion.ScriptFollowInformed = true
 			motion.FollowLastTargetKnown = false
 			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorFollow), uint32(targetGUID))
+		}
+		if motion.Moving {
+			s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PhaseMask, motion.TransportGUID)
+			motion.Moving = false
+			motion.MoveEnds = time.Time{}
 		}
 		return true
 	}
@@ -7131,13 +7159,22 @@ func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, p
 	// untouched instead of recalculating and re-broadcasting it every
 	// tick. The stamp lands before the path attempt, as in C++ (the
 	// position is recorded when the test passes, ahead of the inner
-	// gate and the CalculatePath call).
+	// gate and the CalculatePath call); the inner gate just below
+	// (:117) then decides whether a moved target actually re-paths.
 	if motion.FollowLastTargetKnown && tx == motion.FollowLastTX && ty == motion.FollowLastTY && tz == motion.FollowLastTZ {
 		return true
 	}
 	motion.FollowLastTX, motion.FollowLastTY, motion.FollowLastTZ = tx, ty, tz
 	motion.FollowLastTargetKnown = true
-	curRel := normalizeScriptAngle(float32(math.Atan2(float64(motion.Y-ty), float64(motion.X-tx))) - tOrient)
+	// FollowMovementGenerator::Update (FollowMovementGenerator.cpp:115-117):
+	// the re-path block runs only when the owner still has a spline in
+	// flight (UNIT_STATE_FOLLOW_MOVE) or the target sits outside range +
+	// FOLLOW_RANGE_TOLERANCE — inside the band with no spline in flight
+	// the owner stands, even though the target moved.
+	if !(motion.Moving && now.Before(motion.MoveEnds)) && dist <= reachSum+motion.ScriptFollowDist+1.0 {
+		return true
+	}
+	curRel = normalizeScriptAngle(float32(math.Atan2(float64(motion.Y-ty), float64(motion.X-tx))) - tOrient)
 	tAngle := scriptFollowAngle(curRel, motion.ScriptFollowAngle)
 	absAngle := normalizeScriptAngle(tOrient + tAngle)
 	radius := reachSum + motion.ScriptFollowDist
@@ -13146,7 +13183,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// _mutualChase when the check runs (:155-156),
 					// whether or not the launch below succeeds.
 					mutualChase := victimMotion != nil && (victimMotion.ScriptChaseTargetGUID == motion.GUID || (victimMotion.InCombat && victimMotion.TargetGUID == motion.GUID))
-					targetMoved := !motion.ChaseTargetKnown || motion.ChaseTX != target.X || motion.ChaseTY != target.Y || motion.ChaseTZ != target.Z || mutualChase != motion.ChaseMutual
+					// Position::operator== (Position.cpp:28-34) compares the
+					// target's full position including orientation, so a
+					// victim turning in place forces the re-path evaluation
+					// (ChaseMovementGenerator.cpp:154); the orientation is
+					// resolved the same way chaseRangeCheck does above
+					// (player session orientation, else the victim motion's).
+					targetOrient := float32(0)
+					if target.Sess != nil && target.Sess.player != nil {
+						targetOrient = target.Sess.player.Orientation
+					} else if victimMotion != nil {
+						targetOrient = victimMotion.Orientation
+					}
+					targetMoved := !motion.ChaseTargetKnown || motion.ChaseTX != target.X || motion.ChaseTY != target.Y || motion.ChaseTZ != target.Z || motion.ChaseTO != targetOrient || mutualChase != motion.ChaseMutual
 					motion.ChaseMutual = mutualChase
 					// Unit::PauseMovement (Unit.cpp:10514) on the ACTIVE slot:
 					// the chase generator is paused, so no re-path launches
@@ -13323,9 +13372,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								// MoveSplineInit.cpp:106-124, over the
 								// whole poly path; duration on the total
 								// path length).
-								if s.launchCreaturePolySpline(motion, points, false, movementGeneratorChase, faceAngle, true, speed, now, 0) {
+								// ChaseMovementGenerator.cpp:208-216: the launch
+								// walks when the movement template says
+								// AlwaysWalk, or CanWalk with the owner's walk
+								// flag — chaseWalk is the twin, and the speed
+								// above already rides it; the packet mode must
+								// match or the client runs at walk speed.
+								if s.launchCreaturePolySpline(motion, points, chaseWalk(motion), movementGeneratorChase, faceAngle, true, speed, now, 0) {
 									setCreatureCannotReachTarget(motion, false, now)
 									motion.ChaseTX, motion.ChaseTY, motion.ChaseTZ = target.X, target.Y, target.Z
+									motion.ChaseTO = targetOrient
 									motion.ChaseTargetKnown = true
 									motion.ChaseArrived = false
 									motion.ChaseInformed = false
