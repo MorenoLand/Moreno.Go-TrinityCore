@@ -202,6 +202,41 @@ func (s *session) loadQuestQueryData(ctx context.Context, questID uint32) (quest
 	for index := range data.ObjectiveText {
 		data.ObjectiveText[index] = objectiveText[index].String
 	}
+	// QuestDef.cpp:396-406 — quest_template_locale overrides Title, Details,
+	// Objectives, AreaDescription (EndText column), CompletedText and
+	// ObjectiveText1-4 for the session locale; GetLocaleString keeps the
+	// enUS base value when the locale string is empty (ObjectMgr.h:1568-1570).
+	// Same guard/pattern as the page-text locale in items.go:6331.
+	if s.locale != 0 && int(s.locale) < len(localeNames) {
+		var locTitle, locDetails, locObjectives, locEndText, locCompleted sql.NullString
+		var locObjectiveText [questObjectivesCount]sql.NullString
+		locTargets := []any{&locTitle, &locDetails, &locObjectives, &locEndText, &locCompleted}
+		for index := range locObjectiveText {
+			locTargets = append(locTargets, &locObjectiveText[index])
+		}
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Title, Details, Objectives, EndText, CompletedText, ObjectiveText1, ObjectiveText2, ObjectiveText3, ObjectiveText4 FROM quest_template_locale WHERE ID = ? AND locale = ?", questID, localeNames[s.locale]).Scan(locTargets...); err == nil {
+			if locTitle.Valid && locTitle.String != "" {
+				data.Title = locTitle.String
+			}
+			if locDetails.Valid && locDetails.String != "" {
+				data.Details = locDetails.String
+			}
+			if locObjectives.Valid && locObjectives.String != "" {
+				data.Objectives = locObjectives.String
+			}
+			if locEndText.Valid && locEndText.String != "" {
+				data.AreaDescription = locEndText.String
+			}
+			if locCompleted.Valid && locCompleted.String != "" {
+				data.CompletedText = locCompleted.String
+			}
+			for index := range locObjectiveText {
+				if locObjectiveText[index].Valid && locObjectiveText[index].String != "" {
+					data.ObjectiveText[index] = locObjectiveText[index].String
+				}
+			}
+		}
+	}
 	return data, nil
 }
 

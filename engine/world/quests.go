@@ -1338,6 +1338,103 @@ func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) 
 	return true
 }
 
+// questPOIBlobPoint mirrors C++ QuestPOIBlobPoint (ObjectMgr.h:831-834): one
+// map point of a POI blob, X/Y in client map coordinates.
+type questPOIBlobPoint struct {
+	X int32
+	Y int32
+}
+
+// questPOIBlob mirrors C++ QuestPOIBlobData (ObjectMgr.h:837-847). Unk3/Unk4
+// are the quest_poi Priority/Flags columns.
+type questPOIBlob struct {
+	BlobIndex      uint32
+	ObjectiveIndex int32
+	MapID          uint32
+	WorldMapAreaID uint32
+	Floor          uint32
+	Unk3           uint32
+	Unk4           uint32
+	Points         []questPOIBlobPoint
+}
+
+// loadQuestPOIBlobs mirrors ObjectMgr::LoadQuestPOI (ObjectMgr.cpp:8191-8290)
+// scoped to one quest: quest_poi_points load first (ORDER BY Idx2 within
+// each blob), then quest_poi rows attach only when their blob id passes the
+// C++ POIs[questId] size gate — a row with no points for its id is dropped,
+// while a row whose id falls under the resize window keeps an empty point
+// list. Returns nil when no blob survives, the C++ no-wrapper arm.
+func (s *session) loadQuestPOIBlobs(ctx context.Context, questID uint32) []questPOIBlob {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil
+	}
+	db := s.server.WorldStore.DB
+	points := make(map[uint32][]questPOIBlobPoint)
+	pointsLen := uint32(0)
+	rows, err := db.QueryContext(ctx, "SELECT Idx1, X, Y FROM quest_poi_points WHERE QuestID = ? ORDER BY Idx2", questID)
+	if err != nil {
+		return nil
+	}
+	for rows.Next() {
+		var id uint32
+		var x, y int32
+		if err := rows.Scan(&id, &x, &y); err != nil {
+			continue
+		}
+		// ObjectMgr.cpp:8229-8231: the per-quest point vector grows to id+10
+		// when a point arrives past its end.
+		if pointsLen <= id+1 {
+			pointsLen = id + 10
+		}
+		points[id] = append(points[id], questPOIBlobPoint{X: x, Y: y})
+	}
+	_ = rows.Close()
+	poiRows, err := db.QueryContext(ctx, "SELECT id, ObjectiveIndex, MapID, WorldMapAreaId, Floor, Priority, Flags FROM quest_poi WHERE QuestID = ?", questID)
+	if err != nil {
+		return nil
+	}
+	defer poiRows.Close()
+	var blobs []questPOIBlob
+	for poiRows.Next() {
+		var blob questPOIBlob
+		if err := poiRows.Scan(&blob.BlobIndex, &blob.ObjectiveIndex, &blob.MapID, &blob.WorldMapAreaID, &blob.Floor, &blob.Unk3, &blob.Unk4); err != nil {
+			continue
+		}
+		// ObjectMgr.cpp:8262: quest_poi rows outside the points vector are
+		// logged and dropped, so no wrapper is built for them.
+		if blob.BlobIndex >= pointsLen {
+			continue
+		}
+		blob.Points = points[blob.BlobIndex]
+		blobs = append(blobs, blob)
+	}
+	return blobs
+}
+
+// buildQuestPOIBlob mirrors QuestPOIWrapper::BuildQueryData
+// (ObjectMgr.cpp:10404-10431): quest id, POI count, then per blob the index,
+// objective index, map/area/floor, two unknowns, point count and X/Y pairs.
+func buildQuestPOIBlob(questID uint32, blobs []questPOIBlob) []byte {
+	buf := protocol.NewBuffer(8)
+	buf.WriteU32(questID)
+	buf.WriteU32(uint32(len(blobs)))
+	for _, blob := range blobs {
+		buf.WriteU32(blob.BlobIndex)
+		buf.WriteI32(blob.ObjectiveIndex)
+		buf.WriteU32(blob.MapID)
+		buf.WriteU32(blob.WorldMapAreaID)
+		buf.WriteU32(blob.Floor)
+		buf.WriteU32(blob.Unk3)
+		buf.WriteU32(blob.Unk4)
+		buf.WriteU32(uint32(len(blob.Points)))
+		for _, point := range blob.Points {
+			buf.WriteI32(point.X)
+			buf.WriteI32(point.Y)
+		}
+	}
+	return buf.Bytes()
+}
+
 // handleQuestPoiQuery processes CMSG_QUEST_POI_QUERY (0x1E3).
 // Reference: WorldSession::HandleQuestPOIQuery (QueryHandler.cpp:321-363).
 func (s *session) handleQuestPoiQuery(ctx context.Context, payload []byte) bool {
@@ -1366,10 +1463,11 @@ func (s *session) handleQuestPoiQuery(ctx context.Context, payload []byte) bool 
 		questIDs = append(questIDs, questID)
 	}
 
-	// QueryHandler.cpp:344-356 — only quests in the player's log are
-	// echoed: FindQuestSlot must resolve, and the count field is still the
-	// deduped request count (C++ writes questIds.size() up front), so a
-	// spoofed non-log id shrinks the entry list but not the count.
+	// QueryHandler.cpp:344-363 — C++ writes an entry for EVERY deduped quest
+	// id: in-log with a POI wrapper appends the blob, every other case (not
+	// in log, or in log without a wrapper) writes quest id + zero POI count.
+	// The count field is the deduped request count, so skipping non-log ids
+	// would malform the packet (count/entries mismatch).
 	logQuests := make(map[uint32]struct{})
 	if s.player != nil {
 		for _, entry := range s.player.QuestLog {
@@ -1382,12 +1480,14 @@ func (s *session) handleQuestPoiQuery(ctx context.Context, payload []byte) bool 
 	buf.WriteU32(uint32(len(questIDs)))
 	for _, questID := range questIDs {
 		if _, inLog := logQuests[questID]; !inLog {
+			buf.WriteU32(questID)
+			buf.WriteU32(0)
 			continue
 		}
-		// Quests with POI data append the QuestPOIWrapper buffer. Go has no
-		// quest_poi model (no loader for quest_poi/quest_poi_points), so
-		// every in-log quest takes the C++ no-wrapper arm: quest id + zero
-		// POI count (documented delta).
+		if blobs := s.loadQuestPOIBlobs(ctx, questID); len(blobs) > 0 {
+			buf.Write(buildQuestPOIBlob(questID, blobs))
+			continue
+		}
 		buf.WriteU32(questID)
 		buf.WriteU32(0)
 	}
