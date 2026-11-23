@@ -481,12 +481,11 @@ func (s *session) handleCmdGMNotifyCommand(ctx context.Context, args []string) b
 // handleCmdWhispers mirrors HandleWhispersCommand (cs_message.cpp:214-256,
 // RBAC 471). The no-arg status arm and the bool on/off arms are ported on
 // the playerExtraAcceptWhispers flag (persisted like the .gm flag flips);
-// the off arm's ClearWhisperWhiteList is vacuous — no whitelist exists in
-// the Go tree. The `remove` sub-arm stays blocked on the missing whitelist
-// model and reports honestly instead of pretending to remove a name; with
-// no name it returns false silently (C++ returns false, cs_message.cpp:236-237). Bool
-// tokens follow StringTo<bool> (StringConvert.h:146-166, case-insensitive):
-// 1/y/on/yes/true and 0/n/off/no/false; anything else is LANG_USE_BOL.
+// the off arm clears the whisper whitelist (cs_message.cpp:220) and the
+// `remove` sub-arm drops one name from it (cs_message.cpp:227-247).
+// Bool tokens follow StringTo<bool> (StringConvert.h:146-166,
+// case-insensitive): 1/y/on/yes/true and 0/n/off/no/false; anything else
+// is LANG_USE_BOL.
 func (s *session) handleCmdWhispers(ctx context.Context, args []string) bool {
 	if s.messageDeny(ctx, permissionCommandWhispers) {
 		return false
@@ -510,21 +509,36 @@ func (s *session) handleCmdWhispers(ctx context.Context, args []string) bool {
 		s.sendSysMessage("Whisper accepting on.") // LANG_COMMAND_WHISPERON
 		return true
 	case "0", "n", "off", "no", "false":
+		// cs_message.cpp:220-221 — turning whispers off clears the
+		// whitelist as well as the accept flag.
+		s.whisperWhiteList = nil
 		s.player.ExtraFlags &^= playerExtraAcceptWhispers
 		s.persistExtraFlags()
 		s.sendSysMessage("Whisper accepting off.") // LANG_COMMAND_WHISPEROFF
 		return true
 	case "remove":
-		// C++ returns false with no name (cs_message.cpp:236-237), so the
-		// framework shows the leaf usage; the removal itself stays blocked
-		// on the missing whitelist model.
+		// C++ returns false with no name (cs_message.cpp:229-230), so the
+		// framework shows the leaf usage; with more than one name it also
+		// returns false (no multi-name arm exists).
 		if len(args) < 2 {
 			return false
 		}
 		if len(args) > 2 {
 			return false
 		}
-		s.sendSysMessage("Whisper white list removal is unavailable: the Go tree has no whisper white list model.")
+		name := normalizePlayerName(args[1])
+		target := s.server.findSessionByName(name)
+		if target == nil {
+			// LANG_PLAYER_NOT_FOUND (cs_message.cpp:242); the Go
+			// convention is the "Player not found." sysmessage.
+			s.sendSysMessage("Player not found.")
+			return false
+		}
+		s.removeWhisperWhiteList(target.playerGUID)
+		// LANG_COMMAND_WHISPEROFFPLAYER (Language.h:363): the English
+		// trinity_string text is not in the local tree, so the verified
+		// LANG_COMMAND_WHISPEROFF text is reused for this arm.
+		s.sendSysMessage("Whisper accepting off.")
 		return true
 	default:
 		s.sendSysMessage("Use on/off.") // LANG_USE_BOL 259

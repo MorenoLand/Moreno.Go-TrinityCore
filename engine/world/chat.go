@@ -325,6 +325,15 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			language = modifiedLanguage
 		} else if s.twoSideChat {
 			language = languageUniversal
+		} else if s.server.Config.AllowTwoSideInteractionGroup {
+			// Reference: ChatHandler.cpp:158-169 — without the
+			// RBAC_PERM_TWO_SIDE_INTERACTION_CHAT permission, party and
+			// raid chat still go out universal when
+			// CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP is on.
+			switch typeID {
+			case chatParty, chatPartyLeader, chatRaid, chatRaidLeader, chatRaidWarning:
+				language = languageUniversal
+			}
 		}
 	}
 	if typeID == chatWhisper && language != languageAddon {
@@ -384,26 +393,42 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.sendChatPlayerNotFound(targetName)
 			return true
 		}
-		// Reference: the CHAT_MSG_WHISPER arm (ChatHandler.cpp:340-394) — the
-		// sender level requirement and the faction check are both skipped when
-		// the receiver is a GM accepting whispers; Go has no
-		// AcceptWhispers/whitelist state, so chatGMMode(receiver) is the
-		// IsGameMasterAcceptingWhispers() analog. The silence-aura check runs
-		// after the faction check in C++ (ChatHandler.cpp:388-393).
-		if !chatGMMode(s) && !chatGMMode(receiver) && s.player != nil && uint32(s.player.Level) < s.server.Config.ChatWhisperLevelReq {
-			s.sendNotification(fmt.Sprintf("You cannot whisper until you become level %d.", s.server.Config.ChatWhisperLevelReq))
-			s.debug("chat rejected", "account", s.accountName, "reason", "whisper level requirement", "required", s.server.Config.ChatWhisperLevelReq, "level", s.player.Level)
+		// Reference: the CHAT_MSG_WHISPER arm (ChatHandler.cpp:354-386) — a
+		// receiver who does not accept whispers and holds
+		// RBAC_PERM_CAN_FILTER_WHISPERS (RBAC.h:36; the Go analog is .gm-on
+		// mode, chatGMMode) is invisible to senders outside the whitelist,
+		// exactly like a missing player. The level and faction checks are
+		// skipped when the sender is already whitelisted or the receiver is
+		// a GM accepting whispers; the silence-aura check runs after the
+		// faction check (ChatHandler.cpp:388-393).
+		if language != languageAddon && !receiver.acceptsWhispers() && chatGMMode(receiver) && !receiver.inWhisperWhiteList(s.playerGUID) {
+			s.debug("chat rejected", "account", s.accountName, "reason", "whisper not accepted", "receiver", receiver.playerGUID)
+			s.sendChatPlayerNotFound(targetName)
 			return true
 		}
-		if !s.twoSideChat && !chatGMMode(receiver) && s.playerAlliance() != receiver.playerAlliance() {
-			s.debug("chat rejected", "account", s.accountName, "reason", "whisper wrong faction", "receiver", receiver.playerGUID)
-			s.sendChatWrongFaction()
-			return true
+		if !receiver.inWhisperWhiteList(s.playerGUID) && !receiver.isGameMasterAcceptingWhispers() {
+			if !chatGMMode(s) && s.player != nil && uint32(s.player.Level) < s.server.Config.ChatWhisperLevelReq {
+				s.sendNotification(fmt.Sprintf("You cannot whisper until you become level %d.", s.server.Config.ChatWhisperLevelReq))
+				s.debug("chat rejected", "account", s.accountName, "reason", "whisper level requirement", "required", s.server.Config.ChatWhisperLevelReq, "level", s.player.Level)
+				return true
+			}
+			if !s.twoSideChat && s.playerAlliance() != receiver.playerAlliance() {
+				s.debug("chat rejected", "account", s.accountName, "reason", "whisper wrong faction", "receiver", receiver.playerGUID)
+				s.sendChatWrongFaction()
+				return true
+			}
 		}
 		if s.hasAura(1852) && !chatGMMode(receiver) {
 			s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
 			s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852, "receiver", receiver.playerGUID)
 			return true
+		}
+		// Reference: ChatHandler.cpp:384-386 — a GM whispering a
+		// below-level receiver, or a GM with whispers off whispering
+		// anyone, auto-whitelists the receiver for future whispers.
+		if receiver.player != nil && (uint32(receiver.player.Level) < s.server.Config.ChatWhisperLevelReq ||
+			(chatGMMode(s) && !s.acceptsWhispers() && !s.inWhisperWhiteList(receiver.playerGUID))) {
+			s.addWhisperWhiteList(receiver.playerGUID)
 		}
 	}
 	// Reference: the CHAT_MSG_GUILD/OFFICER arms (ChatHandler.cpp:421-453) only
@@ -489,6 +514,15 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	}
 	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channelName, chatGroupID)
 	if typeID == chatWhisper && receiver != nil && language != languageAddon {
+		// Reference: Player::Whisper (Player.cpp:21038-21044) — a non-GM
+		// sender who does not accept whispers auto-enables it on the
+		// first whisper to a non-GM, with the LANG_COMMAND_WHISPERON
+		// sysmessage.
+		if s.player != nil && !s.acceptsWhispers() && !chatGMMode(s) && !chatGMMode(receiver) {
+			s.player.ExtraFlags |= playerExtraAcceptWhispers
+			s.persistExtraFlags()
+			s.sendSysMessage("Whisper accepting on.") // LANG_COMMAND_WHISPERON
+		}
 		s.announceChatAutoReply(receiver)
 	}
 	s.debug("chat accepted", "account", s.accountName, "type", typeID, "gm_chat", s.gmChat)
@@ -847,17 +881,18 @@ func (s *session) setPlayerDND(on bool) {
 
 // announceChatAutoReply mirrors the AFK/DND auto-reply announcement at the end
 // of Player::Whisper (Player.cpp:21050-21054): the target's auto-reply message
-// is sent to the whispering player as a notification (not an addon whisper).
+// is sent to the whispering player as a system chat message (CHAT_MSG_SYSTEM),
+// not a notification.
 func (s *session) announceChatAutoReply(target *session) {
 	if s == nil || target == nil || target.player == nil {
 		return
 	}
 	if target.player.PlayerFlags&playerFlagAFK != 0 {
 		// LANG_PLAYER_AFK (708).
-		s.sendNotification(fmt.Sprintf("%s is AFK: %s", target.player.Name, target.autoReplyMsg))
+		s.sendSysMessage(fmt.Sprintf("%s is AFK: %s", target.player.Name, target.autoReplyMsg))
 	} else if target.player.PlayerFlags&playerFlagDND != 0 {
 		// LANG_PLAYER_DND (707).
-		s.sendNotification(fmt.Sprintf("%s is DND: %s", target.player.Name, target.autoReplyMsg))
+		s.sendSysMessage(fmt.Sprintf("%s is DND: %s", target.player.Name, target.autoReplyMsg))
 	}
 }
 
@@ -872,6 +907,47 @@ func addonChatType(typeID uint32) bool {
 
 func chatGMMode(s *session) bool {
 	return s != nil && s.player != nil && s.player.ExtraFlags&playerExtraGMOn != 0
+}
+
+// acceptsWhispers mirrors Player::isAcceptWhispers (Player.h:957): the
+// playerExtraAcceptWhispers bit (0x0004), persisted in characters.extra_flags.
+func (s *session) acceptsWhispers() bool {
+	return s != nil && s.player != nil && s.player.ExtraFlags&playerExtraAcceptWhispers != 0
+}
+
+// isGameMasterAcceptingWhispers mirrors Player::IsGameMasterAcceptingWhispers
+// (Player.h:960).
+func (s *session) isGameMasterAcceptingWhispers() bool {
+	return chatGMMode(s) && s.acceptsWhispers()
+}
+
+// inWhisperWhiteList mirrors Player::IsInWhisperWhiteList (Player.cpp:26826).
+func (s *session) inWhisperWhiteList(guid uint64) bool {
+	if s == nil || s.whisperWhiteList == nil {
+		return false
+	}
+	_, ok := s.whisperWhiteList[guid]
+	return ok
+}
+
+// addWhisperWhiteList mirrors Player::AddWhisperWhiteList (Player.h:2162).
+func (s *session) addWhisperWhiteList(guid uint64) {
+	if s == nil {
+		return
+	}
+	if s.whisperWhiteList == nil {
+		s.whisperWhiteList = make(map[uint64]struct{})
+	}
+	s.whisperWhiteList[guid] = struct{}{}
+}
+
+// removeWhisperWhiteList mirrors Player::RemoveFromWhisperWhiteList
+// (Player.h:2164).
+func (s *session) removeWhisperWhiteList(guid uint64) {
+	if s == nil || s.whisperWhiteList == nil {
+		return
+	}
+	delete(s.whisperWhiteList, guid)
 }
 
 func languageSkill(language uint32) (uint16, bool) {

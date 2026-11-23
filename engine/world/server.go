@@ -513,7 +513,12 @@ type session struct {
 	gmVisibilityDetect uint8
 	// autoReplyMsg mirrors Player::autoReplyMsg (Player.h:939): the AFK/DND
 	// auto-reply message announced to whispering players (Player.cpp:21050).
-	autoReplyMsg            string
+	autoReplyMsg string
+	// whisperWhiteList mirrors Player::WhisperList (Player.h:2161-2164):
+	// the in-memory whitelist of GUIDs allowed to whisper past a GM's
+	// accept-whispers gate. Cleared on logout (WorldSession.cpp:577);
+	// it lives on the session, so it never survives a disconnect.
+	whisperWhiteList        map[uint64]struct{}
 	gmMessage               bool
 	twoSideChat             bool
 	twoSideWhoList          bool

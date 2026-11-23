@@ -195,7 +195,13 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		return true
 	}
 	key := s.scopedChannelKey(name)
-	flags := channelFlags(channelID, name)
+	flags := channelFlags(channelID, s.chatChannelDBCFlags(channelID))
+	// Reference: ChannelHandler.cpp:74-79 — a system-channel join passes no
+	// password (JoinChannel(GetPlayer())); only custom channels carry one.
+	channelPassword := password
+	if channelID != 0 {
+		channelPassword = ""
+	}
 	s.server.channelsMu.Lock()
 	if s.server.channels == nil {
 		s.server.channels = make(map[string]*worldChannel)
@@ -210,7 +216,7 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 			// joins/leaves and hand out ownership; constant (built-in)
 			// channels do neither, and their members carry MEMBER_FLAG_NONE.
 			Flags:      flags,
-			Password:   password,
+			Password:   channelPassword,
 			Announce:   channelID == 0,
 			Members:    make(map[*session]struct{}),
 			Moderators: make(map[uint64]struct{}),
@@ -815,30 +821,51 @@ func (s *session) scopedChannelKey(name string) string {
 	return strconv.FormatUint(uint64(playerTeam(s.player.Race)), 10) + ":" + key
 }
 
-func channelFlags(id uint32, name string) uint8 {
+func channelFlags(id uint32, dbcFlags uint32) uint8 {
 	if id == 0 {
 		return channelFlagCustom
 	}
-	name = strings.ToLower(strings.TrimSpace(name))
-	if separator := strings.Index(name, " - "); separator >= 0 {
-		name = name[:separator]
+	// Reference: Channel::Channel (Channel.cpp:41-66) — the runtime flags
+	// derive from the ChatChannels.dbc row: CHANNEL_FLAG_GENERAL for all
+	// built-ins, TRADE from CHANNEL_DBC_FLAG_TRADE (0x08), CITY from
+	// CHANNEL_DBC_FLAG_CITY_ONLY2 (0x20), LFG from CHANNEL_DBC_FLAG_LFG
+	// (0x40000) with NOT_LFG for every other channel. The stock rows
+	// (store.go:2091-2096) reproduce all six built-ins: General 0x18,
+	// Trade 0x3C, LocalDefense 0x18, WorldDefense 0x18,
+	// GuildRecruitment 0x38, LFG 0x74.
+	flags := channelFlagGeneral
+	if dbcFlags&channelDBCFlagTrade != 0 {
+		flags |= channelFlagTrade
 	}
-	switch strings.ReplaceAll(name, " ", "") {
-	case "trade":
-		return channelFlagGeneral | channelFlagNotLFG | channelFlagTrade | channelFlagCity
-	case "lookingforgroup":
-		// Reference: Channel.h documents the LFG runtime flags as
-		// 0x50 = 0x40 | 0x10 — CHANNEL_FLAG_CITY comes only from
-		// CHANNEL_DBC_FLAG_CITY_ONLY2 (Channel.cpp:54-55), which the LFG DBC
-		// row lacks. City gating for LFG rides its LFG bit (see the join
-		// gate and updateLocalChannels), matching CanJoinConstantChannelInZone
-		// (Player.cpp:5164-5165, CITY_ONLY covers Trade/GuildRecruitment/LFG).
-		return channelFlagGeneral | channelFlagLFG
-	case "guildrecruitment":
-		return channelFlagGeneral | channelFlagNotLFG | channelFlagCity
-	default:
-		return channelFlagGeneral | channelFlagNotLFG
+	if dbcFlags&channelDBCFlagCityOnly2 != 0 {
+		flags |= channelFlagCity
 	}
+	if dbcFlags&channelDBCFlagLFG != 0 {
+		flags |= channelFlagLFG
+	} else {
+		flags |= channelFlagNotLFG
+	}
+	return flags
+}
+
+// chatChannelDBCFlags returns the ChatChannels.dbc Flags row for a built-in
+// channel id, or 0 when the row is absent. C++ asserts the row exists
+// (Channel.cpp:52); the Go zone gate already refuses unknown ids, so 0
+// (General + NOT_LFG) is only a fallback.
+func (s *session) chatChannelDBCFlags(channelID uint32) uint32 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	entries, err := s.server.Data.ChatChannels()
+	if err != nil {
+		return 0
+	}
+	for _, entry := range entries {
+		if entry.ID == channelID {
+			return entry.Flags
+		}
+	}
+	return 0
 }
 
 func (s *Server) removeSessionChannels(member *session) {
@@ -1071,7 +1098,7 @@ func (s *session) syncLocalChannels(newZone uint32) {
 			channel = &worldChannel{
 				ID:    entry.ID,
 				Name:  joinName,
-				Flags: channelFlags(entry.ID, joinName),
+				Flags: channelFlags(entry.ID, entry.Flags),
 				// Reference: Channel::Channel — built-in channels never get
 				// an owner (_ownershipEnabled=false); members carry
 				// MEMBER_FLAG_NONE in userlist and channel-list packets.

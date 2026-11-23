@@ -723,8 +723,8 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 // first; a handled spell returns without casting, an unhandled one logs the
 // unknown-spell error and returns. Known spells proceed to the cast. The
 // known-spell HandleCustomSpell call (GameObject.cpp:2089) is not wired: its
-// result is discarded and the only leg is a side-effect-free predicate (see
-// handleOutdoorPvPCustomSpell), so the call would be a no-op. A store error
+// result is discarded, and with no OutdoorPvP zones registered in Go the
+// dispatch is a no-op (see handleOutdoorPvPCustomSpell). A store error
 // is permissive (the cast path no-ops on unknown spells by itself), matching
 // the terrain.go convention.
 func (s *session) admitUseTailSpell(spellID uint32, entry uint32, goType uint8) bool {
@@ -753,11 +753,13 @@ func (s *session) admitUseTailSpell(spellID uint32, entry uint32, goType uint8) 
 // (OutdoorPvP.cpp:511-516): the manager iterates its zones, each zone its
 // capture points, and the base capture-point leg claims the spell iff the
 // player is outdoor-PvP-active (Player.cpp:7323: alive, visible, PvP-flagged,
-// not flying). No subclass overrides the leg anywhere in the tree, and Go
-// registers no OutdoorPvP zones or capture points (no OutdoorPvP manager:
-// server.go defense-message arm, gossip.go), so no zone can claim a spell
-// and the dispatch always reports unhandled. The hook stays so a future zone
-// registry plugs in here instead of at the call sites.
+// not flying). Two zone overrides exist — OPvPCapturePointNA Halaa taxi
+// spells (OutdoorPvPNA.cpp:396, 32075/32059) and OutdoorPvPSI silithyst
+// (OutdoorPvPSI.cpp:228, 29518) — but Go registers no OutdoorPvP zones or
+// capture points (no OutdoorPvP manager: server.go defense-message arm,
+// gossip.go), so no zone can claim a spell and the dispatch always reports
+// unhandled. The hook stays so a future zone registry plugs in here instead
+// of at the call sites.
 func (s *Server) handleOutdoorPvPCustomSpell(sess *session, spellID uint32, goEntry uint32) bool {
 	return false
 }

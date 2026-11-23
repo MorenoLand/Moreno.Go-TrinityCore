@@ -5527,8 +5527,9 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	}
 
 	// Create guild
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild (guildid, name, leaderguid, createdate) VALUES (?, ?, ?, ?)",
-		newGuildID, guildName, ownerGUID, timeNow())
+	// Guild::Create (Guild.cpp:1098): a new guild's motd is "No message set."
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild (guildid, name, leaderguid, createdate, motd) VALUES (?, ?, ?, ?, ?)",
+		newGuildID, guildName, ownerGUID, timeNow(), "No message set.")
 
 	// Guild::_CreateDefaultGuildRanks (Guild.cpp:2428): Guild Master and
 	// Officer get GR_RIGHT_ALL (0x001DF1FF); the remaining ranks get
@@ -5542,8 +5543,34 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 3, 'Member', ?, 0)", newGuildID, chatRights)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, 4, 'Initiate', ?, 0)", newGuildID, chatRights)
 
-	// Add leader
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 0, '', '')", newGuildID, ownerGUID)
+	// Read the signers into memory BEFORE the leader is added:
+	// Guild::AddMember calls Player::RemovePetitionsAndSigns
+	// (Guild.cpp:2209), which deletes the petition_sign rows — adding the
+	// leader first would lose the signer list. The name rides along for
+	// the GE_JOINED broadcast (Guild.cpp:2264-2272); a signature without
+	// a character row cannot be AddMember()ed (C++ bails when the
+	// CHAR_SEL_CHAR_DATA_FOR_GUILD lookup fails, Guild.cpp:2247-2262).
+	type petitionSigner struct {
+		guid int64
+		name string
+	}
+	var signers []petitionSigner
+	rows, _ := cdb.QueryContext(ctx, `SELECT ps.playerguid, c.name FROM petition_sign ps
+		JOIN characters c ON c.guid = ps.playerguid WHERE ps.petitionguid = ?`, petitionGUID)
+	if rows != nil {
+		for rows.Next() {
+			var signer petitionSigner
+			if err := rows.Scan(&signer.guid, &signer.name); err == nil && signer.guid != ownerGUID {
+				signers = append(signers, signer)
+			}
+		}
+		rows.Close()
+	}
+
+	// Add leader — Guild::Create AddMember()s the guildmaster
+	// (Guild.cpp:1130), which sends the login info, logs the JOIN event
+	// and broadcasts GE_JOINED (Guild.cpp:2230, 2267-2272).
+	s.guildAddMember(ctx, cdb, uint32(newGuildID), uint64(ownerGUID), 0, s.player.Name)
 	s.player.GuildID = uint32(newGuildID)
 	s.player.GuildRank = 0
 
@@ -5554,34 +5581,17 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	s.fireGuildEvent(ctx, scripting.GuildEventOnAddMember, createGuild, s.luaPlayer(), uint32(0))
 	s.fireGuildEvent(ctx, scripting.GuildEventOnCreate, createGuild, s.luaPlayer(), guildName)
 
-	// Add signers
-	var signers []int64
-	rows, _ := cdb.QueryContext(ctx, "SELECT playerguid FROM petition_sign WHERE petitionguid = ?", petitionGUID)
-	if rows != nil {
-		for rows.Next() {
-			var signerGUID int64
-			if err := rows.Scan(&signerGUID); err == nil && signerGUID != ownerGUID {
-				signers = append(signers, signerGUID)
-			}
-		}
-		rows.Close()
-	}
-	for _, signerGUID := range signers {
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 4, '', '')", newGuildID, signerGUID)
+	// Add signers — PetitionsHandler.cpp:701: each signature member is
+	// AddMember()ed, firing OnGuildAddMember (Guild.cpp:2272); offline
+	// signers reach the hook as nil, like Eluna's Push of a null Player*.
+	for _, signer := range signers {
+		s.guildAddMember(ctx, cdb, uint32(newGuildID), uint64(signer.guid), 4, signer.name)
 		var signerPlayer *scripting.Object
 		if s.server != nil {
-			if signerSess := s.server.findSessionByGUID(uint64(signerGUID)); signerSess != nil && signerSess.worldReady.Load() {
+			if signerSess := s.server.findSessionByGUID(uint64(signer.guid)); signerSess != nil && signerSess.worldReady.Load() {
 				signerPlayer = signerSess.luaPlayer()
-				if signerPlayer != nil {
-					signerSess.player.GuildID = uint32(newGuildID)
-					signerSess.player.GuildRank = 4
-					signerSess.sendPlayerUpdate()
-				}
 			}
 		}
-		// PetitionsHandler.cpp:701: each signature member is AddMember()ed,
-		// firing OnGuildAddMember (Guild.cpp:2272); offline signers reach the
-		// hook as nil, like Eluna's Push of a null Player*.
 		s.fireGuildEvent(ctx, scripting.GuildEventOnAddMember, createGuild, signerPlayer, uint32(4))
 	}
 

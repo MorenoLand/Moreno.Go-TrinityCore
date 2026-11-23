@@ -4439,6 +4439,9 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		return nil
 	}
 	s.worldReady.Store(false)
+	// WorldSession::LogoutPlayer (WorldSession.cpp:577) clears the whisper
+	// whitelist on logout: it is in-memory only.
+	s.whisperWhiteList = nil
 	s.stopSpellLifecycle()
 	// Unit::RemoveFromWorld (Unit.cpp:9795-9796): a leaving unit's
 	// dynamic objects are all removed, not just the current channel's.
