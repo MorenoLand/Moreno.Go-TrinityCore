@@ -41,11 +41,16 @@
 //   - Unit::CanSwim (Unit.cpp:13318-13326): players are always swimmers
 //     (UNIT_FLAG_PLAYER_CONTROLLED), creatures follow the movement
 //     template (creatureCanSwimMotion).
+//   - UNIT_STATE_IGNORE_PATHFINDING shortcut arm (PathGenerator.cpp:
+//     102-104): the snapshot carries the live mask bit (creature
+//     ScriptUnitState / session mask), so a flagged source takes the
+//     BuildShortcut leg.
+//   - Unit::GetHoverOffset (Unit.h:1648) in UpdateAllowedPositionZ
+//     (Object.cpp:1458-1511): creatures read Hovering + HoverHeight,
+//     players the hover aura + 1.0 field; the offset lifts the
+//     ground/max clamps.
 //
 // Flagged gaps, NOT fabricated:
-//   - UNIT_STATE_IGNORE_PATHFINDING gate (PathGenerator.cpp:102-104):
-//     the const exists (lua_unit_state.go:53) but no live mask reads it,
-//     so the arm is omitted — a source with the state still pathfinds.
 //   - Unit::IsFalling in the far-from-poly leg (:283-284): creature
 //     IsFalling has no Go model (only motion.ScriptMoveFalling, which is
 //     not Unit::IsFalling); the creature adapter reports false, so the
@@ -59,15 +64,14 @@
 //     (2.03128, DEFAULT_COLLISION_HEIGHT, Object.h:69) — the C++ default
 //     when no model data resolves. The player adapter resolves the race
 //     display lookup with the same fallback.
-//   - GetHoverOffset: no Go model on either surface, so the hover
-//     offset is 0 in NormalizePath (flying units clamp to ground level).
 //   - Transport sources: UpdateAllowedPositionZ's transport early-out
 //     (Object.cpp:1460-1467) has no Go source model; path sources are
 //     creatures and players, never transports.
-//   - LoS in ShortenPathUntilDist rides Server.hasLineOfSight (VMAP
-//     only; Go has no gameobject-collision LOS model) and the
-//     LINEOFSIGHT_ALL_CHECKS / ModelIgnoreFlags::Nothing args have no Go
-//     twin, so the check is the VMAP leg only.
+//   - LoS in ShortenPathUntilDist rides Server.hasLineOfSight, which is
+//     the ModelIgnoreFlags::Nothing twin (hasLineOfSightFlags with
+//     ignoreM2=false, terrain.go:1128-1130) — the flag args are bridged;
+//     what stays VMAP-only is the gameobject-collision leg, which Go has
+//     no model for.
 //   - C++ logs (TC_LOG_DEBUG/ERROR) are dropped; error legs keep their
 //     exact control flow and return values.
 
@@ -174,6 +178,8 @@ type pathGeneratorSource interface {
 	pathIsFalling() bool
 	pathCollisionHeight() float32
 	pathCombatReach() float32
+	pathIgnorePathfinding() bool
+	pathHoverOffset() float32
 }
 
 // pathSourceSnapshot is the point-in-time source state. Adapters fill it
@@ -186,6 +192,8 @@ type pathSourceSnapshot struct {
 	walk, swim, fly          bool
 	inWater, underWater      bool
 	inCombat, evade, falling bool
+	ignorePathfinding        bool
+	hoverOffset              float32
 	collisionHeight          float32
 	combatReach              float32
 }
@@ -209,6 +217,10 @@ func (s *pathSourceSnapshot) pathCollisionHeight() float32 {
 	return s.collisionHeight
 }
 func (s *pathSourceSnapshot) pathCombatReach() float32 { return s.combatReach }
+func (s *pathSourceSnapshot) pathIgnorePathfinding() bool {
+	return s.ignorePathfinding
+}
+func (s *pathSourceSnapshot) pathHoverOffset() float32 { return s.hoverOffset }
 
 // newCreaturePathSource snapshots a creatureMotion as a point read — the
 // way the cast arms read a selected motion (castCommandSelectedCreature);
@@ -237,6 +249,21 @@ func newCreaturePathSource(srv *Server, m *creatureMotion) pathGeneratorSource {
 		falling:         false,
 		collisionHeight: terrainDefaultCollisionHeight,
 		combatReach:     m.combatReachOrDefault(),
+	}
+	// UNIT_STATE_IGNORE_PATHFINDING (PathGenerator.cpp:102-104) reads the
+	// live mask: creatureUnitStateAdd writes ScriptUnitState
+	// (lua_unit_state.go:196), and transport passengers carry the bit
+	// (transports.go:1331). The direct field read matches the adapter's
+	// other snapshot reads — the locking reader would deadlock under a
+	// caller-held motionMu.
+	if m.ScriptUnitState&unitStateIgnorePathfinding != 0 {
+		snap.ignorePathfinding = true
+	}
+	// Unit::GetHoverOffset (Unit.h:1648): UNIT_FIELD_HOVERHEIGHT while
+	// the HOVER movement flag is set, 0 otherwise. motion.Hovering is
+	// the live flag, motion.HoverHeight the template field value.
+	if m.Hovering {
+		snap.hoverOffset = m.HoverHeight
 	}
 	if srv != nil {
 		snap.inWater = srv.mapIsInWater(m.Map, m.X, m.Y, m.Z)
@@ -267,6 +294,17 @@ func newPlayerPathSource(sess *session) pathGeneratorSource {
 		falling:         sess.isFalling || sess.isFallingFar,
 		collisionHeight: terrainDefaultCollisionHeight,
 		combatReach:     miscPlayerCombatReach(p),
+	}
+	// UNIT_STATE_IGNORE_PATHFINDING rides the session mask
+	// (playerUnitStateHas, lua_unit_state.go:259).
+	if sess.playerUnitStateHas(unitStateIgnorePathfinding) {
+		snap.ignorePathfinding = true
+	}
+	// Unit::GetHoverOffset (Unit.h:1648): the field is written as 1.0
+	// (player_state.go:4001) while the HOVER flag is set, 0 otherwise;
+	// the flag rides the hover aura (characters.go:1758).
+	if sess.hasAuraType(spellAuraHover) {
+		snap.hoverOffset = 1.0
 	}
 	if sess.server != nil {
 		snap.inWater = sess.server.mapIsInWater(p.Map, p.X, p.Y, p.Z)
@@ -374,9 +412,15 @@ func (g *PathGenerator) PathPoints() []pathVec { return g.pathPoints }
 func (g *PathGenerator) PathType() pathType { return g.pathType }
 
 // CalculatePath mirrors PathGenerator::CalculatePath
-// (PathGenerator.cpp:62-106). The UNIT_STATE_IGNORE_PATHFINDING arm
-// (:102-104) is omitted: the state has no live Go model (see header).
+// (PathGenerator.cpp:62-106), including the UNIT_STATE_IGNORE_PATHFINDING
+// shortcut arm (:102-104) via the snapshot mask.
 func (g *PathGenerator) CalculatePath(destX, destY, destZ float32, forceDest bool) bool {
+	// The shared per-(map, instance) query keeps its search state on
+	// the query object, so concurrent queries corrupt each other;
+	// navMeshQueryMu (mmap.go) serializes every CalculatePath, and the
+	// .mmap loc arm takes the same lock for its direct FindNearestPoly.
+	navMeshQueryMu.Lock()
+	defer navMeshQueryMu.Unlock()
 	x, y, z := g.source.pathPosition()
 	if !validMovementPosition(destX, destY, destZ, 0) || !validMovementPosition(x, y, z, 0) {
 		return false
@@ -392,7 +436,9 @@ func (g *PathGenerator) CalculatePath(destX, destY, destZ float32, forceDest boo
 	g.forceDestination = forceDest
 
 	// make sure navMesh works - we can run on map w/o mmap
-	if g.navMesh == nil || g.navMeshQuery == nil || !g.haveTile(start) || !g.haveTile(dest) {
+	// (PathGenerator.cpp:84-90): the UNIT_STATE_IGNORE_PATHFINDING arm
+	// (:102-104) rides the snapshot mask (see the adapters).
+	if g.navMesh == nil || g.navMeshQuery == nil || g.source.pathIgnorePathfinding() || !g.haveTile(start) || !g.haveTile(dest) {
 		g.buildShortcut()
 		g.pathType = pathfindNormal | pathfindNotUsingPath
 		return true
@@ -489,18 +535,24 @@ func (g *PathGenerator) normalizePath() {
 // updateAllowedPositionZ mirrors WorldObject::UpdateAllowedPositionZ
 // (Object.cpp:1458-1511) for a unit source: flyers clamp up to ground,
 // swimmers clamp into [ground, water-or-ground], walkers clamp into
-// [ground, ground]. Hover offset has no Go model (0). A nil server
-// leaves Z untouched. The transport early-out (:1460-1467) has no Go
-// source model.
+// [ground, ground]; hovering units cannot go below their hover height
+// (GetHoverOffset lifts both clamps). A nil server leaves Z untouched.
+// The transport early-out (:1460-1467) has no Go source model.
 func (g *PathGenerator) updateAllowedPositionZ(x, y float32, z *float32) {
 	if g.srv == nil {
 		return
 	}
 	mapID := g.source.pathMapID()
+	// Unit::GetHoverOffset (Unit.h:1648): hovering units cannot go below
+	// their hover height — the offset lifts the ground/max clamps below
+	// (Object.cpp:1458-1511).
+	hoverOffset := g.source.pathHoverOffset()
 	if g.source.pathCanFly() {
 		ground, ok := g.srv.mapHeight(mapID, x, y, *z, true, terrainDefaultHeightSearch)
 		if !ok {
 			ground = terrainInvalidHeight
+		} else {
+			ground += hoverOffset
 		}
 		if *z < ground {
 			*z = ground
@@ -518,6 +570,8 @@ func (g *PathGenerator) updateAllowedPositionZ(x, y float32, z *float32) {
 		maxZ = groundZ
 	}
 	if maxZ > terrainInvalidHeight {
+		maxZ += hoverOffset
+		groundZ += hoverOffset
 		if *z > maxZ {
 			*z = maxZ
 		} else if *z < groundZ {

@@ -165,7 +165,9 @@ func (s *session) handleMmapLocCommand(ctx context.Context) bool {
 	// dtQueryFilter (:160) is NewQueryFilter.
 	location := detour.Vec3{s.player.Y, s.player.Z, s.player.X}
 	extents := detour.Vec3{3.0, 5.0, 3.0}
+	navMeshQueryMu.Lock()
 	polyRef, _, st := navmeshquery.FindNearestPoly(location, extents, detour.NewQueryFilter())
+	navMeshQueryMu.Unlock()
 	if detour.StatusFailed(st) {
 		s.sendSysMessage("Dt     [??,??] (invalid poly, probably no tile loaded)")
 		return true

@@ -9025,12 +9025,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// (NOPATH, :200); SetCannotReachTarget resets the 5s timer on every change
 		// (Creature.cpp:3001-3010, clear sites at :207/CreatureAI.cpp:312/
 		// ScriptedCreature.cpp:259/Creature.cpp:2127), and the timer arm skips raid
-		// maps before calling AI()->EnterEvadeMode(EVADE_REASON_NO_PATH). Go has no
-		// PathGenerator — pursuit runs straight-line to the target's XYZ below, so
-		// the path-fail site can never fire; and creatureMotion carries CanFly only
-		// (no CanSwim/CanWalk flags) while player positions carry no liquid status,
-		// so the accessible-place predicate cannot be evaluated either. The flag can
-		// never be set, so the timer can never start.
+		// maps before calling AI()->EnterEvadeMode(EVADE_REASON_NO_PATH). The
+		// pursuit leg below runs the ported PathGenerator, so the path-fail
+		// site does fire now (NOPATH stops the spline); what stays unmodeled
+		// is the CannotReachTarget flag itself — Go carries no such field —
+		// so the 5s timer can never start. The accessible-place predicate
+		// likewise cannot be evaluated: creatureMotion carries CanFly only
+		// (no CanSwim/CanWalk flags) while player positions carry no liquid
+		// status.
 		// TurretAI (CombatAI.cpp:253-258): AttackStart(who) calls
 		// me->Attack(who, false) — no chase (meleePossible=false) — and the
 		// turret only ever casts spell[0] inside its range band. It
@@ -11866,28 +11868,70 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						// The 2D dist can sit inside the archer stop distance
 						// while the 3D band check above passed (large dz): never
 						// launch onto the victim's center in that case.
-						if speed := creatureSplineVelocityExplicit(motion, chaseWalk(motion)); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z) {
-							// ChaseMovementGenerator.cpp:180-207 shortens the path to the
-							// victim's ring (ShortenPathUntilDist) before Launch, so the
-							// spline duration runs on the shortened 3D travel distance to
-							// the ring point at the victim's Z (Spline.cpp:152-156), not
-							// the 2D center distance. ChaseMovementGenerator::PositionOkay
-							// (:45-60) also requires line of sight to the victim before
-							// arrival — without it C++ stops (StopMoving +
-							// SetCannotReachTarget, :196-200) and re-paths next update.
-							// Go has no PathGenerator, so the launch itself is LOS-gated
-							// on the victim's center: a creature behind a wall stands
-							// and retries next tick (this leg re-runs while !Moving)
-							// instead of chasing through it.
-							travelDist := float32(distance3D(motion.X, motion.Y, motion.Z, destX, destY, target.Z))
-							duration := splineDurationMs(float64(travelDist), speed)
-							s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true, motion.PhaseMask, motion.TransportGUID)
-							motion.X, motion.Y, motion.Z = destX, destY, target.Z
-							motion.ChaseTX, motion.ChaseTY = target.X, target.Y
-							motion.Moving = true
-							motion.ScriptMoveFromKnown = false
-							motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
-							motion.MoveVelocity = speed
+						if speed := creatureSplineVelocityExplicit(motion, chaseWalk(motion)); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) {
+							// ChaseMovementGenerator::Update (ChaseMovementGenerator.cpp:
+							// 157-207): path to the victim's center and shorten to the
+							// melee ring (ShortenPathUntilDist, :211), or to the near
+							// point on the target's absolute angle when a fixed
+							// ChaseAngle is set (:180-189); then MoveSplineInit
+							// MovebyPath launches the poly path. PositionOkay's LOS
+							// term (:45-60) only decides whether to re-path — the
+							// pathfinder itself routes around walls — so the launch
+							// is no longer LOS-gated on the victim's center: with
+							// no navmesh CalculatePath takes the C++-exact
+							// shortcut leg (PathGenerator.cpp:84-90), and with
+							// one it routes around the obstacle instead of
+							// standing still behind it. The hover Z leg
+							// (:193-194) rides inside CalculatePath: NormalizePath
+							// applies UpdateAllowedPositionZ to every point.
+							path := NewPathGenerator(s, newCreaturePathSource(s, motion))
+							pathDestX, pathDestY := target.X, target.Y
+							if scriptChase {
+								pathDestX, pathDestY = destX, destY
+							}
+							ok := path.CalculatePath(pathDestX, pathDestY, target.Z, motion.CanFly || motion.Flying)
+							points := path.PathPoints()
+							if !ok || path.PathType()&pathfindNopath != 0 || len(points) == 0 {
+								// ChaseMovementGenerator.cpp:196-200: StopMoving +
+								// SetCannotReachTarget(true). Go carries no
+								// CannotReachTarget field, so the 5s no-path
+								// evade timer (Creature.cpp:924-930) stays
+								// unmodeled; the stop is the whole leg:
+								// cancel the in-flight spline and retry next
+								// tick (this leg re-runs while !Moving, and
+								// ChaseTX/TY are left stale so the
+								// target-moved arm re-fires).
+								if motion.Moving {
+									s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PhaseMask, motion.TransportGUID)
+									motion.Moving = false
+									motion.MoveEnds = time.Time{}
+								}
+							} else {
+								if !scriptChase {
+									path.ShortenPathUntilDist(pathVec{target.X, target.Y, target.Z}, shorten)
+									points = path.PathPoints()
+								}
+								end := points[len(points)-1]
+								// MoveSplineInit::Launch (MoveSplineInit.cpp:106-124)
+								// runs the spline over the whole poly path, so the
+								// duration runs on the total path length, not the
+								// straight-line gap; the Go atomic spline still
+								// carries one leg to the path's actual end (the
+								// client sees a straight line, the server timing
+								// follows the path).
+								travelDist := float32(0)
+								for i := 1; i < len(points); i++ {
+									travelDist += points[i].sub(points[i-1]).length()
+								}
+								duration := splineDurationMs(float64(travelDist), speed)
+								s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, end.X, end.Y, end.Z, duration, false, faceAngle, true, motion.PhaseMask, motion.TransportGUID)
+								motion.X, motion.Y, motion.Z = end.X, end.Y, end.Z
+								motion.ChaseTX, motion.ChaseTY = target.X, target.Y
+								motion.Moving = true
+								motion.ScriptMoveFromKnown = false
+								motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+								motion.MoveVelocity = speed
+							}
 						}
 					}
 				}

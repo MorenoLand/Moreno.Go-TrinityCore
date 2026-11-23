@@ -166,6 +166,18 @@ func (s *Server) invalidateMmapDisableFlags() {
 	s.mmapDisableMu.Unlock()
 }
 
+// navMeshQueryMu serializes use of the shared per-(map, instance)
+// dtNavMeshQuery objects (MMapManager.GetNavMeshQuery): the query keeps
+// its node pool and open list on the query object
+// (DetourNavMeshQuery.cpp), so two concurrent queries on one instance
+// corrupt each other's search state. TrinityCore runs world work on one
+// thread, so C++ needs no lock; Go runs session commands on their own
+// goroutines beside the world step, so every query use —
+// PathGenerator.CalculatePath and the .mmap loc arm's FindNearestPoly —
+// takes this lock. The navmesh itself is immutable after load and needs
+// no lock.
+var navMeshQueryMu sync.Mutex
+
 // mmapManager is the Server's lazy accessor for the MMapManager singleton,
 // the Go twin of MMAP::MMapFactory::createOrGetMMapManager
 // (MMapFactory.cpp:25-31). There is no Go twin of MMapFactory::clear: the
