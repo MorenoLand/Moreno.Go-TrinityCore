@@ -818,10 +818,12 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	var loginSelection worldportInstanceSelection
 	var loginInstanceCommitted, loginAdmissionReserved, loginAdmissionCommitted bool
 	s.playerLoading = true
+	s.loginFarTeleport = false
 	s.worldReady.Store(false)
 	s.setPendingBind(0, 0, 0, 0)
 	defer func() {
 		s.playerLoading = false
+		s.loginFarTeleport = false
 		if success {
 			s.initialLoginPending = false
 		} else {

@@ -62,6 +62,7 @@ func (s *session) recoverLoginMapCreationFailure(ctx context.Context, state *pla
 	if s == nil || state == nil || s.server == nil || s.server.Data == nil {
 		return nil
 	}
+	originMap := state.Map
 	mapEntry, found, err := s.server.Data.Map(state.Map)
 	if err != nil {
 		return err
@@ -121,6 +122,12 @@ func (s *session) recoverLoginMapCreationFailure(ctx context.Context, state *pla
 		state.Map, state.Zone, state.X, state.Y, state.Z, state.Orientation = location.Map, location.Zone, location.X, location.Y, location.Z, 0
 		state.InstanceID = 0
 		state.TransportGUID, state.TransportX, state.TransportY, state.TransportZ, state.TransportO = 0, 0, 0, 0, 0
+		// Reference: Player::UpdateLocalChannels (Player.cpp:5199-5202) —
+		// a login relocation to another map is the far-teleport arm that
+		// lets the zone walk run during PlayerLoading().
+		if state.Map != originMap {
+			s.loginFarTeleport = true
+		}
 		return nil
 	}
 	return s.recoverLoginInstanceMapFailure(ctx, state)
@@ -181,6 +188,12 @@ func (s *session) recoverLoginInstanceMapFailure(ctx context.Context, state *pla
 		state.Map, state.Zone, state.X, state.Y, state.Z = location.Map, location.Zone, location.X, location.Y, location.Z
 		state.InstanceID = 0
 		state.TransportGUID, state.TransportX, state.TransportY, state.TransportZ, state.TransportO = 0, 0, 0, 0, 0
+		// Reference: Player::UpdateLocalChannels (Player.cpp:5199-5202) —
+		// a login relocation to another map is the far-teleport arm that
+		// lets the zone walk run during PlayerLoading().
+		if location.Map != mapID {
+			s.loginFarTeleport = true
+		}
 		s.debug("instance map unavailable; moved to go-back trigger", "guid", state.GUID, "map", mapID, "destination", location.Map)
 		return nil
 	}
@@ -188,11 +201,18 @@ func (s *session) recoverLoginInstanceMapFailure(ctx context.Context, state *pla
 }
 
 func (s *session) recoverLoginHomebindOrStart(ctx context.Context, state *playerState) error {
+	originMap := state.Map
 	homebind := mapFallbackLocation{Map: state.HomebindMap, X: state.HomebindX, Y: state.HomebindY, Z: state.HomebindZ}
 	if s.validMapFallbackLocation(homebind) {
 		state.Map, state.Zone, state.X, state.Y, state.Z = homebind.Map, 0, homebind.X, homebind.Y, homebind.Z
 		state.InstanceID = 0
 		state.TransportGUID, state.TransportX, state.TransportY, state.TransportZ, state.TransportO = 0, 0, 0, 0, 0
+		// Reference: Player::UpdateLocalChannels (Player.cpp:5199-5202) —
+		// a login relocation to another map is the far-teleport arm that
+		// lets the zone walk run during PlayerLoading().
+		if state.Map != originMap {
+			s.loginFarTeleport = true
+		}
 		return nil
 	}
 	location, err := s.raceClassStartLocation(ctx, *state)
@@ -205,6 +225,9 @@ func (s *session) recoverLoginHomebindOrStart(ctx context.Context, state *player
 	state.Map, state.Zone, state.X, state.Y, state.Z, state.Orientation = location.Map, location.Zone, location.X, location.Y, location.Z, 0
 	state.InstanceID = 0
 	state.TransportGUID, state.TransportX, state.TransportY, state.TransportZ, state.TransportO = 0, 0, 0, 0, 0
+	if state.Map != originMap {
+		s.loginFarTeleport = true
+	}
 	return nil
 }
 

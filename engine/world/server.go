@@ -554,7 +554,14 @@ type session struct {
 	mounts          *MountState
 	playerGUID      uint64
 	playerLoading   bool
-	playerLoaded    bool
+	// loginFarTeleport marks a login that relocated the player to another
+	// map (the Player::TeleportTo far leg, CharacterHandler.cpp:832-837):
+	// the IsBeingTeleportedFar() arm of Player::UpdateLocalChannels
+	// (Player.cpp:5199-5202) that lets the zone walk run during
+	// PlayerLoading(). Set by the login relocation helpers, cleared with
+	// playerLoading at the end of handlePlayerLogin.
+	loginFarTeleport bool
+	playerLoaded     bool
 	// preLoginQueue holds STATUS_LOGGEDIN packets read while the player was
 	// not yet in world, for replay after login (see preLoginPacket).
 	preLoginQueue []preLoginPacket

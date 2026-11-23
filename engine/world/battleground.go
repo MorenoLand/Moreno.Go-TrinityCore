@@ -2305,6 +2305,12 @@ func (s *session) relocateLoginToBGEntryPoint() {
 	if s == nil || s.player == nil || !s.hasBattlegroundEntryPoint() {
 		return
 	}
+	// Reference: Player::UpdateLocalChannels (Player.cpp:5199-5202) — a
+	// login relocation to another map is the far-teleport arm that lets the
+	// zone walk run during PlayerLoading().
+	if s.bgData.JoinMap != s.player.Map {
+		s.loginFarTeleport = true
+	}
 	s.player.Map = s.bgData.JoinMap
 	s.player.X = s.bgData.JoinX
 	s.player.Y = s.bgData.JoinY

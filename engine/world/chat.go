@@ -342,11 +342,12 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if typeID == chatEmote {
 		language = languageUniversal
 	}
-	// Reference: Channel::Say (Channel.cpp) - channel chat goes out in the
-	// universal language when two-side channel interaction is on.
-	if typeID == chatChannel && s.twoSideChannelInteraction() {
-		language = languageUniversal
-	}
+	// Reference: ChatHandler.cpp:140-177 — the pre-hook language rewrite has
+	// no CHAT_MSG_CHANNEL case, so the typed language reaches OnPlayerChat;
+	// the universal rewrite for channel chat lives only at send time in
+	// Channel::Say (Channel.cpp:679-690), ported in broadcastChat. The
+	// RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL permission (id 26) gates
+	// channel member operations, never the language.
 	// Reference: the CHAT_MSG_GUILD/CHAT_MSG_OFFICER arms of
 	// WorldSession::HandleMessagechatOpcode (ChatHandler.cpp:425-451) — the
 	// guild-presence gate wraps the chat hook, while the rank-rights gate lives

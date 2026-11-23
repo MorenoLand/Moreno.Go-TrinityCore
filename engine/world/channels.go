@@ -92,9 +92,11 @@ type worldChannel struct {
 
 // canonicalSystemChannelName mirrors the system-channel half of
 // ChannelHandler.cpp:74-79 / ChannelMgr::GetSystemChannel: builtin channels
-// resolve by (channelId, zone), never by the packet name. The ChatChannels.dbc
-// entry supplies the canonical base name; the client's " - Zone" suffix is
-// kept so zone-dependent channels keep their zone-scoped key.
+// resolve by (channelId, zone), never by the packet name. The name is built
+// from the DBC row and the player's server-side zone, exactly like
+// Channel::GetChannelName (Channel.cpp:88-103): the plain DBC name for
+// GLOBAL rows, " - City" for CITY_ONLY rows, " - <zone>" otherwise. A bare
+// or wrong-zone packet suffix must not key a phantom channel.
 func (s *session) canonicalSystemChannelName(channelID uint32, packetName string) string {
 	base := ""
 	if s != nil && s.server != nil && s.server.Data != nil {
@@ -110,18 +112,22 @@ func (s *session) canonicalSystemChannelName(channelID uint32, packetName string
 	if base == "" {
 		return packetName
 	}
-	if i := strings.Index(base, " - "); i >= 0 {
-		base = base[:i]
+	flags := s.chatChannelDBCFlags(channelID)
+	switch {
+	case flags&channelDBCFlagGlobal != 0:
+		return strings.TrimSpace(strings.ReplaceAll(base, "%s", ""))
+	case flags&channelDBCFlagCityOnly != 0:
+		return fmt.Sprintf(base, channelCityName)
+	default:
+		if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+			return packetName
+		}
+		area, found, err := s.server.Data.Area(s.player.Zone)
+		if err != nil || !found {
+			return packetName
+		}
+		return fmt.Sprintf(base, area.Name)
 	}
-	base = strings.TrimSpace(strings.ReplaceAll(base, "%s", ""))
-	if base == "" {
-		return packetName
-	}
-	suffix := ""
-	if i := strings.Index(packetName, " - "); i >= 0 {
-		suffix = packetName[i:]
-	}
-	return base + suffix
 }
 
 func (s *session) handleJoinChannel(payload []byte) bool {
@@ -164,6 +170,9 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		s.debug("channel join rejected: zone gate", "account", s.accountName, "id", channelID)
 		return true
 	}
+	// Reference: ChannelHandler.cpp:66 — DisallowHyperlinksAndMaybeKick runs
+	// on the raw packet name, before system-channel resolution below.
+	rawName := name
 	if channelID != 0 {
 		// Reference: ChannelHandler.cpp:54-59 — the invalid-name check runs
 		// on the RAW packet name, BEFORE system-channel resolution
@@ -181,17 +190,28 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 		return s.sendChannelNotify(channelInvalidNameNotice, name, nil) == nil
 	}
 	// Reference: ChannelHandler.cpp:60-72 — an over-long password is a silent
-	// drop, then DisallowHyperlinksAndMaybeKick (any '|' in the name is a
-	// silent drop here; the Go port never strict-kicks), then the
-	// custom-channel name over-length check, which applies only when
-	// channelId is 0.
+	// drop, then DisallowHyperlinksAndMaybeKick, then the custom-channel
+	// name over-length check, which applies only when channelId is 0.
 	if len(password) > 31 {
 		return true
 	}
-	if strings.Contains(name, "|") {
+	// Reference: WorldSession::DisallowHyperlinksAndMaybeKick
+	// (WorldSession.cpp:674-687) — any '|' in the name drops the join, and
+	// kicks the session when ChatStrictLinkChecking.Kick is on.
+	if strings.Contains(rawName, "|") {
+		if s.server != nil && s.server.Config.ChatStrictLinkCheckingKick {
+			s.kickSession(s)
+		}
 		return true
 	}
 	if channelID == 0 && len(name) > 31 {
+		return true
+	}
+	// Reference: ChannelMgr::CreateCustomChannel / GetCustomChannel
+	// (ChannelMgr.cpp:175-203) — an invalid-UTF-8 custom name fails
+	// Utf8toWStr, so both lookups return nullptr and the handler silently
+	// drops the join. System joins ignore the name.
+	if channelID == 0 && !utf8.ValidString(name) {
 		return true
 	}
 	key := s.scopedChannelKey(name)
@@ -375,17 +395,15 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 		s.debug("channel leave rejected: zone gate", "account", s.accountName, "id", channelID)
 		return true
 	}
+	if channelID != 0 {
+		// Reference: ChannelMgr::GetChannel (ChannelMgr.cpp:197-241) —
+		// builtin channels resolve by (channelId, zone); the packet name
+		// is never used for the lookup.
+		name = s.canonicalSystemChannelName(channelID, name)
+	}
 	key := s.scopedChannelKey(name)
 	s.server.channelsMu.Lock()
 	channel := s.server.channels[key]
-	if channel == nil && channelID != 0 {
-		// Reference: ChannelMgr::GetChannel (ChannelMgr.cpp:197-241) —
-		// builtin channels resolve by (channelId, zone); retry with the
-		// DBC-canonical name instead of scanning every channel by id.
-		name = s.canonicalSystemChannelName(channelID, name)
-		key = s.scopedChannelKey(name)
-		channel = s.server.channels[key]
-	}
 	if channel == nil {
 		s.server.channelsMu.Unlock()
 		// Reference: ChannelMgr::GetChannel (ChannelMgr.cpp:234-241) —
@@ -419,6 +437,12 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 		delete(s.server.channels, key)
 	}
 	s.server.channelsMu.Unlock()
+	// Reference: Channel::LeaveChannel (Channel.cpp:230-290) sends, in
+	// order: YouLeft to the leaver, the Left announce, LeaveNotify
+	// (SMSG_USERLIST_REMOVE), then the owner hand-off.
+	if err := s.sendChannelNotify(channelYouLeftNotice, channelName, &channelNotifyChannel{Flags: channelFlagsValue, ID: channelIDValue}); err != nil {
+		return true
+	}
 	// Reference: Channel::LeaveChannel (Channel.cpp) - the left broadcast
 	// is suppressed when the session holds
 	// RBAC_PERM_SILENTLY_JOIN_CHANNEL.
@@ -426,15 +450,6 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 		for _, member := range others {
 			_ = member.sendChannelNotify(channelLeftNotice, channelName, &channelNotifyGUID{GUID: s.playerGUID})
 		}
-	}
-	if newOwner != nil {
-		for _, member := range others {
-			_ = member.sendChannelNotify(channelModeChangeNotice, channelName, &channelNotifyModeChange{GUID: newOwner.playerGUID, OldFlags: oldFlags, NewFlags: newFlags})
-			_ = member.sendChannelNotify(channelOwnerChangedNotice, channelName, &channelNotifyGUID{GUID: newOwner.playerGUID})
-		}
-	}
-	if err := s.sendChannelNotify(channelYouLeftNotice, channelName, &channelNotifyChannel{Flags: channelFlagsValue, ID: channelIDValue}); err != nil {
-		return true
 	}
 	// Reference: Channel::LeaveNotify (Channel.cpp:842-860) — SMSG_USERLIST_REMOVE
 	// to all-but-one (constant) or all (custom); the leaver is already erased
@@ -447,6 +462,12 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 	removePkt.WriteCString(channelName)
 	for _, member := range others {
 		_ = member.write(uint16(protocol.OpcodeSMSG_USERLIST_REMOVE), removePkt.Bytes(), true)
+	}
+	if newOwner != nil {
+		for _, member := range others {
+			_ = member.sendChannelNotify(channelModeChangeNotice, channelName, &channelNotifyModeChange{GUID: newOwner.playerGUID, OldFlags: oldFlags, NewFlags: newFlags})
+			_ = member.sendChannelNotify(channelOwnerChangedNotice, channelName, &channelNotifyGUID{GUID: newOwner.playerGUID})
+		}
 	}
 	s.debug("channel left", "account", s.accountName, "channel", channelName, "id", channelIDValue)
 	return true
@@ -928,11 +949,13 @@ func (s *Server) removeSessionChannels(member *session) {
 			if left.announce && !member.silentlyJoinChannel() {
 				_ = other.sendChannelNotify(channelLeftNotice, left.name, &channelNotifyGUID{GUID: member.playerGUID})
 			}
+			_ = other.write(uint16(protocol.OpcodeSMSG_USERLIST_REMOVE), removePkt.Bytes(), true)
+			// Reference: Channel::LeaveChannel (Channel.cpp:230-290) — the
+			// owner hand-off runs after LeaveNotify.
 			if left.newOwner != nil {
 				_ = other.sendChannelNotify(channelModeChangeNotice, left.name, &channelNotifyModeChange{GUID: left.newOwner.playerGUID, OldFlags: left.oldFlags, NewFlags: left.newFlags})
 				_ = other.sendChannelNotify(channelOwnerChangedNotice, left.name, &channelNotifyGUID{GUID: left.newOwner.playerGUID})
 			}
-			_ = other.write(uint16(protocol.OpcodeSMSG_USERLIST_REMOVE), removePkt.Bytes(), true)
 		}
 	}
 }
@@ -992,12 +1015,12 @@ func (s *session) updateLocalChannels(newZone uint32) {
 	s.player.Zone = newZone
 	// Reference: Player::UpdateLocalChannels (Player.cpp:5199-5202) — during
 	// initial login the client drives the built-in channel joins itself, so
-	// the server skips the whole walk; it runs on every later zone change
-	// (Player::UpdateZone, Player.cpp:7272: "recent client version not send
-	// leave/join channel packets for built-in local channels"). The Go login
-	// flow has no teleported-far window (no IsBeingTeleportedFar analog), so
-	// playerLoading alone gates it.
-	if s.playerLoading {
+	// the server skips the whole walk — except when the login relocated the
+	// player with a far teleport, when the walk re-syncs the built-in
+	// channels. It runs on every later zone change (Player::UpdateZone,
+	// Player.cpp:7272: "recent client version not send leave/join channel
+	// packets for built-in local channels").
+	if s.playerLoading && !s.loginFarTeleport {
 		return
 	}
 	s.syncLocalChannels(newZone)
@@ -1156,19 +1179,16 @@ func (s *session) syncLocalChannels(newZone uint32) {
 			s.broadcastUserlist(true, s.playerGUID, channel.memberFlags(s.playerGUID), channel.Flags, uint32(len(channel.Members)), channel.Name, ev.members)
 		default:
 			channel := ev.channel
+			// Reference: Channel::LeaveChannel (Channel.cpp:230-290) sends,
+			// in order: YouLeft to the leaver, the Left announce,
+			// LeaveNotify (SMSG_USERLIST_REMOVE), then the owner hand-off.
+			if ev.sendLeave {
+				_ = s.sendChannelNotify(channelYouLeftNotice, channel.Name, &channelNotifyChannel{Flags: channel.Flags, ID: channel.ID})
+			}
 			if ev.announce && !s.silentlyJoinChannel() {
 				for _, other := range ev.members {
 					_ = other.sendChannelNotify(channelLeftNotice, channel.Name, &channelNotifyGUID{GUID: s.playerGUID})
 				}
-			}
-			if ev.newOwner != nil {
-				for _, other := range ev.members {
-					_ = other.sendChannelNotify(channelModeChangeNotice, channel.Name, &channelNotifyModeChange{GUID: ev.newOwner.playerGUID, OldFlags: ev.oldFlags, NewFlags: ev.newFlags})
-					_ = other.sendChannelNotify(channelOwnerChangedNotice, channel.Name, &channelNotifyGUID{GUID: ev.newOwner.playerGUID})
-				}
-			}
-			if ev.sendLeave {
-				_ = s.sendChannelNotify(channelYouLeftNotice, channel.Name, &channelNotifyChannel{Flags: channel.Flags, ID: channel.ID})
 			}
 			// Reference: Channel::LeaveNotify (Channel.cpp:842-860) —
 			// SMSG_USERLIST_REMOVE to the remaining members.
@@ -1179,6 +1199,12 @@ func (s *session) syncLocalChannels(newZone uint32) {
 			removePkt.WriteCString(channel.Name)
 			for _, other := range ev.members {
 				_ = other.write(uint16(protocol.OpcodeSMSG_USERLIST_REMOVE), removePkt.Bytes(), true)
+			}
+			if ev.newOwner != nil {
+				for _, other := range ev.members {
+					_ = other.sendChannelNotify(channelModeChangeNotice, channel.Name, &channelNotifyModeChange{GUID: ev.newOwner.playerGUID, OldFlags: ev.oldFlags, NewFlags: ev.newFlags})
+					_ = other.sendChannelNotify(channelOwnerChangedNotice, channel.Name, &channelNotifyGUID{GUID: ev.newOwner.playerGUID})
+				}
 			}
 		}
 	}
