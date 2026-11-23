@@ -359,7 +359,7 @@ func defaultConfig() (c Config) {
 		c.NPCBots.DamagePhysicalMultiplier = 1
 		c.NPCBots.DamageSpellMultiplier = 1
 	}()
-	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", UpdatesEnableDatabases: 7, UpdatesAutoSetup: true, UpdatesRedundancy: true, UpdatesArchivedRedundancy: false, UpdatesAllowRehash: true, UpdatesCleanDeadReferencesMaxCount: 3, AuthDatabaseFile: "auth.db", WrongPassBanTime: 600, BanExpiryCheckInterval: 60, CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, BindIP: "0.0.0.0", PidFile: "", RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", ClientCacheVersion: 0, LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, MinPlayerName: 2, StrictPlayerNames: 0, SkipCinematics: 0, Expansion: 2, MaxPlayerLevel: 80, StartPlayerLevel: 1, StartPlayerMoney: 10000, GameType: 0, AllFlightPaths: false, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, VisibilityDistanceInstances: 170, VisibilityDistanceBGArenas: 533, SoloLFGEnable: true, SoloLFGAnnounce: true, DungeonFinderOptionsMask: 1, GMStartLevel: 1, GMLoginState: 2, GMVisibleState: 2, GMLevelInGmList: 3, ChatFloodMessageCount: 10, ChatFloodMessageDelay: 1, ChatFloodMuteTime: 10, ChatFakeMessagePreventing: false, ChatStrictLinkCheckingSeverity: 0, ChatStrictLinkCheckingKick: false, ChatChannelLevelReq: 1, ChatWhisperLevelReq: 1, ChatEmoteLevelReq: 1, ChatSayLevelReq: 1, ChatYellLevelReq: 1, ChatListenRangeSay: 25, ChatListenRangeYell: 300, ChatListenRangeTextEmote: 25, ChatPartyRaidWarnings: false, ChannelRestrictedLFG: true, TradeLevelReq: 1, PartyLevelReq: 1, AllowTwoSideTrade: false, AllowTwoSideInteractionCalendar: false, MaxOverSpeedPings: 2, MinPetitionSigns: 9, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, DeathSicknessLevel: 11, DeathBonesWorld: true, DeathBonesBattleground: true, DurabilityLossInPvP: false, DurabilityLossOnDeath: 10.0, ResetDuelCooldowns: false, ResetDuelHealthMana: false, BattlegroundCastDeserter: true, BattlegroundReportAFK: 3, BattlegroundPrematureFinishTimer: 300000, BGRewardWinnerHonorFirst: 30, BGRewardWinnerHonorLast: 15, BGRewardWinnerArenaFirst: 25, BGRewardWinnerArenaLast: 0, BGRewardLoserHonorFirst: 5, BGRewardLoserHonorLast: 5, PlayerStartAllSpells: false, PlayerStartAllReputation: false, PlayerStartMapsExplored: false, XPBoostDaymask: 0, XPBoostRate: 2.0, RecruitAFriendMaxLevel: 60, RecruitAFriendMaxDifference: 4, MaxRecruitAFriendBonusDistance: 100.0, ReputationRecruitAFriendBonusRate: 0.1, ReputationLowLevelKillRate: 1.0, ReputationLowLevelQuestRate: 1.0, ReputationGainRate: 1.0, HonorPointsAfterDuel: 0, MaxArenaPoints: 10000, MaxHonorPoints: 75000, NoResetTalentsCost: false, NoGrayAggroAbove: 0, NoGrayAggroBelow: 0, RateCreatureAggro: 1.0, CreatureFamilyAssistanceRadius: 10.0, CreatureFamilyAssistanceDelay: 1500, CreatureFamilyFleeAssistanceRadius: 30.0, ArenaSeasonID: 8, ArenaSeasonInProgress: true, PlayerLimit: 100, DisconnectToleranceInterval: 0, AllowTrackBothResources: false, MailLevelReq: 1, AuctionLevelReq: 1, TicketLevelReq: 1, GuildCharterCost: 1000, GuildResetHour: 6, DailyQuestResetTimeHour: 3, ChanceOfGMSurvey: 50.0, MailDeliveryDelay: 3600, CleanOldMailTime: 4, PreserveCustomChannels: false, PreserveCustomChannelDuration: 14, PreserveCustomChannelInterval: 5, WardenEnabled: false, WardenNumInjectionChecks: 9, WardenNumLuaSandboxChecks: 1, WardenNumClientModChecks: 1, WardenClientResponseDelay: 600, WardenClientCheckHoldOff: 30, WardenClientCheckFailAction: 0, WardenBanDuration: 86400, SocketTimeOutTime: 900000, SocketTimeOutTimeActive: 60000, NPCBots: NPCBotConfig{Enable: true, MaxBots: 1, MaxBotsPerClass: 1, BaseFollowDistance: 30, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: false, EnableBG: false, EnableArena: false, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, InfoPacketsLimit: -1, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: false, BlademasterEnable: true, ObsidianDestroyerEnable: true, ArchmageEnable: true, DreadlordEnable: true, SpellBreakerEnable: true, DarkRangerEnable: true, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
+	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", UpdatesEnableDatabases: 7, UpdatesAutoSetup: true, UpdatesRedundancy: true, UpdatesArchivedRedundancy: false, UpdatesAllowRehash: true, UpdatesCleanDeadReferencesMaxCount: 3, AuthDatabaseFile: "auth.db", WrongPassBanTime: 600, BanExpiryCheckInterval: 60, CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, BindIP: "0.0.0.0", PidFile: "", RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", ClientCacheVersion: 0, LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, MinPlayerName: 2, StrictPlayerNames: 0, SkipCinematics: 0, Expansion: 2, MaxPlayerLevel: 80, StartPlayerLevel: 1, StartPlayerMoney: 0, GameType: 0, AllFlightPaths: false, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, VisibilityDistanceInstances: 170, VisibilityDistanceBGArenas: 533, SoloLFGEnable: true, SoloLFGAnnounce: true, DungeonFinderOptionsMask: 1, GMStartLevel: 1, GMLoginState: 2, GMVisibleState: 2, GMLevelInGmList: 3, ChatFloodMessageCount: 10, ChatFloodMessageDelay: 1, ChatFloodMuteTime: 10, ChatFakeMessagePreventing: false, ChatStrictLinkCheckingSeverity: 0, ChatStrictLinkCheckingKick: false, ChatChannelLevelReq: 1, ChatWhisperLevelReq: 1, ChatEmoteLevelReq: 1, ChatSayLevelReq: 1, ChatYellLevelReq: 1, ChatListenRangeSay: 25, ChatListenRangeYell: 300, ChatListenRangeTextEmote: 25, ChatPartyRaidWarnings: false, ChannelRestrictedLFG: true, TradeLevelReq: 1, PartyLevelReq: 1, AllowTwoSideTrade: false, AllowTwoSideInteractionCalendar: false, MaxOverSpeedPings: 2, MinPetitionSigns: 9, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, DeathSicknessLevel: 11, DeathBonesWorld: true, DeathBonesBattleground: true, DurabilityLossInPvP: false, DurabilityLossOnDeath: 10.0, ResetDuelCooldowns: false, ResetDuelHealthMana: false, BattlegroundCastDeserter: true, BattlegroundReportAFK: 3, BattlegroundPrematureFinishTimer: 300000, BGRewardWinnerHonorFirst: 30, BGRewardWinnerHonorLast: 15, BGRewardWinnerArenaFirst: 25, BGRewardWinnerArenaLast: 0, BGRewardLoserHonorFirst: 5, BGRewardLoserHonorLast: 5, PlayerStartAllSpells: false, PlayerStartAllReputation: false, PlayerStartMapsExplored: false, XPBoostDaymask: 0, XPBoostRate: 2.0, RecruitAFriendMaxLevel: 60, RecruitAFriendMaxDifference: 4, MaxRecruitAFriendBonusDistance: 100.0, ReputationRecruitAFriendBonusRate: 0.1, ReputationLowLevelKillRate: 1.0, ReputationLowLevelQuestRate: 1.0, ReputationGainRate: 1.0, HonorPointsAfterDuel: 0, MaxArenaPoints: 10000, MaxHonorPoints: 75000, NoResetTalentsCost: false, NoGrayAggroAbove: 0, NoGrayAggroBelow: 0, RateCreatureAggro: 1.0, CreatureFamilyAssistanceRadius: 10.0, CreatureFamilyAssistanceDelay: 1500, CreatureFamilyFleeAssistanceRadius: 30.0, ArenaSeasonID: 8, ArenaSeasonInProgress: true, PlayerLimit: 100, DisconnectToleranceInterval: 0, AllowTrackBothResources: false, MailLevelReq: 1, AuctionLevelReq: 1, TicketLevelReq: 1, GuildCharterCost: 1000, GuildResetHour: 6, DailyQuestResetTimeHour: 3, ChanceOfGMSurvey: 50.0, MailDeliveryDelay: 3600, CleanOldMailTime: 4, PreserveCustomChannels: false, PreserveCustomChannelDuration: 14, PreserveCustomChannelInterval: 5, WardenEnabled: false, WardenNumInjectionChecks: 9, WardenNumLuaSandboxChecks: 1, WardenNumClientModChecks: 1, WardenClientResponseDelay: 600, WardenClientCheckHoldOff: 30, WardenClientCheckFailAction: 0, WardenBanDuration: 86400, SocketTimeOutTime: 900000, SocketTimeOutTimeActive: 60000, NPCBots: NPCBotConfig{Enable: true, MaxBots: 1, MaxBotsPerClass: 1, BaseFollowDistance: 30, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: false, EnableBG: false, EnableArena: false, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, InfoPacketsLimit: -1, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: false, BlademasterEnable: true, ObsidianDestroyerEnable: true, ArchmageEnable: true, DreadlordEnable: true, SpellBreakerEnable: true, DarkRangerEnable: true, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
 }
 
 func Default() Config {
@@ -452,6 +452,7 @@ func Load(path string) (Config, error) {
 	c := Default()
 	c.seenKeys = map[string]struct{}{}
 	if path == "" {
+		c.clampStartValues()
 		c.finalizeAutoBalance()
 		return c, nil
 	}
@@ -498,6 +499,7 @@ func Load(path string) (Config, error) {
 	if c.RespawnDynamicRateGameObject < 0 {
 		c.RespawnDynamicRateGameObject = 10
 	}
+	c.clampStartValues()
 	c.finalizeAutoBalance()
 	return c, nil
 }
@@ -1596,6 +1598,46 @@ func setFloat64(dst *float64, key, value string) error {
 	}
 	*dst = n
 	return nil
+}
+
+// clampStartValues applies the World::LoadConfig clamps (World.cpp:842-870,
+// 885-958): out-of-range values are reset to sane defaults and the server
+// starts, instead of failing validation.
+func (c *Config) clampStartValues() {
+	// World.cpp:874-878: MaxPlayerLevel above MAX_LEVEL (80) is clamped
+	// before the start levels are clamped against it.
+	if c.MaxPlayerLevel > 80 {
+		c.MaxPlayerLevel = 80
+	}
+	if c.CharactersPerAccount < c.CharactersPerRealm {
+		c.CharactersPerAccount = c.CharactersPerRealm
+	}
+	if c.DeathKnightsPerRealm > 10 {
+		c.DeathKnightsPerRealm = 1
+	}
+	if c.SkipCinematics > 2 {
+		c.SkipCinematics = 0
+	}
+	if c.StartPlayerLevel < 1 {
+		c.StartPlayerLevel = 1
+	} else if c.StartPlayerLevel > c.MaxPlayerLevel {
+		c.StartPlayerLevel = c.MaxPlayerLevel
+	}
+	if c.StartDeathKnightPlayerLevel < 1 {
+		c.StartDeathKnightPlayerLevel = 55
+	} else if c.StartDeathKnightPlayerLevel > c.MaxPlayerLevel {
+		c.StartDeathKnightPlayerLevel = c.MaxPlayerLevel
+	}
+	// MAX_MONEY_AMOUNT is int32 max (Player.cpp:179).
+	if c.StartPlayerMoney > 2147483647 {
+		c.StartPlayerMoney = 2147483647
+	}
+	if c.StartHonorPoints > c.MaxHonorPoints {
+		c.StartHonorPoints = c.MaxHonorPoints
+	}
+	if c.StartArenaPoints > c.MaxArenaPoints {
+		c.StartArenaPoints = c.MaxArenaPoints
+	}
 }
 
 func (c Config) Validate() error {

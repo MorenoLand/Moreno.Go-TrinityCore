@@ -3626,7 +3626,10 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 					break
 				}
 				var skillID, rank int64
-				if defaultRows.Scan(&skillID, &rank) != nil || skillID <= 0 || skillID > 65535 || rank < 0 || rank > 65535 || !s.skillAllowed(state.Race, state.Class, uint16(skillID)) {
+				// ObjectMgr::LoadPlayerInfo (ObjectMgr.cpp:4003,4018-4023) drops
+				// rows with rank >= MAX_SKILL_STEP (16, DBCStructure.h:1365) or
+				// no SkillLine DBC row.
+				if defaultRows.Scan(&skillID, &rank) != nil || skillID <= 0 || skillID > 65535 || rank < 0 || rank >= 16 || !s.skillAllowed(state.Race, state.Class, uint16(skillID)) || !s.skillLineExists(uint16(skillID)) {
 					continue
 				}
 				if _, found := current[uint16(skillID)]; found {
@@ -3788,6 +3791,21 @@ func (s *session) skillAllowed(race, class uint8, skill uint16) bool {
 		}
 	}
 	return isAllowedClassSkill(class, skill)
+}
+
+// skillLineExists reports whether the SkillLine DBC carries the skill.
+// ObjectMgr::LoadPlayerInfo (ObjectMgr.cpp:4018-4023) drops
+// playercreateinfo_skills rows whose skill has no SkillLine row; without the
+// DBC loaded the check cannot run and the row is kept.
+func (s *session) skillLineExists(skill uint16) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return true
+	}
+	_, found, err := s.server.Data.SkillLineCategory(uint32(skill))
+	if err != nil {
+		return true
+	}
+	return found
 }
 
 func (s *session) skillRangeType(race, class uint8, skill uint16) uint8 {

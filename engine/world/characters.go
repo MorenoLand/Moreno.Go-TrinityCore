@@ -367,31 +367,16 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	}
 	// CharacterHandler.cpp:394: the death-knight arms are skipped for sessions
 	// holding RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_DEATH_KNIGHT.
+	// Only the two speedup checks live up front (CharacterHandler.cpp:397-410):
+	// a zero per-realm limit, or a required level above MaxPlayerLevel, answers
+	// before the name/account/realm gates. The slot-count and level-requirement
+	// arms run in finalizeCharacterCreation, after those gates — see below.
 	if class == 6 && !s.skipCharCreateDeathKnight {
 		if s.server.Config.DeathKnightsPerRealm == 0 {
 			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateUniqueClassLimit)
 		}
-		var deathKnights int64
-		// C++ guards every create-path scalar query with `if (result)`
-		// (CharacterHandler.cpp:420-452,476-521): a failed query leaves the zero
-		// value and creation proceeds — never a disconnect.
-		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(guid) FROM characters WHERE account = ? AND class = ?", s.accountID, class).Scan(&deathKnights); err != nil {
-			s.debug("character create death-knight count failed", "account", s.accountName, "error", err)
-		}
-		if deathKnights >= int64(s.server.Config.DeathKnightsPerRealm) {
-			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateUniqueClassLimit)
-		}
-		if required := s.server.Config.CharacterCreatingMinLevelForDeathKnight; required > 0 {
-			var maxLevel sql.NullInt64
-			// CHAR_SEL_CHAR_CREATE_INFO ("SELECT level, race, class FROM
-			// characters WHERE account = ?") has no class filter: every
-			// account row, death knights included, feeds the level check.
-			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT MAX(level) FROM characters WHERE account = ?", s.accountID).Scan(&maxLevel); err != nil {
-				s.debug("character create max-level query failed", "account", s.accountName, "error", err)
-			}
-			if !maxLevel.Valid || maxLevel.Int64 < int64(required) {
-				return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateLevelRequirement)
-			}
+		if required := s.server.Config.CharacterCreatingMinLevelForDeathKnight; required > s.server.Config.MaxPlayerLevel {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateLevelRequirement)
 		}
 	}
 	row, err := s.server.CharactersStore.QueryRowStatement(ctx, "CHAR_SEL_CHECK_NAME", name)
@@ -460,6 +445,36 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 			// CharacterHandler.cpp:505-521: the team check lives inside
 			// `if (result)` — a failed query skips it, never a disconnect.
 			s.debug("character create team check failed", "account", s.accountName, "error", err)
+		}
+	}
+	// finalizeCharacterCreation (CharacterHandler.cpp:467-521, 535-549): the
+	// death-knight slot count decrements one free slot per existing death
+	// knight on the account and answers UNIQUE_CLASS_LIMIT at zero, and the
+	// level requirement is checked against every account character's level.
+	// Both run here, after the name-in-use, account-limit, realm-limit and
+	// PvP-team gates — a DK-full account with a taken name answers NAME_IN_USE.
+	if class == 6 && !s.skipCharCreateDeathKnight {
+		var deathKnights int64
+		// C++ guards every create-path scalar query with `if (result)`
+		// (CharacterHandler.cpp:420-452,476-521): a failed query leaves the zero
+		// value and creation proceeds — never a disconnect.
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(guid) FROM characters WHERE account = ? AND class = ?", s.accountID, class).Scan(&deathKnights); err != nil {
+			s.debug("character create death-knight count failed", "account", s.accountName, "error", err)
+		}
+		if deathKnights >= int64(s.server.Config.DeathKnightsPerRealm) {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateUniqueClassLimit)
+		}
+		if required := s.server.Config.CharacterCreatingMinLevelForDeathKnight; required > 0 {
+			var maxLevel sql.NullInt64
+			// CHAR_SEL_CHAR_CREATE_INFO ("SELECT level, race, class FROM
+			// characters WHERE account = ?") has no class filter: every
+			// account row, death knights included, feeds the level check.
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT MAX(level) FROM characters WHERE account = ?", s.accountID).Scan(&maxLevel); err != nil {
+				s.debug("character create max-level query failed", "account", s.accountName, "error", err)
+			}
+			if !maxLevel.Valid || maxLevel.Int64 < int64(required) {
+				return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateLevelRequirement)
+			}
 		}
 	}
 	// Player::Create reads the playercreateinfo spawn row; a missing
@@ -3317,7 +3332,10 @@ func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, cl
 		defer rows.Close()
 		for rows.Next() {
 			var skillID, rank int64
-			if rows.Scan(&skillID, &rank) != nil || skillID <= 0 || skillID > 65535 || rank < 0 || rank > 65535 || !s.skillAllowed(race, class, uint16(skillID)) {
+			// ObjectMgr::LoadPlayerInfo (ObjectMgr.cpp:4003,4018-4023) drops
+			// rows with rank >= MAX_SKILL_STEP (16, DBCStructure.h:1365) or
+			// no SkillLine DBC row.
+			if rows.Scan(&skillID, &rank) != nil || skillID <= 0 || skillID > 65535 || rank < 0 || rank >= 16 || !s.skillAllowed(race, class, uint16(skillID)) || !s.skillLineExists(uint16(skillID)) {
 				continue
 			}
 			if _, found := current[uint16(skillID)]; found {
