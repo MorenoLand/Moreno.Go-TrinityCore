@@ -6577,6 +6577,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.ScriptChaseTargetGUID = targetGUID
 		motion.ScriptChaseDist = dist
 		motion.ScriptChaseAngle = angle
+		motion.ChaseTargetKnown = false
 		s.motionMu.Unlock()
 		return nil, nil
 	}

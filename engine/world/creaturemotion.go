@@ -927,13 +927,19 @@ type creatureMotion struct {
 	// creatureSplinePosition reads the fall elevation while it is in
 	// flight. Cleared with the other ScriptMove stamps on launch.
 	ScriptMoveFalling bool
-	// ChaseTX/ChaseTY record the victim's position when the combat pursuit
-	// spline launched — ChaseMovementGenerator's _lastTargetPosition
-	// (ChaseMovementGenerator.h): the chase re-paths whenever the target
-	// moves, so a spline whose victim left the launch point is relaunched.
-	// Zero when no pursuit spline is armed.
-	ChaseTX float32
-	ChaseTY float32
+	// ChaseTX/TY/TZ + ChaseTargetKnown are ChaseMovementGenerator's
+	// _lastTargetPosition (ChaseMovementGenerator.h, an
+	// Optional<Position>): the victim's position at the last chase
+	// re-path evaluation. The chase re-paths whenever the target moves
+	// (exact-equality test, X/Y/Z — Position::operator==,
+	// Position.cpp:28-34, compares x, y, z and orientation; Go tracks
+	// position only, a victim turning in place does not force a Go
+	// re-path evaluation), so a spline whose victim left the launch
+	// point is relaunched. Known is false when no pursuit is armed;
+	// the coordinates are stale then, never a (0, 0) sentinel — a
+	// victim standing at the map origin is a real position.
+	ChaseTX, ChaseTY, ChaseTZ float32
+	ChaseTargetKnown          bool
 	// ChaseArrived latches the once-per-arrival SetInFront
 	// (ChaseMovementGenerator.cpp:127-151): the range-check and
 	// spline-finalize arms face the target once, when INFORM_ENABLED
@@ -1878,12 +1884,17 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 		}
 	}
 	// UnitSpeedChanged (FollowMovementGenerator.h:46,
-	// FleeingMovementGenerator.h:43): a speed change resets the follow
-	// dedup (forcing a fresh re-path evaluation on the next tick) and
-	// arms the flee SPEED_UPDATE_PENDING flag (an immediate re-path
-	// while the flee spline is in flight).
+	// FleeingMovementGenerator.h:43, ChaseMovementGenerator.h:44): a
+	// speed change resets the follow and chase dedups (forcing a fresh
+	// re-path evaluation on the next tick) and arms the flee
+	// SPEED_UPDATE_PENDING flag (an immediate re-path while the flee
+	// spline is in flight). The chase generator sets no pending flag —
+	// its UnitSpeedChanged only clears _lastTargetPosition.
 	if motion.ScriptFollowTargetGUID != 0 {
 		motion.FollowLastTargetKnown = false
+	}
+	if (motion.InCombat && motion.TargetGUID != 0) || motion.ScriptChaseTargetGUID != 0 {
+		motion.ChaseTargetKnown = false
 	}
 	if motion.Fleeing || (!motion.FleeingUntil.IsZero() && now.Before(motion.FleeingUntil)) {
 		motion.FleeSpeedUpdatePending = true
@@ -12922,7 +12933,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// swing below still fires while stunned or rooted
 				// (DoMeleeAttackIfReady gates UNIT_STATE_CASTING
 				// only, UnitAI.cpp:61-63), so only the pursuit pauses.
-				if !motion.ScriptRooted && !motion.ScriptStunned && !motion.NoCombatMovement && !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) && !creatureMovementPreventedByCasting(motion, now) {
+				// ChaseMovementGenerator::Update (ChaseMovementGenerator.cpp:98-106):
+				// the pause branch's third disjunct is HasLostTarget
+				// (owner victim != target, :28-31): a MoveChase slot armed
+				// on a non-victim pauses the chase — StopMoving, reset the
+				// last target position, clear the cannot-reach flag — and
+				// the plain victim pursuit never runs, since the script
+				// chase replaced it in the ACTIVE slot (MotionMaster.cpp
+				// :594-602 Add). The combat tick's target IS the victim,
+				// so the disjunct only bites on a script chase to another
+				// unit; out of combat the tick never runs, so a slot
+				// armed there already moves nothing.
+				lostTarget := motion.ScriptChaseTargetGUID != 0 && motion.ScriptChaseTargetGUID != motion.TargetGUID
+				if !motion.ScriptRooted && !motion.ScriptStunned && !motion.NoCombatMovement && !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) && !creatureMovementPreventedByCasting(motion, now) && !lostTarget {
 					// ConfusedMovementGenerator::DoUpdate
 					// (ConfusedMovementGenerator.cpp): the confused
 					// generator runs at MOTION_PRIORITY_HIGHEST, so a
@@ -12956,7 +12979,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// _mutualChase when the check runs (:155-156),
 					// whether or not the launch below succeeds.
 					mutualChase := victimMotion != nil && (victimMotion.ScriptChaseTargetGUID == motion.GUID || (victimMotion.InCombat && victimMotion.TargetGUID == motion.GUID))
-					targetMoved := motion.ChaseTX != target.X || motion.ChaseTY != target.Y || mutualChase != motion.ChaseMutual
+					targetMoved := !motion.ChaseTargetKnown || motion.ChaseTX != target.X || motion.ChaseTY != target.Y || motion.ChaseTZ != target.Z || mutualChase != motion.ChaseMutual
 					motion.ChaseMutual = mutualChase
 					// Unit::PauseMovement (Unit.cpp:10514) on the ACTIVE slot:
 					// the chase generator is paused, so no re-path launches
@@ -13080,8 +13103,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								// evade timer (Creature.cpp:924-930) runs
 								// from the set. Cancel the in-flight spline
 								// and retry next tick (this leg re-runs
-								// while !Moving, and ChaseTX/TY are left
-								// stale so the target-moved arm re-fires).
+								// while !Moving, and ChaseTX/TY/TZ are left
+								// stale (Known stays set) so the target-moved
+								// arm re-fires).
 								setCreatureCannotReachTarget(motion, true, now)
 								if motion.Moving {
 									s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PhaseMask, motion.TransportGUID)
@@ -13105,7 +13129,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								// path length).
 								if s.launchCreaturePolySpline(motion, points, false, movementGeneratorChase, faceAngle, true, speed, now, 0) {
 									setCreatureCannotReachTarget(motion, false, now)
-									motion.ChaseTX, motion.ChaseTY = target.X, target.Y
+									motion.ChaseTX, motion.ChaseTY, motion.ChaseTZ = target.X, target.Y, target.Z
+									motion.ChaseTargetKnown = true
 									motion.ChaseArrived = false
 									motion.ChaseInformed = false
 								}
@@ -13114,16 +13139,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				} else {
 					// ChaseMovementGenerator.cpp:105-114: UNIT_STATE_NOT_MOVE
-					// (root | stun | died | distracted) or
-					// IsMovementPreventedByCasting (Creature.cpp:3360-3376)
-					// pauses the chase — StopMoving, reset the last target
-					// position, clear the cannot-reach flag (:111). Died
-					// rides the tick's Health gate and distracted rides
-					// DistractedUntil above, so only root / stun /
-					// no-combat-movement / not-move-aura / casting reach
-					// this arm in Go.
+					// (root | stun | died | distracted), IsMovementPreventedByCasting
+					// (Creature.cpp:3360-3376), or HasLostTarget (a script
+					// chase slot armed on a non-victim, :28-31) pauses the
+					// chase — StopMoving, reset the last target position,
+					// clear the cannot-reach flag (:111). Died rides the
+					// tick's Health gate and distracted rides DistractedUntil
+					// above, so only root / stun / no-combat-movement /
+					// not-move-aura / casting / lost-target reach this arm
+					// in Go.
 					setCreatureCannotReachTarget(motion, false, now)
-					motion.ChaseTX, motion.ChaseTY = 0, 0
+					motion.ChaseTargetKnown = false
 					if motion.Moving {
 						s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PhaseMask, motion.TransportGUID)
 						motion.Moving = false

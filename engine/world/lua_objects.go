@@ -558,6 +558,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			motion.ScriptChaseTargetGUID = targetGUID
 			motion.ScriptChaseDist = dist
 			motion.ScriptChaseAngle = angle
+			motion.ChaseTargetKnown = false
 			s.server.motionMu.Unlock()
 		}
 		return nil, nil

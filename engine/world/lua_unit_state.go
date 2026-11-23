@@ -60,10 +60,10 @@ const (
 //   - DIED (fake-death aura): no feign-death model on either surface.
 //   - ROAMING / FOLLOW / FOLLOW_MOVE / ROAMING_MOVE: no live generator
 //     tracking; motion.MoveType is the spawn template (1 random,
-//     2 waypoint), not the running generator, and ChaseTX/ChaseTY are
-//     a last-position record that is never cleared, so CHASE and
-//     CHASE_MOVE are mask-only too (a chase that ended would read
-//     stuck-true from the record).
+//     2 waypoint), not the running generator, and ChaseTX/TY/TZ are
+//     a Known-guarded last-position record (reset on pause, MoveChase
+//     install, and speed change), so CHASE and CHASE_MOVE are
+//     mask-only too — the record alone cannot say a chase is live.
 //   - FOCUSING / ISOLATED / CHARGING / JUMPING / ROTATING /
 //     IGNORE_PATHFINDING: no model on either surface.
 //   - ATTACK_PLAYER (contested PvP, Player.cpp:20727 SetContestedPvP):

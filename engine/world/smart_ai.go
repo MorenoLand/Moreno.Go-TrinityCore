@@ -6327,6 +6327,7 @@ func (s *Server) smartActionSetRangedMovement(ctx context.Context, motion *creat
 			tm.ScriptChaseTargetGUID = victimGUID
 			tm.ScriptChaseDist = dist
 			tm.ScriptChaseAngle = angle
+			tm.ChaseTargetKnown = false
 		}
 		s.motionMu.Unlock()
 	}
