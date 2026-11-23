@@ -964,8 +964,16 @@ type creatureMotion struct {
 	// _mutualChase): a flip forces a re-path evaluation even when
 	// the victim has not moved.
 	ChaseMutual bool
-	WaitUntil   time.Time
-	Refreshed   time.Time
+	// ChaseRangeCheckAt is the next RANGE_CHECK_INTERVAL evaluation of
+	// the chase range-check arm (ChaseMovementGenerator.cpp:124-127,
+	// _rangeCheckTimer, 100ms): the arm stops the spline early and
+	// informs once the interpolated position is in range. Zero means
+	// the first combat tick evaluates immediately; the arm restamps
+	// it 100ms out on every evaluation, pass or fail, as C++ resets
+	// the timer whenever it passes.
+	ChaseRangeCheckAt time.Time
+	WaitUntil         time.Time
+	Refreshed         time.Time
 	// DistractedUntil is the DistractMovementGenerator hold
 	// (Spell::EffectDistract, SpellEffects.cpp:2547): the creature turned to
 	// face the distraction and pauses wandering until this time. Zero when
@@ -1179,6 +1187,156 @@ func chaseWalk(motion *creatureMotion) bool {
 		return motion.Walking
 	default:
 		return false
+	}
+}
+
+// chaseRangeBounds is the ChaseMovementGenerator::Update range math
+// (ChaseMovementGenerator.cpp:117-120): hitboxSum is both combat
+// reaches, meleeRange is the owner's GetMeleeRange twin
+// (Unit.cpp:614-618, calcMeleeRange). A script chase carries a
+// ChaseRange(dist) (MovementDefines.cpp:25): MinRange is 0 when the
+// distance clears CONTACT_DISTANCE, MinTolerance and MaxTolerance are
+// the distance itself, MaxRange adds CONTACT_DISTANCE. The plain
+// chase has no range: minRange is CONTACT_DISTANCE alone (no hitbox
+// added), minTarget is 0 plus hitboxSum, maxRange is the melee range
+// (already includes hitboxes), maxTarget is CONTACT_DISTANCE plus
+// hitboxSum.
+func chaseRangeBounds(scriptChase bool, scriptDist, hitboxSum, meleeRange float32) (minRange, minTarget, maxRange, maxTarget float32) {
+	if !scriptChase {
+		return 0.5, hitboxSum, meleeRange, 0.5 + hitboxSum
+	}
+	if scriptDist > 0.5 {
+		minRange = hitboxSum
+	} else {
+		minRange = scriptDist - 0.5 + hitboxSum
+	}
+	return minRange, scriptDist + hitboxSum, scriptDist + 0.5 + hitboxSum, scriptDist + hitboxSum
+}
+
+// chasePositionOkay is the static PositionOkay
+// (ChaseMovementGenerator.cpp:42-53): the squared 3D distance
+// (GetExactDistSq) sits inside the optional min/max bounds, the fixed
+// angle — when present — holds the owner's relative bearing from the
+// target inside the ChaseAngle tolerance (pi/4,
+// MovementDefines.cpp: ChaseAngle::IsAngleOkay), and the owner has
+// line of sight to the target (IsWithinLOSInMap, s.hasLineOfSight).
+// A nil bound or angle skips that term, matching C++'s
+// Optional<float> / Optional<ChaseAngle>. _movingTowards is constant
+// true in this C++ version (ChaseMovementGenerator.h:55 declares the
+// default and no site ever assigns it, verified tree-wide), so the
+// range-check arm always calls with min absent and max at maxTarget.
+func (s *Server) chasePositionOkay(motion *creatureMotion, ox, oy, oz float32, target *playerPos, targetOrient float32, minDist, maxDist, relAngle *float32) bool {
+	if motion == nil || target == nil {
+		return false
+	}
+	dx, dy, dz := ox-target.X, oy-target.Y, oz-target.Z
+	distSq := dx*dx + dy*dy + dz*dz
+	if minDist != nil && distSq < *minDist**minDist {
+		return false
+	}
+	if maxDist != nil && distSq > *maxDist**maxDist {
+		return false
+	}
+	if relAngle != nil {
+		rel := normalizeScriptAngle(float32(math.Atan2(float64(oy-target.Y), float64(ox-target.X))) - targetOrient)
+		angle := normalizeScriptAngle(*relAngle)
+		diff := rel - angle
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > 2*math.Pi-diff {
+			diff = 2*math.Pi - diff
+		}
+		if diff > math.Pi/4 {
+			return false
+		}
+	}
+	if s != nil && !s.hasLineOfSight(motion.Map, ox, oy, oz, target.X, target.Y, target.Z) {
+		return false
+	}
+	return true
+}
+
+// chaseRangeCheck is the ChaseMovementGenerator range-check arm
+// (ChaseMovementGenerator.cpp:124-139): every RANGE_CHECK_INTERVAL
+// (100ms, _rangeCheckTimer) the generator asks whether the owner is
+// already in range — PositionOkay with the _movingTowards bounds
+// (min absent, max maxTarget) and the fixed angle suppressed on a
+// mutual chase (:141) — and when INFORM_ENABLED and in range it
+// clears the flag, drops the path, clears cannot-reach, stops moving,
+// faces the target and informs once. The check runs on the
+// interpolated spline position (creatureSplinePosition), so a chaser
+// whose victim turns toward it stops its spline early instead of
+// riding it to the end; a standing script-chase holder informs on
+// first entering range instead of waiting for a spline finalize that
+// never comes. The arm never runs while the chase is paused (the
+// pause branch at :127-136 returns before the timer), while confused
+// (the confused generator owns the slot), or once the inform latch
+// is consumed.
+func (s *Server) chaseRangeCheck(ctx context.Context, motion *creatureMotion, target *playerPos, victimMotion *creatureMotion, cReach, victimReach, contactDist float32, now time.Time) {
+	if s == nil || motion == nil || target == nil || motion.Confused || motion.ChaseInformed {
+		return
+	}
+	if !motion.ChaseRangeCheckAt.IsZero() && now.Before(motion.ChaseRangeCheckAt) {
+		return
+	}
+	// C++ resets the timer whenever it passes, before the PositionOkay
+	// test, so the next check lands 100ms out whether this one fires
+	// or not.
+	motion.ChaseRangeCheckAt = now.Add(100 * time.Millisecond)
+	// The pause branch (:127-136) returns before the timer, so the arm
+	// is gated on the same predicate: UNIT_STATE_NOT_MOVE (root | stun
+	// | died | distracted), IsMovementPreventedByCasting, HasLostTarget
+	// (a script chase slot armed on a non-victim), and the ACTIVE-slot
+	// PauseMovement hold. Died rides the tick's Health gate and
+	// distracted rides DistractedUntil above.
+	lostTarget := motion.ScriptChaseTargetGUID != 0 && motion.ScriptChaseTargetGUID != motion.TargetGUID
+	if motion.ScriptRooted || motion.ScriptStunned || motion.NoCombatMovement || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || creatureMovementPreventedByCasting(motion, now) || lostTarget || (motion.MovementPausedSlot == 1 && (motion.MovementPaused || now.Before(motion.MovementPausedUntil))) {
+		return
+	}
+	scriptChase := motion.ScriptChaseTargetGUID != 0 && motion.ScriptChaseTargetGUID == motion.TargetGUID
+	_, _, _, maxTarget := chaseRangeBounds(scriptChase, motion.ScriptChaseDist, cReach+victimReach, contactDist)
+	targetOrient := float32(0)
+	if target.Sess != nil && target.Sess.player != nil {
+		targetOrient = target.Sess.player.Orientation
+	} else if victimMotion != nil {
+		targetOrient = victimMotion.Orientation
+	}
+	// IsMutualChase (ChaseMovementGenerator.cpp:30-39): the victim's
+	// own current generator is a chase targeting the owner. A player
+	// victim never runs a chase generator (victimMotion nil), so it
+	// never counts as mutual.
+	mutualChase := victimMotion != nil && (victimMotion.ScriptChaseTargetGUID == motion.GUID || (victimMotion.InCombat && victimMotion.TargetGUID == motion.GUID))
+	var relAngle *float32
+	if scriptChase && !mutualChase {
+		relAngle = &motion.ScriptChaseAngle
+	}
+	ox, oy, oz := creatureSplinePosition(motion, now)
+	if !s.chasePositionOkay(motion, ox, oy, oz, target, targetOrient, nil, &maxTarget, relAngle) {
+		return
+	}
+	// In range: stop the spline (a no-op standing), clear the
+	// cannot-reach flag, face the target once and inform once — the
+	// ChaseArrived / ChaseInformed latches are the INFORM_ENABLED
+	// twin shared with the landing-gate finalize arm.
+	setCreatureCannotReachTarget(motion, false, now)
+	if motion.Moving {
+		s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PhaseMask, motion.TransportGUID)
+		motion.Moving = false
+		motion.MoveEnds = time.Time{}
+	}
+	if !motion.ChaseArrived {
+		motion.ChaseArrived = true
+		faceAngle := float32(math.Atan2(float64(target.Y-oy), float64(target.X-ox)))
+		if faceAngle < 0 {
+			faceAngle += 2 * math.Pi
+		}
+		motion.Orientation = faceAngle
+	}
+	if !motion.ChaseInformed {
+		motion.ChaseInformed = true
+		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorChase), uint32(target.GUID))
+		s.smartMovementInform(ctx, motion, movementGeneratorChase, uint32(target.GUID))
 	}
 }
 
@@ -12831,6 +12989,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 
+		// ChaseMovementGenerator::Update (ChaseMovementGenerator.cpp:124-139):
+		// the range-check arm runs on its 100ms timer ahead of the
+		// pursuit/swing split — it stops a chase spline early once the
+		// interpolated position is in range and informs a standing
+		// script-chase holder on first entering range. A fired spell
+		// above returns first, so a spell tick skips it like the rest
+		// of the pursuit.
+		s.chaseRangeCheck(ctx, motion, target, victimMotion, cReach, victimReach, contactDist, now)
+
 		// In melee range (3D, Unit::IsWithinMeleeRangeAt): attack player.
 		// A 2D check here let mobs on a different height swing before true
 		// contact; C++ measures dz too.
@@ -13035,6 +13202,35 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						scriptChase := motion.ScriptChaseTargetGUID != 0 && motion.ScriptChaseTargetGUID == motion.TargetGUID
 						if scriptChase {
 							shorten = motion.ScriptChaseDist + cReach + victimReach
+						}
+						// ChaseMovementGenerator.cpp:153-158: the re-path
+						// evaluation only launches when the creature is
+						// chase-moving or not yet in position
+						// (HasUnitState(CHASE_MOVE) ||
+						// !PositionOkay(minRange, maxRange, angle)) — a
+						// standing creature inside its chase range holds
+						// position instead of re-pathing whenever the
+						// victim moves. The plain chase never trips it
+						// here (maxRange is the melee range and this
+						// branch only runs outside it); the script chase
+						// does, so a MoveChase(victim, dist) holder
+						// stands at range instead of closing onto the
+						// victim's center on the first tick after engage.
+						if !motion.Moving || now.After(motion.MoveEnds) {
+							gateMinRange, _, gateMaxRange, _ := chaseRangeBounds(scriptChase, motion.ScriptChaseDist, cReach+victimReach, contactDist)
+							var gateAngle *float32
+							gateOrient := float32(0)
+							if target.Sess != nil && target.Sess.player != nil {
+								gateOrient = target.Sess.player.Orientation
+							} else if victimMotion != nil {
+								gateOrient = victimMotion.Orientation
+							}
+							if scriptChase && !mutualChase {
+								gateAngle = &motion.ScriptChaseAngle
+							}
+							if s.chasePositionOkay(motion, motion.X, motion.Y, motion.Z, target, gateOrient, &gateMinRange, &gateMaxRange, gateAngle) {
+								return
+							}
 						}
 						destX, destY := target.X, target.Y
 						if dist > shorten {
@@ -13244,7 +13440,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// INFORM_ENABLED twin shared with the landing-gate
 			// finalize arm: a finalize inform for the same spline
 			// already consumed it, so this arm never double-fires.
-			if target != nil && !motion.ChaseInformed {
+			// The inform itself fires only inside maxTarget
+			// (PositionOkay's max is CONTACT_DISTANCE + hitboxSum,
+			// or the scripted chase distance + hitboxSum): the swing
+			// gate's melee range over-fired for a standing creature
+			// at 3.5-5yd, where C++ stands silent until the victim
+			// closes inside maxTarget or a spline finalizes — the
+			// landing gate still informs on finalize regardless of
+			// distance, and the range-check arm above informs once
+			// maxTarget is reached, so the inform is never lost,
+			// only correctly delayed.
+			_, _, _, swingMaxTarget := chaseRangeBounds(motion.ScriptChaseTargetGUID != 0 && motion.ScriptChaseTargetGUID == motion.TargetGUID, motion.ScriptChaseDist, cReach+victimReach, contactDist)
+			if target != nil && !motion.ChaseInformed && dist3D <= swingMaxTarget {
 				motion.ChaseInformed = true
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorChase), uint32(target.GUID))
 				s.smartMovementInform(ctx, motion, movementGeneratorChase, uint32(target.GUID))
