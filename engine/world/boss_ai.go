@@ -2449,6 +2449,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 					s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStartWithPower(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo, schoolMask, mechanicMask), castMs, startTarget, nil, s.creatureSpellAmmoData(ctx, m), spellStartImmunities(schoolMask, mechanicMask)))
 				}
 				m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+				m.CastingMoveAllowed = spellIsMoveAllowedChannel(spellInfo)
 				s.cancelPendingCreatureCast(m)
 				m.PendingCastSpellID = spellID
 				s.scheduleDeferredTwinCast(m, spellID, targetGUID, basePointOverrides, explicitDest, castMs, m.PendingCastToken, radiusMod, maxTargets)
@@ -3335,6 +3336,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// and re-stamping would hold CASTING for a second cast time.
 		if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); castMs > 0 && !deferredFire {
 			m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+			m.CastingMoveAllowed = spellIsMoveAllowedChannel(spellInfo)
 		}
 		// Spell::handle_immediate channel arms (Spell.cpp:3569-3596):
 		// a channeled creature spell holds UNIT_STATE_CASTING for the
@@ -3378,6 +3380,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				if channelUntil.After(m.CastingUntil) {
 					m.CastingUntil = channelUntil
 				}
+				// The channel is the same spell the cast-time stamp above
+				// already classified, but an instant-cast channel takes no
+				// cast-time stamp — without this the bool would go stale
+				// from the previous cast.
+				m.CastingMoveAllowed = spellIsMoveAllowedChannel(spellInfo)
 				// The channel object follows SendChannelStart
 				// (Spell.cpp:4669): the caster when the channel
 				// spell has a destination, else its object target

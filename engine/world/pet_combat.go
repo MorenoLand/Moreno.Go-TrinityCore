@@ -4820,6 +4820,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 			s.server.sendCreatureSpellStart(motion, targetGUID, protocol.BuildSpellStartWithPower(motion.GUID, motion.GUID, castCount, spell.ID, creatureStartCastFlags(spell, schoolMask, mechanicMask), castMs, startTarget, nil, s.server.creatureSpellAmmoData(ctx, motion), spellStartImmunities(schoolMask, mechanicMask)))
 			now := time.Now()
 			motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+			motion.CastingMoveAllowed = spellIsMoveAllowedChannel(spell)
 			s.server.triggerPetGlobalCooldown(motion, spell, now)
 			s.server.cancelPendingCreatureCast(motion)
 			motion.PendingCastSpellID = spell.ID

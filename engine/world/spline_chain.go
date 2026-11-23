@@ -261,7 +261,7 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	pointID, walk := run.PointID, run.Walk
 	flying, animTier := run.Flying, run.AnimTier
 	s.motionMu.Unlock()
-	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, flying, animTier)
+	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, flying, animTier, false)
 }
 
 // splineChainClosedLength is the closed-loop length of a chain link's

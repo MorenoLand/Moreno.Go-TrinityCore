@@ -296,7 +296,7 @@ func (s *Server) formationLeaderStartedMoving(ctx context.Context, motion *creat
 	}
 	s.motionMu.Unlock()
 	for _, pending := range pendingMoves {
-		s.broadcastMonsterMoveInInstance(pending.mapID, pending.instanceID, pending.guid, pending.fromX, pending.fromY, pending.fromZ, pending.destX, pending.destY, pending.destZ, pending.duration, false, pending.facing, true, pending.phase, pending.transportGUID)
+		s.broadcastPendingFormationMove(pending)
 	}
 }
 
@@ -382,12 +382,30 @@ type pendingFormationMove struct {
 	facing                                   float32
 	phase                                    uint32
 	transportGUID                            uint64
+	// points carries a routed CalculatePath poly (3+ points) for the
+	// multi-point broadcast; nil keeps the direct single segment.
+	points []pathVec
 }
 
 func (s *Server) launchFormationLeg(motion, leader *creatureMotion, now time.Time) {
 	if pending := s.planFormationLeg(motion, leader, now); pending != nil {
-		s.broadcastMonsterMoveInInstance(pending.mapID, pending.instanceID, pending.guid, pending.fromX, pending.fromY, pending.fromZ, pending.destX, pending.destY, pending.destZ, pending.duration, false, pending.facing, true, pending.phase, pending.transportGUID)
+		s.broadcastPendingFormationMove(pending)
 	}
+}
+
+// broadcastPendingFormationMove flushes a planned formation leg: a routed
+// poly rides the multi-point writer, a direct leg the single-point writer
+// (the member faces the leader's orientation for the whole leg, as the
+// direct arm already did).
+func (s *Server) broadcastPendingFormationMove(pending *pendingFormationMove) {
+	if s == nil || pending == nil {
+		return
+	}
+	if pending.points != nil {
+		s.broadcastMonsterMoveMultiInInstance(pending.mapID, pending.instanceID, pending.guid, pending.fromX, pending.fromY, pending.fromZ, pending.points, pending.duration, false, pending.facing, true, pending.phase, pending.transportGUID, false, animTierNone)
+		return
+	}
+	s.broadcastMonsterMoveInInstance(pending.mapID, pending.instanceID, pending.guid, pending.fromX, pending.fromY, pending.fromZ, pending.destX, pending.destY, pending.destZ, pending.duration, false, pending.facing, true, pending.phase, pending.transportGUID)
 }
 
 // planFormationLeg is launchFormationLeg's motion-state half: it computes
@@ -443,9 +461,35 @@ func (s *Server) planFormationLeg(motion, leader *creatureMotion, now time.Time)
 	if memberVel <= 0 {
 		memberVel = vel
 	}
+	// FormationMovementGenerator::LaunchMovement
+	// (FormationMovementGenerator.cpp:192-193): init.MoveTo runs
+	// CalculatePath with the MoveTo default generatePath=true
+	// (MoveSplineInit.cpp:245-256), falling back to the direct leg
+	// below on failure or PATHFIND_NOPATH — MoveTo rejects only
+	// NOPATH. No path-length limit. A routed poly (3+ points) rides
+	// the multi-point broadcast; a 2-point shortcut is geometrically
+	// the direct leg, so it keeps the pending single segment. The
+	// path runs here, inside the plan, so the broadcast stays deferred:
+	// planFormationLeg runs under motionMu in the
+	// formationLeaderStartedMoving path, and CalculatePath takes no
+	// motionMu (lock-free source snapshot).
+	var polyPoints []pathVec
+	path := NewPathGenerator(s, newCreaturePathSource(s, motion))
+	if ok := path.CalculatePath(destX, destY, leader.Z, false); ok && path.PathType()&pathfindNopath == 0 {
+		if points := path.PathPoints(); len(points) > 2 {
+			polyPoints = points
+		}
+	}
 	duration := splineDurationMs(slotDist, memberVel)
+	if polyPoints != nil {
+		travelDist := float32(0)
+		for i := 1; i < len(polyPoints); i++ {
+			travelDist += polyPoints[i].sub(polyPoints[i-1]).length()
+		}
+		duration = splineDurationMs(float64(travelDist), memberVel)
+	}
 	heading := float32(math.Atan2(float64(destY-motion.Y), float64(destX-motion.X)))
-	pending := &pendingFormationMove{mapID: motion.Map, instanceID: motion.InstanceID, guid: motion.GUID, fromX: motion.X, fromY: motion.Y, fromZ: motion.Z, destX: destX, destY: destY, destZ: leader.Z, duration: duration, facing: leader.Orientation, phase: motion.PhaseMask, transportGUID: motion.TransportGUID}
+	pending := &pendingFormationMove{mapID: motion.Map, instanceID: motion.InstanceID, guid: motion.GUID, fromX: motion.X, fromY: motion.Y, fromZ: motion.Z, destX: destX, destY: destY, destZ: leader.Z, duration: duration, facing: leader.Orientation, phase: motion.PhaseMask, transportGUID: motion.TransportGUID, points: polyPoints}
 	motion.X, motion.Y = destX, destY
 	motion.Z = leader.Z
 	motion.Moving = true

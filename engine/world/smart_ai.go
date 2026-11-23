@@ -4741,6 +4741,7 @@ func (s *Server) smartSetFollow(ctx context.Context, motion *creatureMotion, st 
 	motion.ScriptChaseDist = 0
 	motion.ScriptChaseAngle = 0
 	motion.ScriptFollowTargetGUID = targetGUID
+	motion.FollowLastTargetKnown = false
 	motion.ScriptFollowDist = dist
 	motion.ScriptFollowAngle = angle
 	motion.ScriptFollowInformed = false

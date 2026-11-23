@@ -592,6 +592,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			motion.ScriptChaseDist = 0
 			motion.ScriptChaseAngle = 0
 			motion.ScriptFollowTargetGUID = targetGUID
+			motion.FollowLastTargetKnown = false
 			motion.ScriptFollowDist = dist
 			motion.ScriptFollowAngle = angle
 			motion.ScriptFollowInformed = false

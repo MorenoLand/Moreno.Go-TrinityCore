@@ -1488,6 +1488,7 @@ func (s *session) handleNPCFollow(ctx context.Context, rest []string) bool {
 	motion.ScriptChaseDist = 0
 	motion.ScriptChaseAngle = 0
 	motion.ScriptFollowTargetGUID = s.playerGUID
+	motion.FollowLastTargetKnown = false
 	motion.ScriptFollowDist = 1.0
 	motion.ScriptFollowAngle = float32(math.Pi / 2)
 	motion.ScriptFollowInformed = false

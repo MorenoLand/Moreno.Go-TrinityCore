@@ -6204,8 +6204,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// via the shared script-spline launch. The id is recorded on the
 	// motion (ScriptMovePointID/dest) so the prologue landing gate can
 	// fire the MovementInform arrival (POINT_MOTION_TYPE, event 28).
-	// genPath is accepted and ignored — Go has no PathGenerator, so the
-	// spline is straight-line like every other script launch. The player
+	// The binding takes no genPath arg, so the C++ default (true,
+	// MotionMaster.h:162-163) applies and the launch paths through
+	// CalculatePath (launchCreatureScriptSplineSpeed). The player
 	// surface stays out (client-driven movement).
 	methods["MoveTo"] = func(_ context.Context, args []any) ([]any, error) {
 		id, err := luaUint32Arg(args, 0)
@@ -6335,8 +6336,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// (POINT_MOTION_TYPE, id) on event 28 (creaturemotion.go:5723),
 	// exactly as C++ MovementInform receives it. The C++ charge
 	// speed rides launchCreatureScriptSplineSpeed (the spline-chain
-	// speed-taking core); the spline itself is straight-line like
-	// every other script launch — Go has no PathGenerator. Arg
+	// speed-taking core); the charge stays straight-line by C++
+	// design — MotionMaster::MoveCharge defaults generatePath=false
+	// (MotionMaster.h:173). Arg
 	// order follows the Lua MoveTo family (id first), not the C++
 	// (x, y, z, speed, id) order; speed defaults to SPEED_CHARGE
 	// (42.0) when omitted and folds to the unit's run speed when
@@ -6378,7 +6380,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if speed <= 0 {
 			speed = creatureSplineVelocity(motion, false)
 		}
-		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed, false, animTierNone)
+		// MotionMaster::MoveCharge defaults generatePath=false
+		// (MotionMaster.h:173), so the charge stays straight-line by
+		// C++ design even though it shares the Point generator type.
+		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed, false, animTierNone, false)
 		return nil, nil
 	}
 	// MoveAlongSplineChain is MotionMaster::MoveAlongSplineChain
@@ -6600,6 +6605,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.ScriptChaseDist = 0
 		motion.ScriptChaseAngle = 0
 		motion.ScriptFollowTargetGUID = targetGUID
+		motion.FollowLastTargetKnown = false
 		motion.ScriptFollowDist = dist
 		motion.ScriptFollowAngle = angle
 		motion.ScriptFollowInformed = false

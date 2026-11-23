@@ -241,6 +241,15 @@ type creatureMotion struct {
 	// 200ms after a failed LOS check, now on a NOT_MOVE launch refusal
 	// (retry on the next tick). Zero when no flee leg is armed.
 	FleeNextAt time.Time
+	// FleeSpeedUpdatePending is MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING
+	// (MovementGenerator.h:35, 0x004) for the flee generator:
+	// UnitSpeedChanged sets it (FleeingMovementGenerator.h:43) and
+	// DoUpdate re-paths immediately while the spline is still in flight
+	// (:86-92). Set on any run/swim speed change while fleeing;
+	// consumed by repathCreatureFleeIfDue; cleared when a flee starts
+	// or ends. No UNIT_STATE_SPEED_UPDATE_PENDING exists (the state
+	// lives only as a movement-generator flag).
+	FleeSpeedUpdatePending bool
 	// ScriptMoveType is the MovementGeneratorType (MovementDefines.h)
 	// stamped by a script Move* launch: POINT 8, RANDOM 1, HOME 6,
 	// CONFUSED 4, FOLLOW 14, EFFECT 16. GetMovementType reads it only while the spline is in
@@ -292,6 +301,18 @@ type creatureMotion struct {
 	ScriptFollowTargetGUID uint64
 	ScriptFollowDist       float32
 	ScriptFollowAngle      float32
+	// FollowLastTX/TY/TZ + FollowLastTargetKnown are the
+	// FollowMovementGenerator::_lastTargetPosition
+	// (FollowMovementGenerator.h:58, .cpp:115): the re-path block runs
+	// only when the target moved at all (exact-equality test, no
+	// distance threshold), so a stationary target leaves the in-flight
+	// spline untouched. Reset on every MoveFollow assignment
+	// (DoInitialize, :63) and on the once-per-follow in-range inform
+	// (:101); the NOT_MOVE/casting reset (:88) has no Go arm —
+	// stepScriptFollow carries no NOT_MOVE early return. A speed
+	// change resets it too (UnitSpeedChanged, .h:46).
+	FollowLastTX, FollowLastTY, FollowLastTZ float32
+	FollowLastTargetKnown                    bool
 	// Confused is the ConfusedMovementGenerator leg
 	// (MotionMaster::MoveConfused, Unit::SetConfused): while set, the
 	// step tick launches short walk hops until SetConfused(false)
@@ -508,6 +529,21 @@ type creatureMotion struct {
 	// creature casts stay packet-only SPELL_GO; this field is the
 	// scheduling gate only.
 	CastingUntil time.Time
+	// CastingMoveAllowed is the move-allowed-channel leg of
+	// Creature::IsMovementPreventedByCasting (Creature.cpp:3360-3376):
+	// a channeled spell whose info allows movement
+	// (spellIsMoveAllowedChannel, SpellInfo.cpp:1229-1232) does not
+	// prevent movement even while UNIT_STATE_CASTING holds. Stamped
+	// alongside every CastingUntil write; consulted only while
+	// now.Before(CastingUntil), so a stale value after an interrupt
+	// clear is inert — every fresh stamp rewrites it. The spell-focus
+	// leg (HasSpellFocus, :3368-3371) has no Go twin: _spellFocusInfo
+	// is set at Spell::prepare for cast-time/channeled spells and
+	// released at cast end with a <=1s delay tail
+	// (Creature.cpp:3326), so its only incremental effect on the
+	// predicate is a <=1s post-cast pause extension Go cannot model
+	// without a cast-end event.
+	CastingMoveAllowed bool
 	// PendingCastToken / PendingInline* carry the creature-cast deferral
 	// queue (Spell::prepare, Spell.cpp:3174-3206): a non-triggered cast
 	// with a nonzero cast time sends SMSG_SPELL_START at t0 and fires GO +
@@ -816,10 +852,19 @@ type creatureMotion struct {
 	// (ChaseMovementGenerator.h): the chase re-paths whenever the target
 	// moves, so a spline whose victim left the launch point is relaunched.
 	// Zero when no pursuit spline is armed.
-	ChaseTX   float32
-	ChaseTY   float32
-	WaitUntil time.Time
-	Refreshed time.Time
+	ChaseTX float32
+	ChaseTY float32
+	// ChaseArrived latches the once-per-arrival SetInFront
+	// (ChaseMovementGenerator.cpp:127-151): the range-check and
+	// spline-finalize arms face the target once, when INFORM_ENABLED
+	// clears. The latch resets on every chase re-path launch, so a
+	// fresh pursuit re-faces on its next arrival; a standing
+	// in-range engage faces on the first swing-gate tick instead.
+	// Unit::SetInFront's CANNOT_TURN gate (Unit.cpp:13663-13667) has
+	// no Go model in chase.
+	ChaseArrived bool
+	WaitUntil    time.Time
+	Refreshed    time.Time
 	// DistractedUntil is the DistractMovementGenerator hold
 	// (Spell::EffectDistract, SpellEffects.cpp:2547): the creature turned to
 	// face the distraction and pauses wandering until this time. Zero when
@@ -1723,6 +1768,17 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 			motion.MoveEnds = now.Add(time.Duration(float64(remaining) * float64(oldVel) / float64(newSpeed)))
 			motion.MoveVelocity = newSpeed
 		}
+	}
+	// UnitSpeedChanged (FollowMovementGenerator.h:46,
+	// FleeingMovementGenerator.h:43): a speed change resets the follow
+	// dedup (forcing a fresh re-path evaluation on the next tick) and
+	// arms the flee SPEED_UPDATE_PENDING flag (an immediate re-path
+	// while the flee spline is in flight).
+	if motion.ScriptFollowTargetGUID != 0 {
+		motion.FollowLastTargetKnown = false
+	}
+	if motion.Fleeing || (!motion.FleeingUntil.IsZero() && now.Before(motion.FleeingUntil)) {
+		motion.FleeSpeedUpdatePending = true
 	}
 	s.motionMu.Unlock()
 	if newSpeed != oldSpeed {
@@ -5296,7 +5352,20 @@ func (s *Server) repathCreatureFleeIfDue(motion *creatureMotion, now time.Time) 
 		return
 	}
 	s.motionMu.Lock()
-	if motion.Moving || motion.Health == 0 || now.Before(motion.FleeNextAt) {
+	if motion.Health == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	// FleeingMovementGenerator::DoUpdate (FleeingMovementGenerator.cpp:86-92):
+	// a pending speed update re-paths immediately while the flee spline is
+	// still in flight — the timer arm below only fires once the spline has
+	// landed. The flag clears on consume (RemoveFlag(TRANSITORY) covers
+	// SPEED_UPDATE_PENDING, MovementGenerator.h:43).
+	speedRepath := motion.FleeSpeedUpdatePending && motion.Moving
+	if speedRepath {
+		motion.FleeSpeedUpdatePending = false
+	}
+	if !speedRepath && (motion.Moving || now.Before(motion.FleeNextAt)) {
 		s.motionMu.Unlock()
 		return
 	}
@@ -5338,6 +5407,7 @@ func (s *Server) startCreatureFlee(motion *creatureMotion, casterX, casterY floa
 		motion.FleeingUntil = now.Add(time.Duration(durationMs) * time.Millisecond)
 	}
 	motion.FleeTargetGUID = targetGUID
+	motion.FleeSpeedUpdatePending = false
 	s.motionMu.Unlock()
 	s.launchCreatureFleeLeg(motion, casterX, casterY, true, now)
 }
@@ -5464,6 +5534,7 @@ func (s *Server) setCreatureFeared(motion *creatureMotion, apply bool) {
 	motion.FleeingUntil = time.Time{}
 	motion.FleeTargetGUID = 0
 	motion.FleeNextAt = time.Time{}
+	motion.FleeSpeedUpdatePending = false
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 	s.motionMu.Unlock()
 	if victim != 0 {
@@ -5516,9 +5587,17 @@ const movementInformVehicleExit uint32 = 1008
 // splines move a corpse — but RandomMovementGenerator (DoInitialize,
 // :80) and ConfusedMovementGenerator (:48) refuse a dead owner, so
 // random and confused legs stay refused (allowDead false).
-// The genPath / pathfinding arm of MovePoint is unported — script
-// splines still run straight-line; the generator legs (chase, follow,
-// flee, confused, random) run their own CalculatePath legs instead.
+// The genPath / pathfinding arm of MovePoint is ported in
+// launchCreatureScriptSplineSpeed: Point and Home launches path
+// through CalculatePath (MotionMaster::MovePoint defaults
+// generatePath=true, MotionMaster.h:162-163; MoveTargetedHome runs a
+// HomeMovementGenerator, HomeMovementGenerator.cpp:76-80), while
+// Random and Effect launches stay straight-line — Random's C++
+// generator paths through its own SetRandomLocation leg (ported in
+// the wander tick), and the one-off Lua MoveRandom spline is a
+// documented simplification of that generator, not a MovePoint.
+// The generator legs (chase, follow, flee, confused, random) run
+// their own CalculatePath legs instead.
 // A script spline does not clear Evading
 // and, while in flight, temporarily overrides pursuit: C++ slot
 // priority (ACTIVE chase over DEFAULT point) is unmodeled, so the
@@ -5527,10 +5606,11 @@ func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY
 	// HomeMovementGenerator.cpp:79 calls SetWalk(false), so a home leg
 	// runs even when the persistent WALKING flag is set; Point-backed
 	// launches keep the inherit form (Point generators never SetWalk).
+	genPath := moveType == movementGeneratorPoint || moveType == movementGeneratorHome
 	if moveType == movementGeneratorHome {
-		return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocityExplicit(motion, walk), false, animTierNone)
+		return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocityExplicit(motion, walk), false, animTierNone, genPath)
 	}
-	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTierNone)
+	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTierNone, genPath)
 }
 
 // launchCreatureScriptSplineAnim is the animation-tier arm of
@@ -5539,7 +5619,7 @@ func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY
 // (MotionMaster.cpp:674-696, UnitDefines.h:81-88); the tier rides the
 // wire as the Animation spline flag + tier byte (buildMonsterMove).
 func (s *Server) launchCreatureScriptSplineAnim(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, animTier int) bool {
-	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTier)
+	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTier, false)
 }
 
 // launchCreatureScriptSplineSpeed is the speed-taking core of
@@ -5552,7 +5632,7 @@ func (s *Server) launchCreatureScriptSplineAnim(motion *creatureMotion, destX, d
 // mid-flight starts from the interpolated spline position
 // (MoveSplineInit::Launch, MoveSplineInit.cpp:60-68), not the snapped
 // destination.
-func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32, flying bool, animTier int) bool {
+func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32, flying bool, animTier int, genPath bool) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -5571,6 +5651,16 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	if moveType != movementGeneratorSplineChain {
 		motion.SplineChain = nil
 	}
+	// HomeMovementGenerator::SetTargetLocation
+	// (HomeMovementGenerator.cpp:78): every home spline carries
+	// SetFacing(home orientation), applied at finalize
+	// (MoveSpline.cpp:46-50 final angle) — the packet arm of the
+	// same rule the evade-home launches and the finalize sites
+	// already carry (motion.Orientation = motion.HomeO).
+	facing, hasFacing := float32(0), false
+	if moveType == movementGeneratorHome {
+		facing, hasFacing = motion.HomeO, true
+	}
 	// MoveSplineInit::Launch (MoveSplineInit.cpp:60-68): a spline
 	// launched while another is unfinalized starts from the running
 	// spline's ComputePosition, not the stored position — the
@@ -5585,15 +5675,35 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
 	phase := motion.PhaseMask
 	transportGUID := motion.TransportGUID
-	// HomeMovementGenerator::SetTargetLocation
-	// (HomeMovementGenerator.cpp:78): every home spline carries
-	// SetFacing(home orientation), applied at finalize
-	// (MoveSpline.cpp:46-50 final angle) — the packet arm of the
-	// same rule the evade-home launches and the finalize sites
-	// already carry (motion.Orientation = motion.HomeO).
-	facing, hasFacing := float32(0), false
-	if moveType == movementGeneratorHome {
-		facing, hasFacing = motion.HomeO, true
+	// PointMovementGenerator::DoInitialize (PointMovementGenerator.cpp:67)
+	// and HomeMovementGenerator::SetTargetLocation
+	// (HomeMovementGenerator.cpp:76-80): MotionMaster::MovePoint defaults
+	// generatePath=true (MotionMaster.h:162-163), so a Point/Home launch
+	// paths through CalculatePath (MoveSplineInit::MoveTo,
+	// MoveSplineInit.cpp:245-256) and falls back to the straight-line
+	// launch below on failure or PATHFIND_NOPATH — MoveTo rejects only
+	// NOPATH, so SHORTCUT and FARFROMPOLY paths still launch, unlike
+	// the flee/confused legs whose generators reject them. No
+	// path-length limit: neither generator sets one. The poly launch
+	// stamps ScriptMovePointID 0, so the id is re-stamped after — the
+	// landing gate fires MovementInform (POINT_MOTION_TYPE, id) only
+	// for the stamped id. Point's _finalOrient (:71-72) has no Go
+	// source: no caller passes a final orientation (Lua MoveTo and
+	// SmartAI MovePoint carry none), so the facing arm stays
+	// unmodeled; the DoUpdate re-launch's facing drop is moot (Go
+	// never re-launches a script spline).
+	if genPath {
+		path := NewPathGenerator(s, newCreaturePathSource(s, motion))
+		ok := path.CalculatePath(destX, destY, destZ, false)
+		points := path.PathPoints()
+		if ok && path.PathType()&pathfindNopath == 0 && len(points) >= 2 {
+			if s.launchCreaturePolySpline(motion, points, walk, moveType, facing, hasFacing, speed, now) {
+				s.motionMu.Lock()
+				motion.ScriptMovePointID = pointID
+				s.motionMu.Unlock()
+				return true
+			}
+		}
 	}
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
@@ -5612,6 +5722,32 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveFlagsInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, walk, facing, hasFacing, phase, transportGUID, flying, animTier)
 	return true
+}
+
+// tryLaunchCreatureHomePath runs the HomeMovementGenerator::SetTargetLocation
+// CalculatePath leg (HomeMovementGenerator.cpp:76-80, via
+// MoveSplineInit::MoveTo, MoveSplineInit.cpp:245-256): the home spline
+// paths through the navmesh when one exists. On failure or
+// PATHFIND_NOPATH it returns false and the caller falls back to the
+// straight-line launch — MoveTo rejects only NOPATH, so SHORTCUT and
+// FARFROMPOLY paths still launch here, unlike the flee/confused legs
+// whose generators reject them. No path-length limit: Home never sets
+// one. Facing rides HomeO (SetFacing, :78) and the leg runs
+// (SetWalk(false), :79). The launch stamps no script type: the engine
+// home leg never did, and the home arrival rides the evade-completion
+// arm, not the script landing gate (the gate's own comment at the
+// prologue landing site).
+func (s *Server) tryLaunchCreatureHomePath(motion *creatureMotion, speed float32, now time.Time) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	path := NewPathGenerator(s, newCreaturePathSource(s, motion))
+	ok := path.CalculatePath(motion.HomeX, motion.HomeY, motion.HomeZ, false)
+	points := path.PathPoints()
+	if !ok || path.PathType()&pathfindNopath != 0 || len(points) < 2 {
+		return false
+	}
+	return s.launchCreaturePolySpline(motion, points, false, 0, motion.HomeO, true, speed, now)
 }
 
 // launchCreaturePolySpline launches a CalculatePath poly path
@@ -6198,10 +6334,24 @@ func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, p
 		// spline lands in range on a later tick.
 		if !motion.ScriptFollowInformed {
 			motion.ScriptFollowInformed = true
+			motion.FollowLastTargetKnown = false
 			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorFollow), uint32(targetGUID))
 		}
 		return true
 	}
+	// FollowMovementGenerator::Update (FollowMovementGenerator.cpp:115):
+	// the re-path block runs only when the target moved at all — the
+	// exact-equality test on the last target position, no distance
+	// threshold — so a stationary target leaves the in-flight spline
+	// untouched instead of recalculating and re-broadcasting it every
+	// tick. The stamp lands before the path attempt, as in C++ (the
+	// position is recorded when the test passes, ahead of the inner
+	// gate and the CalculatePath call).
+	if motion.FollowLastTargetKnown && tx == motion.FollowLastTX && ty == motion.FollowLastTY && tz == motion.FollowLastTZ {
+		return true
+	}
+	motion.FollowLastTX, motion.FollowLastTY, motion.FollowLastTZ = tx, ty, tz
+	motion.FollowLastTargetKnown = true
 	curRel := normalizeScriptAngle(float32(math.Atan2(float64(motion.Y-ty), float64(motion.X-tx))) - tOrient)
 	tAngle := scriptFollowAngle(curRel, motion.ScriptFollowAngle)
 	absAngle := normalizeScriptAngle(tOrient + tAngle)
@@ -6733,6 +6883,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		if ownerGUID := creatureCharmerOrOwnerGUID(motion); ownerGUID != 0 {
 			if _, _, _, ok := s.unitPositionByGUID(motion.Map, motion.InstanceID, ownerGUID); ok {
 				motion.ScriptFollowTargetGUID = ownerGUID
+				motion.FollowLastTargetKnown = false
 				motion.ScriptFollowDist = 1.0
 				motion.ScriptFollowAngle = float32(math.Pi / 2)
 				motion.ScriptFollowInformed = false
@@ -6788,6 +6939,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 					// no-ops on self (MotionMaster.cpp:584-592).
 					if st.followGUID != motion.GUID {
 						motion.ScriptFollowTargetGUID = st.followGUID
+						motion.FollowLastTargetKnown = false
 						motion.ScriptFollowDist = st.followDist
 						motion.ScriptFollowAngle = st.followAngle
 						motion.ScriptFollowInformed = false
@@ -6824,23 +6976,28 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 					s.smartJustReachedHome(ctx, motion)
 					return
 				}
-				// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the
-				// home duration runs on the 3D distance, not the 2D threshold
-				// distance above (a flying evade or cliff home would otherwise
-				// arrive early and fire JustReachedHome early).
-				duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ)), speed)
-				// HomeMovementGenerator.cpp:78: the home spline carries
-				// SetFacing(home orientation); MoveSpline.cpp:46-50 applies
-				// the final angle when the spline completes, so the packet
-				// rides HomeO as the facing leg.
-				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
-				motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
-				motion.Moving = true
-				motion.ScriptMoveFromKnown = false
-				motion.Evading = true
-				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
-				motion.MoveVelocity = speed
-				motion.WaitUntil = motion.MoveEnds
+				if s.tryLaunchCreatureHomePath(motion, speed, now) {
+					motion.Evading = true
+					motion.WaitUntil = motion.MoveEnds
+				} else {
+					// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the
+					// home duration runs on the 3D distance, not the 2D threshold
+					// distance above (a flying evade or cliff home would otherwise
+					// arrive early and fire JustReachedHome early).
+					duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ)), speed)
+					// HomeMovementGenerator.cpp:78: the home spline carries
+					// SetFacing(home orientation); MoveSpline.cpp:46-50 applies
+					// the final angle when the spline completes, so the packet
+					// rides HomeO as the facing leg.
+					s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
+					motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+					motion.Moving = true
+					motion.ScriptMoveFromKnown = false
+					motion.Evading = true
+					motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+					motion.MoveVelocity = speed
+					motion.WaitUntil = motion.MoveEnds
+				}
 			} else {
 				motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 				// HomeMovementGenerator.cpp:78 SetFacing(home orientation),
@@ -8537,6 +8694,20 @@ func (s *Server) creatureMeleeVictimPos(mapID, instanceID uint32, guid uint64) *
 	return nil
 }
 
+// creatureMovementPreventedByCasting is Creature::IsMovementPreventedByCasting
+// (Creature.cpp:3360-3376) for the chase-pause arm: a creature actively
+// casting (now inside its CastingUntil window) cannot move — unless the cast
+// is a move-allowed channel (CastingMoveAllowed, stamped at cast start from
+// spellIsMoveAllowedChannel). The spell-focus leg has no Go twin (see the
+// CastingMoveAllowed field comment): its only incremental effect is a <=1s
+// post-cast pause extension.
+func creatureMovementPreventedByCasting(motion *creatureMotion, now time.Time) bool {
+	if motion == nil || !now.Before(motion.CastingUntil) {
+		return false
+	}
+	return !motion.CastingMoveAllowed
+}
+
 func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time, summoned bool) {
 	if motion == nil {
 		return
@@ -8971,6 +9142,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// HomeMovementGenerator.cpp:78 SetFacing(home orientation),
 				// applied at finalize (MoveSpline.cpp:46-50 final angle).
 				motion.Orientation = motion.HomeO
+				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:147):
+				// SetSpawnHealth runs ahead of JustReachedHome on every informed
+				// finalize, including a scripted MoveHome.
+				s.restoreCreatureSpawnHealth(motion)
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
 				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
@@ -9080,6 +9255,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				motion.Active = false
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 				s.smartJustReachedHome(ctx, motion)
+				return
+			}
+			if s.tryLaunchCreatureHomePath(motion, speed, now) {
+				motion.Evading = true
+				motion.WaitUntil = motion.MoveEnds
 				return
 			}
 			// Spline.cpp:152-156: SegLengthLinear is 3D Euclidean — the
@@ -9911,6 +10091,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							motion.PendingInlineTargetGUID = target.GUID
 							motion.PendingInlineFireAt = now.Add(time.Duration(castMs) * time.Millisecond)
 							motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+							motion.CastingMoveAllowed = spellIsMoveAllowedChannel(dueSpell)
 							// UnitAI::DoSpellAttackIfReady (UnitAI.cpp:88-100):
 							// the cast resets the base attack timer, so the
 							// next swing waits a full interval from the cast
@@ -11849,6 +12030,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// this stamp: its window already ran from t0.
 			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); castMs > 0 && !firingPendingInline {
 				motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+				motion.CastingMoveAllowed = spellIsMoveAllowedChannel(dueSpell)
 			}
 			// Spell::handle_immediate channel arms (Spell.cpp:3569-3596),
 			// the inline-path twin of the castCreatureSpellInternal arm in
@@ -11870,6 +12052,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if channelUntil := now.Add(time.Duration(channelMs) * time.Millisecond); channelUntil.After(motion.CastingUntil) {
 						motion.CastingUntil = channelUntil
 					}
+					// The channel is the same spell the cast-time stamp
+					// above already classified, but an instant-cast channel
+					// takes no cast-time stamp — without this the bool
+					// would go stale from the previous cast.
+					motion.CastingMoveAllowed = spellIsMoveAllowedChannel(dueSpell)
 				}
 			}
 			// Spell::finish IsAutoActionResetSpell leg (Spell.cpp:3937-3956):
@@ -11990,7 +12177,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// swing below still fires while stunned or rooted
 				// (DoMeleeAttackIfReady gates UNIT_STATE_CASTING
 				// only, UnitAI.cpp:61-63), so only the pursuit pauses.
-				if !motion.ScriptRooted && !motion.ScriptStunned && !motion.NoCombatMovement && !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) {
+				if !motion.ScriptRooted && !motion.ScriptStunned && !motion.NoCombatMovement && !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) && !creatureMovementPreventedByCasting(motion, now) {
 					// ConfusedMovementGenerator::DoUpdate
 					// (ConfusedMovementGenerator.cpp): the confused
 					// generator runs at MOTION_PRIORITY_HIGHEST, so a
@@ -12153,18 +12340,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								if s.launchCreaturePolySpline(motion, points, false, movementGeneratorChase, faceAngle, true, speed, now) {
 									setCreatureCannotReachTarget(motion, false, now)
 									motion.ChaseTX, motion.ChaseTY = target.X, target.Y
+									motion.ChaseArrived = false
 								}
 							}
 						}
 					}
 				} else {
 					// ChaseMovementGenerator.cpp:105-114: UNIT_STATE_NOT_MOVE
-					// (root | stun | died | distracted) pauses the chase —
-					// StopMoving, reset the last target position, clear the
-					// cannot-reach flag (:111). Died rides the tick's
-					// Health gate and distracted rides DistractedUntil
-					// above, so only root / stun / no-combat-movement /
-					// not-move-aura reach this arm in Go.
+					// (root | stun | died | distracted) or
+					// IsMovementPreventedByCasting (Creature.cpp:3360-3376)
+					// pauses the chase — StopMoving, reset the last target
+					// position, clear the cannot-reach flag (:111). Died
+					// rides the tick's Health gate and distracted rides
+					// DistractedUntil above, so only root / stun /
+					// no-combat-movement / not-move-aura / casting reach
+					// this arm in Go.
 					setCreatureCannotReachTarget(motion, false, now)
 					motion.ChaseTX, motion.ChaseTY = 0, 0
 					if motion.Moving {
@@ -12213,11 +12403,43 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 		motion.Moving = false
+		// ChaseMovementGenerator.cpp:140,152: SetInFront(target) on arrival —
+		// the range-check inform path and the spline-finalized path both snap
+		// orientation to the target's current bearing. The swing arm below
+		// faces only when a swing fires, so a victim that sidestepped during
+		// the spline would otherwise stay stale until then. The
+		// UNIT_STATE_CANNOT_TURN gate rides the swing arm's Possessed +
+		// DisableTurn precedent (Unit.cpp:13663-13667); LOST_CONTROL /
+		// ROTATING / FOCUSING have no Go model.
+		if target != nil && motion.UnitFlags&unitFlagPossessed == 0 && motion.UnitFlags2&unitFlag2DisableTurn == 0 {
+			faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
+			if faceAngle < 0 {
+				faceAngle += 2 * math.Pi
+			}
+			motion.Orientation = faceAngle
+		}
 		// ChaseMovementGenerator.cpp:142-147: a finalized chase spline
 		// clears the cannot-reach flag, as does the in-range inform
 		// (:128-151, PositionOkay on the range-check timer). Reaching
 		// the swing gate means the creature is in range.
 		setCreatureCannotReachTarget(motion, false, now)
+		// ChaseMovementGenerator.cpp:127-151: the range-check arrival
+		// (:135) and the spline-finalize arm (:149) both call
+		// SetInFront(target) once, when INFORM_ENABLED clears — the
+		// creature faces the target's current position on arrival
+		// (Unit::SetInFront, Unit.cpp:13663-13667). The latch makes
+		// the Go swing gate fire it once per arrival instead of every
+		// in-range tick (C++ never re-faces a standing pursuer until
+		// it re-paths); a standing in-range engage faces on the first
+		// swing-gate tick. The CANNOT_TURN gate has no Go model.
+		if !motion.ChaseArrived {
+			motion.ChaseArrived = true
+			faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
+			if faceAngle < 0 {
+				faceAngle += 2 * math.Pi
+			}
+			motion.Orientation = faceAngle
+		}
 		// Unit::ApplyAttackTimePercentMod (Unit.cpp:10847-10864): the
 		// creature's swing interval is UNIT_FIELD_BASEATTACKTIME scaled by
 		// the live attack-time auras (9/138/192/193/252) —
@@ -13097,6 +13319,30 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			s.waypointNodeArrival(ctx, motion, now)
 		}
 		return
+	}
+	// WaypointMovementGenerator::StartMove (WaypointMovementGenerator.cpp:345):
+	// init.MoveTo runs CalculatePath with the MoveTo default generatePath=true
+	// (MoveSplineInit.cpp:245-256), falling back to the straight-line leg
+	// below on failure or PATHFIND_NOPATH — MoveTo rejects only NOPATH, so
+	// SHORTCUT and FARFROMPOLY paths still launch, and no path-length limit
+	// applies (the random leg's 30.0 is Random-specific). LAND/TAKEOFF nodes
+	// keep the direct leg: their animation tier has no poly-launch carrier.
+	// The poly launch stamps no script type, so the prologue landing gate
+	// still finalizes the leg like WaypointMovementGenerator::OnArrived.
+	if animTier == animTierNone {
+		path := NewPathGenerator(s, newCreaturePathSource(s, motion))
+		if ok := path.CalculatePath(destX, destY, destZ, false); ok && path.PathType()&pathfindNopath == 0 {
+			if points := path.PathPoints(); len(points) >= 2 {
+				end := points[len(points)-1]
+				heading := float32(math.Atan2(float64(end.Y-motion.Y), float64(end.X-motion.X)))
+				if s.launchCreaturePolySpline(motion, points, walk, 0, facing, hasFacing, speed, now) {
+					motion.MoveHeading = heading
+					motion.WaitUntil = motion.MoveEnds.Add(wait)
+					s.formationLeaderStartedMoving(ctx, motion, now)
+					return
+				}
+			}
+		}
 	}
 	duration := splineDurationMs(moveDist, speed)
 	// The leg's travel heading and speed are recorded for the formation slot
