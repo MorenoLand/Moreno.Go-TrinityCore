@@ -6377,13 +6377,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				return nil, err
 			}
 		}
+		// PointMovementGenerator::_speed twin: only a positive caller
+		// speed is explicit (DoInitialize applies _speed > 0.0f,
+		// PointMovementGenerator.cpp:68-69); a non-positive speed
+		// leaves the velocity unset and the spline takes GetSpeed
+		// (:82-85), so the leg inherits later speed changes.
+		explicitSpeed := speed
+		if explicitSpeed < 0 {
+			explicitSpeed = 0
+		}
 		if speed <= 0 {
 			speed = creatureSplineVelocity(motion, false)
 		}
 		// MotionMaster::MoveCharge defaults generatePath=false
 		// (MotionMaster.h:173), so the charge stays straight-line by
 		// C++ design even though it shares the Point generator type.
-		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed, false, animTierNone, false)
+		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed, false, animTierNone, false, explicitSpeed)
 		return nil, nil
 	}
 	// MoveAlongSplineChain is MotionMaster::MoveAlongSplineChain

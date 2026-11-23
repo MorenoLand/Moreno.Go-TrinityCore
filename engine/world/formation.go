@@ -500,12 +500,25 @@ func (s *Server) planFormationLeg(motion, leader *creatureMotion, now time.Time)
 	pending := &pendingFormationMove{mapID: motion.Map, instanceID: motion.InstanceID, guid: motion.GUID, fromX: motion.X, fromY: motion.Y, fromZ: motion.Z, destX: destX, destY: destY, destZ: leader.Z, duration: duration, facing: leader.Orientation, phase: motion.PhaseMask, transportGUID: motion.TransportGUID, points: polyPoints}
 	motion.X, motion.Y = destX, destY
 	motion.Z = leader.Z
+	// FormationMovementGenerator::DoUpdate (FormationMovementGenerator.cpp:91):
+	// while the member spline is in flight the home position tracks the
+	// member's current position, so an evade after formation movement
+	// returns to the last formation position instead of spawn. The
+	// atomic model snaps to the launch destination, so the destination
+	// is the in-flight position — the waypoint twin of this arm
+	// (creaturemotion.go:13998-14015) does the same, and HomeO carries
+	// the member's CURRENT orientation (SetHomePosition(x,y,z,o)), not
+	// the leader's (the member takes the leader's orientation at spline
+	// end, per the documented delta in this function).
+	motion.HomeX, motion.HomeY, motion.HomeZ = destX, destY, leader.Z
+	motion.HomeO = motion.Orientation
 	motion.Moving = true
 	motion.ScriptMoveFromKnown = false
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.WaitUntil = motion.MoveEnds
 	motion.MoveHeading = heading
 	motion.MoveVelocity = memberVel
+	motion.ScriptMoveExplicitSpeed = 0
 	motion.FormationPredicted = leaderMoving
 	motion.FormationLeaderMoveEnds = leader.MoveEnds
 	motion.FormationLeaderX, motion.FormationLeaderY = leader.X, leader.Y

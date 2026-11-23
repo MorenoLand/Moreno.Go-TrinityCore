@@ -236,6 +236,17 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	if speed <= 0 {
 		speed = creatureSplineVelocityExplicit(motion, run.Walk)
 	}
+	// SplineChainMovementGenerator::SendPathSpline
+	// (SplineChainMovementGenerator.cpp:49-61): a link velocity > 0 wins
+	// over the creature speed, and the chain generator has no
+	// UnitSpeedChanged override — the in-flight link keeps its velocity
+	// across speed changes, the same banked-speed outcome as a Point
+	// charge (PointMovementGenerator.cpp:120-121). A non-positive
+	// velocity inherits GetSpeed, so it banks nothing.
+	explicitSpeed := link.Velocity
+	if explicitSpeed < 0 {
+		explicitSpeed = 0
+	}
 	// The wait scaling below compares against the C++ actual duration,
 	// which Launch computes from the capped velocity (capSplineVelocity),
 	// so the accumulation must use the capped speed too. The distance
@@ -261,7 +272,7 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	pointID, walk := run.PointID, run.Walk
 	flying, animTier := run.Flying, run.AnimTier
 	s.motionMu.Unlock()
-	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, flying, animTier, false)
+	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, flying, animTier, false, explicitSpeed)
 }
 
 // splineChainClosedLength is the closed-loop length of a chain link's
@@ -411,6 +422,7 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 	if motion.X != motion.ScriptMoveDestX || motion.Y != motion.ScriptMoveDestY || motion.Z != motion.ScriptMoveDestZ {
 		motion.SplineChain = nil
 		motion.ScriptMoveType = 0
+		motion.ScriptMoveExplicitSpeed = 0
 		motion.ScriptMovePointID = 0
 		motion.ScriptMoveDestX = 0
 		motion.ScriptMoveDestY = 0
@@ -461,6 +473,7 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 		pointID := run.PointID
 		motion.SplineChain = nil
 		motion.ScriptMoveType = 0
+		motion.ScriptMoveExplicitSpeed = 0
 		motion.ScriptMovePointID = 0
 		motion.ScriptMoveDestX = 0
 		motion.ScriptMoveDestY = 0
@@ -474,6 +487,7 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 	run.LinkIndex++
 	run.PointIndex = 0
 	motion.ScriptMoveType = 0
+	motion.ScriptMoveExplicitSpeed = 0
 	motion.ScriptMovePointID = 0
 	motion.ScriptMoveDestX = 0
 	motion.ScriptMoveDestY = 0

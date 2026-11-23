@@ -245,7 +245,7 @@ type creatureMotion struct {
 	// (MovementGenerator.h:35, 0x004) for the flee generator:
 	// UnitSpeedChanged sets it (FleeingMovementGenerator.h:43) and
 	// DoUpdate re-paths immediately while the spline is still in flight
-	// (:86-92). Set on any run/swim speed change while fleeing;
+	// (:88). Set on any run/swim speed change while fleeing;
 	// consumed by repathCreatureFleeIfDue; cleared when a flee starts
 	// or ends. No UNIT_STATE_SPEED_UPDATE_PENDING exists (the state
 	// lives only as a movement-generator flag).
@@ -303,6 +303,16 @@ type creatureMotion struct {
 	ScriptMoveDestX   float32
 	ScriptMoveDestY   float32
 	ScriptMoveDestZ   float32
+	// ScriptMoveExplicitSpeed is the banked PointMovementGenerator::_speed
+	// (PointMovementGenerator.h:53): the explicit per-leg velocity of a
+	// MoveCharge or spline-chain link, capped like the launch speed; 0
+	// means the leg inherits GetSpeed. C++ re-applies _speed on every
+	// UnitSpeedChanged relaunch (PointMovementGenerator.cpp:120-121), so
+	// a leg carrying one must not take the refresh rescale (see
+	// refreshCreatureRunSpeedMotion). Stamped by the shared launchers
+	// alongside ScriptMoveType, cleared by every bypass launch and on
+	// landing.
+	ScriptMoveExplicitSpeed float32
 	// PendingScriptMove is the Point/Home script launch deferred by the
 	// NOT_MOVE/casting gate in launchCreatureScriptSplineSpeed
 	// (PointMovementGenerator::DoInitialize, PointMovementGenerator.cpp
@@ -324,15 +334,16 @@ type creatureMotion struct {
 	// generator finalize). Effect, Random, and SplineChain launches
 	// never record: GenericMovementGenerator::Initialize launches
 	// unconditionally, and Random's own gate lives in its wander leg.
-	PendingScriptMove          bool
-	PendingScriptMoveType      uint32
-	PendingScriptMovePointID   uint32
-	PendingScriptMoveDestX     float32
-	PendingScriptMoveDestY     float32
-	PendingScriptMoveDestZ     float32
-	PendingScriptMoveWalk      bool
-	PendingScriptMoveSpeed     float32
-	PendingScriptMoveAllowDead bool
+	PendingScriptMove              bool
+	PendingScriptMoveType          uint32
+	PendingScriptMovePointID       uint32
+	PendingScriptMoveDestX         float32
+	PendingScriptMoveDestY         float32
+	PendingScriptMoveDestZ         float32
+	PendingScriptMoveWalk          bool
+	PendingScriptMoveSpeed         float32
+	PendingScriptMoveExplicitSpeed float32
+	PendingScriptMoveAllowDead     bool
 	// ScriptFollowInformed latches the once-per-follow MovementInform
 	// (FOLLOW_MOTION_TYPE): FollowMovementGenerator clears its
 	// INFORM_ENABLED flag after the first in-range inform
@@ -1850,7 +1861,13 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 	motion.SwimSpeed = newSwimSpeed
 	// A fall spline's duration derives from its drop (computeFallTime),
 	// not run speed, so a speed change must not rescale its MoveEnds.
-	if motion.Moving && oldVel > 0 && newSpeed > 0 && !motion.ScriptMoveFalling {
+	// A leg carrying a banked explicit speed (MoveCharge / spline-chain
+	// link) is likewise exempt: C++ re-applies _speed on the
+	// UnitSpeedChanged relaunch (PointMovementGenerator.cpp:120-121),
+	// so the remaining time at unchanged velocity is unchanged — the
+	// rescale below would stretch it by oldVel/newSpeed. The pending
+	// flag still arms (the formation signal re-issues, :126-127).
+	if motion.Moving && oldVel > 0 && newSpeed > 0 && !motion.ScriptMoveFalling && motion.ScriptMoveExplicitSpeed <= 0 {
 		if remaining := motion.MoveEnds.Sub(now); remaining > 0 {
 			motion.MoveEnds = now.Add(time.Duration(float64(remaining) * float64(oldVel) / float64(newSpeed)))
 			motion.MoveVelocity = newSpeed
@@ -3898,6 +3915,34 @@ func (s *Server) callCreatureForHelp(ctx context.Context, caller *creatureMotion
 	}
 }
 
+// defaultReplaceActive reports whether installing a new DEFAULT-slot
+// generator finalizes the old one with active=true: no ACTIVE-slot
+// generator is stacked (MotionMaster::DirectAdd, MotionMaster.cpp:1172,
+// Finalize(_owner, _generators.empty(), false)). The CONTROLLED slot
+// (flee/confuse, _slot[MOTION_SLOT_CONTROLLED]) is a separate array and
+// never counts toward _generators. In Go the ACTIVE slot is a chase or
+// follow assignment (in combat or out), an evade-home or
+// seek-assistance leg, a spline-chain run, or an in-flight script
+// spline of an ACTIVE generator type (point/home/effect; a random leg
+// counts only off a wanderer — on a wanderer the leg belongs to the
+// default being replaced, not to the ACTIVE slot).
+func defaultReplaceActive(motion *creatureMotion) bool {
+	if motion == nil || motion.InCombat || motion.ScriptFollowTargetGUID != 0 || motion.ScriptChaseTargetGUID != 0 || motion.Evading || motion.SeekAssistPending || motion.SplineChain != nil {
+		return false
+	}
+	if motion.Moving {
+		switch motion.ScriptMoveType {
+		case movementGeneratorPoint, movementGeneratorHome, movementGeneratorEffect:
+			return false
+		case movementGeneratorRandom:
+			if motion.MoveType != 1 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // startCreatureWaypoint mirrors the MovePath arm of
 // CreatureMethods::MoveWaypoint (CreatureMethods.h:1196-1203):
 // MovePath(GetWaypointPath(), true) installs the waypoint generator on
@@ -3911,7 +3956,6 @@ func (s *Server) startCreatureWaypoint(ctx context.Context, motion *creatureMoti
 		return false
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
 	pathID := motion.PathID
 	points := motion.Points
 	if len(points) == 0 {
@@ -3923,6 +3967,7 @@ func (s *Server) startCreatureWaypoint(ctx context.Context, motion *creatureMoti
 		}
 	}
 	if len(points) == 0 {
+		s.motionMu.Unlock()
 		return false
 	}
 	motion.PathID = pathID
@@ -3932,6 +3977,23 @@ func (s *Server) startCreatureWaypoint(ctx context.Context, motion *creatureMoti
 	motion.PathStarted = false
 	motion.MoveType = 2
 	motion.WaitUntil = time.Now().Add(time.Second)
+	// RandomMovementGenerator::DoFinalize /
+	// WaypointMovementGenerator::DoFinalize
+	// (RandomMovementGenerator.cpp:233-245,
+	// WaypointMovementGenerator.cpp:227-237): installing a new default
+	// finalizes the old one, and the active arm calls SetWalk(false) —
+	// the install-time half of the path-end clear in the waypoint step
+	// tick. The broadcast runs after the unlock, like the SetWalk
+	// bridge (lua_creature_events.go:4730-4756).
+	clearWalk := motion.Walking && defaultReplaceActive(motion)
+	if clearWalk {
+		motion.Walking = false
+	}
+	mapID, instanceID, x, y, guid, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, motion.PhaseMask
+	s.motionMu.Unlock()
+	if clearWalk {
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE, phase)
+	}
 	return true
 }
 
@@ -3949,9 +4011,9 @@ func (s *Server) startCreaturePath(ctx context.Context, motion *creatureMotion, 
 		return false
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
 	points := s.loadWaypoints(ctx, pathID)
 	if len(points) == 0 {
+		s.motionMu.Unlock()
 		return false
 	}
 	motion.PathID = pathID
@@ -3961,6 +4023,23 @@ func (s *Server) startCreaturePath(ctx context.Context, motion *creatureMotion, 
 	motion.PathStarted = false
 	motion.MoveType = 2
 	motion.WaitUntil = time.Now().Add(time.Second)
+	// RandomMovementGenerator::DoFinalize /
+	// WaypointMovementGenerator::DoFinalize
+	// (RandomMovementGenerator.cpp:233-245,
+	// WaypointMovementGenerator.cpp:227-237): installing a new default
+	// finalizes the old one, and the active arm calls SetWalk(false) —
+	// the install-time half of the path-end clear in the waypoint step
+	// tick. The broadcast runs after the unlock, like the SetWalk
+	// bridge (lua_creature_events.go:4730-4756).
+	clearWalk := motion.Walking && defaultReplaceActive(motion)
+	if clearWalk {
+		motion.Walking = false
+	}
+	mapID, instanceID, x, y, guid, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, motion.PhaseMask
+	s.motionMu.Unlock()
+	if clearWalk {
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE, phase)
+	}
 	return true
 }
 
@@ -5414,7 +5493,11 @@ func (s *Server) launchCreatureFleeLeg(motion *creatureMotion, targetX, targetY 
 		s.motionMu.Unlock()
 		return false
 	}
-	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+	// MoveSplineInit::Launch (MoveSplineInit.cpp:60-68): a re-path
+	// mid-flight starts from the running spline's ComputePosition,
+	// not the snapped destination — the timer arm lands first
+	// (Moving false), so the interpolated point is identical there.
+	fromX, fromY, fromZ := creatureSplinePosition(motion, now)
 	mapID := motion.Map
 	orientation := motion.Orientation
 	s.motionMu.Unlock()
@@ -5450,7 +5533,7 @@ func (s *Server) launchCreatureFleeLeg(motion *creatureMotion, targetX, targetY 
 		s.motionMu.Unlock()
 		return false
 	}
-	if !s.launchCreaturePolySpline(motion, points, false, movementGeneratorFleeing, 0, false, speed, now) {
+	if !s.launchCreaturePolySpline(motion, points, false, movementGeneratorFleeing, 0, false, speed, now, 0) {
 		s.motionMu.Lock()
 		motion.FleeNextAt = now.Add(time.Duration(800+rand.Intn(701)) * time.Millisecond)
 		s.motionMu.Unlock()
@@ -5463,20 +5546,34 @@ func (s *Server) launchCreatureFleeLeg(motion *creatureMotion, targetX, targetY 
 }
 
 // repathCreatureFleeIfDue runs FleeingMovementGenerator::DoUpdate's
-// re-path arm (:93-102): once the flee spline has landed (Moving cleared
-// by the landing gate) and the timer passed, SetTargetLocation picks a
-// fresh GetPoint leg. The flee target re-resolves live from
-// FleeTargetGUID each time; a gone target takes GetPoint's random arm.
+// re-path arm (:72-102): a pending speed update re-paths while the flee
+// spline is still in flight (:88 first disjunct), and once the spline
+// has landed (Moving cleared by the landing gate) and the timer passed,
+// SetTargetLocation picks a fresh GetPoint leg (:88 second disjunct).
+// The flee target re-resolves live from FleeTargetGUID each time; a
+// gone target takes GetPoint's random arm.
 func (s *Server) repathCreatureFleeIfDue(motion *creatureMotion, now time.Time) {
 	if s == nil || motion == nil {
 		return
 	}
+	// NOT_MOVE aura leg (Unit.h:256 root|stun) — auraMu, never taken
+	// under motionMu (the launchCreatureFleeLeg precedent).
+	notMoveAura := s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion))
 	s.motionMu.Lock()
 	if motion.Health == 0 {
 		s.motionMu.Unlock()
 		return
 	}
-	// FleeingMovementGenerator::DoUpdate (FleeingMovementGenerator.cpp:86-92):
+	// FleeingMovementGenerator::DoUpdate (FleeingMovementGenerator.cpp:76-85):
+	// the NOT_MOVE / casting-prevented guard runs before either arm — a
+	// refused launch keeps the flag (and the frozen timer), so the guard
+	// returns without consuming it (the repathCreatureSpeedPendingIfDue
+	// sibling-guard twin, :5720).
+	if notMoveAura || motion.ScriptRooted || motion.ScriptStunned || now.Before(motion.CastingUntil) {
+		s.motionMu.Unlock()
+		return
+	}
+	// FleeingMovementGenerator::DoUpdate (FleeingMovementGenerator.cpp:88):
 	// a pending speed update re-paths immediately while the flee spline is
 	// still in flight — the timer arm below only fires once the spline has
 	// landed. The flag clears on consume (RemoveFlag(TRANSITORY) covers
@@ -5489,6 +5586,11 @@ func (s *Server) repathCreatureFleeIfDue(motion *creatureMotion, now time.Time) 
 		s.motionMu.Unlock()
 		return
 	}
+	// Either arm clears TRANSITORY (MovementGenerator.h:43): the speed arm
+	// cleared it on consume above; the timer arm clears it here, before the
+	// target resolve, so a flag armed just before landing cannot fire a
+	// spurious mid-flight re-path on the next leg.
+	motion.FleeSpeedUpdatePending = false
 	targetGUID := motion.FleeTargetGUID
 	mapID, instanceID := motion.Map, motion.InstanceID
 	s.motionMu.Unlock()
@@ -5566,7 +5668,7 @@ func (s *Server) launchCreatureRandomLeg(ctx context.Context, motion *creatureMo
 		wait = time.Duration(4+rand.Intn(7)) * time.Second
 		motion.WanderSteps = 2 + rand.Intn(9)
 	}
-	if !s.launchCreaturePolySpline(motion, points, walk, movementGeneratorRandom, 0, false, speed, now) {
+	if !s.launchCreaturePolySpline(motion, points, walk, movementGeneratorRandom, 0, false, speed, now, 0) {
 		motion.WaitUntil = now.Add(wait)
 		return false
 	}
@@ -5899,6 +6001,7 @@ func clearPendingScriptMove(motion *creatureMotion) {
 	motion.PendingScriptMoveDestZ = 0
 	motion.PendingScriptMoveWalk = false
 	motion.PendingScriptMoveSpeed = 0
+	motion.PendingScriptMoveExplicitSpeed = 0
 	motion.PendingScriptMoveAllowDead = false
 }
 
@@ -5936,9 +6039,9 @@ func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY
 	// launches keep the inherit form (Point generators never SetWalk).
 	genPath := moveType == movementGeneratorPoint || moveType == movementGeneratorHome
 	if moveType == movementGeneratorHome {
-		return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocityExplicit(motion, walk), false, animTierNone, genPath)
+		return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocityExplicit(motion, walk), false, animTierNone, genPath, 0)
 	}
-	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTierNone, genPath)
+	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTierNone, genPath, 0)
 }
 
 // launchCreatureScriptSplineAnim is the animation-tier arm of
@@ -5947,7 +6050,7 @@ func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY
 // (MotionMaster.cpp:674-696, UnitDefines.h:81-88); the tier rides the
 // wire as the Animation spline flag + tier byte (buildMonsterMove).
 func (s *Server) launchCreatureScriptSplineAnim(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, animTier int) bool {
-	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTier, false)
+	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTier, false, 0)
 }
 
 // launchCreatureScriptSplineSpeed is the speed-taking core of
@@ -5955,12 +6058,16 @@ func (s *Server) launchCreatureScriptSplineAnim(motion *creatureMotion, destX, d
 // velocity (SplineChainMovementGenerator::SendPathSpline: velocity >
 // 0 wins over the creature speed), so the chain walker launches
 // through here while every other script leg uses the wrapper above.
-// A non-chain launch clears a running chain (MotionMaster takes a
-// new generator, the old one finalizes without informing). A relaunch
-// mid-flight starts from the interpolated spline position
+// explicitSpeed banks the PointMovementGenerator::_speed of a MoveCharge
+// or chain link (0 = inherit GetSpeed): C++ re-applies _speed on every
+// UnitSpeedChanged relaunch (PointMovementGenerator.cpp:120-121), so the
+// banked leg must not take the refresh rescale. A non-chain launch
+// clears a running chain (MotionMaster takes a new generator, the old
+// one finalizes without informing). A relaunch mid-flight starts from
+// the interpolated spline position
 // (MoveSplineInit::Launch, MoveSplineInit.cpp:60-68), not the snapped
 // destination.
-func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32, flying bool, animTier int, genPath bool) bool {
+func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32, flying bool, animTier int, genPath bool, explicitSpeed float32) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -6004,6 +6111,7 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 			motion.PendingScriptMoveDestZ = destZ
 			motion.PendingScriptMoveWalk = walk
 			motion.PendingScriptMoveSpeed = speed
+			motion.PendingScriptMoveExplicitSpeed = explicitSpeed
 			motion.PendingScriptMoveAllowDead = allowDead
 			s.motionMu.Unlock()
 			return false
@@ -6020,6 +6128,14 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	// MoveSplineInit::Launch caps the velocity (capSplineVelocity); the
 	// duration below must derive from the capped speed, like C++.
 	speed = capSplineVelocity(speed, motion.RunSpeed)
+	// The banked _speed rides the capped launch speed: when the caller
+	// passed an explicit velocity it is the launch speed, so the capped
+	// explicit value is the effective velocity C++ re-applies on
+	// relaunch (PointMovementGenerator.cpp:120-121).
+	explicit := float32(0)
+	if explicitSpeed > 0 {
+		explicit = capSplineVelocity(explicitSpeed, motion.RunSpeed)
+	}
 	if moveType != movementGeneratorSplineChain {
 		motion.SplineChain = nil
 	}
@@ -6065,22 +6181,31 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	// unmodeled; the DoUpdate re-launch's facing drop is moot (Go
 	// never re-launches a script spline).
 	if genPath {
+		// CalculatePath takes no motionMu (lock-free source snapshot)
+		// and launchCreaturePolySpline takes it for its stamp, so the
+		// lock must drop here: holding it across the poly call
+		// self-deadlocks (motionMu is sync.Mutex, not re-entrant) on
+		// every Point/Home launch whose CalculatePath succeeds. The
+		// straight-line fallthrough below re-takes it.
+		s.motionMu.Unlock()
 		path := NewPathGenerator(s, newCreaturePathSource(s, motion))
 		ok := path.CalculatePath(destX, destY, destZ, false)
 		points := path.PathPoints()
 		if ok && path.PathType()&pathfindNopath == 0 && len(points) >= 2 {
-			if s.launchCreaturePolySpline(motion, points, walk, moveType, facing, hasFacing, speed, now) {
+			if s.launchCreaturePolySpline(motion, points, walk, moveType, facing, hasFacing, speed, now, explicit) {
 				s.motionMu.Lock()
 				motion.ScriptMovePointID = pointID
 				s.motionMu.Unlock()
 				return true
 			}
 		}
+		s.motionMu.Lock()
 	}
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.MoveVelocity = speed
+	motion.ScriptMoveExplicitSpeed = explicit
 	motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ = fromX, fromY, fromZ
 	motion.ScriptMoveFromKnown = true
 	motion.ScriptMoveParabolicAmp = 0
@@ -6134,6 +6259,7 @@ func (s *Server) retryPendingScriptMove(ctx context.Context, motion *creatureMot
 	destX, destY, destZ := motion.PendingScriptMoveDestX, motion.PendingScriptMoveDestY, motion.PendingScriptMoveDestZ
 	walk := motion.PendingScriptMoveWalk
 	speed := motion.PendingScriptMoveSpeed
+	explicitSpeed := motion.PendingScriptMoveExplicitSpeed
 	allowDead := motion.PendingScriptMoveAllowDead
 	clearPendingScriptMove(motion)
 	s.motionMu.Unlock()
@@ -6161,11 +6287,12 @@ func (s *Server) retryPendingScriptMove(ctx context.Context, motion *creatureMot
 		motion.PendingScriptMoveDestZ = destZ
 		motion.PendingScriptMoveWalk = walk
 		motion.PendingScriptMoveSpeed = speed
+		motion.PendingScriptMoveExplicitSpeed = explicitSpeed
 		motion.PendingScriptMoveAllowDead = allowDead
 		s.motionMu.Unlock()
 		return
 	}
-	s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, speed, false, animTierNone, true)
+	s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, speed, false, animTierNone, true, explicitSpeed)
 }
 
 // tryLaunchCreatureHomePath runs the HomeMovementGenerator::SetTargetLocation
@@ -6191,7 +6318,7 @@ func (s *Server) tryLaunchCreatureHomePath(motion *creatureMotion, speed float32
 	if !ok || path.PathType()&pathfindNopath != 0 || len(points) < 2 {
 		return false
 	}
-	return s.launchCreaturePolySpline(motion, points, false, 0, motion.HomeO, true, speed, now)
+	return s.launchCreaturePolySpline(motion, points, false, 0, motion.HomeO, true, speed, now, 0)
 }
 
 // launchCreaturePolySpline launches a CalculatePath poly path
@@ -6208,7 +6335,7 @@ func (s *Server) tryLaunchCreatureHomePath(motion *creatureMotion, speed float32
 // (MoveSpline.cpp:210). The caller holds no motionMu: the launch
 // takes it for the stamp, then broadcasts after the unlock, like
 // launchCreatureScriptSplineSpeed.
-func (s *Server) launchCreaturePolySpline(motion *creatureMotion, points []pathVec, walk bool, moveType uint32, facing float32, hasFacing bool, speed float32, now time.Time) bool {
+func (s *Server) launchCreaturePolySpline(motion *creatureMotion, points []pathVec, walk bool, moveType uint32, facing float32, hasFacing bool, speed float32, now time.Time, explicitSpeed float32) bool {
 	if s == nil || motion == nil || len(points) < 2 || speed < 0.001 {
 		return false
 	}
@@ -6230,6 +6357,16 @@ func (s *Server) launchCreaturePolySpline(motion *creatureMotion, points []pathV
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.MoveVelocity = speed
+	// The banked _speed (PointMovementGenerator.cpp:120-121): only the
+	// script launcher passes one (MoveCharge / chain link, capped like
+	// the launch speed); every other poly leg runs at a derived speed
+	// and clears the bank, so a stale charge velocity can never exempt
+	// a later plain leg from the refresh rescale.
+	if explicitSpeed > 0 {
+		motion.ScriptMoveExplicitSpeed = capSplineVelocity(explicitSpeed, motion.RunSpeed)
+	} else {
+		motion.ScriptMoveExplicitSpeed = 0
+	}
 	motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ = from.X, from.Y, from.Z
 	motion.ScriptMoveFromKnown = true
 	motion.ScriptMoveParabolicAmp = 0
@@ -6304,7 +6441,7 @@ func (s *Server) launchCreatureConfusedSpline(motion *creatureMotion, now time.T
 		return false
 	}
 	speed := creatureSplineVelocity(motion, true)
-	if !s.launchCreaturePolySpline(motion, points, true, movementGeneratorConfused, 0, false, speed, now) {
+	if !s.launchCreaturePolySpline(motion, points, true, movementGeneratorConfused, 0, false, speed, now, 0) {
 		s.motionMu.Lock()
 		motion.WaitUntil = now.Add(time.Duration(800+rand.Intn(701)) * time.Millisecond)
 		s.motionMu.Unlock()
@@ -6568,6 +6705,7 @@ func (s *Server) launchCreatureParabolicSpline(motion *creatureMotion, destX, de
 	motion.ScriptMoveParabolicAmp = amplitude
 	motion.ScriptMoveFalling = false
 	motion.ScriptMoveType = movementGeneratorEffect
+	motion.ScriptMoveExplicitSpeed = 0
 	motion.ScriptMovePointID = id
 	motion.ScriptMoveDestX = destX
 	motion.ScriptMoveDestY = destY
@@ -6664,6 +6802,7 @@ func (s *Server) launchCreatureFallSpline(motion *creatureMotion, destX, destY, 
 	motion.ScriptMoveParabolicAmp = 0
 	motion.ScriptMoveFalling = true
 	motion.ScriptMoveType = movementGeneratorEffect
+	motion.ScriptMoveExplicitSpeed = 0
 	motion.ScriptMovePointID = id
 	motion.ScriptMoveDestX = destX
 	motion.ScriptMoveDestY = destY
@@ -6836,7 +6975,7 @@ func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, p
 		}
 		return true
 	}
-	if !s.launchCreaturePolySpline(motion, points, targetWalking, movementGeneratorFollow, tOrient, true, speed, now) {
+	if !s.launchCreaturePolySpline(motion, points, targetWalking, movementGeneratorFollow, tOrient, true, speed, now, 0) {
 		return true
 	}
 	return true
@@ -7021,6 +7160,7 @@ func (s *Server) startCreatureSeekAssistance(ctx context.Context, motion *creatu
 	motion.ScriptMoveFromKnown = false
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.MoveVelocity = speed
+	motion.ScriptMoveExplicitSpeed = 0
 	motion.SeekAssistPending = true
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, x, y, z, duration, false, 0, false, phase, transportGUID)
@@ -7477,6 +7617,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 					motion.Evading = true
 					motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 					motion.MoveVelocity = speed
+					motion.ScriptMoveExplicitSpeed = 0
 					motion.WaitUntil = motion.MoveEnds
 				}
 			} else {
@@ -9598,6 +9739,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// early return below must not starve it, like the
 			// spline-chain arm above.
 			s.repathCreatureSpeedPendingIfDue(ctx, motion, now)
+			// FleeingMovementGenerator::DoUpdate
+			// (FleeingMovementGenerator.cpp:88 first disjunct): the
+			// flee SPEED_UPDATE_PENDING arm re-paths while the flee
+			// spline is still in flight. The landed call sites below
+			// only ever see Moving cleared, so without this mid-flight
+			// call the flag — armed with no Moving gate in
+			// refreshCreatureRunSpeedMotion — can never fire; the
+			// helper's own guards make it a no-op unless the flag is
+			// set (its timer arm returns early while Moving).
+			s.repathCreatureFleeIfDue(motion, now)
 			return
 		}
 		motion.Moving = false
@@ -9701,6 +9852,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		if !chainSpline {
 			motion.ScriptMoveType = 0
+			motion.ScriptMoveExplicitSpeed = 0
 			motion.ScriptMovePointID = 0
 			motion.ScriptMoveDestX = 0
 			motion.ScriptMoveDestY = 0
@@ -9730,7 +9882,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// The untimed flee leg never expires on its own: while Fleeing is set
 	// the tick skips combat/wander until SetFeared(false) clears it.
 	// A landed leg re-paths on FleeNextAt (FleeingMovementGenerator
-	// ::DoUpdate, FleeingMovementGenerator.cpp:93-102) instead of
+	// ::DoUpdate, FleeingMovementGenerator.cpp:72-102) instead of
 	// standing still; the NOT_MOVE / casting-prevented stop is the
 	// launch gate inside launchCreatureFleeLeg (the mid-leg StopMoving
 	// has no Go twin — atomic splines finish first, the same delta as
@@ -9818,6 +9970,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.Evading = true
 			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 			motion.MoveVelocity = speed
+			motion.ScriptMoveExplicitSpeed = 0
 			motion.WaitUntil = motion.MoveEnds
 			return
 		}
@@ -12903,7 +13056,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								// MoveSplineInit.cpp:106-124, over the
 								// whole poly path; duration on the total
 								// path length).
-								if s.launchCreaturePolySpline(motion, points, false, movementGeneratorChase, faceAngle, true, speed, now) {
+								if s.launchCreaturePolySpline(motion, points, false, movementGeneratorChase, faceAngle, true, speed, now, 0) {
 									setCreatureCannotReachTarget(motion, false, now)
 									motion.ChaseTX, motion.ChaseTY = target.X, target.Y
 									motion.ChaseArrived = false
@@ -13913,7 +14066,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if points := path.PathPoints(); len(points) >= 2 {
 				end := points[len(points)-1]
 				heading := float32(math.Atan2(float64(end.Y-motion.Y), float64(end.X-motion.X)))
-				if s.launchCreaturePolySpline(motion, points, walk, 0, facing, hasFacing, speed, now) {
+				if s.launchCreaturePolySpline(motion, points, walk, 0, facing, hasFacing, speed, now, 0) {
 					motion.MoveHeading = heading
 					motion.WaitUntil = motion.MoveEnds.Add(wait)
 					// WaypointMovementGenerator::StartMove
@@ -13934,6 +14087,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// so the heading would otherwise be lost.
 	motion.MoveHeading = float32(math.Atan2(float64(destY-motion.Y), float64(destX-motion.X)))
 	motion.MoveVelocity = speed
+	motion.ScriptMoveExplicitSpeed = 0
 	s.broadcastMonsterMoveFlagsInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk, facing, hasFacing, motion.PhaseMask, motion.TransportGUID, false, animTier)
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
