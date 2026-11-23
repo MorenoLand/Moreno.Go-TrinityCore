@@ -6519,6 +6519,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		// with Clear(): the ACTIVE chase/follow slots drop with the
 		// engagement.
 		s.clearScriptChaseFollow(motion)
+		s.clearCreatureFleeState(motion)
 		s.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, 0, true)
 		return nil, nil
 	}
@@ -6615,6 +6616,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.ScriptChaseDist = dist
 		motion.ScriptChaseAngle = angle
 		motion.ChaseTargetKnown = false
+		// ChaseMovementGenerator::Initialize (ChaseMovementGenerator
+		// .cpp:79-85) sets INFORM_ENABLED on every install (DirectAdd
+		// removes the same-priority old generator, MotionMaster
+		// .cpp:1187), so a fresh MoveChase re-arms the arrival
+		// inform/face latches instead of inheriting a consumed pair.
+		motion.ChaseInformed = false
+		motion.ChaseArrived = false
 		s.motionMu.Unlock()
 		return nil, nil
 	}

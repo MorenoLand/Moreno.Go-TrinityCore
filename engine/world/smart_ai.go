@@ -6328,6 +6328,13 @@ func (s *Server) smartActionSetRangedMovement(ctx context.Context, motion *creat
 			tm.ScriptChaseDist = dist
 			tm.ScriptChaseAngle = angle
 			tm.ChaseTargetKnown = false
+			// ChaseMovementGenerator::Initialize (ChaseMovementGenerator
+			// .cpp:79-85) sets INFORM_ENABLED on every install (DirectAdd
+			// removes the same-priority old generator, MotionMaster
+			// .cpp:1187), so a fresh chase install re-arms the arrival
+			// inform/face latches instead of inheriting a consumed pair.
+			tm.ChaseInformed = false
+			tm.ChaseArrived = false
 		}
 		s.motionMu.Unlock()
 	}

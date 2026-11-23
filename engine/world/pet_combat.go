@@ -272,21 +272,46 @@ func (s *Server) onPetCommandAttack(ctx context.Context, mapID, instanceID uint3
 	}
 	s.motionMu.Lock()
 	enteredCombat := false
+	refused := false
 	if motion := s.motionMapLocked(mapID, instanceID)[petGUID]; motion != nil && motion.Health > 0 {
-		enteredCombat = !motion.InCombat
-		motion.TargetGUID = targetGUID
-		motion.InCombat = true
-		motion.PetCommand = PetCommandAttack
-		// DoAttack clears the charm flags (PetAI.cpp:420-421): an
-		// attack order ends any return-to-owner in progress, and
-		// clears IsAtStay — the pet leaves stay to chase, and the
-		// stay-return arm re-sets it on arrival (or the epsilon gate
-		// in the stay branch when the pet never moved).
-		motion.PetReturning = false
-		motion.PetAtStay = false
-		motion.Moving = true
+		// PetAI::AttackStart (PetAI.cpp:254-257): the command never
+		// switches the pet off a live victim — the guard runs before
+		// _AttackStart, so it also covers the CanAttack
+		// owner-selected-unit arm below it (PetAI.cpp:530-541), which
+		// Go has no twin for. The defensive twins carry the same guard
+		// (triggerPetDefensive / triggerPetOwnerAttacked); the attack
+		// command was the one entry point missing it. TargetGUID != 0
+		// && InCombat is the live-victim proxy the pet tick maintains:
+		// its disengage clears both together on victim death/loss
+		// (petCombatPursuitAndAttack).
+		if motion.TargetGUID != 0 && motion.InCombat {
+			refused = true
+		}
+		// PetAI::CanAttack returning arm (PetAI.cpp:514-515) via
+		// _AttackStart (PetAI.cpp:268): a pet returning to its owner
+		// on a follow command cannot start an attack.
+		if !refused && motion.PetReturning && motion.PetCommand == PetCommandFollow {
+			refused = true
+		}
+		if !refused {
+			enteredCombat = !motion.InCombat
+			motion.TargetGUID = targetGUID
+			motion.InCombat = true
+			motion.PetCommand = PetCommandAttack
+			// DoAttack clears the charm flags (PetAI.cpp:420-421): an
+			// attack order ends any return-to-owner in progress, and
+			// clears IsAtStay — the pet leaves stay to chase, and the
+			// stay-return arm re-sets it on arrival (or the epsilon gate
+			// in the stay branch when the pet never moved).
+			motion.PetReturning = false
+			motion.PetAtStay = false
+			motion.Moving = true
+		}
 	}
 	s.motionMu.Unlock()
+	if refused {
+		return
+	}
 	// Eluna CREATURE_EVENT_ON_ENTER_COMBAT (1): C++ PetAI::AttackStart
 	// reaches it via ElunaCreatureAI::JustEngagedWith for
 	// binding-carrying pets (CreatureHooks.cpp:105-113). Fires only on

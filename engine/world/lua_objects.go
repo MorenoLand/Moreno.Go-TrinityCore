@@ -492,6 +492,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			s.server.motionMu.Unlock()
 			if !owned {
 				s.server.clearScriptChaseFollow(motion)
+				s.server.clearCreatureFleeState(motion)
 				s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, 0, true)
 			}
 		}
@@ -559,6 +560,13 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			motion.ScriptChaseDist = dist
 			motion.ScriptChaseAngle = angle
 			motion.ChaseTargetKnown = false
+			// ChaseMovementGenerator::Initialize (ChaseMovementGenerator
+			// .cpp:79-85) sets INFORM_ENABLED on every install (DirectAdd
+			// removes the same-priority old generator, MotionMaster
+			// .cpp:1187), so a fresh MoveChase re-arms the arrival
+			// inform/face latches instead of inheriting a consumed pair.
+			motion.ChaseInformed = false
+			motion.ChaseArrived = false
 			s.server.motionMu.Unlock()
 		}
 		return nil, nil

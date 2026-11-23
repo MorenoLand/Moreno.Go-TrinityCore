@@ -6774,8 +6774,33 @@ func (s *Server) clearScriptChaseFollow(motion *creatureMotion) {
 	motion.ScriptFollowTargetGUID = 0
 	motion.ScriptFollowDist = 0
 	motion.ScriptFollowAngle = 0
+	// ChaseMovementGenerator::Initialize (ChaseMovementGenerator.cpp:79-85)
+	// sets INFORM_ENABLED on every install; the generator dies with the
+	// slot, so the arrival latches reset with it — a fresh chase install
+	// or re-engage informs again instead of inheriting a consumed latch.
+	motion.ChaseInformed = false
+	motion.ChaseArrived = false
 	motion.CannotReachTarget = false
 	motion.CannotReachSince = time.Time{}
+	s.motionMu.Unlock()
+}
+
+// clearCreatureFleeState drops the flee-generator state, the MotionMaster::
+// Clear twin for sites that remove every generator: MoveTargetedHome opens
+// with Clear() (MotionMaster.cpp:551-573), finalizing a HIGHEST flee
+// generator (FleeingMovementGenerator<Creature>::DoFinalize, :123-135).
+// The field set matches setCreatureFeared(false). Takes motionMu itself,
+// like clearScriptChaseFollow.
+func (s *Server) clearCreatureFleeState(motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	motion.Fleeing = false
+	motion.FleeingUntil = time.Time{}
+	motion.FleeTargetGUID = 0
+	motion.FleeNextAt = time.Time{}
+	motion.FleeSpeedUpdatePending = false
 	s.motionMu.Unlock()
 }
 
@@ -7641,6 +7666,21 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.ScriptFollowTargetGUID = 0
 	motion.ScriptFollowDist = 0
 	motion.ScriptFollowAngle = 0
+	// ChaseMovementGenerator::Initialize (ChaseMovementGenerator.cpp:79-85)
+	// sets INFORM_ENABLED on every install; the generator dies with the
+	// slot, so the arrival latches reset with it.
+	motion.ChaseInformed = false
+	motion.ChaseArrived = false
+	// MotionMaster::Clear (DirectClear, MotionMaster.cpp:431-445) finalizes
+	// every generator, including a HIGHEST flee generator
+	// (FleeingMovementGenerator<Creature>::DoFinalize, :123-135) — and
+	// CreatureAI::_EnterEvadeMode removes the fear aura first
+	// (CreatureAI.cpp:304), which ends SetFeared. Go's evade already
+	// clears the auras but never reconciled the flee state, so an
+	// evade-while-feared kept re-launching flee legs from the tick's
+	// flee arm ahead of the evade-home finalize, and Evading never
+	// cleared.
+	s.clearCreatureFleeState(motion)
 	// The same Clear drops a deferred Point/Home launch: the generator
 	// it belonged to is gone, so the tick must not retry or finalize it
 	// after the evade (the escort-return arm below may record a fresh
@@ -9648,6 +9688,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.ScriptFollowTargetGUID = 0
 		motion.ScriptFollowDist = 0
 		motion.ScriptFollowAngle = 0
+		// ChaseMovementGenerator::Initialize (ChaseMovementGenerator
+		// .cpp:79-85) sets INFORM_ENABLED on every install; the
+		// generator dies with the creature, so the arrival latches
+		// reset with it.
+		motion.ChaseInformed = false
+		motion.ChaseArrived = false
 		// MotionMaster::Clear finalizes the generators too: a deferred
 		// Point/Home launch dies with the creature instead of retrying
 		// on respawn.
@@ -10336,6 +10382,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
 				nextVictim := motion.ThreatMgr.GetCurrentVictim()
 				motion.TargetGUID = nextVictim
+				// ScriptedAI::AttackStart -> UnitAI::AttackStart
+				// (UnitAI.cpp:29-40) -> MoveChase: a victim switch
+				// installs a fresh chase generator (DirectAdd removes
+				// the same-priority old one, MotionMaster.cpp:1187),
+				// so Initialize re-arms INFORM_ENABLED
+				// (ChaseMovementGenerator.cpp:79-85) and the new victim
+				// gets its arrival inform.
+				motion.ChaseInformed = false
+				motion.ChaseArrived = false
 				entries := motion.ThreatMgr.SortedEntriesAvailable()
 				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries, motion.PhaseMask)
 				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, nextVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
@@ -10525,6 +10580,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
 				nextVictim := motion.ThreatMgr.GetCurrentVictim()
 				motion.TargetGUID = nextVictim
+				// ScriptedAI::AttackStart -> UnitAI::AttackStart
+				// (UnitAI.cpp:29-40) -> MoveChase: a victim switch
+				// installs a fresh chase generator (DirectAdd removes
+				// the same-priority old one, MotionMaster.cpp:1187),
+				// so Initialize re-arms INFORM_ENABLED
+				// (ChaseMovementGenerator.cpp:79-85) and the new victim
+				// gets its arrival inform.
+				motion.ChaseInformed = false
+				motion.ChaseArrived = false
 				entries := motion.ThreatMgr.SortedEntriesAvailable()
 				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries, motion.PhaseMask)
 				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, nextVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
@@ -14380,6 +14444,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// LAND/TAKEOFF set no walk leg, so they inherit the persistent
 		// flag via the MoveSplineInit ctor default.
 		walk = point.MoveType == 0 || ((point.MoveType == 2 || point.MoveType == 3) && motion.Walking) // WAYPOINT_MOVE_TYPE_WALK (WaypointDefines.h:26); default RUN
+		// WaypointMovementGenerator::StartMove (WaypointMovementGenerator
+		// .cpp:359-366): RUN calls SetWalk(false) and WALK calls
+		// SetWalk(true) — the persistent walk flag — while LAND/TAKEOFF
+		// set no walk leg and inherit it. The per-leg walk above read
+		// the old flag for LAND/TAKEOFF, so the write lands here, after
+		// the read: without it a RUN node followed by a LAND/TAKEOFF
+		// node walked in Go but ran in C++ (and vice versa for WALK).
+		if point.MoveType == 0 {
+			motion.Walking = true
+		} else if point.MoveType == 1 {
+			motion.Walking = false
+		}
 		speed = creatureSplineVelocityExplicit(motion, walk)
 		// WaypointMovementGenerator.cpp:353-359: LAND sets
 		// SetAnimation(Ground) and TAKEOFF SetAnimation(Hover); the
