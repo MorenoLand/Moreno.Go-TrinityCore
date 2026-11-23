@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strconv"
@@ -1173,21 +1174,63 @@ func (s *session) trainerValidForCreature(ctx context.Context, creatureEntry uin
 type gossipOptionRow struct {
 	id, icon, optionType, requiredFlags, actionMenuID, actionPoiID, coded, boxMoney int64
 	message, boxMessage                                                             string
+	optionBroadcastID, boxBroadcastID                                               int64
+}
+
+// resolveGossipMenuText mirrors the option/box text selection in
+// Player::PrepareGossipMenu (Player.cpp:14496-14528): a broadcast text wins,
+// resolved with BroadcastText::GetText (ObjectMgr.h:516) for the session
+// locale and the player's gender (a female player takes Text1 when the enUS
+// Text1 is non-empty, else Text); without a broadcast text, a non-enUS
+// session falls back to gossip_menu_option_locale; otherwise the base column
+// stands. Locale strings override only when non-empty (GetLocaleString).
+func (s *session) resolveGossipMenuText(ctx context.Context, broadcastID int64, base string, box bool, menuID, optionID uint32) string {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return base
+	}
+	if broadcastID != 0 {
+		var text, text1 sql.NullString
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, Text1 FROM broadcast_text WHERE ID = ?", broadcastID).Scan(&text, &text1); err == nil {
+			locText, locText1 := sql.NullString{}, sql.NullString{}
+			if s.locale != 0 && int(s.locale) < len(localeNames) {
+				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, Text1 FROM broadcast_text_locale WHERE ID = ? AND locale = ?", broadcastID, localeNames[s.locale]).Scan(&locText, &locText1)
+			}
+			if s.player != nil && s.player.Gender != 0 && text1.Valid && text1.String != "" {
+				if locText1.Valid && locText1.String != "" {
+					return locText1.String
+				}
+				return text1.String
+			}
+			if locText.Valid && locText.String != "" {
+				return locText.String
+			}
+			return text.String
+		}
+	}
+	if s.locale != 0 && int(s.locale) < len(localeNames) {
+		column := "OptionText"
+		if box {
+			column = "BoxText"
+		}
+		var loc sql.NullString
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT "+column+" FROM gossip_menu_option_locale WHERE MenuID = ? AND OptionID = ? AND Locale = ?", menuID, optionID, localeNames[s.locale]).Scan(&loc); err == nil && loc.Valid && loc.String != "" {
+			return loc.String
+		}
+	}
+	return base
 }
 
 // loadGossipOptionRows runs the gossip_menu_option lookup shared by the
 // creature and gameobject menu loaders (broadcast_text fallback included).
 func (s *session) loadGossipOptionRows(ctx context.Context, menuID uint32) ([]gossipOptionRow, error) {
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT gmo.OptionID, gmo.OptionIcon,
-		COALESCE(NULLIF(gmo.OptionText, ''), bt.Text, ''),
+		COALESCE(gmo.OptionText, ''),
 		gmo.OptionType, gmo.OptionNpcFlag, gmo.ActionMenuID, gmo.ActionPoiID, gmo.BoxCoded, gmo.BoxMoney,
-		COALESCE(NULLIF(gmo.BoxText, ''), btb.Text, '')
+		COALESCE(gmo.BoxText, ''), gmo.OptionBroadcastTextID, gmo.BoxBroadcastTextID
 		FROM gossip_menu_option AS gmo
-		LEFT JOIN broadcast_text AS bt ON bt.ID = gmo.OptionBroadcastTextID
-		LEFT JOIN broadcast_text AS btb ON btb.ID = gmo.BoxBroadcastTextID
 		WHERE gmo.MenuID = ? ORDER BY gmo.OptionID`, menuID)
 	if err != nil {
-		rows, err = s.server.WorldStore.DB.QueryContext(ctx, "SELECT OptionID, OptionIcon, COALESCE(OptionText, ''), OptionType, OptionNpcFlag, ActionMenuID, ActionPoiID, BoxCoded, BoxMoney, COALESCE(BoxText, '') FROM gossip_menu_option WHERE MenuID = ? ORDER BY OptionID", menuID)
+		rows, err = s.server.WorldStore.DB.QueryContext(ctx, "SELECT OptionID, OptionIcon, COALESCE(OptionText, ''), OptionType, OptionNpcFlag, ActionMenuID, ActionPoiID, BoxCoded, BoxMoney, COALESCE(BoxText, ''), OptionBroadcastTextID, BoxBroadcastTextID FROM gossip_menu_option WHERE MenuID = ? ORDER BY OptionID", menuID)
 		if err != nil {
 			if missingTable(err) {
 				return nil, nil
@@ -1199,9 +1242,14 @@ func (s *session) loadGossipOptionRows(ctx context.Context, menuID uint32) ([]go
 	result := make([]gossipOptionRow, 0, 32)
 	for rows.Next() {
 		var row gossipOptionRow
-		if err := rows.Scan(&row.id, &row.icon, &row.message, &row.optionType, &row.requiredFlags, &row.actionMenuID, &row.actionPoiID, &row.coded, &row.boxMoney, &row.boxMessage); err != nil {
+		if err := rows.Scan(&row.id, &row.icon, &row.message, &row.optionType, &row.requiredFlags, &row.actionMenuID, &row.actionPoiID, &row.coded, &row.boxMoney, &row.boxMessage, &row.optionBroadcastID, &row.boxBroadcastID); err != nil {
 			return nil, err
 		}
+		// Player::PrepareGossipMenu (Player.cpp:14496-14528): broadcast
+		// text (locale + player gender) wins over the base column, with
+		// gossip_menu_option_locale as the non-broadcast fallback.
+		row.message = s.resolveGossipMenuText(ctx, row.optionBroadcastID, row.message, false, menuID, uint32(row.id))
+		row.boxMessage = s.resolveGossipMenuText(ctx, row.boxBroadcastID, row.boxMessage, true, menuID, uint32(row.id))
 		result = append(result, row)
 	}
 	return result, rows.Err()
@@ -1378,6 +1426,21 @@ func (s *session) prepareGameObjectGossip(ctx context.Context, guid uint64, entr
 // (GossipDef.cpp:319-370): guid, the quest_greeting row keyed by entry and the
 // source's type (or an empty title with zero emotes), then the quest rows
 // with the 3.3.3 autocomplete byte.
+// questGreetingDBType maps a TYPEID (3 unit / 5 gameobject) to the
+// quest_greeting / quest_greeting_locale Type column: C++ stores 0 for
+// creature and 1 for gameobject in the DB and converts to TYPEID only in
+// the in-memory loader (ObjectMgr.cpp:6447-6507, 6508+).
+func questGreetingDBType(greetType uint32) uint32 {
+	switch greetType {
+	case typeIDUnit:
+		return 0
+	case typeIDGameObject:
+		return 1
+	default:
+		return greetType
+	}
+}
+
 func (s *session) buildQuestGiverQuestList(ctx context.Context, guid uint64, entry uint32, greetType uint32, quests []gossipQuestItem) []byte {
 	title := ""
 	var emoteDelay, emoteType uint32
@@ -1388,19 +1451,30 @@ func (s *session) buildQuestGiverQuestList(ctx context.Context, guid uint64, ent
 		// LoadQuestGreetings (ObjectMgr.cpp:6447): ID, Type, GreetEmoteType, GreetEmoteDelay, Greeting.
 		if err := s.server.WorldStore.DB.QueryRowContext(ctx,
 			`SELECT GreetEmoteType, GreetEmoteDelay, Greeting FROM quest_greeting WHERE ID = ? AND Type = ? LIMIT 1`,
-			entry, greetType).Scan(&greetEmoteType, &greetEmoteDelay, &greeting); err == nil {
+			entry, questGreetingDBType(greetType)).Scan(&greetEmoteType, &greetEmoteDelay, &greeting); err == nil {
 			title = greeting
 			// GossipDef.cpp:340-341: the packet carries delay then type.
 			emoteDelay, emoteType = uint32(greetEmoteDelay), uint32(greetEmoteType)
 			greetingFound = true
+			// PlayerMenu::SendQuestGiverQuestList (GossipDef.cpp:324-334):
+			// a non-enUS session overrides the greeting from
+			// quest_greeting_locale (non-empty only, GetLocaleString).
+			if s.locale != 0 && int(s.locale) < len(localeNames) {
+				var locGreeting sql.NullString
+				if lerr := s.server.WorldStore.DB.QueryRowContext(ctx,
+					`SELECT Greeting FROM quest_greeting_locale WHERE ID = ? AND Type = ? AND locale = ? LIMIT 1`,
+					entry, questGreetingDBType(greetType), localeNames[s.locale]).Scan(&locGreeting); lerr == nil && locGreeting.Valid && locGreeting.String != "" {
+					title = locGreeting.String
+				}
+			}
 		}
 	}
 	// Player::SendPreparedQuest (Player.cpp:14855-14880): with no
 	// quest_greeting row, a creature source falls back to its NPC gossip
 	// text title (Text_0, else Text_1) and the first emote from
 	// GetGossipTextId(creature); a gameobject source keeps the empty title
-	// and zero emotes. npc_text locale overrides are unmodeled with the
-	// rest of the no-locale divergence.
+	// and zero emotes. The fallback reads through loadNPCText, so the
+	// broadcast-text / npc_text_locale selection above applies to it too.
 	if !greetingFound && greetType == typeIDUnit && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		var gossipMenuID int64
 		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT gossip_menu_id FROM creature_template WHERE entry = ?", entry).Scan(&gossipMenuID); err == nil && gossipMenuID != 0 {

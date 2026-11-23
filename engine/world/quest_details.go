@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -498,15 +499,169 @@ func (s *session) checkPlayerQuestGiverGates(ctx context.Context, giverGUID uint
 }
 
 // canShareQuest mirrors Player::CanShareQuest (Player.cpp:16145): the quest
-// must carry QUEST_FLAGS_SHARABLE and the giver must have it active. The
-// pool-availability arm has no Go model.
+// must carry QUEST_FLAGS_SHARABLE and the giver must have it active. A
+// pooled quest that is not currently active (Wintergrasp/Dalaran weekly
+// rotation) cannot be shared: C++ answers the sharer with
+// QUEST_PARTY_MSG_CANT_BE_SHARED_TODAY from inside CanShareQuest, so the
+// push goes out here, on the giver's session, before returning false.
 func (s *session) canShareQuest(ctx context.Context, questID uint32) bool {
 	data, err := s.loadQuestDetailData(ctx, questID)
 	if err != nil || data.Flags&questFlagsSharable == 0 {
 		return false
 	}
 	st, _ := s.characterQuestStatus(ctx, questID)
-	return st != 0
+	if st == 0 {
+		return false
+	}
+	if !s.isQuestPoolActive(ctx, questID) {
+		if s.player != nil {
+			s.sendPushToPartyResponse(s.playerGUID, QuestPartyMsgCantBeSharedToday)
+		}
+		return false
+	}
+	return true
+}
+
+// isQuestPoolActive mirrors QuestPoolMgr::IsQuestActive (QuestPools.cpp:287):
+// a quest in no pool is always active; a pooled quest is active only while
+// it is in the pool's saved active set (pool_quest_save, characters DB).
+// QuestPoolMgr::LoadFromDB (QuestPools.cpp:78-260) only pools daily, weekly
+// and monthly quests, drops pools with no template row, and regenerates the
+// active set (persisting it) when the saved set is empty or its active
+// index count disagrees with numActive — the same rules apply here, lazily,
+// because Go has no pool-manager load step.
+func (s *session) isQuestPoolActive(ctx context.Context, questID uint32) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil ||
+		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	var poolID int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT poolId FROM quest_pool_members WHERE questId = ?", questID).Scan(&poolID); err != nil {
+		return true // not pooled (or unreadable): C++ returns true for unpooled quests
+	}
+	if !s.isQuestRotationEligible(ctx, questID) {
+		return true // C++ LoadFromDB never admits a non-daily/weekly/monthly quest to a pool
+	}
+	members, numActive, ok := s.loadQuestPoolMembers(ctx, uint32(poolID))
+	if !ok {
+		return true // no template row: C++ LoadFromDB drops the pool's members
+	}
+	saved := make(map[uint32]bool)
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest_id FROM pool_quest_save WHERE pool_id = ?", poolID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var savedQuest int64
+			// A saved quest outside the pool is dropped, matching the
+			// LoadFromDB warning arm (QuestPools.cpp:224-228).
+			if rows.Scan(&savedQuest) == nil {
+				if _, inPool := members[uint32(savedQuest)]; inPool {
+					saved[uint32(savedQuest)] = true
+				}
+			}
+		}
+	}
+	activeIndices := make(map[int]bool)
+	for quest := range saved {
+		activeIndices[members[quest]] = true
+	}
+	// LoadFromDB post-processing (QuestPools.cpp:201-214): an empty saved
+	// set, or one whose active index count disagrees with numActive,
+	// regenerates the pool and persists the new active set.
+	if len(saved) == 0 || len(activeIndices) != numActive {
+		saved = s.regenerateQuestPool(ctx, uint32(poolID), members, numActive)
+	}
+	return saved[questID]
+}
+
+// isQuestRotationEligible reports whether a quest may belong to a quest pool:
+// daily, weekly (quest_template.Flags) or monthly (quest_template_addon
+// SpecialFlags), per Quest::IsDailyOrWeekly/IsMonthly (QuestDef.h:288-292)
+// as applied by QuestPoolMgr::LoadFromDB (QuestPools.cpp:107-112).
+func (s *session) isQuestRotationEligible(ctx context.Context, questID uint32) bool {
+	var flags int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0) FROM quest_template WHERE ID = ?", questID).Scan(&flags); err != nil {
+		return false
+	}
+	if flags&(questFlagsDaily|questFlagsWeekly) != 0 {
+		return true
+	}
+	var specialFlags int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags); err == nil && specialFlags&questSpecialMonthly != 0 {
+		return true
+	}
+	return false
+}
+
+// loadQuestPoolMembers reads one pool's template and members. It returns the
+// member quest -> poolIndex map and numActive (clamped to the index count,
+// as LoadFromDB does at QuestPools.cpp:172-176), or ok=false when the pool
+// has no template row. Non-rotating member quests are skipped, matching the
+// LoadFromDB admission check.
+func (s *session) loadQuestPoolMembers(ctx context.Context, poolID uint32) (map[uint32]int, int, bool) {
+	var numActive int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT numActive FROM quest_pool_template WHERE poolId = ?", poolID).Scan(&numActive); err != nil {
+		return nil, 0, false
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT questId, poolIndex FROM quest_pool_members WHERE poolId = ? ORDER BY poolIndex", poolID)
+	if err != nil {
+		return nil, 0, false
+	}
+	defer rows.Close()
+	members := make(map[uint32]int)
+	distinctIndices := make(map[int]bool)
+	for rows.Next() {
+		var questID, poolIndex int64
+		if rows.Scan(&questID, &poolIndex) != nil || questID <= 0 || poolIndex < 0 {
+			continue
+		}
+		if !s.isQuestRotationEligible(ctx, uint32(questID)) {
+			continue
+		}
+		members[uint32(questID)] = int(poolIndex)
+		distinctIndices[int(poolIndex)] = true
+	}
+	if len(distinctIndices) == 0 {
+		return members, 0, true
+	}
+	// LoadFromDB clamps numActive to the member count after dropping empty
+	// index slots (QuestPools.cpp:172-176); the distinct-index count is the
+	// same bound here.
+	if int(numActive) > len(distinctIndices) {
+		numActive = int64(len(distinctIndices))
+	}
+	return members, int(numActive), true
+}
+
+// regenerateQuestPool mirrors RegeneratePool + SaveToDB (QuestPools.cpp:36-66):
+// numActive member indices are drawn at random (partial Fisher-Yates over
+// the index list, urand(i, n) per draw) and every quest at a drawn index
+// becomes active; the new set replaces the pool's pool_quest_save rows. It
+// returns the new active set.
+func (s *session) regenerateQuestPool(ctx context.Context, poolID uint32, members map[uint32]int, numActive int) map[uint32]bool {
+	indices := make([]int, 0)
+	byIndex := make(map[int][]uint32)
+	for quest, index := range members {
+		if _, seen := byIndex[index]; !seen {
+			indices = append(indices, index)
+		}
+		byIndex[index] = append(byIndex[index], quest)
+	}
+	active := make(map[uint32]bool)
+	for i := 0; i < numActive && i < len(indices); i++ {
+		j := i + rand.Intn(len(indices)-i)
+		indices[i], indices[j] = indices[j], indices[i]
+		for _, quest := range byIndex[indices[i]] {
+			active[quest] = true
+		}
+	}
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pool_quest_save WHERE pool_id = ?", poolID)
+		for quest := range active {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT INTO pool_quest_save (pool_id, quest_id) VALUES (?, ?)", poolID, quest)
+		}
+	}
+	return active
 }
 
 func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byte) bool {

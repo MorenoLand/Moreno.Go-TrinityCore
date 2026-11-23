@@ -2368,8 +2368,9 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["CanTitanGrip"] = luaNoArgs(func() any { return playerHasSpell(state, 46917) })
 	// CanShareQuest is Player::CanShareQuest (PlayerMethods.h:235-242;
 	// Player.cpp:16145) via the quest_details.go helper: sharable flag
-	// plus an active status row. The pool-inactive arm (and its
-	// QUEST_PARTY_MSG_CANT_BE_SHARED_TODAY push) has no Go model.
+	// plus an active status row plus the pool-active arm, which answers
+	// QUEST_PARTY_MSG_CANT_BE_SHARED_TODAY to the sharer when the pooled
+	// quest is not currently active.
 	methods["CanShareQuest"] = func(ctx context.Context, args []any) ([]any, error) {
 		entry, err := luaUint32Arg(args, 0)
 		if err != nil {

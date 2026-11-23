@@ -82,14 +82,17 @@ func (s *session) loadNPCText(ctx context.Context, textID uint32) ([]npcTextOpti
 	if err := row.Scan(targets...); err != nil {
 		return nil, err
 	}
+	var broadcastResolved [npcTextOptions]bool
 	for index := range options {
 		options[index].Probability = float32(probabilities[index])
 		options[index].Text0, options[index].Text1 = text0[index].String, text1[index].String
 		if broadcastTextIDs[index] != 0 {
-			var broadcast0, broadcast1 sql.NullString
-			err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, Text1 FROM broadcast_text WHERE ID = ?", broadcastTextIDs[index]).Scan(&broadcast0, &broadcast1)
-			if err == nil {
-				options[index].Text0, options[index].Text1 = broadcast0.String, broadcast1.String
+			// HandleNpcTextQueryOpcode (QueryHandler.cpp:226-237): the
+			// broadcast text wins over the npc_text columns, resolved
+			// locale- and gender-aware (see broadcastNPCText).
+			if broadcast0, broadcast1, ok := s.broadcastNPCText(ctx, broadcastTextIDs[index]); ok {
+				options[index].Text0, options[index].Text1 = broadcast0, broadcast1
+				broadcastResolved[index] = true
 			}
 		}
 		options[index].Language = uint32(languages[index])
@@ -97,7 +100,67 @@ func (s *session) loadNPCText(ctx context.Context, textID uint32) ([]npcTextOpti
 			options[index].Emotes[emote] = npcTextEmote{Delay: uint32(emoteDelays[index][emote]), ID: uint32(emoteIDs[index][emote])}
 		}
 	}
+	// QueryHandler.cpp:239-246: with no broadcast text and a non-enUS
+	// session, npc_text_locale overrides the base Text_0/Text_1 per option
+	// (non-empty locale strings only, ObjectMgr::GetLocaleString).
+	if s.locale != 0 && int(s.locale) < len(localeNames) && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		columns := make([]string, 0, npcTextOptions*2)
+		for index := 0; index < npcTextOptions; index++ {
+			suffix := strconv.Itoa(index)
+			columns = append(columns, "Text"+suffix+"_0", "Text"+suffix+"_1")
+		}
+		var locText [npcTextOptions][2]sql.NullString
+		targets := make([]any, 0, len(columns))
+		for index := range locText {
+			targets = append(targets, &locText[index][0], &locText[index][1])
+		}
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT "+strings.Join(columns, ", ")+" FROM npc_text_locale WHERE ID = ? AND Locale = ?", textID, localeNames[s.locale]).Scan(targets...); err == nil {
+			for index := range options {
+				// A dangling BroadcastTextID (row missing from
+				// broadcast_text) counts as no broadcast text in C++
+				// (GetBroadcastText null), so the locale fallback still
+				// applies to that option.
+				if broadcastResolved[index] {
+					continue
+				}
+				if locText[index][0].Valid && locText[index][0].String != "" {
+					options[index].Text0 = locText[index][0].String
+				}
+				if locText[index][1].Valid && locText[index][1].String != "" {
+					options[index].Text1 = locText[index][1].String
+				}
+			}
+		}
+	}
 	return options, nil
+}
+
+// broadcastNPCText mirrors the broadcast-text arm of
+// HandleNpcTextQueryOpcode (QueryHandler.cpp:226-237):
+// BroadcastText::GetText(locale, GENDER_MALE, true) for Text_0 and
+// GetText(locale, GENDER_FEMALE, true) for Text_1 — the forceGender=true
+// call always reads the Text1 column for the female line, and a non-empty
+// broadcast_text_locale row overrides the enUS text per column.
+func (s *session) broadcastNPCText(ctx context.Context, broadcastID int64) (string, string, bool) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return "", "", false
+	}
+	var text, text1 sql.NullString
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, Text1 FROM broadcast_text WHERE ID = ?", broadcastID).Scan(&text, &text1); err != nil {
+		return "", "", false
+	}
+	if s.locale != 0 && int(s.locale) < len(localeNames) {
+		var locText, locText1 sql.NullString
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, Text1 FROM broadcast_text_locale WHERE ID = ? AND locale = ?", broadcastID, localeNames[s.locale]).Scan(&locText, &locText1); err == nil {
+			if locText.Valid && locText.String != "" {
+				text = locText
+			}
+			if locText1.Valid && locText1.String != "" {
+				text1 = locText1
+			}
+		}
+	}
+	return text.String, text1.String, true
 }
 
 func defaultNPCTextOptions() []npcTextOption {

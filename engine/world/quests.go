@@ -1485,14 +1485,13 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 	}
 
 	// Player::CanShareQuest (Player.cpp:16145): the quest must carry
-	// QUEST_FLAGS_SHARABLE and the sender must have it active. (The
-	// pool-availability arm has no Go model.) C++ runs CanShareQuest before
-	// the group check (QuestHandler.cpp:567-578), so a groupless player
-	// pushing a non-sharable or unknown quest gets silence, not NOT_IN_PARTY.
-	if data.Flags&questFlagsSharable == 0 {
-		return true
-	}
-	if st, _ := s.characterQuestStatus(ctx, questID); st == 0 {
+	// QUEST_FLAGS_SHARABLE, the sender must have it active, and a pooled
+	// quest must be currently active. C++ runs CanShareQuest before the
+	// group check (QuestHandler.cpp:567-578), so a groupless player pushing
+	// a non-sharable or unknown quest gets silence, not NOT_IN_PARTY; the
+	// pool-inactive arm answers QUEST_PARTY_MSG_CANT_BE_SHARED_TODAY from
+	// inside CanShareQuest.
+	if !s.canShareQuest(ctx, questID) {
 		return true
 	}
 
@@ -1726,6 +1725,68 @@ func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
 			questgivers = append(questgivers, questgiver{guid: gameObjectGUID(uint32(guid), uint32(entry)), entry: uint32(entry), enderTable: "gameobject_questender", starterTable: "gameobject_queststarter"})
 		}
 		objectRows.Close()
+	}
+	// Player::SendQuestGiverStatusMultiple (Player.cpp:17144-17160): the sweep
+	// runs over m_clientGUIDs and resolves creatures via
+	// ObjectAccessor::GetCreatureOrPetOrVehicle — pets and vehicles included —
+	// skipping hostile ones. Go has no per-session client-GUID set, so the DB
+	// sweep above stands in for in-range creatures; pets and vehicles are not
+	// DB spawns, so they are collected here from every live session's
+	// PetGUID/VehicleGUID (findSessionByPetGUID precedent, chat.go:1238) and
+	// resolved through their motion records with the same distance,
+	// QUESTGIVER-flag and hostile gates as the DB arm.
+	if s.server != nil {
+		seen := make(map[uint64]bool, len(questgivers))
+		for _, q := range questgivers {
+			seen[q.guid] = true
+		}
+		candidates := make([]uint64, 0, 8)
+		candidateFactions := make(map[uint64]uint32, 8)
+		s.server.sessionsMu.RLock()
+		for value := range s.server.sessions {
+			if value == nil || !value.worldReady.Load() || value.player == nil {
+				continue
+			}
+			// Pet.cpp:226, 623: pets and vehicles take their owner's
+			// faction, so the hostile gate below runs on the owner's
+			// faction template, not the creature template's.
+			ownerFaction := value.effectiveFactionTemplate(value.player.Race)
+			if value.player.PetGUID != 0 {
+				candidates = append(candidates, value.player.PetGUID)
+				candidateFactions[value.player.PetGUID] = ownerFaction
+			}
+			if value.player.VehicleGUID != 0 {
+				candidates = append(candidates, value.player.VehicleGUID)
+				candidateFactions[value.player.VehicleGUID] = ownerFaction
+			}
+		}
+		s.server.sessionsMu.RUnlock()
+		s.server.motionMu.Lock()
+		type petVehicleMotion struct {
+			guid    uint64
+			entry   uint32
+			faction uint32
+		}
+		motions := make([]petVehicleMotion, 0, len(candidates))
+		for _, guid := range candidates {
+			if seen[guid] {
+				continue
+			}
+			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid)
+			if motion == nil || math.Sqrt((float64(motion.X)-float64(s.player.X))*(float64(motion.X)-float64(s.player.X))+(float64(motion.Y)-float64(s.player.Y))*(float64(motion.Y)-float64(s.player.Y))+(float64(motion.Z)-float64(s.player.Z))*(float64(motion.Z)-float64(s.player.Z))) > distance {
+				continue
+			}
+			motions = append(motions, petVehicleMotion{guid: guid, entry: motion.Entry, faction: candidateFactions[guid]})
+			seen[guid] = true
+		}
+		s.server.motionMu.Unlock()
+		for _, motion := range motions {
+			var npcFlags int64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(npcflag, 0) FROM creature_template WHERE entry = ?", motion.entry).Scan(&npcFlags); err != nil || npcFlags&2 == 0 {
+				continue
+			}
+			questgivers = append(questgivers, questgiver{guid: motion.guid, entry: motion.entry, faction: motion.faction, enderTable: "creature_questender", starterTable: "creature_queststarter"})
+		}
 	}
 	player := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	entries := make([]struct {
