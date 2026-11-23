@@ -8,6 +8,22 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+// inProgressNonArenaBG mirrors Battleground::GetStatus() == STATUS_IN_PROGRESS
+// for the queue-driven BG model: the player's queue slot for this map is
+// active and in progress. A player standing on the map without such a slot
+// (GM teleport, post-match WaitLeave) is not in a running battleground, as
+// in C++ where HandleAreaTrigger only runs on the player's Battleground
+// (MiscHandler.cpp:697-700).
+func (s *session) inProgressNonArenaBG(mapID uint32) bool {
+	for i := range s.bgQueues {
+		e := &s.bgQueues[i]
+		if e.Active && !e.IsArena && e.Status == BGStatusInProgress && e.MapID == mapID {
+			return true
+		}
+	}
+	return false
+}
+
 // handleAreaTrigger processes CMSG_AREATRIGGER (0x0B4).
 // Reference: WorldSession::HandleAreaTriggerOpcode (MiscHandler.cpp:645-780).
 func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
@@ -134,10 +150,11 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	// portal message instead of leaving. The remaining trigger set in that
 	// switch (3866/3867/3868/3869/3870/4020/4021/4674) is commented out in C++
 	// and falls through to the empty Battleground::HandleAreaTrigger — no
-	// arms to port. No STATUS_IN_PROGRESS gate here: Go's AB state has no
-	// start/stop lifecycle, and leaving the zone mid-simulation is still the
-	// correct action.
-	if s.player.Map == ABMapID && (triggerID == 3948 || triggerID == 3949) {
+	// arms to port. BattlegroundAB::HandleAreaTrigger (BattlegroundAB.cpp:236-237)
+	// returns unless the battleground is STATUS_IN_PROGRESS; the gate is the
+	// queue-slot check (inProgressNonArenaBG) — Go's AB state has no
+	// start/stop lifecycle of its own.
+	if s.player.Map == ABMapID && s.inProgressNonArenaBG(ABMapID) && (triggerID == 3948 || triggerID == 3949) {
 		allianceExit := triggerID == 3948
 		if teamForRace(s.player.Race) == 0 && allianceExit || teamForRace(s.player.Race) == 1 && !allianceExit {
 			s.handleLeaveBattlefield(ctx, nil, false, false)
@@ -154,9 +171,10 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	// Reference: BattlegroundAV::HandleAreaTrigger (BattlegroundAV.cpp:508-535):
 	// 95/2608 is the alliance exit, 2606 the horde exit; the wrong team gets
 	// the portal message instead of leaving. 3326-3331 are C++ no-ops — no arms
-	// to port. No STATUS_IN_PROGRESS gate here: Go's AV state has no
-	// start/stop lifecycle (same convention as the AB arm above).
-	if s.player.Map == AVMapID && (triggerID == 95 || triggerID == 2608 || triggerID == 2606) {
+	// to port. BattlegroundAV::HandleAreaTrigger (BattlegroundAV.cpp:506-507)
+	// returns unless the battleground is STATUS_IN_PROGRESS; gated the same
+	// way as the AB arm above.
+	if s.player.Map == AVMapID && s.inProgressNonArenaBG(AVMapID) && (triggerID == 95 || triggerID == 2608 || triggerID == 2606) {
 		allianceExit := triggerID != 2606
 		if teamForRace(s.player.Race) == 0 && allianceExit || teamForRace(s.player.Race) == 1 && !allianceExit {
 			s.handleLeaveBattlefield(ctx, nil, false, false)

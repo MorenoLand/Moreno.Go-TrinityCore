@@ -1804,8 +1804,8 @@ const (
 // reset weekday. CONFIG_WEEKLY_QUEST_RESET_TIME_WDAY defaults to 3
 // (Wednesday, World.cpp:989); Go keeps no such config field, so 3 is
 // fixed. C++ tm_wday and Go Weekday both count Sunday as 0.
-func nextWeeklyQuestResetTime(now time.Time) time.Time {
-	next := nextDailyQuestResetTime(now)
+func nextWeeklyQuestResetTime(now time.Time, hour uint32) time.Time {
+	next := nextDailyQuestResetTime(now, hour)
 	wday := int(next.Weekday())
 	target := 3
 	if target < wday {
@@ -1818,8 +1818,8 @@ func nextWeeklyQuestResetTime(now time.Time) time.Time {
 // (World.cpp:3299-3309): the next daily reset, moved to the 1st of the
 // next month unless it already falls on the 1st. Go's time.Date
 // normalizes the December overflow exactly as C++ mktime does.
-func nextMonthlyQuestResetTime(now time.Time) time.Time {
-	next := nextDailyQuestResetTime(now)
+func nextMonthlyQuestResetTime(now time.Time, hour uint32) time.Time {
+	next := nextDailyQuestResetTime(now, hour)
 	if next.Day() == 1 {
 		return next
 	}
@@ -1901,7 +1901,7 @@ func (s *session) debugResetDailyQuests(ctx context.Context) {
 		sess.player.DailyQuests = [playerDailyQuestsCount]uint32{}
 		sess.player.LastDailyQuestTime = 0
 	}
-	next := nextDailyQuestResetTime(time.Now())
+	next := nextDailyQuestResetTime(time.Now(), s.dailyQuestResetTimeHour())
 	if s.server != nil {
 		s.server.setWorldState(ctx, worldStateDailyQuestResetTime, uint64(next.Unix()))
 	}
@@ -1915,7 +1915,7 @@ func (s *session) debugResetWeeklyQuests(ctx context.Context) {
 	for _, sess := range s.debugResetQuestSessions() {
 		sess.player.WeeklyQuests = make(map[uint32]struct{})
 	}
-	next := nextWeeklyQuestResetTime(time.Now())
+	next := nextWeeklyQuestResetTime(time.Now(), s.dailyQuestResetTimeHour())
 	if s.server != nil {
 		s.server.setWorldState(ctx, worldStateWeeklyQuestResetTime, uint64(next.Unix()))
 	}
@@ -1929,7 +1929,7 @@ func (s *session) debugResetMonthlyQuests(ctx context.Context) {
 	for _, sess := range s.debugResetQuestSessions() {
 		sess.player.MonthlyQuests = make(map[uint32]struct{})
 	}
-	next := nextMonthlyQuestResetTime(time.Now())
+	next := nextMonthlyQuestResetTime(time.Now(), s.dailyQuestResetTimeHour())
 	if s.server != nil {
 		s.server.setWorldState(ctx, worldStateMonthlyQuestResetTime, uint64(next.Unix()))
 	}

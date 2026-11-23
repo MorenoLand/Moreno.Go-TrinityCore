@@ -114,7 +114,7 @@ func (s *session) sendQueryTimeResponse() {
 	now := time.Now()
 	buf := protocol.NewBuffer(8)
 	buf.WriteU32(uint32(now.Unix()))
-	buf.WriteU32(uint32(nextDailyQuestResetTime(now).Sub(now).Seconds()))
+	buf.WriteU32(uint32(nextDailyQuestResetTime(now, s.dailyQuestResetTimeHour()).Sub(now).Seconds()))
 	_ = s.write(uint16(protocol.OpcodeSMSG_QUERY_TIME_RESPONSE), buf.Bytes(), true)
 }
 

@@ -456,6 +456,15 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			// UpdateFlagState(HORDE, BG_WS_FLAG_STATE_ON_PLAYER) — the
 			// worldstate is indexed by the carrying team, not the flag.
 			s.wsgUpdateFlagState(sess.player.Map, 1, WSGFlagStateOnPlayer)
+			// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:529-532):
+			// a ground pickup while the stalemate has already escalated
+			// re-applies the stage aura at once — the timer leg only arms it
+			// on stage fire, and the drop arm stripped it from the old carrier.
+			if wsg.StalemateStage == 1 {
+				sess.applyAura(WSGSpellFocusedAssault)
+			} else if wsg.StalemateStage == 2 {
+				sess.applyAura(WSGSpellBrutalAssault)
+			}
 			// EventPlayerClickedOnFlag, ground-pickup leg (BattlegroundWS.cpp:526):
 			// UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, 1).
 			s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 1)
@@ -494,6 +503,15 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 			// UpdateFlagState(ALLIANCE, BG_WS_FLAG_STATE_ON_PLAYER) — the
 			// worldstate is indexed by the carrying team, not the flag.
 			s.wsgUpdateFlagState(sess.player.Map, 0, WSGFlagStateOnPlayer)
+			// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:562-565):
+			// a ground pickup while the stalemate has already escalated
+			// re-applies the stage aura at once — the timer leg only arms it
+			// on stage fire, and the drop arm stripped it from the old carrier.
+			if wsg.StalemateStage == 1 {
+				sess.applyAura(WSGSpellFocusedAssault)
+			} else if wsg.StalemateStage == 2 {
+				sess.applyAura(WSGSpellBrutalAssault)
+			}
 			// EventPlayerClickedOnFlag, ground-pickup leg (BattlegroundWS.cpp:565):
 			// UpdateWorldState(BG_WS_FLAG_UNK_HORDE, 1).
 			s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 1)

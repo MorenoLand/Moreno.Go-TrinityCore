@@ -710,12 +710,56 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 	// (smartActionCastGO), which exempts the unit-only CheckCast arms for a
 	// non-unit caster; the deferred-fire rebuild leg covers cast-time
 	// goober spells via syntheticGOMotion.
-	if tpl.spellID != 0 {
+	if tpl.spellID != 0 && s.admitUseTailSpell(tpl.spellID, entry, goState.Type) {
 		if motion := s.server.syntheticGOMotion(goState.Map, goState.InstanceID, guid); motion != nil {
 			s.server.castCreatureSpell(ctx, motion, tpl.spellID, s.playerGUID)
 		}
 	}
 
+}
+
+// admitUseTailSpell mirrors the GameObject::Use tail (GameObject.cpp:2078-2097):
+// a use-tail spellId with no DBC entry is offered to the OutdoorPvP manager
+// first; a handled spell returns without casting, an unhandled one logs the
+// unknown-spell error and returns. Known spells proceed to the cast. The
+// known-spell HandleCustomSpell call (GameObject.cpp:2089) is not wired: its
+// result is discarded and the only leg is a side-effect-free predicate (see
+// handleOutdoorPvPCustomSpell), so the call would be a no-op. A store error
+// is permissive (the cast path no-ops on unknown spells by itself), matching
+// the terrain.go convention.
+func (s *session) admitUseTailSpell(spellID uint32, entry uint32, goType uint8) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return true
+	}
+	_, known, err := s.server.Data.Spell(spellID)
+	if err != nil || known {
+		return true
+	}
+	if s.server.handleOutdoorPvPCustomSpell(s, spellID, entry) {
+		if s.server.Logger != nil {
+			s.server.Logger.Debug("non-dbc spell was handled by OutdoorPvP", "spellID", spellID)
+		}
+		return false
+	}
+	if s.server.Logger != nil {
+		s.server.Logger.Error("unknown spell id at use action for gameobject", "spellID", spellID, "entry", entry, "goType", goType)
+	}
+	return false
+}
+
+// handleOutdoorPvPCustomSpell mirrors OutdoorPvPMgr::HandleCustomSpell
+// (OutdoorPvPMgr.cpp:169-178) through OutdoorPvP::HandleCustomSpell
+// (OutdoorPvP.cpp:502-508) to OPvPCapturePoint::HandleCustomSpell
+// (OutdoorPvP.cpp:511-516): the manager iterates its zones, each zone its
+// capture points, and the base capture-point leg claims the spell iff the
+// player is outdoor-PvP-active (Player.cpp:7323: alive, visible, PvP-flagged,
+// not flying). No subclass overrides the leg anywhere in the tree, and Go
+// registers no OutdoorPvP zones or capture points (no OutdoorPvP manager:
+// server.go defense-message arm, gossip.go), so no zone can claim a spell
+// and the dispatch always reports unhandled. The hook stays so a future zone
+// registry plugs in here instead of at the call sites.
+func (s *Server) handleOutdoorPvPCustomSpell(sess *session, spellID uint32, goEntry uint32) bool {
+	return false
 }
 
 // gameObjectInteractionDistance mirrors GameObject::GetInteractionDistance
@@ -1060,7 +1104,7 @@ func (s *session) useGameObjectTypeArms(ctx context.Context, payload []byte, goS
 			goState.UseCount = 0
 		}
 		s.server.objectsMu.Unlock()
-		if tpl[0] != 0 { // spellcaster.spellId (data0)
+		if tpl[0] != 0 && s.admitUseTailSpell(tpl[0], entry, goState.Type) { // spellcaster.spellId (data0)
 			// Use() tail: spellCaster defaults to the user, so the user
 			// casts on themselves (GameObject.cpp:1487,2092); Go's
 			// castSpellDirect casts as the player on the player — exact.
@@ -1395,7 +1439,7 @@ func (s *session) useSummoningRitual(ctx context.Context, goState *dynamicGameOb
 		goState.RitualUsers = nil
 		srv.objectsMu.Unlock()
 	}
-	if spellID != 0 {
+	if spellID != 0 && s.admitUseTailSpell(spellID, entry, goState.Type) {
 		// spellCaster->CastSpell(user, spellId, triggered): the completing
 		// player is the target. Go's castSpellDirect is triggered by
 		// convention, so the animSpell/61993 triggered arms and the plain

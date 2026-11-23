@@ -11338,8 +11338,8 @@ func (s *session) handleQueryTime() bool {
 	now := time.Now()
 	// QueryHandler.cpp:83-88 + World.cpp:3234-3237 (GetNextDailyResetTime):
 	// the second u32 is the next daily-quest reset minus now, where the next
-	// reset is the next local 03:00 per Quests.DailyResetTime (default 3).
-	delta := nextDailyQuestResetTime(now).Sub(now)
+	// reset is the next local reset hour per Quests.DailyResetTime (default 3).
+	delta := nextDailyQuestResetTime(now, s.dailyQuestResetTimeHour()).Sub(now)
 	packet := protocol.NewBuffer(8)
 	packet.WriteU32(uint32(now.Unix()))
 	packet.WriteU32(uint32(delta.Seconds()))
@@ -11349,14 +11349,27 @@ func (s *session) handleQueryTime() bool {
 // nextDailyQuestResetTime mirrors World::GetNextDailyResetTime
 // (World.cpp:3234-3237) via GetLocalHourTimestamp(t, hour, onlyAfterTime=true)
 // (Util.cpp:82-95): midnight local + hour, plus a day when the hour is not
-// strictly after now. CONFIG_DAILY_QUEST_RESET_TIME_HOUR defaults to 3
-// (World.cpp:982).
-func nextDailyQuestResetTime(now time.Time) time.Time {
-	next := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
+// strictly after now. hour is CONFIG_DAILY_QUEST_RESET_TIME_HOUR
+// ("Quests.DailyResetTime", World.cpp:982); out of range (> 23) falls back
+// to 3, as the C++ load does (World.cpp:983-986).
+func nextDailyQuestResetTime(now time.Time, hour uint32) time.Time {
+	if hour > 23 {
+		hour = 3
+	}
+	next := time.Date(now.Year(), now.Month(), now.Day(), int(hour), 0, 0, 0, now.Location())
 	if !next.After(now) {
 		next = next.Add(24 * time.Hour)
 	}
 	return next
+}
+
+// dailyQuestResetTimeHour reads CONFIG_DAILY_QUEST_RESET_TIME_HOUR from the
+// server config; 3 when the server is absent (the World.cpp:982 default).
+func (s *session) dailyQuestResetTimeHour() uint32 {
+	if s == nil || s.server == nil {
+		return 3
+	}
+	return s.server.Config.DailyQuestResetTimeHour
 }
 
 func (s *session) handlePlayedTime(ctx context.Context, payload []byte) bool {
