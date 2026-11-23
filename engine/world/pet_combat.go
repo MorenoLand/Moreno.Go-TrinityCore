@@ -666,6 +666,45 @@ func (s *Server) attackersOf(mapID, instanceID uint32, guid uint64) []uint64 {
 	return found
 }
 
+// petReceiveEmote is PetAI::ReceiveEmote (PetAI.cpp:548-572): a DK ghoul
+// answers its owner's /cower, /angry, /glare and /soothe with an emote
+// command — OMNICAST_GHOUL on cower/soothe, the stun pose on angry/glare.
+// The owner gate (GetOwnerGUID), the pet gate (IsPet(): PetID != 0 —
+// a guardian ghoul shares entry 26125 but is no Pet) and the ghoul
+// gate (IsPetGhoul: entry 26125, TemporarySummon.h:26,81) all apply;
+// the Risen Ally (30230) is not a ghoul and takes no arm. Unit::HandleEmoteCommand (Unit.cpp:1610-
+// 1616) sends SMSG_EMOTE (u32 emote + u64 guid) to the visibility set,
+// the PerformEmote twin. ChatHandler.cpp:740-742 fires AI()->ReceiveEmote
+// for any creature target with an AI, so this arm rides the same dispatch
+// as the Lua ev8 + SmartAI arms in handleTextEmote.
+func (s *Server) petReceiveEmote(motion *creatureMotion, playerGUID uint64, textEmote uint32) {
+	if s == nil || motion == nil || playerGUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	entry, ownerGUID := motion.Entry, motion.OwnerGUID
+	petID := motion.PetID
+	guid, mapID, instanceID := motion.GUID, motion.Map, motion.InstanceID
+	x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+	s.motionMu.Unlock()
+	if entry != 26125 || petID == 0 || ownerGUID == 0 || ownerGUID != playerGUID {
+		return
+	}
+	var emote uint32
+	switch textEmote {
+	case 28, 134: // TEXT_EMOTE_COWER, TEXT_EMOTE_SOOTHE (SharedDefines.h:1706,1812)
+		emote = 434 // EMOTE_ONESHOT_OMNICAST_GHOUL (SharedDefines.h:2071)
+	case 3, 46: // TEXT_EMOTE_ANGRY, TEXT_EMOTE_GLARE (SharedDefines.h:1681,1724)
+		emote = 64 // EMOTE_STATE_STUN (SharedDefines.h:1983)
+	default:
+		return
+	}
+	pkt := protocol.NewBuffer(12)
+	pkt.WriteU32(emote)
+	pkt.WriteU64(guid)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), mapID, instanceID, x, y, z, phase)
+}
+
 // triggerPetDefensive triggers the owner's controlled creatures into attack
 // mode when the owner either attacks (assist) or takes damage (defend).
 // Mirrors TrinityCore PetAI::OwnerAttackedBy / PetAI::OwnerAttacked
@@ -2882,9 +2921,38 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 				}
 				continue
 			}
-			if ownerGUID := motion.OwnerGUID; ownerGUID != 0 && s.petCanAutoCastTarget(ctx, owner, motion, spell, ownerGUID) &&
-				s.checkCreatureSpellRange(motion, spell, ownerGUID, modOwner) {
-				candidates = append(candidates, petAutocastCandidate{spell: spell, target: ownerGUID})
+			// PetAI.cpp:160-176 — the friendly scan over _allySet
+			// (UpdateAllies, PetAI.cpp:600-622): the pet itself, the
+			// owner when ungrouped, or the same-subgroup group members
+			// in the owner's map when grouped — the owner is skipped by
+			// the group loop (:615-616), so a grouped pet never buffs
+			// its owner through this scan. _allySet is a std::set, so
+			// the scan runs in GUID order and the first ally passing
+			// CanAutoCast wins. Go computes the set fresh per tick
+			// instead of caching it on the 10s UpdateAllies timer —
+			// same membership, never stale.
+			allies := []uint64{motion.GUID}
+			if _, partyMembers, _, inGroup := owner.friendlyGroupSnapshot(); inGroup {
+				for guid := range partyMembers {
+					if guid == motion.OwnerGUID {
+						continue
+					}
+					member := s.findSessionByGUID(guid)
+					if member == nil || member.player == nil || member.player.Map != motion.Map || member.player.InstanceID != motion.InstanceID {
+						continue
+					}
+					allies = append(allies, guid)
+				}
+			} else if ownerGUID := motion.OwnerGUID; ownerGUID != 0 {
+				allies = append(allies, ownerGUID)
+			}
+			sort.Slice(allies, func(i, j int) bool { return allies[i] < allies[j] })
+			for _, allyGUID := range allies {
+				if s.petCanAutoCastTarget(ctx, owner, motion, spell, allyGUID) &&
+					s.checkCreatureSpellRange(motion, spell, allyGUID, modOwner) {
+					candidates = append(candidates, petAutocastCandidate{spell: spell, target: allyGUID})
+					break
+				}
 			}
 		} else if !selfCast && targetGUID != 0 && motion.InCombat && usableInCombat &&
 			s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) &&

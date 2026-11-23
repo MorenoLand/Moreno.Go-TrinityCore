@@ -241,6 +241,7 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); motion != nil {
 			s.server.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReceiveEmote, s.luaPlayer(), textEmote)
 			s.server.smartReceiveEmote(ctx, motion, s.playerGUID, textEmote)
+			s.server.petReceiveEmote(motion, s.playerGUID, textEmote)
 		}
 	}
 	return true
