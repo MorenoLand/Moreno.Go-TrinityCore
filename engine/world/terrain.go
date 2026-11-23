@@ -32,6 +32,9 @@ const (
 	g3dFuzzyEpsilon64 = 0.0000005
 	// terrainDefaultHeightSearch is DEFAULT_HEIGHT_SEARCH (Map.h:287).
 	terrainDefaultHeightSearch = float32(50)
+	// terrainMaxFallSearch is MAX_FALL_DISTANCE (Map.h:286): the "unlimited
+	// fall" VMap ground search MotionMaster::MoveFall uses (MotionMaster.cpp:922).
+	terrainMaxFallSearch = float32(250000)
 	// terrainMaxHeight is MAX_HEIGHT (Map.h:284).
 	terrainMaxHeight = float32(100000)
 )
@@ -49,6 +52,70 @@ func creatureIsInAir(z, ground, hoverHeight float32) bool {
 		eps = g3dFuzzyEpsilon64 * aa
 	}
 	return float64(z) > float64(ground+hoverHeight+terrainGroundTolerance)+eps || float64(z) < float64(ground-terrainGroundTolerance)-eps
+}
+
+// updateAllowedPositionZForMotion is WorldObject::UpdateAllowedPositionZ
+// (Object.cpp:1461-1520) for a creature motion, branch-for-branch: a
+// transport passenger returns z unchanged (groundZ = z); a flyer
+// (Creature::CanFly, Creature.h:106 — template flight allowed or live
+// flying) floors z at ground + hover offset; a non-flyer
+// clamps z into [ground + hover, max + hover], where max is the
+// water-or-ground level when the creature can swim (creatureCanSwimMotion)
+// and the ground otherwise. Heights read through the
+// WorldObject::GetMapHeight member twin (z + the default collision height,
+// Object.cpp:3665-3672). The motion is snapshotted under motionMu; the
+// height queries run after the unlock, on the MoveFall-bridge precedent.
+// Returns the clamped z and the ground z (terrainInvalidHeight when the
+// ground lookup fails on the plain-height leg).
+func (s *Server) updateAllowedPositionZForMotion(motion *creatureMotion, x, y, z float32) (float32, float32) {
+	if motion == nil || s == nil {
+		return z, z
+	}
+	s.motionMu.Lock()
+	mapID, transportGUID := motion.Map, motion.TransportGUID
+	canFly := motion.CanFly || motion.Flying
+	canSwim := creatureCanSwimMotion(motion)
+	hoverOffset := float32(0)
+	if motion.Hovering {
+		hoverOffset = motion.HoverHeight
+	}
+	s.motionMu.Unlock()
+	if transportGUID != 0 {
+		return z, z
+	}
+	if canFly {
+		ground, ok := s.mapHeight(mapID, x, y, z+terrainDefaultCollisionHeight, true, terrainDefaultHeightSearch)
+		if !ok {
+			return z, terrainInvalidHeight + hoverOffset
+		}
+		ground += hoverOffset
+		if z < ground {
+			z = ground
+		}
+		return z, ground
+	}
+	var ground, maxZ float32
+	if canSwim {
+		maxZ, ground = s.mapWaterOrGroundLevel(mapID, x, y, z, terrainDefaultCollisionHeight)
+		if maxZ <= terrainInvalidHeight {
+			return z, z
+		}
+	} else {
+		var ok bool
+		ground, ok = s.mapHeight(mapID, x, y, z+terrainDefaultCollisionHeight, true, terrainDefaultHeightSearch)
+		if !ok {
+			return z, terrainInvalidHeight
+		}
+		maxZ = ground
+	}
+	maxZ += hoverOffset
+	ground += hoverOffset
+	if z > maxZ {
+		z = maxZ
+	} else if z < ground {
+		z = ground
+	}
+	return z, ground
 }
 
 // vmapDisable* mirror the VMAP::VMAP_DISABLE_* bits (VMapManager2.h:71-74),
@@ -1321,6 +1388,61 @@ func (s *Server) mapHeight(mapID uint32, x, y, z float32, checkVMap bool, maxSea
 		}
 	}
 	return mapHeight, mapOK
+}
+
+// mapStaticFloorZ is the m_staticFloorZ twin (WorldObject::GetFloorZ's first
+// leg, Object.cpp:3647-3652): the floorZ selection of
+// Map::GetFullTerrainStatusForPosition (Map.cpp:2761-2779) as stored by
+// WorldObject::ProcessPositionDataChanged (Object.cpp:1102) — refreshed on
+// every Unit::UpdatePosition (Unit.cpp:13420) and on CreatureRelocation
+// (Map.cpp:1138), so it is the current-position floor, not a spawn cache.
+// The .map grid height counts when z sits no more than the ground tolerance
+// below it; the static-VMAP floor (VMapManager2::getAreaAndLiquidData,
+// VMapManager2.cpp:282-313 — the enclosing WMO's ground, WMO-only per
+// ModelInstance::GetLocationInfo, ModelInstance.cpp:110-112, "M2 files
+// don't contain area info") replaces it when z sits below the grid surface
+// or the WMO floor is higher. It differs from mapHeight (Map::GetHeight,
+// Map.cpp:2489-2527) in the vmap leg — the enclosing-model ground here
+// (terrainModelHit, the WMO-interior area-query twin, +0.1 lift included)
+// versus the bounded ray over WMO and M2 alike there — and in selection:
+// nearer-to-z never wins here. The dynamic-tree leg (dynData.floorZ,
+// Map.cpp:2774-2779; GetGameObjectFloor, Map.h:576) is not modeled: Go has
+// no dynamic GO collision tree (mapVMapHeight comment above). A
+// VMAP_DISABLE_LIQUIDSTATUS row (VMapManager2.cpp:284-293) leaves the vmap
+// floor at z — the early return skips the tree lookup entirely. The second
+// INVALID_HEIGHT sentinel, which callers must not use as a Z.
+func (s *Server) mapStaticFloorZ(mapID uint32, x, y, z float32) (float32, bool) {
+	floorZ := terrainInvalidHeight
+	gridHeight := terrainInvalidHeight
+	if h, ok := s.mapGridHeight(mapID, x, y); ok {
+		gridHeight = h
+	}
+	if gridHeight > terrainInvalidHeight && z >= gridHeight-terrainGroundTolerance {
+		floorZ = gridHeight
+	}
+	tileX := int(float64(x)/terrainGridSize + terrainCenterGrid)
+	tileY := int(float64(y)/terrainGridSize + terrainCenterGrid)
+	vmapFloor, vmapOK := float32(0), false
+	if tileX >= 0 && tileX < 64 && tileY >= 0 && tileY < 64 {
+		point := terrainVector{terrainMapHalfSize - x, terrainMapHalfSize - y, z}
+		for _, spawn := range s.terrainTile(mapID, 63-tileX, 63-tileY) {
+			if hit, ok := terrainModelHit(spawn, s.terrainModel(spawn.Name), point); ok && (!vmapOK || hit.Ground > vmapFloor) {
+				vmapFloor, vmapOK = hit.Ground, true
+			}
+		}
+	}
+	if s.vmapDisabledFor(mapID, vmapDisableLiquidStatus) {
+		vmapFloor, vmapOK = z, true
+	}
+	if vmapOK && vmapFloor > terrainInvalidHeight &&
+		z >= vmapFloor-terrainGroundTolerance &&
+		(z < gridHeight-terrainGroundTolerance || vmapFloor > gridHeight) {
+		floorZ = vmapFloor
+	}
+	if floorZ <= terrainInvalidHeight {
+		return 0, false
+	}
+	return floorZ, true
 }
 
 // vmapLiquid is the VMapManager2::GetLiquidLevel result (VMapManager2.cpp:

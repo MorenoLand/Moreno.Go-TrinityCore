@@ -158,6 +158,7 @@ type creatureMotion struct {
 	MovementInfo          movementInfo        // m_movementInfo twin (MovementHandler.cpp:389, MiscHandler.cpp:1398): acked flags / time / wholesale packet when this creature is the mover (possessed creature, driven vehicle base), kept off any session store; read by the creature Teleport twin (Unit::SendTeleportPacket, Unit.cpp:13353)
 	MovementInfoSet       bool                // a stored packet exists; written under the server motionMu at the ack sites
 	FeatherFalling        bool                // MOVEMENTFLAG_FALLING_SLOW live value: .debug moveflags SetFeatherFall twin (Unit.cpp:13767); zero value = normal fall (the C++ default), broadcast leg only
+	Falling               bool                // MOVEMENTFLAG_FALLING live value: set by launchCreatureFallSpline (MotionMaster::MoveFall twin, MotionMaster.cpp:938), cleared by the UpdateMovementFlags fold when !isInAir (Creature.cpp:2813-2814) and by the fly/gravity-disable enable transitions (Unit.cpp:13720/:13748); the flag leg survives a mid-air supersede/stop, unlike the ScriptMoveFalling spline marker — together they are Unit::IsFalling (Unit.cpp:13313-13316)
 	MoveFlagsRaw          uint32              // unhandled movement-flag bits stored by .debug moveflags (cs_debug.cpp:1251): the SetUnitMovementFlags word minus the handled set; folded into the moveflags display, never read by engine gates
 	MoveFlagsExtra        uint32              // MovementFlags2 extra flags stored by .debug moveflags (SetExtraUnitMovementFlags twin); display only
 	DebugAuraStateMask    uint32              // .debug setaurastate override bits (Unit::ModifyAuraState twin): ORed into creatureAuraStateMask except the health-derived bits, which Unit::Update re-derives every tick
@@ -7202,6 +7203,11 @@ func (s *Server) launchCreatureFallSpline(motion *creatureMotion, destX, destY, 
 	motion.ScriptMoveFromKnown = true
 	motion.ScriptMoveParabolicAmp = 0
 	motion.ScriptMoveFalling = true
+	// MotionMaster::MoveFall (MotionMaster.cpp:938) sets MOVEMENTFLAG_FALLING
+	// ahead of the spline launch; the latch survives a mid-air supersede/stop
+	// that clears the marker above, so it is set here and cleared only by
+	// the UpdateMovementFlags fold (grounded / fly / gravity-disable legs).
+	motion.Falling = true
 	motion.ScriptMoveType = movementGeneratorEffect
 	motion.ScriptMoveExplicitSpeed = 0
 	motion.ScriptMovePointID = id
@@ -10029,6 +10035,15 @@ func creatureMovementPreventedByCasting(motion *creatureMotion, now time.Time) b
 	return !motion.CastingMoveAllowed
 }
 
+// creatureIsFalling is Unit::IsFalling (Unit.cpp:13313-13316) for a
+// creature motion: the MOVEMENTFLAG_FALLING latch OR the MoveFall spline
+// marker (movespline->isFalling twin). The latch is set at MoveFall launch
+// and cleared only when grounded or on a fly/gravity-disable transition,
+// so it stays true across a mid-air supersede/stop that clears the marker.
+func creatureIsFalling(motion *creatureMotion) bool {
+	return motion != nil && (motion.Falling || motion.ScriptMoveFalling)
+}
+
 func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time, summoned bool) {
 	if motion == nil {
 		return
@@ -10095,21 +10110,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion.FlagsExtra&creatureFlagExtraNoMoveFlagsUpdate == 0 {
 		// Creature::UpdateMovementFlags fly/gravity/hover legs
 		// (Creature.cpp:2779-2816), same gate and cadence as the swim
-		// leg below (every Creature::Update). ground is Server.mapHeight
-		// (Map::GetHeight twin, terrain.go), not C++ GetFloorZ (no
-		// game-object-floor / m_staticFloorZ leg); a failed height lookup
-		// keeps the current flags. The !IsFalling() gate is omitted — Go
-		// has no per-creature falling latch: ScriptMoveFalling is a
-		// MoveFall spline-launch marker, not Unit::IsFalling (Unit.cpp:13313,
-		// flag OR movespline->isFalling; no arrival clear, and the flag
-		// leg survives a mid-air supersede/stop the marker does not) —
-		// and the !isInAir RemoveUnitMovementFlag(FALLING) leg with it:
-		// no per-creature FALLING flag state exists in Go (no Falling
-		// field; debugMoveFlagFalling is a .debug display mask, s.isFalling
-		// is player-session only), so there is nothing to clear. The
+		// leg below (every Creature::Update). ground is the GetFloorZ
+		// twin (Object.cpp:3647-3652): the static floor first
+		// (mapStaticFloorZ), falling back to the Map::GetHeight twin
+		// when it fails to resolve — the dynamic game-object-floor leg
+		// (Map::GetGameObjectFloor, Map.h:576) has no Go model, so the
+		// bounded-ray height stands in for it. A failed lookup keeps
+		// the current flags. The !IsFalling() gate (:2803) reads
+		// creatureIsFalling (Unit::IsFalling twin, Unit.cpp:13313-13316:
+		// the FALLING latch OR the MoveFall spline marker), and the
+		// !isInAir RemoveUnitMovementFlag(FALLING) leg (:2813-2814)
+		// clears the latch below, ahead of the swim leg. The
 		// hover-height Z fold (Unit.cpp:13789-13803) stays out with the
 		// SetHover bridge.
-		if ground, ok := s.mapHeight(motion.Map, motion.X, motion.Y, motion.Z, true, terrainDefaultHeightSearch); ok {
+		ground, groundOK := s.mapStaticFloorZ(motion.Map, motion.X, motion.Y, motion.Z)
+		if !groundOK {
+			ground, groundOK = s.mapHeight(motion.Map, motion.X, motion.Y, motion.Z, true, terrainDefaultHeightSearch)
+		}
+		if groundOK {
 			canHover := motion.MoveGround == 2 || motion.Hovering // Creature::CanHover (Creature.h:107)
 			hoverH := float32(0)
 			if canHover {
@@ -10117,14 +10135,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			isInAir := creatureIsInAir(motion.Z, ground, hoverH)
 			hasHoverAura := s.creatureHasAuraType(creatureAuraKeyForMotion(motion), spellAuraHover)
-			if motion.MoveFlight != 0 && isInAir { // IsFlightAllowed (CreatureData.h:128)
+			if motion.MoveFlight != 0 && isInAir && !creatureIsFalling(motion) { // IsFlightAllowed (CreatureData.h:128), !IsFalling (Creature.cpp:2803)
 				if motion.MoveFlight == 2 { // CreatureFlightMovementType::CanFly
 					if !motion.Flying {
 						motion.Flying = true
+						// Unit::SetCanFly(true) clears FALLING (Unit.cpp:13748).
+						motion.Falling = false
 						s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_SET_FLYING, motion.PhaseMask)
 					}
 				} else if !motion.GravityDisabled { // DisableGravity
 					motion.GravityDisabled = true
+					// Unit::SetDisableGravity(true) clears FALLING (Unit.cpp:13720).
+					motion.Falling = false
 					s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_DISABLE, motion.PhaseMask)
 				}
 				if !hasHoverAura && motion.Hovering {
@@ -10144,6 +10166,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					motion.Hovering = true
 					s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER, motion.PhaseMask)
 				}
+			}
+			// Creature::UpdateMovementFlags (Creature.cpp:2813-2814): once the
+			// creature is no longer in the air, the FALLING flag clears — after
+			// the fly/gravity/hover legs above, before the swim leg below. The
+			// latch is the only FALLING state: the spline marker clears on
+			// launch/abort and never reaches this leg.
+			if !isInAir {
+				motion.Falling = false
 			}
 		}
 		// Creature::UpdateMovementFlags swim leg (Creature.cpp:2779-2816):

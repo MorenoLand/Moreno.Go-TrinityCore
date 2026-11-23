@@ -6583,8 +6583,8 @@ func (s *Server) sendJumpToKnockBackDest(targetSess *session, guid uint64, absol
 // MotionMaster::MoveJumpTo (MotionMaster.cpp:763-777): the flight is
 // dist = 2 * (speedZ / gravity) * speedXY along the target's own
 // orientation plus the forward/backward angle (GetNearPoint2D with a
-// null searcher adds no reach), Z kept — the UpdateAllowedPositionZ
-// ground clamp has no Go model, the charge/pull snap precedent —
+// null searcher adds no reach); the dest Z runs through
+// UpdateAllowedPositionZ (MotionMaster.cpp:770) before the launch —
 // launched as a parabolic spline (EVENT_JUMP 1004) like the charge
 // arm's creatureEffectJump. MoveJumpTo returns early for players;
 // the caller routes player targets to sendJumpToKnockBack.
@@ -6602,16 +6602,17 @@ func (s *Server) jumpToCreatureTarget(tm *creatureMotion, forward bool, speedXY,
 	dist := 2 * (float64(speedZ) / jumpToGravity) * float64(speedXY)
 	destX := ox + float32(dist*math.Cos(float64(orientation+angle)))
 	destY := oy + float32(dist*math.Sin(float64(orientation+angle)))
-	s.launchCreatureJumpSpline(tm, destX, destY, oz, speedXY, speedZ, 1004)
+	destZ, _ := s.updateAllowedPositionZForMotion(tm, destX, destY, oz)
+	s.launchCreatureJumpSpline(tm, destX, destY, destZ, speedXY, speedZ, 1004)
 }
 
 // jumpToCreatureTargetDest mirrors the creature arm of Unit::JumpTo via
 // MotionMaster::MoveJumpTo (MotionMaster.cpp:763-777) with a
 // destination: the flight is dist = 2 * (speedZ / gravity) * speedXY
 // along the absolute angle from the target to the destination (the
-// target's orientation plus GetRelativeAngle(dest)), Z kept — the
-// UpdateAllowedPositionZ ground clamp has no Go model, the charge/pull
-// snap precedent — launched as a parabolic spline (EVENT_JUMP 1004).
+// target's orientation plus GetRelativeAngle(dest)); the dest Z runs
+// through UpdateAllowedPositionZ (MotionMaster.cpp:770) before the
+// launch — launched as a parabolic spline (EVENT_JUMP 1004).
 func (s *Server) jumpToCreatureTargetDest(tm *creatureMotion, absoluteAngle float64, speedXY, speedZ float32) {
 	if s == nil || tm == nil {
 		return
@@ -6622,7 +6623,8 @@ func (s *Server) jumpToCreatureTargetDest(tm *creatureMotion, absoluteAngle floa
 	dist := 2 * (float64(speedZ) / jumpToGravity) * float64(speedXY)
 	destX := ox + float32(dist*math.Cos(absoluteAngle))
 	destY := oy + float32(dist*math.Sin(absoluteAngle))
-	s.launchCreatureJumpSpline(tm, destX, destY, oz, speedXY, speedZ, 1004)
+	destZ, _ := s.updateAllowedPositionZForMotion(tm, destX, destY, oz)
+	s.launchCreatureJumpSpline(tm, destX, destY, destZ, speedXY, speedZ, 1004)
 }
 
 // knockbackFirstCollisionDest mirrors the destination leg of

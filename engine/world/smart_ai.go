@@ -5728,6 +5728,10 @@ func (s *Server) smartActionSetDisableGravity(ctx context.Context, motion *creat
 		return
 	}
 	motion.GravityDisabled = disable
+	if disable {
+		// Unit::SetDisableGravity(true) clears FALLING (Unit.cpp:13720).
+		motion.Falling = false
+	}
 	mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
 	phase := motion.PhaseMask
 	s.motionMu.Unlock()
@@ -5773,6 +5777,10 @@ func (s *Server) smartActionSetCanFly(ctx context.Context, motion *creatureMotio
 		return
 	}
 	motion.Flying = enable
+	if enable {
+		// Unit::SetCanFly(true) clears FALLING (Unit.cpp:13748).
+		motion.Falling = false
+	}
 	mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
 	phase := motion.PhaseMask
 	s.motionMu.Unlock()

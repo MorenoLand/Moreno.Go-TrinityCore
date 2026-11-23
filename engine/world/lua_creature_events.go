@@ -4483,9 +4483,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// fall spline to the ground height (SetFall, MoveSplineInit.h:150),
 	// duration computeFallTime(drop) (FallInitializer,
 	// MoveSpline.cpp:94-101). The ground resolves via Server.mapHeight
-	// (Map::GetHeight twin); a failed lookup launches nothing, like
-	// C++ (MotionMaster.cpp:923-929). MOVEMENTFLAG_FALLING is transient
-	// in C++ (cleared on landing), so no latch is kept on the motion.
+	// (Map::GetHeight twin) with the MAX_FALL_DISTANCE search
+	// (MotionMaster.cpp:922, Map.h:286); a failed lookup launches nothing,
+	// like C++ (MotionMaster.cpp:923-929). The FALLING latch (motion.Falling)
+	// is set at launch and cleared by the UpdateMovementFlags fold on
+	// landing (Creature.cpp:2813-2814).
 	// Rooted units do not fall in C++ (MotionMaster.cpp:937-939); the
 	// ScriptRooted gate is the Go twin, and the stunned half rides the
 	// ScriptStunned slot (same HasUnitState(ROOT|STUNNED) gate). The
@@ -4512,7 +4514,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, nil
 		}
 		mapID, x, y, z := m.Map, m.X, m.Y, m.Z
-		ground, groundOK := s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+		ground, groundOK := s.mapHeight(mapID, x, y, z, true, terrainMaxFallSearch)
 		s.motionMu.Unlock()
 		if groundOK {
 			s.launchCreatureFallSpline(m, x, y, ground, id)
@@ -4540,10 +4542,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// SMSG_SPLINE_MOVE_GRAVITY_DISABLE/ENABLE (packed GUID only,
 	// Creature.cpp:3040-3045). The animation-tier fold (Fly/Ground/Hover)
 	// stays out — the Go engine models no animation tiers (the waypoint
-	// LAND/TAKEOFF precedent, creaturemotion.go). The falling-flag clear is
-	// internal: the Go engine keeps no per-creature movement flags, so the
-	// bit lives on motion for idempotence and the packet is the
-	// client-visible leg (the Teleport bridge precedent). C++ skips the
+	// LAND/TAKEOFF precedent, creaturemotion.go). The falling-flag clear
+	// lands on motion.Falling (Unit::SetDisableGravity twin, Unit.cpp:13720).
+	// C++ skips the
 	// packet when the move spline is uninitialized; the Go movement model
 	// has no splines, so the broadcast always goes (matching the ported
 	// arms, which always pair it with a visible motion change).
@@ -4561,6 +4562,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, nil
 		}
 		motion.GravityDisabled = disable
+		if disable {
+			// Unit::SetDisableGravity(true) clears FALLING (Unit.cpp:13720).
+			motion.Falling = false
+		}
 		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
 		phase := motion.PhaseMask
 		s.motionMu.Unlock()
@@ -4693,8 +4698,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return nil, nil
 	}
 	// SetCanFly is Creature::SetCanFly (Creature.cpp:3060): flips
-	// MOVEMENTFLAG_CAN_FLY (and clears the moving-fly mask / FALLING on
-	// disable) with the C++ no-op-on-unchanged early-out, then broadcasts
+	// MOVEMENTFLAG_CAN_FLY (and clears MOVEMENTFLAG_FALLING on enable,
+	// Unit.cpp:13748; the moving-fly mask clears on disable, :13751) with
+	// the C++ no-op-on-unchanged early-out, then broadcasts
 	// SMSG_SPLINE_MOVE_SET_FLYING/UNSET_FLYING (packed GUID only,
 	// Creature.cpp:3067-3071). The animation-tier fold stays out (the
 	// SetDisableGravity precedent, above).
@@ -4712,6 +4718,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, nil
 		}
 		motion.Flying = enable
+		if enable {
+			// Unit::SetCanFly(true) clears FALLING (Unit.cpp:13748).
+			motion.Falling = false
+		}
 		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
 		phase := motion.PhaseMask
 		s.motionMu.Unlock()
@@ -6800,8 +6810,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// MoveJumpTo is MotionMaster::MoveJumpTo (MotionMaster.cpp:763-777):
 	// the hop is dist = 2 * (speedZ / gravity) * speedXY along the
 	// owner's orientation plus the angle (GetNearPoint2D with a null
-	// searcher adds no reach), Z kept — the UpdateAllowedPositionZ
-	// ground clamp has no Go model, the charge/pull snap precedent —
+	// searcher adds no reach); the dest Z runs through
+	// UpdateAllowedPositionZ (MotionMaster.cpp:770) before the launch —
 	// launched as a parabolic spline with the MoveJump default id
 	// (EVENT_JUMP 1004), the jumpToCreatureTarget twin (boss_ai.go).
 	// MoveJumpTo returns early for players; this is the creature
@@ -6826,7 +6836,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		dist := 2 * (float64(speedZ) / jumpToGravity) * float64(speedXY)
 		destX := ox + float32(dist*math.Cos(float64(orientation+angle)))
 		destY := oy + float32(dist*math.Sin(float64(orientation+angle)))
-		s.launchCreatureJumpSpline(motion, destX, destY, oz, speedXY, speedZ, 1004)
+		destZ, _ := s.updateAllowedPositionZForMotion(motion, destX, destY, oz)
+		s.launchCreatureJumpSpline(motion, destX, destY, destZ, speedXY, speedZ, 1004)
 		return nil, nil
 	}
 	// GetMovementType is UnitMethods::GetMovementType

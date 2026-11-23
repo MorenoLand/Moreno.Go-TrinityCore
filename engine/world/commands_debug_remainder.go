@@ -788,6 +788,9 @@ func debugCreatureMovementFlags(motion *creatureMotion) (uint32, uint32) {
 	if motion.FeatherFalling {
 		flags |= debugMoveFlagFallingSlow
 	}
+	if motion.Falling {
+		flags |= debugMoveFlagFalling
+	}
 	if motion.Hovering {
 		flags |= debugMoveFlagHover
 	}

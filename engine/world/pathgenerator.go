@@ -51,10 +51,10 @@
 //     ground/max clamps.
 //
 // Flagged gaps, NOT fabricated:
-//   - Unit::IsFalling in the far-from-poly leg (:283-284): creature
-//     IsFalling has no Go model (only motion.ScriptMoveFalling, which is
-//     not Unit::IsFalling); the creature adapter reports false, so the
-//     falling shortcut never fires for creatures. The player adapter
+//   - Unit::IsFalling in the far-from-poly leg (:283-284): the creature
+//     adapter reads creatureIsFalling (Unit::IsFalling twin: the FALLING
+//     latch OR the MoveFall spline marker), so the falling shortcut fires
+//     for falling creatures as well as falling players. The player adapter
 //     reads the session falling flags, which are the live model.
 //   - IsInEvadeMode: the Lua surface reads motion.Evading
 //     (lua_creature_events.go:1628); the creature adapter snapshots that
@@ -226,9 +226,9 @@ func (s *pathSourceSnapshot) pathHoverOffset() float32 { return s.hoverOffset }
 // way the cast arms read a selected motion (castCommandSelectedCreature);
 // callers already holding Server.motionMu get a consistent snapshot.
 // Collision height has no per-creature Go model: terrainDefaultCollisionHeight
-// is the C++ default (see the file header). IsFalling has no creature Go
-// model either (ScriptMoveFalling is not Unit::IsFalling), so falling is
-// false — the far-from-poly falling shortcut never fires for creatures.
+// is the C++ default (see the file header). Falling reads creatureIsFalling
+// (Unit::IsFalling twin: the FALLING latch OR the MoveFall spline marker),
+// so the far-from-poly falling shortcut fires for falling creatures.
 func newCreaturePathSource(srv *Server, m *creatureMotion) pathGeneratorSource {
 	if m == nil {
 		return nil
@@ -246,7 +246,7 @@ func newCreaturePathSource(srv *Server, m *creatureMotion) pathGeneratorSource {
 		fly:             m.CanFly || m.Flying,
 		inCombat:        m.InCombat,
 		evade:           m.Evading,
-		falling:         false,
+		falling:         creatureIsFalling(m),
 		collisionHeight: terrainDefaultCollisionHeight,
 		combatReach:     m.combatReachOrDefault(),
 	}
@@ -791,8 +791,9 @@ func (g *PathGenerator) buildPolyPath(startPos, endPos pathVec) {
 				buildShortcut = true
 				// Allow to build a shortcut if the unit is falling and
 				// it's trying to move downwards towards a target (i.e.
-				// charging). Creature IsFalling has no Go model (see
-				// header), so this leg only fires for falling players.
+				// charging). Both adapters report Unit::IsFalling: the
+				// creature adapter reads the FALLING latch OR the MoveFall
+				// spline marker, the player adapter the session flags.
 			} else if g.source.pathIsFalling() && endPos.Z < startPos.Z {
 				buildShortcut = true
 			}
