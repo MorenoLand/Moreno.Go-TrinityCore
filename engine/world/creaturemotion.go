@@ -250,6 +250,41 @@ type creatureMotion struct {
 	// or ends. No UNIT_STATE_SPEED_UPDATE_PENDING exists (the state
 	// lives only as a movement-generator flag).
 	FleeSpeedUpdatePending bool
+	// ConfusedSpeedUpdatePending is MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING
+	// (MovementGenerator.h:35, 0x004) for the confused generator:
+	// UnitSpeedChanged sets it (ConfusedMovementGenerator.h:40) and
+	// DoUpdate re-paths immediately while the hop is still in flight
+	// (:86-87). Set on a run/swim speed change while a confused hop
+	// is in flight; consumed by repathCreatureSpeedPendingIfDue.
+	ConfusedSpeedUpdatePending bool
+	// RandomSpeedUpdatePending is MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING
+	// (MovementGenerator.h:35, 0x004) for the random generator:
+	// UnitSpeedChanged sets it (RandomMovementGenerator.h:44) and
+	// DoUpdate re-paths immediately while the wander leg is still in
+	// flight (:215-216). Set on a run/swim speed change while a
+	// wander leg is in flight; consumed by
+	// repathCreatureSpeedPendingIfDue on a successful launch only
+	// (SetRandomLocation clears TRANSITORY on success,
+	// RandomMovementGenerator.cpp:152).
+	RandomSpeedUpdatePending bool
+	// WaypointSpeedUpdatePending is MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING
+	// (MovementGenerator.h:35, 0x004) for the waypoint generator:
+	// UnitSpeedChanged sets it (WaypointMovementGenerator.h:42) and
+	// DoUpdate relaunches the current node while the leg is still in
+	// flight (:177-178). Set on a run/swim speed change while a
+	// patrol leg is in flight; consumed by
+	// repathCreatureSpeedPendingIfDue (the spline half is the
+	// refresh rescale, the formation signal re-issues).
+	WaypointSpeedUpdatePending bool
+	// PointSpeedUpdatePending is MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING
+	// (MovementGenerator.h:35, 0x004) for the point generator:
+	// UnitSpeedChanged sets it (PointMovementGenerator.h:40) and
+	// DoUpdate re-launches the stored destination while the spline
+	// is still in flight (:112-114). Set on a run/swim speed change
+	// while a point spline is in flight; consumed by
+	// repathCreatureSpeedPendingIfDue (the spline half is the
+	// refresh rescale, the formation signal re-issues).
+	PointSpeedUpdatePending bool
 	// ScriptMoveType is the MovementGeneratorType (MovementDefines.h)
 	// stamped by a script Move* launch: POINT 8, RANDOM 1, HOME 6,
 	// CONFUSED 4, FOLLOW 14, EFFECT 16. GetMovementType reads it only while the spline is in
@@ -268,6 +303,36 @@ type creatureMotion struct {
 	ScriptMoveDestX   float32
 	ScriptMoveDestY   float32
 	ScriptMoveDestZ   float32
+	// PendingScriptMove is the Point/Home script launch deferred by the
+	// NOT_MOVE/casting gate in launchCreatureScriptSplineSpeed
+	// (PointMovementGenerator::DoInitialize, PointMovementGenerator.cpp
+	// :57-61; HomeMovementGenerator::SetTargetLocation,
+	// HomeMovementGenerator.cpp:54-57): the launch recorded its full
+	// arguments here instead of starting a spline, and the step tick
+	// retries/finalizes it (retryPendingScriptMove). A Point record
+	// re-launches once the state clears (PointMovementGenerator::DoUpdate
+	// :112-129 re-launches an INTERRUPTED generator when the spline is
+	// finalized); a Home record finalizes on the next tick instead of
+	// re-launching (HomeMovementGenerator::DoUpdate :115-122 returns
+	// false on INTERRUPTED, so DoFinalize fires JustReachedHome with the
+	// creature in place). The stored speed is the pre-cap velocity the
+	// launch resolved — MoveCharge's explicit speed survives the deferral,
+	// while a wrapper launch's speed may go stale if a speed aura lands
+	// mid-deferral (re-capped, not re-resolved, at retry). A fresh
+	// script launch supersedes the record (MotionMaster takes a new
+	// generator); evade and death clear it (MotionMaster::Clear /
+	// generator finalize). Effect, Random, and SplineChain launches
+	// never record: GenericMovementGenerator::Initialize launches
+	// unconditionally, and Random's own gate lives in its wander leg.
+	PendingScriptMove          bool
+	PendingScriptMoveType      uint32
+	PendingScriptMovePointID   uint32
+	PendingScriptMoveDestX     float32
+	PendingScriptMoveDestY     float32
+	PendingScriptMoveDestZ     float32
+	PendingScriptMoveWalk      bool
+	PendingScriptMoveSpeed     float32
+	PendingScriptMoveAllowDead bool
 	// ScriptFollowInformed latches the once-per-follow MovementInform
 	// (FOLLOW_MOTION_TYPE): FollowMovementGenerator clears its
 	// INFORM_ENABLED flag after the first in-range inform
@@ -1801,6 +1866,39 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 	}
 	if motion.Fleeing || (!motion.FleeingUntil.IsZero() && now.Before(motion.FleeingUntil)) {
 		motion.FleeSpeedUpdatePending = true
+	}
+	// UnitSpeedChanged (ConfusedMovementGenerator.h:40,
+	// RandomMovementGenerator.h:44, WaypointMovementGenerator.h:42,
+	// PointMovementGenerator.h:40): a speed change arms
+	// MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING
+	// (MovementGenerator.h:35, 0x004) on each live generator; its
+	// DoUpdate re-paths immediately while the spline is still in
+	// flight (ConfusedMovementGenerator.cpp:86-87,
+	// RandomMovementGenerator.cpp:215-216,
+	// WaypointMovementGenerator.cpp:177-178,
+	// PointMovementGenerator.cpp:112-114). Armed only while a spline
+	// is in flight: C++ sets the flag unconditionally, but its only
+	// observable effect needs an unfinalized spline — a flag armed
+	// while idle would survive to the next leg and fire a spurious
+	// mid-leg repath, where C++'s timer arm consumes it at launch
+	// (the next Go launch already reads the new speed live). The
+	// in-flight re-path runs in repathCreatureSpeedPendingIfDue,
+	// called from the step tick's mid-flight gate; a landing
+	// consumes any flag the tick did not (the landing gate clears
+	// all four).
+	if motion.Moving {
+		if motion.Confused {
+			motion.ConfusedSpeedUpdatePending = true
+		}
+		if motion.MoveType == 1 {
+			motion.RandomSpeedUpdatePending = true
+		}
+		if motion.MoveType == 2 {
+			motion.WaypointSpeedUpdatePending = true
+		}
+		if motion.ScriptMoveType == movementGeneratorPoint {
+			motion.PointSpeedUpdatePending = true
+		}
 	}
 	s.motionMu.Unlock()
 	if newSpeed != oldSpeed {
@@ -5402,6 +5500,162 @@ func (s *Server) repathCreatureFleeIfDue(motion *creatureMotion, now time.Time) 
 	s.launchCreatureFleeLeg(motion, targetX, targetY, targetKnown, now)
 }
 
+// launchCreatureRandomLeg runs one RandomMovementGenerator<Creature>::SetRandomLocation
+// pick (RandomMovementGenerator.cpp:111-186), shared by the section-3 wander launch and
+// the mid-flight SPEED_UPDATE_PENDING re-path (repathCreatureSpeedPendingIfDue). It
+// reports whether a leg launched: SetRandomLocation clears TRANSITORY only on a
+// successful launch (:152), so a failed pick keeps the caller's pending flag and retries
+// on the next tick; the WanderSteps accounting runs on both arms (a failed launch still
+// consumes the step, splineDuration 0).
+func (s *Server) launchCreatureRandomLeg(ctx context.Context, motion *creatureMotion, now time.Time) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	var destX, destY, destZ float32
+	var wait time.Duration
+	// RandomMovementGenerator<Creature>::SetRandomLocation
+	// (RandomMovementGenerator.cpp:111-186): frand(0,
+	// _wanderDistance) around the DoInitialize reference point;
+	// MovePositionToFirstCollision has no Go bridge, so the
+	// destination is the plain polar offset, as the chase leg
+	// does. The LOS re-check retries in 200ms (:130-135) and
+	// the PathGenerator leg (30.0 path-length limit) retries in
+	// 100ms on NOPATH or SHORTCUT (:143-149) — FARFROMPOLY is
+	// deliberately not checked (:144,147: creatures in water
+	// are most likely far from poly). The walk/run legs of
+	// CreatureMovementData::Random (CanRun/AlwaysRun,
+	// CreatureData.h:103-108) ride randomWalk below (the
+	// movement row loads via loadCreatureStats). The
+	// UNIT_STATE_NOT_MOVE/casting interruption guards of
+	// SetRandomLocation (:117-123) are the caller's: the section-3
+	// launch gate, and the repathCreatureSpeedPendingIfDue blocked
+	// check for a mid-flight re-path (the LOST_CONTROL leg has no
+	// Go fear/confuse model).
+	angle := rand.Float64() * 2 * math.Pi
+	dist := rand.Float64() * motion.Wander
+	destX = float32(float64(motion.WanderRefX) + dist*math.Cos(angle))
+	destY = float32(float64(motion.WanderRefY) + dist*math.Sin(angle))
+	destZ = motion.WanderRefZ
+	// RandomMovementGenerator::SetRandomLocation
+	// (RandomMovementGenerator.cpp:156-167): the walk/run leg reads the
+	// template Random type — AlwaysRun runs, CanRun follows the owner's
+	// walk flag, Walk always walks.
+	walk := randomWalk(motion)
+	speed := creatureSplineVelocityExplicit(motion, walk)
+	if !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, destX, destY, destZ) {
+		motion.WaitUntil = now.Add(200 * time.Millisecond)
+		return false
+	}
+	path := NewPathGenerator(s, newCreaturePathSource(s, motion))
+	path.SetPathLengthLimit(30.0)
+	ok := path.CalculatePath(destX, destY, destZ, false)
+	points := path.PathPoints()
+	if !ok || path.PathType()&pathfindNopath != 0 || path.PathType()&pathfindShortcut != 0 || len(points) == 0 {
+		motion.WaitUntil = now.Add(100 * time.Millisecond)
+		return false
+	}
+	end := points[len(points)-1]
+	heading := float32(math.Atan2(float64(end.Y-motion.Y), float64(end.X-motion.X)))
+	// SetRandomLocation (:175-183): each launched spline consumes
+	// one step; once the steps run out the creature rests
+	// urand(4,10)s (rounded, retail) and the step counter resets
+	// to urand(2,10). A failed launch still consumes the step
+	// (splineDuration 0), so the accounting runs on both arms.
+	motion.WanderSteps--
+	if motion.WanderSteps <= 0 {
+		wait = time.Duration(4+rand.Intn(7)) * time.Second
+		motion.WanderSteps = 2 + rand.Intn(9)
+	}
+	if !s.launchCreaturePolySpline(motion, points, walk, movementGeneratorRandom, 0, false, speed, now) {
+		motion.WaitUntil = now.Add(wait)
+		return false
+	}
+	motion.MoveHeading = heading
+	motion.WaitUntil = motion.MoveEnds.Add(wait)
+	// Creature::SignalFormationMovement (Creature.cpp:362-369) via
+	// CreatureGroup::LeaderStartedMoving (CreatureGroups.cpp:280-295).
+	s.formationLeaderStartedMoving(ctx, motion, now)
+	return true
+}
+
+// repathCreatureSpeedPendingIfDue runs the SPEED_UPDATE_PENDING mid-flight
+// re-path arms of the confused, random, waypoint, and point generators
+// (ConfusedMovementGenerator.cpp:86-87, RandomMovementGenerator.cpp:215-216,
+// WaypointMovementGenerator.cpp:177-178, PointMovementGenerator.cpp:112-114),
+// called from the step tick's mid-flight gate while the spline is still in
+// flight — the flee twin (repathCreatureFleeIfDue) cannot serve here: it runs
+// after the landing gate, where Moving is already false. Confused and random
+// pick a fresh destination (launchCreatureConfusedSpline /
+// launchCreatureRandomLeg, the SetRandomLocation twin); waypoint and point
+// relaunch their current node/dest. The relaunch half of the last two is the
+// MoveEnds rescale refreshCreatureRunSpeedMotion already applied — Go's
+// atomic splines snap to the destination at launch, so re-running the launch
+// from the teleported position would synthesize an immediate arrival (the
+// <0.5 degenerate arm); the flag is consumed and the formation signal
+// re-issued instead (WaypointMovementGenerator::StartMove and
+// PointMovementGenerator::DoUpdate both SignalFormationMovement on relaunch).
+// A leg owned by another generator is left alone: flee (its own flag),
+// evade-home (Evading, ScriptMoveType 0), and any script spline
+// (ScriptMoveType stamps its owner; a waypoint leg stamps none, a random leg
+// stamps RANDOM, a confused hop stamps CONFUSED). A NOT_MOVE /
+// casting-prevented owner launches nothing and keeps the flag: C++ stops the
+// spline and retries on the next update, and the landing gate consumes any
+// flag the tick did not — the rescaled leg runs out instead (Go cannot stop
+// a spline mid-flight) and the next launch picks fresh at the new speed.
+func (s *Server) repathCreatureSpeedPendingIfDue(ctx context.Context, motion *creatureMotion, now time.Time) {
+	if s == nil || motion == nil {
+		return
+	}
+	if !motion.ConfusedSpeedUpdatePending && !motion.RandomSpeedUpdatePending && !motion.WaypointSpeedUpdatePending && !motion.PointSpeedUpdatePending {
+		return
+	}
+	if motion.Fleeing || (!motion.FleeingUntil.IsZero() && now.Before(motion.FleeingUntil)) || motion.Evading {
+		return
+	}
+	// The section-3 launch gate's NOT_MOVE/casting predicate
+	// (RandomMovementGenerator.cpp:204-210, ConfusedMovementGenerator.cpp:74-80):
+	// a rooted, stunned, or casting-prevented owner launches no fresh leg.
+	if motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
+		return
+	}
+	// ConfusedMovementGenerator::DoUpdate (ConfusedMovementGenerator.cpp:86-87):
+	// the pending flag re-paths while the hop is still in flight; the arm clears
+	// TRANSITORY before the pick, so a failed pick (LOS/path) still consumes it —
+	// the launch stamps the retry WaitUntil and the hop re-arms on landing.
+	if motion.ConfusedSpeedUpdatePending && motion.Confused && motion.ScriptMoveType == movementGeneratorConfused {
+		motion.ConfusedSpeedUpdatePending = false
+		s.launchCreatureConfusedSpline(motion, now)
+	}
+	// RandomMovementGenerator::DoUpdate (RandomMovementGenerator.cpp:215-216):
+	// the pending flag re-paths while the wander leg is still in flight; a
+	// MoveRandom one-off on a wanderer rides the same arm (MotionMaster::MoveRandom
+	// installs a RandomMovementGenerator, MotionMaster.cpp:575-582) with its pick
+	// centered on WanderRef, the spawn reference, rather than the install position
+	// (the one-off's documented simplification).
+	if motion.RandomSpeedUpdatePending && motion.MoveType == 1 && motion.ScriptMoveType == movementGeneratorRandom {
+		if s.launchCreatureRandomLeg(ctx, motion, now) {
+			motion.RandomSpeedUpdatePending = false
+		}
+	}
+	// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:177-178):
+	// the pending flag relaunches the current node while the leg is still in flight —
+	// StartMove(owner, true) skips ComputeNextNode (INFORM_ENABLED is clear
+	// mid-flight), so the node index never advances here. The spline half is the
+	// refresh rescale (see above); the formation signal re-issues.
+	if motion.WaypointSpeedUpdatePending && motion.MoveType == 2 && motion.ScriptMoveType == 0 {
+		motion.WaypointSpeedUpdatePending = false
+		s.formationLeaderStartedMoving(ctx, motion, now)
+	}
+	// PointMovementGenerator::DoUpdate (PointMovementGenerator.cpp:112-114): the
+	// pending flag re-launches the stored destination while the spline is still in
+	// flight. The spline half is the refresh rescale (see above); the formation
+	// signal re-issues.
+	if motion.PointSpeedUpdatePending && motion.ScriptMoveType == movementGeneratorPoint {
+		motion.PointSpeedUpdatePending = false
+		s.formationLeaderStartedMoving(ctx, motion, now)
+	}
+}
+
 // startCreatureFlee is the MotionMaster::MoveFleeing (MotionMaster.cpp:618-633)
 // engine leg for creatures: the caller already resolved the flee target's
 // position (a nil enemy returns early in C++, so bindings resolve first and
@@ -5596,6 +5850,58 @@ const (
 // (Unit.cpp:13249).
 const movementInformVehicleExit uint32 = 1008
 
+// scriptMoveBlockedFields is the Point/Home launch gate
+// (PointMovementGenerator::DoInitialize, PointMovementGenerator.cpp:57-61:
+// HasUnitState(UNIT_STATE_NOT_MOVE) || IsMovementPreventedByCasting();
+// HomeMovementGenerator::SetTargetLocation, HomeMovementGenerator.cpp:54-57:
+// ROOT | STUNNED | DISTRACTED): Go reads it as the script root/stun
+// latches + the NOT_MOVE aura leg (root/stun auras) + the casting
+// prevention (CastingUntil with the move-allowed-channel exception,
+// Creature::IsMovementPreventedByCasting, Creature.cpp:3360-3376) +
+// the DistractedUntil hold (UNIT_STATE_DISTRACTED is in NOT_MOVE,
+// Unit.h:256). NOT_MOVE's DIED leg is deliberately not ported: the
+// existing allowDead leg moves corpses on Point/Home splines (see the
+// launchCreatureScriptSpline comment), and the DIED bit has no live
+// setter on the launch path. The caller supplies the aura leg
+// separately: creatureHasNotMoveAura takes auraMu, which must never be
+// taken under motionMu (cf. launchCreatureFleeLeg), so launcher call
+// sites compute it before locking and pass it in, while unlocked
+// call sites use scriptMoveBlockedByState.
+func scriptMoveBlockedFields(motion *creatureMotion, now time.Time, notMoveAura bool) bool {
+	if motion == nil {
+		return false
+	}
+	return notMoveAura || motion.ScriptRooted || motion.ScriptStunned || creatureMovementPreventedByCasting(motion, now) || now.Before(motion.DistractedUntil)
+}
+
+// scriptMoveBlockedByState is the unlocked-path form of
+// scriptMoveBlockedFields (step tick, evade): motionMu is not held on
+// those paths, so the aura leg runs inline here.
+func (s *Server) scriptMoveBlockedByState(motion *creatureMotion, now time.Time) bool {
+	if motion == nil {
+		return false
+	}
+	return scriptMoveBlockedFields(motion, now, s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)))
+}
+
+// clearPendingScriptMove drops the deferred Point/Home launch record;
+// the caller holds motionMu, or is on the unlocked tick/evade path
+// whose other motion writes are equally unguarded.
+func clearPendingScriptMove(motion *creatureMotion) {
+	if motion == nil {
+		return
+	}
+	motion.PendingScriptMove = false
+	motion.PendingScriptMoveType = 0
+	motion.PendingScriptMovePointID = 0
+	motion.PendingScriptMoveDestX = 0
+	motion.PendingScriptMoveDestY = 0
+	motion.PendingScriptMoveDestZ = 0
+	motion.PendingScriptMoveWalk = false
+	motion.PendingScriptMoveSpeed = 0
+	motion.PendingScriptMoveAllowDead = false
+}
+
 // launchCreatureScriptSpline is the shared atomic-spline launch for
 // script Move* legs, on the flee/waypoint precedent: the server snaps
 // to the destination at launch and broadcasts SMSG_MONSTER_MOVE, so
@@ -5658,10 +5964,54 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	if s == nil || motion == nil {
 		return false
 	}
+	// The NOT_MOVE/casting aura leg runs before motionMu (auraMu
+	// ordering, cf. launchCreatureFleeLeg); the latched legs run under
+	// the lock below. Only Point and Home gate here: the Generic
+	// (Effect) generator launches unconditionally
+	// (GenericMovementGenerator.cpp:36-48), Random carries its own
+	// SetRandomLocation gate, and the chain walker is not a Point/Home
+	// launch.
+	var notMoveAura bool
+	if moveType == movementGeneratorPoint || moveType == movementGeneratorHome {
+		notMoveAura = s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion))
+	}
 	s.motionMu.Lock()
 	if motion.Health == 0 && !allowDead {
 		s.motionMu.Unlock()
 		return false
+	}
+	if moveType == movementGeneratorPoint || moveType == movementGeneratorHome {
+		if scriptMoveBlockedFields(motion, time.Now(), notMoveAura) {
+			// PointMovementGenerator::DoInitialize
+			// (PointMovementGenerator.cpp:57-61) and
+			// HomeMovementGenerator::SetTargetLocation
+			// (HomeMovementGenerator.cpp:54-57): the generator is
+			// flagged INTERRUPTED and StopMoving runs with no
+			// launch — Go has no per-generator update loop, so the
+			// launch is deferred on the motion (retryPendingScriptMove)
+			// instead of dropped: a dropped MoveTo would silently
+			// swallow the script's MovementInform, while C++ fires
+			// it once the state clears (Point) or finalizes home
+			// (Home). The StopMoving half is vacuous here — the
+			// atomic-spline model holds no in-flight spline to stop
+			// unless one is already running, and a running spline
+			// keeps its own landing.
+			motion.PendingScriptMove = true
+			motion.PendingScriptMoveType = moveType
+			motion.PendingScriptMovePointID = pointID
+			motion.PendingScriptMoveDestX = destX
+			motion.PendingScriptMoveDestY = destY
+			motion.PendingScriptMoveDestZ = destZ
+			motion.PendingScriptMoveWalk = walk
+			motion.PendingScriptMoveSpeed = speed
+			motion.PendingScriptMoveAllowDead = allowDead
+			s.motionMu.Unlock()
+			return false
+		}
+		// A fresh launch supersedes a deferred one (MotionMaster
+		// takes a new generator); the speed check below may still
+		// refuse it, and that refusal replaces the record too.
+		clearPendingScriptMove(motion)
 	}
 	if speed < 0.001 {
 		s.motionMu.Unlock()
@@ -5697,7 +6047,7 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
 	phase := motion.PhaseMask
 	transportGUID := motion.TransportGUID
-	// PointMovementGenerator::DoInitialize (PointMovementGenerator.cpp:67)
+	// PointMovementGenerator::DoInitialize (PointMovementGenerator.cpp:57-61)
 	// and HomeMovementGenerator::SetTargetLocation
 	// (HomeMovementGenerator.cpp:76-80): MotionMaster::MovePoint defaults
 	// generatePath=true (MotionMaster.h:162-163), so a Point/Home launch
@@ -5751,6 +6101,71 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveFlagsInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, walk, facing, hasFacing, phase, transportGUID, flying, animTier)
 	return true
+}
+
+// retryPendingScriptMove runs the Point/Home DoUpdate arm for a launch
+// deferred by the NOT_MOVE/casting gate (the PendingScriptMove record):
+// a Point record re-launches once the state clears
+// (PointMovementGenerator::DoUpdate, PointMovementGenerator.cpp:112-129,
+// re-launches an INTERRUPTED generator when the spline is finalized),
+// while a Home record finalizes on the next update without re-launching
+// (HomeMovementGenerator::DoUpdate, HomeMovementGenerator.cpp:115-122,
+// returns false on INTERRUPTED, so DoFinalize fires JustReachedHome with
+// the creature in place). The step tick calls it ahead of the landing
+// gate, so a relaunched spline pauses combat/wander for the rest of the
+// tick exactly like a fresh launch. The record is consumed before the
+// launch/finalize runs, so a re-entrant Move* from the fired hook re-arms
+// instead of looping, and a still-blocked Point re-arms itself below. A
+// spline already in flight keeps the record for a later tick — the retry
+// never yanks a running spline. The Home finalize carries no facing
+// change: no spline ever launched, so no SetFacing rode it (contrast the
+// landing-gate Home arm, whose spline carried SetFacing(homeO)).
+func (s *Server) retryPendingScriptMove(ctx context.Context, motion *creatureMotion, now time.Time) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	if !motion.PendingScriptMove || motion.Moving {
+		s.motionMu.Unlock()
+		return
+	}
+	moveType := motion.PendingScriptMoveType
+	pointID := motion.PendingScriptMovePointID
+	destX, destY, destZ := motion.PendingScriptMoveDestX, motion.PendingScriptMoveDestY, motion.PendingScriptMoveDestZ
+	walk := motion.PendingScriptMoveWalk
+	speed := motion.PendingScriptMoveSpeed
+	allowDead := motion.PendingScriptMoveAllowDead
+	clearPendingScriptMove(motion)
+	s.motionMu.Unlock()
+	if moveType == movementGeneratorHome {
+		// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:139-151):
+		// SetSpawnHealth ahead of JustReachedHome, Vehicle::Reset(true)
+		// ahead of it, BossAI::_JustReachedHome (me->setActive(false)).
+		s.restoreCreatureSpawnHealth(motion)
+		s.resetVehicleKitOnReachHome(ctx, motion)
+		motion.Active = false
+		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+		s.smartJustReachedHome(ctx, motion)
+		return
+	}
+	if moveType != movementGeneratorPoint {
+		return
+	}
+	if s.scriptMoveBlockedByState(motion, now) {
+		s.motionMu.Lock()
+		motion.PendingScriptMove = true
+		motion.PendingScriptMoveType = moveType
+		motion.PendingScriptMovePointID = pointID
+		motion.PendingScriptMoveDestX = destX
+		motion.PendingScriptMoveDestY = destY
+		motion.PendingScriptMoveDestZ = destZ
+		motion.PendingScriptMoveWalk = walk
+		motion.PendingScriptMoveSpeed = speed
+		motion.PendingScriptMoveAllowDead = allowDead
+		s.motionMu.Unlock()
+		return
+	}
+	s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, speed, false, animTierNone, true)
 }
 
 // tryLaunchCreatureHomePath runs the HomeMovementGenerator::SetTargetLocation
@@ -5852,6 +6267,12 @@ func (s *Server) launchCreatureConfusedSpline(motion *creatureMotion, now time.T
 		return false
 	}
 	s.motionMu.Lock()
+	// Every hop launch consumes the pending speed update:
+	// ConfusedMovementGenerator::DoUpdate removes TRANSITORY when
+	// either the speed arm or the timer arm fires (:87), and a fresh
+	// hop supersedes the in-flight leg, so a flag armed mid-flight
+	// must not fire again on the new leg.
+	motion.ConfusedSpeedUpdatePending = false
 	lx, ly, lz := motion.X, motion.Y, motion.Z
 	ox, oy, oz := lx, ly, lz
 	if motion.ConfusedOriginKnown {
@@ -6796,6 +7217,11 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.ScriptFollowTargetGUID = 0
 	motion.ScriptFollowDist = 0
 	motion.ScriptFollowAngle = 0
+	// The same Clear drops a deferred Point/Home launch: the generator
+	// it belonged to is gone, so the tick must not retry or finalize it
+	// after the evade (the escort-return arm below may record a fresh
+	// one of its own).
+	clearPendingScriptMove(motion)
 	// MotionMaster::Clear drops the default-slot generators too: a
 	// PAUSE_MOVEMENT (127) timer-0 latch dies with them — a waypoint or
 	// random generator re-added after the evade starts unpaused. The
@@ -6949,7 +7375,15 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 					// below 0.001): no spline, and the point generator
 					// finalizes immediately — MovementInform fires
 					// here, like the home arm's sub-0.001 branch.
-					s.smartMovementInform(ctx, motion, movementGeneratorPoint, smartEscortLastOOCPoint)
+					// Unless the launch deferred on the NOT_MOVE /
+					// casting gate instead: the point generator is
+					// INTERRUPTED (PointMovementGenerator.cpp:57-61),
+					// not finalized, so the inform waits for the
+					// retry's landing instead of firing for a point
+					// never reached.
+					if !motion.PendingScriptMove {
+						s.smartMovementInform(ctx, motion, movementGeneratorPoint, smartEscortLastOOCPoint)
+					}
 				}
 				followOwner = true
 			}
@@ -6991,13 +7425,23 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			motion.AlreadySearchedAssistance = false
 			if homeDist > 0.5 {
 				speed := creatureSplineVelocityExplicit(motion, false)
-				if speed < 0.001 {
+				if speed < 0.001 || s.scriptMoveBlockedByState(motion, now) {
 					// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):
 					// velocity below 0.001 fails validation — no spline is launched and no
 					// SMSG_MONSTER_MOVE is sent. HomeMovementGenerator::DoUpdate then sees the
 					// finalized spline and finalizes immediately, so AI()->JustReachedHome()
 					// still fires (HomeMovementGenerator.cpp:139-151); the creature simply
 					// stays where it is instead of returning home at base run speed.
+					// The same immediate finalize covers the SetTargetLocation gate
+					// (HomeMovementGenerator.cpp:54-57: ROOT/STUNNED/DISTRACTED ->
+					// INTERRUPTED, no spline): DoUpdate finalizes an INTERRUPTED
+					// home generator on its next update rather than re-launching
+					// it, so the evade-home case finalizes here instead of
+					// recording a pending launch (contrast the scripted Point
+					// launch, which defers and retries). The cast leg is
+					// vacuous here — the interrupt above already cleared
+					// CastingUntil — but root/stun latches and a live
+					// DistractedUntil hold still take this arm.
 					// DoFinalize clears UNIT_STATE_EVADE on the immediate finalize,
 					// so the flag set at evade start clears here, as in the
 					// already-home arm below.
@@ -8772,6 +9216,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.ScriptFollowTargetGUID = 0
 		motion.ScriptFollowDist = 0
 		motion.ScriptFollowAngle = 0
+		// MotionMaster::Clear finalizes the generators too: a deferred
+		// Point/Home launch dies with the creature instead of retrying
+		// on respawn.
+		clearPendingScriptMove(motion)
 		return
 	}
 	// SmartAI::UpdateAI (SmartAI.cpp:284-303) runs GetScript()->OnUpdate
@@ -9126,6 +9574,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 	}
+	// A Point/Home launch deferred by the NOT_MOVE/casting gate
+	// (retryPendingScriptMove) retries/finalizes here, ahead of the
+	// landing gate so a relaunched spline pauses combat/wander for the
+	// rest of the tick like a fresh launch.
+	s.retryPendingScriptMove(ctx, motion, now)
 	if motion.Moving {
 		if now.Before(motion.MoveEnds) {
 			// SplineChainMovementGenerator::Update
@@ -9137,9 +9590,28 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if motion.SplineChain != nil {
 				s.advanceSplineChain(ctx, motion, now)
 			}
+			// SPEED_UPDATE_PENDING mid-flight re-path (see
+			// repathCreatureSpeedPendingIfDue): a speed change arms
+			// the flag on the live generator in
+			// refreshCreatureRunSpeedMotion, and its DoUpdate
+			// re-paths while the spline is still in flight — the
+			// early return below must not starve it, like the
+			// spline-chain arm above.
+			s.repathCreatureSpeedPendingIfDue(ctx, motion, now)
 			return
 		}
 		motion.Moving = false
+		// A landed spline consumes any pending speed update: in C++
+		// the flag survives until the timer arm fires, but every Go
+		// timer-arm launch picks fresh at the new speed anyway (the
+		// confused/random pick is always fresh; the next waypoint
+		// node launches at the new speed; a point leg finalizes),
+		// so a flag that outlived its leg must not fire a spurious
+		// repath mid-next-leg.
+		motion.ConfusedSpeedUpdatePending = false
+		motion.RandomSpeedUpdatePending = false
+		motion.WaypointSpeedUpdatePending = false
+		motion.PointSpeedUpdatePending = false
 		if motion.SeekAssistPending {
 			s.finishCreatureSeekAssistance(ctx, motion, now)
 		}
@@ -12605,6 +13077,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// 2. If creature is currently in Evade mode returning home:
 	// maintain attack/spell immunity, ignore aggro, and finish return when reached
 	if motion.Evading {
+		// A deferred escort return (PointMovementGenerator::DoUpdate
+		// re-launch) owns the evade until it lands: the home finalize
+		// below must not snap the creature home on a stale MoveEnds
+		// while the return is still pending.
+		if motion.PendingScriptMove {
+			return
+		}
 		if now.Before(motion.MoveEnds) {
 			return
 		}
@@ -13382,66 +13861,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.HomeX, motion.HomeY, motion.HomeZ = destX, destY, destZ
 		motion.HomeO = motion.Orientation
 	} else if motion.MoveType == 1 {
-		// RandomMovementGenerator<Creature>::SetRandomLocation
-		// (RandomMovementGenerator.cpp:111-186): frand(0,
-		// _wanderDistance) around the DoInitialize reference point;
-		// MovePositionToFirstCollision has no Go bridge, so the
-		// destination is the plain polar offset, as the chase leg
-		// does. The LOS re-check retries in 200ms (:130-135) and
-		// the PathGenerator leg (30.0 path-length limit) retries in
-		// 100ms on NOPATH or SHORTCUT (:143-149) — FARFROMPOLY is
-		// deliberately not checked (:144,147: creatures in water
-		// are most likely far from poly). The walk/run legs of
-		// CreatureMovementData::Random (CanRun/AlwaysRun,
-		// CreatureData.h:103-108) ride randomWalk below (the
-		// movement row loads via loadCreatureStats). The
-		// UNIT_STATE_NOT_MOVE/casting interruption guards of
-		// SetRandomLocation (:117-123) ride the shared launch gate
-		// above (the LOST_CONTROL leg has no Go fear/confuse model).
-		angle := rand.Float64() * 2 * math.Pi
-		dist := rand.Float64() * motion.Wander
-		destX = float32(float64(motion.WanderRefX) + dist*math.Cos(angle))
-		destY = float32(float64(motion.WanderRefY) + dist*math.Sin(angle))
-		destZ = motion.WanderRefZ
-		// RandomMovementGenerator::SetRandomLocation
-		// (RandomMovementGenerator.cpp:156-167): the walk/run leg reads the
-		// template Random type — AlwaysRun runs, CanRun follows the owner's
-		// walk flag, Walk always walks.
-		walk = randomWalk(motion)
-		speed = creatureSplineVelocityExplicit(motion, walk)
-		if !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, destX, destY, destZ) {
-			motion.WaitUntil = now.Add(200 * time.Millisecond)
-			return
+		// RandomMovementGenerator::DoUpdate (RandomMovementGenerator.cpp:215-216):
+		// a pending speed update re-paths immediately while the wander leg is still
+		// in flight (repathCreatureSpeedPendingIfDue); the launch below is the timer
+		// arm, which only fires once the spline has landed.
+		if s.launchCreatureRandomLeg(ctx, motion, now) {
+			motion.RandomSpeedUpdatePending = false
 		}
-		path := NewPathGenerator(s, newCreaturePathSource(s, motion))
-		path.SetPathLengthLimit(30.0)
-		ok := path.CalculatePath(destX, destY, destZ, false)
-		points := path.PathPoints()
-		if !ok || path.PathType()&pathfindNopath != 0 || path.PathType()&pathfindShortcut != 0 || len(points) == 0 {
-			motion.WaitUntil = now.Add(100 * time.Millisecond)
-			return
-		}
-		end := points[len(points)-1]
-		heading := float32(math.Atan2(float64(end.Y-motion.Y), float64(end.X-motion.X)))
-		// SetRandomLocation (:175-183): each launched spline consumes
-		// one step; once the steps run out the creature rests
-		// urand(4,10)s (rounded, retail) and the step counter resets
-		// to urand(2,10). A failed launch still consumes the step
-		// (splineDuration 0), so the accounting runs on both arms.
-		motion.WanderSteps--
-		if motion.WanderSteps <= 0 {
-			wait = time.Duration(4+rand.Intn(7)) * time.Second
-			motion.WanderSteps = 2 + rand.Intn(9)
-		}
-		if !s.launchCreaturePolySpline(motion, points, walk, movementGeneratorRandom, 0, false, speed, now) {
-			motion.WaitUntil = now.Add(wait)
-			return
-		}
-		motion.MoveHeading = heading
-		motion.WaitUntil = motion.MoveEnds.Add(wait)
-		// Creature::SignalFormationMovement (Creature.cpp:362-369) via
-		// CreatureGroup::LeaderStartedMoving (CreatureGroups.cpp:280-295).
-		s.formationLeaderStartedMoving(ctx, motion, now)
 		return
 	} else {
 		// MoveType 0 is IDLE_MOTION_TYPE (MovementDefines.h:28): Creature::Initialize
