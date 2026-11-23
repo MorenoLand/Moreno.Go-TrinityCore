@@ -575,10 +575,49 @@ func lfgIntersectDungeons(a, b []uint32) []uint32 {
 	return out
 }
 
-// FindGroups mirrors LFGQueue::FindGroups + FindNewGroups + CheckCompatibility (LFGQueue.cpp:293-360, 373-560) over Go's queue: group entries and solo entries are the units, and a combination matches when it holds at most one LFG group, its dungeon sets intersect, and its merged roles resolve through lfgCheckGroupRoles. Non-solo queues need exactly 5 players (MAXGROUPSIZE); with SoloLFG on, the "enough players" gate is skipped, so a single compatible unit matches alone. Differences from C++: no ignore check (Go keeps no ignore store), the proposal dungeon is the smallest common dungeon instead of a random one, and the leader is the smallest leader-bit guid instead of a random one. Matched units are marked PROPOSAL, not removed, so proposal decline/expiry keep working off the existing queue arms.
-func (m *LFGManager) FindGroups() []*LFGProposal {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// lfgIgnoresPair reports whether either player ignores the other in the
+// loaded ignore map (LFGMgr::HasIgnore, LFGMgr.cpp:2087-2091, checks both
+// directions). A nil map means no ignore data was loaded, so nothing is
+// ignored — the matcher degrades to the pre-port behavior rather than
+// failing the tick.
+func lfgIgnoresPair(ignores map[uint64]map[uint64]bool, a, b uint64) bool {
+	if ignores == nil {
+		return false
+	}
+	return ignores[a][b] || ignores[b][a]
+}
+
+// QueuedGUIDs snapshots every player GUID currently in the queue, group
+// members included, sorted and deduplicated — the batch input for
+// lfgIgnorePairs.
+func (m *LFGManager) QueuedGUIDs() []uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := make(map[uint64]bool)
+	var guids []uint64
+	for _, entry := range m.groupQueue {
+		for guid := range entry.Roles {
+			if !seen[guid] {
+				seen[guid] = true
+				guids = append(guids, guid)
+			}
+		}
+	}
+	for guid := range m.queue {
+		if !seen[guid] {
+			seen[guid] = true
+			guids = append(guids, guid)
+		}
+	}
+	sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+	return guids
+}
+
+// matchUnitsLocked builds the matcher units from the queued group and solo
+// entries: one unit per queued LFG group plus one per ungrouped solo
+// player, group units first in group-id order, then solos in guid order.
+// Callers must hold m.mu (read or write).
+func (m *LFGManager) matchUnitsLocked() []*lfgMatchUnit {
 	var groupIDs []uint64
 	for groupID := range m.groupQueue {
 		groupIDs = append(groupIDs, groupID)
@@ -612,13 +651,21 @@ func (m *LFGManager) FindGroups() []*LFGProposal {
 		entry := m.queue[guid]
 		units = append(units, &lfgMatchUnit{guids: []uint64{guid}, roles: map[uint64]uint8{guid: entry.Roles}, dungeons: append([]uint32(nil), entry.Dungeons...)})
 	}
+	return units
+}
+
+// FindGroups mirrors LFGQueue::FindGroups + FindNewGroups + CheckCompatibility (LFGQueue.cpp:293-360, 373-560) over Go's queue: group entries and solo entries are the units, and a combination matches when it holds at most one LFG group, its dungeon sets intersect, and its merged roles resolve through lfgCheckGroupRoles. Non-solo queues need exactly 5 players (MAXGROUPSIZE); with SoloLFG on, the "enough players" gate is skipped, so a single compatible unit matches alone. The ignore check (LFGQueue.cpp:471-486) runs across units: a unit whose member ignores, or is ignored by, a member of an already-chosen unit is skipped, in either direction (LFGMgr::HasIgnore, LFGMgr.cpp:2087-2091); pairs inside one unit are compared once the combo spans more than one unit (LFGQueue.cpp:458-476), while a lone unit is never checked. Differences from C++: the proposal dungeon is the smallest common dungeon instead of a random one, and the leader is the smallest leader-bit guid instead of a random one. Matched units are marked PROPOSAL, not removed, so proposal decline/expiry keep working off the existing queue arms.
+func (m *LFGManager) FindGroups(ignores map[uint64]map[uint64]bool) []*LFGProposal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	units := m.matchUnitsLocked()
 	used := make([]bool, len(units))
 	var proposals []*LFGProposal
 	for seed := range units {
 		if used[seed] {
 			continue
 		}
-		combo := m.findLFGCombo(units, used, seed)
+		combo := m.findLFGCombo(units, used, seed, ignores)
 		if combo == nil {
 			continue
 		}
@@ -731,8 +778,8 @@ func (m *LFGManager) FindGroups() []*LFGProposal {
 	return proposals
 }
 
-// findLFGCombo searches increasing-index combinations starting at seed for a set satisfying the size, group-count and dungeon gates; role resolution is re-checked by the caller on the full merged set.
-func (m *LFGManager) findLFGCombo(units []*lfgMatchUnit, used []bool, seed int) []int {
+// findLFGCombo searches increasing-index combinations starting at seed for a set satisfying the size, group-count and dungeon gates; role resolution is re-checked by the caller on the full merged set. A unit is skipped when any of its members ignores, or is ignored by, a member of an already-chosen unit (LFGQueue.cpp:471-486, LFGMgr::HasIgnore LFGMgr.cpp:2087-2091). A lone unit is never ignore-checked (LFGQueue.cpp:458-460, single queued entry skips the check); once the combo spans more than one unit, pairs inside one unit are compared too, since C++ compares each queued entry's members against the roles already collected, which holds earlier members of the same entry (LFGQueue.cpp:461-476).
+func (m *LFGManager) findLFGCombo(units []*lfgMatchUnit, used []bool, seed int, ignores map[uint64]map[uint64]bool) []int {
 	var search func(chosen []int, total, groups int, dungeons []uint32) []int
 	search = func(chosen []int, total, groups int, dungeons []uint32) []int {
 		if total > 5 || groups > 1 {
@@ -789,6 +836,44 @@ func (m *LFGManager) findLFGCombo(units []*lfgMatchUnit, used []bool, seed int) 
 					continue
 				}
 			}
+			ignored := false
+			if len(chosen) > 0 {
+				for _, guid := range unit.guids {
+					for _, chosenIdx := range chosen {
+						for _, other := range units[chosenIdx].guids {
+							if lfgIgnoresPair(ignores, guid, other) {
+								ignored = true
+								break
+							}
+						}
+						if ignored {
+							break
+						}
+					}
+					if ignored {
+						break
+					}
+				}
+				if !ignored {
+					for _, idx := range append(append([]int(nil), chosen...), i) {
+						guids := units[idx].guids
+						for a := 0; a < len(guids) && !ignored; a++ {
+							for b := a + 1; b < len(guids); b++ {
+								if lfgIgnoresPair(ignores, guids[a], guids[b]) {
+									ignored = true
+									break
+								}
+							}
+						}
+						if ignored {
+							break
+						}
+					}
+				}
+			}
+			if ignored {
+				continue
+			}
 			if combo := search(append(chosen, i), total+len(unit.guids), nextGroups, nextDungeons); combo != nil {
 				return combo
 			}
@@ -796,6 +881,161 @@ func (m *LFGManager) findLFGCombo(units []*lfgMatchUnit, used []bool, seed int) 
 		return nil
 	}
 	return search([]int{}, 0, 0, nil)
+}
+
+// bestCompatibleRolesLocked returns the merged roles of the largest
+// compatible set containing units[entryIdx]: the on-demand twin of
+// LFGQueue::FindBestCompatibleInQueue + UpdateBestCompatibleInQueue
+// (LFGQueue.cpp:697-742), where the bestCompatible is the largest
+// WITH_LESS_PLAYERS set (< 5 players) containing the entry's guid. A
+// candidate set must hold at most one LFG group, share a dungeon, resolve
+// through lfgCheckGroupRoles, and hold no ignored pair (the A#28 check).
+// C++ nuance, documented not replicated: the C++ <5 early arm
+// (LFGQueue.cpp:427-441) records WITH_LESS_PLAYERS without the
+// dungeon/ignore/role gates and subtracts only the seed entry's roles, so
+// its needs reflect the seed, not the whole set. Go keeps no compat cache
+// and no seed history, so the on-demand port gates on the matcher's
+// compatibility and subtracts all of the set's roles — the closest
+// recompute, and strictly closer than the entry's own roles whenever the
+// entry matches others. Returns nil when even the entry alone does not
+// resolve, so the caller falls back to the entry's own roles.
+func (m *LFGManager) bestCompatibleRolesLocked(units []*lfgMatchUnit, entryIdx int, ignores map[uint64]map[uint64]bool) map[uint64]uint8 {
+	entry := units[entryIdx]
+	var candidates []int
+	for i, unit := range units {
+		if i == entryIdx {
+			continue
+		}
+		if len(lfgIntersectDungeons(entry.dungeons, unit.dungeons)) == 0 {
+			continue
+		}
+		candidates = append(candidates, i)
+	}
+	sort.Slice(candidates, func(a, b int) bool {
+		ua, ub := units[candidates[a]], units[candidates[b]]
+		if len(ua.guids) != len(ub.guids) {
+			return len(ua.guids) > len(ub.guids)
+		}
+		return ua.guids[0] < ub.guids[0]
+	})
+	suffix := make([]int, len(candidates)+1)
+	for i := len(candidates) - 1; i >= 0; i-- {
+		suffix[i] = suffix[i+1] + len(units[candidates[i]].guids)
+	}
+	merged := make(map[uint64]uint8, len(entry.roles))
+	for guid, role := range entry.roles {
+		merged[guid] = role
+	}
+	bestTotal := 0
+	var best map[uint64]uint8
+	consider := func(total int) {
+		if total <= bestTotal {
+			return
+		}
+		probe := make(map[uint64]uint8, len(merged))
+		for guid, role := range merged {
+			probe[guid] = role
+		}
+		if !lfgCheckGroupRoles(probe) {
+			return
+		}
+		bestTotal = total
+		best = make(map[uint64]uint8, len(merged))
+		for guid, role := range merged {
+			best[guid] = role
+		}
+	}
+	consider(len(entry.guids))
+	groups := 0
+	if entry.groupID != 0 {
+		groups = 1
+	}
+	var search func(pos, total, groups int, dungeons []uint32)
+	search = func(pos, total, groups int, dungeons []uint32) {
+		if total > 4 || total+suffix[pos] <= bestTotal {
+			return
+		}
+		for i := pos; i < len(candidates); i++ {
+			unit := units[candidates[i]]
+			if total+len(unit.guids) > 4 {
+				continue
+			}
+			nextGroups := groups
+			if unit.groupID != 0 {
+				nextGroups++
+			}
+			if nextGroups > 1 {
+				continue
+			}
+			nextDungeons := lfgIntersectDungeons(dungeons, unit.dungeons)
+			if len(nextDungeons) == 0 {
+				continue
+			}
+			ignored := false
+			for _, guid := range unit.guids {
+				for other := range merged {
+					if lfgIgnoresPair(ignores, guid, other) {
+						ignored = true
+						break
+					}
+				}
+				if ignored {
+					break
+				}
+			}
+			// Pairs inside one unit count once the set spans more than
+			// one unit (LFGQueue.cpp:458-476, same rule as findLFGCombo):
+			// the candidate's own pairs and the entry unit's pairs.
+			if !ignored {
+				for _, guids := range [][]uint64{unit.guids, entry.guids} {
+					for a := 0; a < len(guids) && !ignored; a++ {
+						for b := a + 1; b < len(guids); b++ {
+							if lfgIgnoresPair(ignores, guids[a], guids[b]) {
+								ignored = true
+								break
+							}
+						}
+					}
+					if ignored {
+						break
+					}
+				}
+			}
+			if ignored {
+				continue
+			}
+			for _, guid := range unit.guids {
+				merged[guid] = unit.roles[guid]
+			}
+			consider(total + len(unit.guids))
+			search(i+1, total+len(unit.guids), nextGroups, nextDungeons)
+			for _, guid := range unit.guids {
+				delete(merged, guid)
+			}
+		}
+	}
+	search(0, len(entry.guids), groups, append([]uint32(nil), entry.dungeons...))
+	return best
+}
+
+// bestCompatibleNeedsLocked returns the needs bytes for a queue unit: the
+// 1/1/3 constants minus the roles of the largest compatible set containing
+// the unit (LFGQueue::UpdateBestCompatibleInQueue, LFGQueue.cpp:714-742),
+// falling back to the unit's own roles when no compatible set resolves.
+// A unit that is not currently queued (a PROPOSAL solo, a non-QUEUED group)
+// has no set to join and always takes the fallback. Exactly one of
+// groupID and guid identifies the unit: a group entry by its group id, a
+// solo entry by its guid.
+func (m *LFGManager) bestCompatibleNeedsLocked(units []*lfgMatchUnit, groupID, guid uint64, fallback map[uint64]uint8, ignores map[uint64]map[uint64]bool) (tanks, healers, dps uint8) {
+	for i, unit := range units {
+		if (groupID != 0 && unit.groupID == groupID) || (groupID == 0 && len(unit.guids) == 1 && unit.guids[0] == guid) {
+			if best := m.bestCompatibleRolesLocked(units, i, ignores); best != nil {
+				return lfgRemainingNeeds(best)
+			}
+			break
+		}
+	}
+	return lfgRemainingNeeds(fallback)
 }
 
 // SetComment mirrors LFGMgr::SetComment (LFGMgr.cpp:1984-1988): the comment
@@ -1345,14 +1585,14 @@ type lfgQueueStatus struct {
 // seconds, and the role-derived wait. Queue data survives a pending
 // proposal until success, so proposal members still get a status; post-
 // success DUNGEON/FINISHED entries are PlayersStore state, not queue units,
-// and get none. The bestCompatible refresh
-// (LFGQueue.cpp:631-632) has no twin: Go's matcher recomputes combos
-// every tick and keeps no cached compatible string to refresh.
+// and get none. The bestCompatible refresh (LFGQueue.cpp:631-632) is
+// computed on demand instead of from a cached compatible string:
+// bestCompatibleRolesLocked finds the largest compatible set containing
+// the entry, and the needs bytes come from its roles.
 // lfgRemainingNeeds mirrors LFGQueue::UpdateBestCompatibleInQueue
 // (LFGQueue.cpp:714-742): the needs bytes start at the 1/1/3 constants and
 // drop once per best-compatible role, tank first, then healer, anything else
-// counting as DPS (a leader-only role lands in the DPS arm). Go has no
-// cross-entry best-compatible set, so the entry's own roles stand in for it;
+// counting as DPS (a leader-only role lands in the DPS arm).
 // uint8 subtraction wraps exactly as C++'s does on a surplus role.
 func lfgRemainingNeeds(roles map[uint64]uint8) (tanks, healers, dps uint8) {
 	tanks, healers, dps = lfgTanksNeeded, lfgHealersNeeded, lfgDPSNeeded
@@ -1368,9 +1608,10 @@ func lfgRemainingNeeds(roles map[uint64]uint8) (tanks, healers, dps uint8) {
 	return tanks, healers, dps
 }
 
-func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
+func (m *LFGManager) QueueStatuses(now time.Time, ignores map[uint64]map[uint64]bool) []lfgQueueStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	units := m.matchUnitsLocked()
 	grouped := make(map[uint64]bool)
 	var groupIDs []uint64
 	for groupID, entry := range m.groupQueue {
@@ -1399,7 +1640,7 @@ func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
 		if queued < 0 {
 			queued = 0
 		}
-		tanks, healers, dps := lfgRemainingNeeds(entry.Roles)
+		tanks, healers, dps := m.bestCompatibleNeedsLocked(units, groupID, 0, entry.Roles, ignores)
 		out = append(out, lfgQueueStatus{
 			dungeonID:  dungeonID,
 			waitTime:   lfgQueueWaitTime(role, lfgWaitTimeOf(m.waitAvg, dungeonID), lfgWaitTimeOf(m.waitTank, dungeonID), lfgWaitTimeOf(m.waitHealer, dungeonID), lfgWaitTimeOf(m.waitDps, dungeonID)),
@@ -1436,7 +1677,7 @@ func (m *LFGManager) QueueStatuses(now time.Time) []lfgQueueStatus {
 			queued = 0
 		}
 		role := entry.Roles &^ LFGRoleLeader
-		tanks, healers, dps := lfgRemainingNeeds(map[uint64]uint8{guid: entry.Roles})
+		tanks, healers, dps := m.bestCompatibleNeedsLocked(units, 0, guid, map[uint64]uint8{guid: entry.Roles}, ignores)
 		out = append(out, lfgQueueStatus{
 			dungeonID:  dungeonID,
 			waitTime:   lfgQueueWaitTime(role, lfgWaitTimeOf(m.waitAvg, dungeonID), lfgWaitTimeOf(m.waitTank, dungeonID), lfgWaitTimeOf(m.waitHealer, dungeonID), lfgWaitTimeOf(m.waitDps, dungeonID)),
@@ -1487,7 +1728,7 @@ func (s *Server) updateLFGQueueTimers(now time.Time, diff time.Duration) {
 	}
 	if s.lfgQueueTimer > lfgQueueUpdateInterval {
 		s.lfgQueueTimer = 0
-		for _, status := range s.Features.LFG.QueueStatuses(now) {
+		for _, status := range s.Features.LFG.QueueStatuses(now, s.lfgIgnorePairs()) {
 			for _, guid := range status.recipients {
 				if ms := s.findSessionByGUID(guid); ms != nil {
 					_ = ms.sendLFGQueueStatus(status)
@@ -1821,7 +2062,7 @@ func (s *session) handleLFGJoin(payload []byte) bool {
 						buildLFGUpdateParty(LFGUpdateAddedToQueue, LFGQueueEntry{Dungeons: rc.Dungeons, State: LFGStateQueued}))
 					if multi {
 						// The matcher runs at once, like the C++ update tick.
-						for _, prop := range s.server.Features.LFG.FindGroups() {
+						for _, prop := range s.server.Features.LFG.FindGroups(s.server.lfgIgnorePairs()) {
 							s.server.deliverLFGProposal(prop)
 						}
 					}
@@ -3169,6 +3410,63 @@ func (s *Server) updateLFGProposalExpiry(now time.Time) {
 	}
 }
 
+// lfgIgnorePairs loads the ignore pairs among the currently queued player
+// GUIDs in a single query, for the matcher ignore check (LFGQueue.cpp:
+// 471-486) and the best-compatible search. character_social holds the
+// ignore store (flags & 2, socialFlagIgnored, as socialHasFriend reads the
+// friend flag from the same table); only pairs where both players are
+// queued and both are online are kept, matching LFGMgr::HasIgnore
+// (LFGMgr.cpp:2087-2091), which requires FindConnectedPlayer on both
+// sides. Bots are never queued players, so no creature GUID ever appears
+// here. A nil store, an empty queue, or a query error yields a nil map,
+// which the matcher treats as "no ignores".
+func (s *Server) lfgIgnorePairs() map[uint64]map[uint64]bool {
+	if s == nil || s.Features == nil || s.Features.LFG == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return nil
+	}
+	guids := s.Features.LFG.QueuedGUIDs()
+	if len(guids) == 0 {
+		return nil
+	}
+	queued := make(map[uint64]bool, len(guids))
+	for _, guid := range guids {
+		queued[guid] = true
+	}
+	placeholders := strings.Repeat("?,", len(guids)-1) + "?"
+	args := make([]any, 0, len(guids))
+	for _, guid := range guids {
+		args = append(args, guid)
+	}
+	rows, err := s.CharactersStore.DB.QueryContext(context.Background(),
+		"SELECT guid, friend, flags FROM character_social WHERE guid IN ("+placeholders+")", args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var pairs map[uint64]map[uint64]bool
+	for rows.Next() {
+		var owner, friend uint64
+		var flags int64
+		if err := rows.Scan(&owner, &friend, &flags); err != nil {
+			continue
+		}
+		if flags&int64(socialFlagIgnored) == 0 || !queued[friend] {
+			continue
+		}
+		if s.findSessionByGUID(owner) == nil || s.findSessionByGUID(friend) == nil {
+			continue
+		}
+		if pairs == nil {
+			pairs = make(map[uint64]map[uint64]bool)
+		}
+		if pairs[owner] == nil {
+			pairs[owner] = make(map[uint64]bool)
+		}
+		pairs[owner][friend] = true
+	}
+	return pairs
+}
+
 // updateLFGFindGroups mirrors the FindGroups arm of LFGMgr::Update (LFGMgr.cpp:352-356): each update tick forms proposals from the queued groups and players.
 func (s *Server) updateLFGFindGroups() {
 	if s == nil || s.Features == nil || s.Features.LFG == nil {
@@ -3177,7 +3475,7 @@ func (s *Server) updateLFGFindGroups() {
 	if s.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
 		return
 	}
-	for _, prop := range s.Features.LFG.FindGroups() {
+	for _, prop := range s.Features.LFG.FindGroups(s.lfgIgnorePairs()) {
 		s.deliverLFGProposal(prop)
 	}
 }
