@@ -28,11 +28,28 @@ const (
 	terrainModelHasBound        = uint32(0x00000004)
 	// terrainGroundTolerance is GROUND_HEIGHT_TOLERANCE (SharedDefines.h:26).
 	terrainGroundTolerance = float32(0.05)
+	// g3dFuzzyEpsilon64 is fuzzyEpsilon64 (g3dmath.h:132).
+	g3dFuzzyEpsilon64 = 0.0000005
 	// terrainDefaultHeightSearch is DEFAULT_HEIGHT_SEARCH (Map.h:287).
 	terrainDefaultHeightSearch = float32(50)
 	// terrainMaxHeight is MAX_HEIGHT (Map.h:284).
 	terrainMaxHeight = float32(100000)
 )
+
+// creatureIsInAir mirrors the Creature::UpdateMovementFlags isInAir test
+// (Creature.cpp:2793): G3D::fuzzyGt(z, ground + hover + GROUND_HEIGHT_TOLERANCE)
+// || G3D::fuzzyLt(z, ground - GROUND_HEIGHT_TOLERANCE). The float args
+// promote to the double overloads (g3dmath.h:866-878), so eps is
+// fuzzyEpsilon64 * (|z| + 1), ignoring the threshold (g3dmath.h:825-834);
+// the thresholds stay float32, only the comparison gains the eps term.
+func creatureIsInAir(z, ground, hoverHeight float32) bool {
+	aa := math.Abs(float64(z)) + 1
+	eps := g3dFuzzyEpsilon64
+	if !math.IsInf(aa, 0) {
+		eps = g3dFuzzyEpsilon64 * aa
+	}
+	return float64(z) > float64(ground+hoverHeight+terrainGroundTolerance)+eps || float64(z) < float64(ground-terrainGroundTolerance)-eps
+}
 
 // vmapDisable* mirror the VMAP::VMAP_DISABLE_* bits (VMapManager2.h:71-74),
 // the disables-table flags for DISABLE_TYPE_VMAP rows (DisableMgr.h:33).

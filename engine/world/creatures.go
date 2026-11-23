@@ -494,6 +494,13 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 	if s == nil || spawn == nil {
 		return
 	}
+	// The sweep/transport queries carry the raw addon bytes2, but C++
+	// LoadCreaturesAddon (Creature.cpp:2656-2668) applies only byte 0
+	// (sheath), never sets byte 1, and forces bytes 2/3 to 0 — strip
+	// bytes 1-3 here so no create block sends them. The live sheath /
+	// PVP overlays below re-apply bytes 0/1 afterwards. Placed before
+	// the transport early return so passengers are covered too.
+	spawn.Bytes2 &= 0xFF
 	if spawn.TransportGUID != 0 {
 		// Transport passengers keep frame-computed positions (the tick
 		// relocates them from the current frame, fresher than the motion
@@ -1384,7 +1391,8 @@ func isUnitStandState(s uint8) bool {
 // creatureTemplateBytes1 mirrors the spawn query's bytes1 COALESCE
 // (creatures.go: creatures list query): creature_addon.bytes1 wins over
 // creature_template_addon.bytes1, else 0. Only the non-stand bytes are
-// ever read from it — byte 0 is the motion's live StandState.
+// ever read from it — byte 0 is the motion's live StandState, and byte 1
+// is forced 0 (LoadCreaturesAddon, Creature.cpp:2642).
 func (s *Server) creatureTemplateBytes1(dbGUID uint32) uint32 {
 	var b uint32
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || dbGUID == 0 {
@@ -1395,7 +1403,7 @@ func (s *Server) creatureTemplateBytes1(dbGUID uint32) uint32 {
 		 LEFT JOIN creature_addon AS ca ON ca.guid = c.guid
 		 LEFT JOIN creature_template_addon AS cta ON cta.entry = c.id
 		 WHERE c.guid = ?`, dbGUID).Scan(&b)
-	return b
+	return b &^ 0xFF00
 }
 
 // standCreatureMotionUp mirrors the creature half of

@@ -8252,8 +8252,9 @@ func (s *Server) loadCreatureAddonRow(ctx context.Context, guid, entry uint32) c
 // applyCreatureAddonToMotion applies the non-aura legs of
 // Creature::LoadCreaturesAddon (Creature.cpp:2624-2703) to a live
 // motion: Mount (Unit::Mount, Unit.cpp:8310-8318, sets the display and
-// UNIT_FLAG_MOUNT), bytes1 stand state (byte 0) with the full template
-// bytes1 banked for the create-block overlay, bytes2 sheath state
+// UNIT_FLAG_MOUNT), bytes1 stand state (byte 0) with the template
+// bytes1 banked for the create-block overlay (byte 1 forced 0,
+// Creature.cpp:2642, PET_TALENTS is pet-only), bytes2 sheath state
 // (byte 0; byte 1 is deliberately never set, Creature.cpp:2665), emote,
 // visibility distance type. Plain field writes only: no DB, no lock,
 // safe under motionMu. The mount flag is paired with UnitFlagsKnown so
@@ -8273,7 +8274,7 @@ func applyCreatureAddonToMotion(motion *creatureMotion, addon creatureAddonRow) 
 		motion.StandState = uint8(addon.Bytes1 & 0xFF)
 		motion.StandStateKnown = true
 	}
-	motion.bytes1Cache = addon.Bytes1
+	motion.bytes1Cache = addon.Bytes1 &^ 0xFF00
 	motion.bytes1CacheKnown = true
 	if addon.Bytes2 != 0 {
 		motion.SheathState = uint8(addon.Bytes2 & 0xFF)
@@ -8317,7 +8318,7 @@ func (s *Server) creatureHoverSpawnOffset(mapID uint32, x, y, z float32, moveGro
 	if !ok {
 		return hoverHeight
 	}
-	if z > ground+hoverHeight+terrainGroundTolerance || z < ground-terrainGroundTolerance {
+	if creatureIsInAir(z, ground, hoverHeight) {
 		return 0
 	}
 	return hoverHeight
@@ -10091,44 +10092,30 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion.Charmed && motion.OwnerGUID == 0 {
 		return
 	}
-	// Creature::UpdateMovementFlags swim leg (Creature.cpp:2779-2816):
-	// SetSwim(IsSwimAllowed() && IsInWater()) — the movement-template
-	// Swim flag (motion.MoveSwim, creature_template_movement.Swim) and
-	// the map liquid state. The fly/gravity/hover legs of the same
-	// function run below on Server.mapHeight. The C++ gates ride along:
-	// a player-controlled creature (m_playerMovingMe) keeps script-set
-	// flags — the charmed early-return above covers charm/possess
-	// control — and CREATURE_FLAG_EXTRA_NO_MOVE_FLAGS_UPDATE leaves the
-	// flag to scripts. A flip broadcasts SMSG_SPLINE_MOVE_START_SWIM/STOP_SWIM,
-	// the SetSwim bridge's packet. Residual: a driven vehicle base has
-	// no per-motion driver marker in Go, so C++'s m_playerMovingMe skip
-	// does not cover it here; its splines never launch from this path.
 	if motion.FlagsExtra&creatureFlagExtraNoMoveFlagsUpdate == 0 {
-		wantSwim := motion.MoveSwim && s.mapIsInWater(motion.Map, motion.X, motion.Y, motion.Z)
-		if wantSwim != motion.Swimming {
-			motion.Swimming = wantSwim
-			opcode := protocol.OpcodeSMSG_SPLINE_MOVE_STOP_SWIM
-			if wantSwim {
-				opcode = protocol.OpcodeSMSG_SPLINE_MOVE_START_SWIM
-			}
-			s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, opcode, motion.PhaseMask)
-		}
 		// Creature::UpdateMovementFlags fly/gravity/hover legs
 		// (Creature.cpp:2779-2816), same gate and cadence as the swim
-		// leg above (every Creature::Update). ground is Server.mapHeight
+		// leg below (every Creature::Update). ground is Server.mapHeight
 		// (Map::GetHeight twin, terrain.go), not C++ GetFloorZ (no
 		// game-object-floor / m_staticFloorZ leg); a failed height lookup
 		// keeps the current flags. The !IsFalling() gate is omitted — Go
-		// has no per-creature falling latch — and the !isInAir
-		// RemoveUnitMovementFlag(FALLING) leg with it; the hover-height Z
-		// fold (Unit.cpp:13789-13803) stays out with the SetHover bridge.
+		// has no per-creature falling latch: ScriptMoveFalling is a
+		// MoveFall spline-launch marker, not Unit::IsFalling (Unit.cpp:13313,
+		// flag OR movespline->isFalling; no arrival clear, and the flag
+		// leg survives a mid-air supersede/stop the marker does not) —
+		// and the !isInAir RemoveUnitMovementFlag(FALLING) leg with it:
+		// no per-creature FALLING flag state exists in Go (no Falling
+		// field; debugMoveFlagFalling is a .debug display mask, s.isFalling
+		// is player-session only), so there is nothing to clear. The
+		// hover-height Z fold (Unit.cpp:13789-13803) stays out with the
+		// SetHover bridge.
 		if ground, ok := s.mapHeight(motion.Map, motion.X, motion.Y, motion.Z, true, terrainDefaultHeightSearch); ok {
 			canHover := motion.MoveGround == 2 || motion.Hovering // Creature::CanHover (Creature.h:107)
 			hoverH := float32(0)
 			if canHover {
 				hoverH = motion.HoverHeight
 			}
-			isInAir := motion.Z > ground+hoverH+terrainGroundTolerance || motion.Z < ground-terrainGroundTolerance
+			isInAir := creatureIsInAir(motion.Z, ground, hoverH)
 			hasHoverAura := s.creatureHasAuraType(creatureAuraKeyForMotion(motion), spellAuraHover)
 			if motion.MoveFlight != 0 && isInAir { // IsFlightAllowed (CreatureData.h:128)
 				if motion.MoveFlight == 2 { // CreatureFlightMovementType::CanFly
@@ -10158,6 +10145,28 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER, motion.PhaseMask)
 				}
 			}
+		}
+		// Creature::UpdateMovementFlags swim leg (Creature.cpp:2779-2816):
+		// SetSwim(IsSwimAllowed() && IsInWater()) — the movement-template
+		// Swim flag (motion.MoveSwim, creature_template_movement.Swim) and
+		// the map liquid state. C++ runs this leg LAST (:2812), after the
+		// fly/gravity/hover legs above, so a tick that flips both swim and
+		// fly broadcasts the fly packets first. The C++ gates ride along:
+		// a player-controlled creature (m_playerMovingMe) keeps script-set
+		// flags — the charmed early-return above covers charm/possess
+		// control — and CREATURE_FLAG_EXTRA_NO_MOVE_FLAGS_UPDATE leaves the
+		// flag to scripts. A flip broadcasts SMSG_SPLINE_MOVE_START_SWIM/STOP_SWIM,
+		// the SetSwim bridge's packet. Residual: a driven vehicle base has
+		// no per-motion driver marker in Go, so C++'s m_playerMovingMe skip
+		// does not cover it here; its splines never launch from this path.
+		wantSwim := motion.MoveSwim && s.mapIsInWater(motion.Map, motion.X, motion.Y, motion.Z)
+		if wantSwim != motion.Swimming {
+			motion.Swimming = wantSwim
+			opcode := protocol.OpcodeSMSG_SPLINE_MOVE_STOP_SWIM
+			if wantSwim {
+				opcode = protocol.OpcodeSMSG_SPLINE_MOVE_START_SWIM
+			}
+			s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, opcode, motion.PhaseMask)
 		}
 	}
 	if isCreaturePassive(motion) && motion.InCombat {
