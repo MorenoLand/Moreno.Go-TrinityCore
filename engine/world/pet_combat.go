@@ -2744,9 +2744,10 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 // containment arm (isSelfCastOnly → pet-self candidate only). The
 // mid-cast and dead-owner arms need no pre-filter — the backstop fizzles
 // them silently with no consumption, so the tick outcome matches C++'s
-// whole-block skip. PetAI's enemy-then-ally target selection
-// (PetAI.cpp:144-190) stays unbridged: the owner is the single ally
-// candidate.
+// whole-block skip. This is the aura-stack precheck only: target
+// validity (CanAutoCast's SelectSpellTargets containment) rides the
+// caller's pre-filter — petSpellCanTargetEnemy for the enemy leg, the
+// ally-set membership for the friendly scan.
 func (s *Server) petCanAutoCastTarget(ctx context.Context, owner *session, caster *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
 	if s == nil || s.Data == nil || caster == nil || targetGUID == 0 {
 		return true
@@ -2828,6 +2829,73 @@ func (s *Server) petCanAutoCastTarget(ctx context.Context, owner *session, caste
 	return true
 }
 
+// petAttackerForHelperTarget mirrors the victim legs of
+// Unit::getAttackerForHelper (Unit.cpp:5627-5644) as PetAI.cpp:149-151
+// calls them: the pet's own attacker first, then the owner's. The pet
+// leg is the engaged victim — IsEngaged gates (Unit.cpp:5628-5629) and,
+// for a pet, the victim returns only when the pet is in combat with it
+// (:5631-5633); Go's motion.InCombat is the engaged twin and the
+// caller runs autocast only on the live-victim path, so a non-zero
+// petVictim here is already that victim. The CombatManager fallback
+// (PvP refs, then owner PvP refs, then PvE refs, then owner PvE refs,
+// :5636-5643) has no Go model — there is no combat-ref index — so an
+// engaged pet with no victim, or an owner who is attacked but never
+// attacked back, yields no enemy here and the spell falls through to
+// the ally scan, where C++ would have cast on the ref target instead.
+// The owner leg reads the owner's attackTarget (Unit::Attack victim,
+// set on attack start, cleared on attack stop/death); a dead or ghost
+// target resolves to no enemy.
+func (s *Server) petAttackerForHelperTarget(ctx context.Context, motion *creatureMotion, owner *session, petVictim uint64) uint64 {
+	if motion != nil && motion.InCombat && petVictim != 0 {
+		return petVictim
+	}
+	if owner == nil || owner.attackTarget == 0 {
+		return 0
+	}
+	if tgt, ok := owner.getCombatTarget(ctx, owner.attackTarget); !ok || tgt.Health == 0 {
+		return 0
+	}
+	if sess := s.findSessionByGUID(owner.attackTarget); sess != nil && sess.player != nil && sess.isDeadOrGhost() {
+		return 0
+	}
+	return owner.attackTarget
+}
+
+// petSpellCanTargetEnemy is the SelectSpellTargets containment twin for
+// Spell::CanAutoCast's enemy leg (Spell.cpp:6506-6523): the enemy is a
+// valid candidate only when some live effect would select it. An effect
+// selects an enemy unit when its implicit target carries
+// TARGET_CHECK_ENEMY in the SpellImplicitTargetInfo table
+// (SpellInfo.cpp:218-330: 2 NEARBY_ENEMY, 6 TARGET_ENEMY, 15/16
+// SRC/DEST_AREA_ENEMY, 24/54/104 CONE_ENEMY), when it targets the
+// wire unit with no faction filter (25 TARGET_ANY —
+// WorldObjectSpellTargetCheck's default arm, Spell.cpp:8364-8366, runs
+// no faction check), or when it targets a dest at the enemy (28
+// DYNOBJ_ENEMY, 53 DEST_TARGET_ENEMY — the ExplicitTargetMask
+// DEST_LOCATION arm makes CanAutoCast return true outright,
+// Spell.cpp:6517-6519). A SPELL_EFFECT_JUMP_DEST effect likewise
+// targets its dest at the enemy (Leap's TARGET_DEST_CASTER_FRONT_LEAP,
+// 55). Anything else — TARGET_ALLY/PARTY/RAID, caster, pet — never
+// selects the enemy, so a friendly buff can never enter the pool on
+// the victim.
+func petSpellCanTargetEnemy(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.Effect == spellEffectJumpDest {
+			return true
+		}
+		for _, target := range [2]uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			switch target {
+			case 2, 6, 15, 16, 24, 25, 28, 53, 54, 104:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // executePetAutocast mirrors PetAI::UpdateAI's autocast block
 // (PetAI.cpp:96-188): every autocast slot is evaluated, spells held by the
 // global cooldown (SpellHistory::HasGlobalCooldown) or still cooling down
@@ -2840,13 +2908,24 @@ func (s *Server) petCanAutoCastTarget(ctx context.Context, owner *session, caste
 // SPELL_ATTR0_CU_NEGATIVE flag, not the per-effect fold) take the
 // CanBeUsedInCombat in-combat gate (PetAI.cpp:133-137): skipped while the
 // pet is neither in combat nor commanded to attack. Their enemy-first
-// targeting (pet attacker, then owner attacker, PetAI.cpp:142-156) has no
-// Go twin — there is no attacker index — so the pet's current victim
-// stands in as the enemy analog; the _allySet scan (PetAI.cpp:160-176)
-// likewise has no twin, so the owner is the single ally candidate (C++
-// scans pet+owner+group by GUID order; owner-only is the documented
-// approximation). SPELL_EFFECT_JUMP_DEST spells (DK Ghoul's Leap) target
-// enemies only (PetAI.cpp:158-160) and take the victim leg.
+// targeting (pet attacker, then owner attacker, PetAI.cpp:142-156) rides
+// petAttackerForHelperTarget: the pet's engaged victim (the caller's
+// live-victim targetGUID) then the owner's attackTarget; the
+// CombatManager PvP/PvE-ref fallback (Unit.cpp:5636-5643) has no Go
+// model and yields no enemy. An enemy candidate only enters the pool
+// when the spell can target an enemy (petSpellCanTargetEnemy, the
+// CanAutoCast containment twin), so friendly buffs never land on the
+// victim. Per the C++ positivity classifier applied to the known
+// pet-spell universe (defaultPetSpells/defaultHunterPetSpells, pets.go),
+// Ghoul Leap (47482, JUMP_DEST) is the only positive enemy-targetable
+// pet spell — every other enemy-targeted pet spell classifies negative
+// (damage/taunt/CC/root/dispel) and every other positive one is
+// self/friendly-targeted — so in practice the enemy leg fires for Leap
+// (and now also on the owner's attacker, PetAI.cpp:150-151). The
+// _allySet scan (PetAI.cpp:160-176) is the strip-20 port (pet+owner+
+// group by GUID order, computed fresh per tick). SPELL_EFFECT_JUMP_DEST
+// spells target enemies only (PetAI.cpp:158-160) and never fall through
+// to the ally scan.
 // Offensive spells take the victim leg (PetAI.cpp:183-190): the caller
 // guarantees a live victim in combat, and CanBeUsedInCombat gates. The
 // Spell::CanAutoCast aura-stack precheck rides petCanAutoCastTarget, and
@@ -2919,6 +2998,22 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 				}
 				continue
 			}
+			// PetAI.cpp:142-156 — enemy first: the pet's attacker, then
+			// the owner's (getAttackerForHelper, Unit.cpp:5627-5644).
+			// petSpellCanTargetEnemy is the CanAutoCast containment twin
+			// (Spell.cpp:6506-6523): without it a friendly buff would
+			// pass the aura-stack/range pre-filter on the victim and
+			// land on an enemy C++ never selects. usableInCombat rides
+			// here because Go only runs autocast on the in-combat path,
+			// where C++ CheckPetCast fails a CANT_USED_IN_COMBAT spell.
+			spellUsed := false
+			if enemyTarget := s.petAttackerForHelperTarget(ctx, motion, owner, targetGUID); enemyTarget != 0 && usableInCombat &&
+				petSpellCanTargetEnemy(spell) &&
+				s.petCanAutoCastTarget(ctx, owner, motion, spell, enemyTarget) &&
+				s.checkCreatureSpellRange(motion, spell, enemyTarget, modOwner) {
+				candidates = append(candidates, petAutocastCandidate{spell: spell, target: enemyTarget})
+				spellUsed = true
+			}
 			jumpToEnemy := false
 			for _, eff := range spell.Effects {
 				if eff.Effect == spellEffectJumpDest {
@@ -2927,10 +3022,12 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 				}
 			}
 			if jumpToEnemy {
-				if targetGUID != 0 && usableInCombat && s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) &&
-					s.checkCreatureSpellRange(motion, spell, targetGUID, modOwner) {
-					candidates = append(candidates, petAutocastCandidate{spell: spell, target: targetGUID})
-				}
+				// PetAI.cpp:158-160 — pets must only jump to target:
+				// a jump spell with no enemy never falls through to
+				// the ally scan.
+				continue
+			}
+			if spellUsed {
 				continue
 			}
 			// PetAI.cpp:160-176 — the friendly scan over _allySet

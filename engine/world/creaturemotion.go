@@ -396,10 +396,10 @@ type creatureMotion struct {
 	// only when the target moved at all (exact-equality test, no
 	// distance threshold), so a stationary target leaves the in-flight
 	// spline untouched. Reset on every MoveFollow assignment
-	// (DoInitialize, :63) and on the once-per-follow in-range inform
-	// (:101); the NOT_MOVE/casting reset (:88) has no Go arm —
-	// stepScriptFollow carries no NOT_MOVE early return. A speed
-	// change resets it too (UnitSpeedChanged, .h:46).
+	// (DoInitialize, :63), on the once-per-follow in-range inform
+	// (:101), and on the NOT_MOVE/casting reset (:88, the
+	// scriptMoveBlockedByState early return in stepScriptFollow).
+	// A speed change resets it too (UnitSpeedChanged, .h:46).
 	FollowLastTX, FollowLastTY, FollowLastTZ float32
 	FollowLastTargetKnown                    bool
 	// Confused is the ConfusedMovementGenerator leg
@@ -7135,6 +7135,24 @@ func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, p
 	}
 	reachSum := ownerReach + tReach
 	dist := float32(distance3D(motion.X, motion.Y, motion.Z, tx, ty, tz))
+	// FollowMovementGenerator::Update (FollowMovementGenerator.cpp:83-91):
+	// while movement is prevented (UNIT_STATE_NOT_MOVE — root, stun,
+	// distracted — or a casting lock,
+	// Creature::IsMovementPreventedByCasting), the follower stops and
+	// the last-target stamp resets, so recovery re-paths at once
+	// instead of waiting for the target to move. The predicate is the
+	// shared launch-gate twin scriptMoveBlockedByState; the DIED leg
+	// rides the tick's Health gate, as on the launch path. The _path
+	// reset is vacuous — Go builds a fresh PathGenerator per re-path.
+	if s.scriptMoveBlockedByState(motion, now) {
+		if motion.Moving {
+			s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PhaseMask, motion.TransportGUID)
+			motion.Moving = false
+			motion.MoveEnds = time.Time{}
+		}
+		motion.FollowLastTargetKnown = false
+		return true
+	}
 	// The owner's current relative bearing as seen from the target
 	// (target->GetRelativeAngle(owner), Position.h:136-139); the
 	// inform check below and the re-path destination share it.

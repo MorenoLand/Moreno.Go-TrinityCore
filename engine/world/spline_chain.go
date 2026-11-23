@@ -704,7 +704,10 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 // 149-171) sends the next link even mid-spline — only the final link
 // waits for the running spline to finalize — so the run advances
 // whether or not the creature is still moving; the launch restarts
-// from the interpolated position (creatureSplinePosition).
+// from the interpolated position (creatureSplinePosition). A wait
+// firing while a leg is still in flight cuts to the next link
+// (LinkIndex advances here); a landed link already advanced at
+// landing, so it sends normally.
 func (s *Server) advanceSplineChain(ctx context.Context, motion *creatureMotion, now time.Time) {
 	if s == nil || motion == nil {
 		return
@@ -719,6 +722,20 @@ func (s *Server) advanceSplineChain(ctx context.Context, motion *creatureMotion,
 	// the next link is a fresh launch, so clear WaitFixed here and let
 	// the new link arm its own wait normally.
 	run.WaitFixed = false
+	// SplineChainMovementGenerator::Update (:164-171) sends the NEXT
+	// link when _msToNext expires — even mid-spline, cutting the
+	// running spline short (only the final link waits for finalize).
+	// Go walks a link point by point and only advances LinkIndex at
+	// landing, so a wait firing while a leg is still in flight
+	// (ScriptMoveType still SPLINE_CHAIN) would re-send the in-flight
+	// leg instead. Cut to the next link here: the send below launches
+	// it from the interpolated position (creatureSplinePosition).
+	// A landed link already advanced LinkIndex at landing and cleared
+	// the stamp, so it sends normally.
+	if motion.ScriptMoveType == movementGeneratorSplineChain && run.LinkIndex < len(run.Links)-1 {
+		run.LinkIndex++
+		run.PointIndex = 0
+	}
 	s.motionMu.Unlock()
 	s.sendSplineChainLink(ctx, motion, now)
 }
