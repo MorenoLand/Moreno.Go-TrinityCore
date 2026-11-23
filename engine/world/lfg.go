@@ -635,7 +635,8 @@ func (m *LFGManager) FindGroups() []*LFGProposal {
 		}
 		// LFGQueue.cpp:538: proposal.isNew = numLfgGroups != 1 ||
 		// GetOldState(gguid) != LFG_STATE_DUNGEON, where gguid is the
-		// first guid of the match — the seed unit here. The only
+		// first guid of the match — the first unit of the combo here
+		// (the seed can backtrack out of the combo). The only
 		// !isNew case is a lone LFG group refilling from inside a
 		// dungeon; its members' OldState is DUNGEON (preserved by
 		// QueueGroup), which is the Go read of the group's old state.
@@ -647,7 +648,7 @@ func (m *LFGManager) FindGroups() []*LFGProposal {
 		}
 		isNew := true
 		if numLfgGroups == 1 {
-			if seedEntry, ok := m.queue[units[seed].guids[0]]; ok && seedEntry.OldState == LFGStateDungeon {
+			if seedEntry, ok := m.queue[units[combo[0]].guids[0]]; ok && seedEntry.OldState == LFGStateDungeon {
 				isNew = false
 			}
 		}
