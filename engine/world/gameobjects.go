@@ -73,35 +73,44 @@ const (
 )
 
 type dynamicGameObjectState struct {
-	GUID            uint64
-	LowGUID         uint32
-	Entry           uint32
-	OwnerGUID       uint64
-	SpellID         uint32 // creating spell, for Spell::cancel's RemoveGameObject(spellId) sweep (Spell.cpp:3255)
-	FishingHandled  bool
-	FishingUses     uint32
-	FishingMaxOpens uint32
-	Map             uint32
-	InstanceID      uint32
-	X               float32
-	Y               float32
-	Z               float32
-	Orientation     float32
-	State           uint8
-	AnimProgress    uint8
-	ArtKit          uint8
-	Type            uint8
-	DisplayID       uint32
-	Size            float32
-	IconName        string
-	Flags           uint32
-	Faction         uint32
-	PhaseMask       uint32 // gameobject.phaseMask (InSamePhase gate, GameObject.cpp:2760)
-	Data1           uint32
-	ParentRotation  [4]float32
-	LocalRotation   [4]float32 // m_localRotation twin (GameObject.cpp:321, SetLocalRotation in Create); zero value = unset, readers fall back to identity
-	AutoCloseTimer  *time.Timer
-	DespawnTimer    *time.Timer
+	GUID    uint64
+	LowGUID uint32
+	Entry   uint32
+	// ScriptName is the gameobject_template ScriptName (GameObject.cpp:399
+	// banks GetGOInfo()->ScriptId into LastUsedScriptID at load). The
+	// gossip script-reload guard (MiscHandler.cpp:165-173) compares the
+	// live script id against LastUsedScriptID; LastUsedScriptIDKnown
+	// marks the banked value as initialized so runtime spawns without a
+	// template row initialize on first sight instead of tripping.
+	ScriptName            string
+	LastUsedScriptID      uint32
+	LastUsedScriptIDKnown bool
+	OwnerGUID             uint64
+	SpellID               uint32 // creating spell, for Spell::cancel's RemoveGameObject(spellId) sweep (Spell.cpp:3255)
+	FishingHandled        bool
+	FishingUses           uint32
+	FishingMaxOpens       uint32
+	Map                   uint32
+	InstanceID            uint32
+	X                     float32
+	Y                     float32
+	Z                     float32
+	Orientation           float32
+	State                 uint8
+	AnimProgress          uint8
+	ArtKit                uint8
+	Type                  uint8
+	DisplayID             uint32
+	Size                  float32
+	IconName              string
+	Flags                 uint32
+	Faction               uint32
+	PhaseMask             uint32 // gameobject.phaseMask (InSamePhase gate, GameObject.cpp:2760)
+	Data1                 uint32
+	ParentRotation        [4]float32
+	LocalRotation         [4]float32 // m_localRotation twin (GameObject.cpp:321, SetLocalRotation in Create); zero value = unset, readers fall back to identity
+	AutoCloseTimer        *time.Timer
+	DespawnTimer          *time.Timer
 	// SpawnState is the state the GO was created with: the m_prevGoState twin
 	// (GameObject.h:314). C++ sets it once in Create (GameObject.cpp:131,349)
 	// and ResetDoorOrButton restores it (GameObject.cpp:1428) — it is NOT the
@@ -1638,34 +1647,40 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 
 	var goMap, goState, goType, displayID, data1, phaseMask int64
 	var goX, goY, goZ, goO, size float64
-	var iconName string
+	var iconName, scriptName string
 	err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, g.orientation, g.state,
-		t.type, t.displayId, t.size, COALESCE(t.data1, 0), COALESCE(t.IconName, ''), COALESCE(g.phaseMask, 0)
+		t.type, t.displayId, t.size, COALESCE(t.data1, 0), COALESCE(t.IconName, ''), COALESCE(g.phaseMask, 0), COALESCE(t.ScriptName, '')
 		FROM gameobject AS g
 		JOIN gameobject_template AS t ON t.entry = g.id
-		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &goO, &goState, &goType, &displayID, &size, &data1, &iconName, &phaseMask)
+		WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &goO, &goState, &goType, &displayID, &size, &data1, &iconName, &phaseMask, &scriptName)
 	if err != nil {
 		return nil, err
 	}
 
 	dyn := &dynamicGameObjectState{
-		GUID:        guid,
-		LowGUID:     lowGUID,
-		Entry:       entry,
-		Map:         uint32(goMap),
-		InstanceID:  instanceID,
-		X:           float32(goX),
-		Y:           float32(goY),
-		Z:           float32(goZ),
-		Orientation: float32(goO),
-		State:       uint8(goState),
-		SpawnState:  uint8(goState),
-		Type:        uint8(goType),
-		DisplayID:   uint32(displayID),
-		Size:        float32(size),
-		IconName:    iconName,
-		PhaseMask:   uint32(phaseMask),
-		Data1:       uint32(data1),
+		GUID:       guid,
+		LowGUID:    lowGUID,
+		Entry:      entry,
+		ScriptName: scriptName,
+		// GameObject load (GameObject.cpp:399) banks the template script
+		// id as the last-used one, so the first gossip select after load
+		// never trips the reload guard.
+		LastUsedScriptID:      scriptIDForName(scriptName),
+		LastUsedScriptIDKnown: true,
+		Map:                   uint32(goMap),
+		InstanceID:            instanceID,
+		X:                     float32(goX),
+		Y:                     float32(goY),
+		Z:                     float32(goZ),
+		Orientation:           float32(goO),
+		State:                 uint8(goState),
+		SpawnState:            uint8(goState),
+		Type:                  uint8(goType),
+		DisplayID:             uint32(displayID),
+		Size:                  float32(size),
+		IconName:              iconName,
+		PhaseMask:             uint32(phaseMask),
+		Data1:                 uint32(data1),
 	}
 	if dyn.Type == GameObjectTypeFishingHole {
 		var minOpens, maxOpens int64

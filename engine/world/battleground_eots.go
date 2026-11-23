@@ -984,6 +984,48 @@ func (s *Server) addEOTSResources(eots *eotsBattlegroundState, team uint32, poin
 	s.broadcastWorldState(eots.MapID, wsID, *resources)
 }
 
+// sweepEOTSFelReaverFlagCapture is the Fel Reaver arm of
+// BattlegroundEY::UpdatePointStatuses (BattlegroundEY.cpp:289-292), run from
+// PostUpdateImpl's tower-cap check every BG_EY_FPOINTS_TICK_TIME (2s): the
+// Fel Reaver capture trigger (4514) is covered by a bigger area trigger and
+// never fires client-side, so a flag carrier standing within 3.0 yards of
+// the point (2044.0, 1729.729, 1190.03) captures when their team owns the
+// tower. The area-trigger path (handleEOTSFlagCaptureTrigger) covers the
+// client-fired case; this sweep is the fallback for when it never fires.
+// It runs on the 1s updateEOTSBattles cadence; the capture clears the
+// carrier, so the denser tick is idempotent. eots.mu is held throughout,
+// like handleEOTSFlagCaptureTrigger's captureEOTSFlag call.
+func (s *Server) sweepEOTSFelReaverFlagCapture(eots *eotsBattlegroundState) {
+	if s == nil || eots == nil {
+		return
+	}
+	eots.mu.Lock()
+	defer eots.mu.Unlock()
+	if eots.Winner >= 0 || eots.FlagState != EOTSFlagStateCarried || eots.FlagCarrierGUID == 0 {
+		return
+	}
+	carrier := s.findSessionByGUID(eots.FlagCarrierGUID)
+	if carrier == nil || carrier.player == nil || carrier.player.Map != eots.MapID {
+		return
+	}
+	// BattlegroundEY::HandleAreaTrigger (BattlegroundEY.cpp:395): dead
+	// players cannot trigger flag captures.
+	if carrier.isDeadOrGhost() {
+		return
+	}
+	team := teamForRace(carrier.player.Race)
+	tower := &eots.Towers[EOTSTowerFelReaver]
+	controlledByTeam := (team == 0 && tower.State == EOTSTowerStateControlledAlliance) ||
+		(team == 1 && tower.State == EOTSTowerStateControlledHorde)
+	if !controlledByTeam {
+		return
+	}
+	if distance3D(carrier.player.X, carrier.player.Y, carrier.player.Z, 2044.0, 1729.729, 1190.03) >= 3.0 {
+		return
+	}
+	s.captureEOTSFlag(eots, carrier, team)
+}
+
 // updateEOTSBattles ticks every live EotS state, driving the resource point tick
 // (BattlegroundEY::PostUpdateImpl's m_PointAddingTimer arm). BattlegroundMgr::Update
 // (BattlegroundMgr.cpp:94) sweeps all running instances with bg->Update(diff)
@@ -1009,6 +1051,7 @@ func (s *Server) updateEOTSBattles(now time.Time) {
 	s.eotsMu.RUnlock()
 	for _, eots := range battles {
 		s.TickEOTSResources(eots, elapsedMs)
+		s.sweepEOTSFelReaverFlagCapture(eots)
 	}
 }
 

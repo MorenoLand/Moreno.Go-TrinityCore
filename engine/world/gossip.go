@@ -356,6 +356,25 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	if !ok {
 		return true
 	}
+	// MiscHandler.cpp:165-173 (HandleGossipSelectOptionOpcode) — the
+	// script-reload guard runs after the feign-death strip, before dispatch:
+	// when the creature's script id differs from the last-used one the
+	// script was reloaded while the menu was open, so the stored id is
+	// updated, the gossip is closed, and the select is ignored. The
+	// motion banks its load-time id at spawn (Creature.cpp:651); a motion
+	// built without one initializes on first sight instead of tripping.
+	if motion := s.findCreatureMotion(guid); motion != nil && s.server != nil {
+		s.server.motionMu.Lock()
+		currentScriptID := scriptIDForName(motion.ScriptName)
+		reloaded := motion.LastUsedScriptIDKnown && currentScriptID != motion.LastUsedScriptID
+		motion.LastUsedScriptID, motion.LastUsedScriptIDKnown = currentScriptID, true
+		s.server.motionMu.Unlock()
+		if reloaded {
+			s.debug("gossip selection rejected: script reloaded", "account", s.accountName, "guid", guid)
+			s.sendGossipComplete()
+			return true
+		}
+	}
 	// Player::OnGossipSelect's OUTDOORPVP arm (Player.cpp:14618-14620) sends no
 	// close: the menu stays open. Capture the live menu so that arm can
 	// restore it below.
@@ -363,12 +382,14 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	s.gossip = nil
 	s.gossipClosed = false
 	// Creature select Lua args are (event, player, creature, sender, action,
-	// code, listID). Code is always forwarded ("" when the option has no code
-	// box) so listID sits at a stable trailing position, mirroring the
-	// gameobject select hook (fireGameObjectGossipSelectHook); Eluna's
-	// OnGossipSelectCode-vs-OnGossipSelect dispatch on !code.empty()
-	// (MiscHandler.cpp:175) is not reproduced — no ported handler reads
-	// code, and a varying arg count would make listID unreadable.
+	// code, listID). MiscHandler.cpp:175 routes a non-empty code to
+	// OnGossipSelectCode (GossipHooks.cpp:125-134), which pushes the code,
+	// while OnGossipSelect (GossipHooks.cpp:115-123) pushes none - so a
+	// coded select forwards the code string and a non-coded one forwards
+	// nil, the item/player select precedent; listID stays at a stable
+	// trailing position either way. A coded select never fires SmartAI
+	// (MiscHandler.cpp:175-204 routes it to AI()->OnGossipSelectCode,
+	// which SmartAI answers false without firing, SmartAI.cpp:772-775).
 	// listID is the CMSG_GOSSIP_SELECT_OPTION menu index — the C++
 	// gossipListId CreatureAI::OnGossipSelect receives — so arms that
 	// branch on gossipListId directly (halls of reflection start/skip,
@@ -376,15 +397,27 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	// directly; sender/action remain the GetGossipOptionSender/Action
 	// twins. menuID is intentionally not forwarded: the post-hook
 	// stale-menu gate below already enforces it.
-	args := []any{uint32(2), s.luaPlayer(), creature, item.Sender, item.Action, code, listID}
+	var codeArg any = code
+	if code == "" {
+		codeArg = nil
+	}
+	args := []any{uint32(2), s.luaPlayer(), creature, item.Sender, item.Action, codeArg, listID}
+	// luaSelectFalse records an Eluna false return (a handler returned
+	// boolean false, CallAllFunctionsBool(..., true),
+	// LuaEngine/HookHelpers.h:92): the AI arm still runs, but the native
+	// Player::OnGossipSelect arms below must see the cleared menu -
+	// Eluna cleared it before the hooks (GossipHooks.cpp:115-123) - so
+	// they find no item and do nothing (Player.cpp:14565-14569). They
+	// must NOT run from the prevGossip snapshot.
+	luaSelectFalse := false
 	if s.server.Features != nil && s.server.Features.Scripts != nil {
 		// HandleGossipSelectOptionOpcode (MiscHandler.cpp:175-204, 209):
-		// the AI and native arms run only when the Eluna hook did NOT veto
+		// the AI arm runs when the Eluna hook did NOT veto
 		// (`if (!sEluna->OnGossipSelect(...))` then AI + native arms), and
 		// the Eluna hook returns false iff a handler returned boolean
 		// false (CallAllFunctionsBool(..., true), LuaEngine/HookHelpers.h:92).
-		// So a Lua false return lets the AI and native select arms
-		// PROCEED; true/nothing vetoes them — the uniform Eluna gossip
+		// So a Lua false return lets the AI select arm proceed;
+		// true/nothing vetoes it - the uniform Eluna gossip
 		// polarity, same as the creature hello hook above and the
 		// gameobject hooks. The menu was already cleared (s.gossip = nil
 		// above, matching Eluna's ClearMenus-before-hooks), so a veto
@@ -397,9 +430,13 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		if terr != nil {
 			s.debug("gossip selection hook failed", "account", s.accountName, "entry", entry, "error", terr)
 		}
-		if s.server.Features.Scripts.HasHook(hookKind, 2) && !luaCancelled(values) {
-			s.debug("gossip selection vetoed by lua", "account", s.accountName, "entry", entry, "list", listID)
-			return true
+		if s.server.Features.Scripts.HasHook(hookKind, 2) {
+			if luaCancelled(values) {
+				luaSelectFalse = true
+			} else {
+				s.debug("gossip selection vetoed by lua", "account", s.accountName, "entry", entry, "list", listID)
+				return true
+			}
 		}
 	}
 	// SmartAI::OnGossipSelect (SmartAI.cpp:765-770) runs after the Eluna
@@ -420,7 +457,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			return true
 		}
 	}
-	if s.gossip == nil && !s.gossipClosed {
+	if !luaSelectFalse && s.gossip == nil && !s.gossipClosed {
 		// Player::OnGossipSelect (Player.cpp:14565-14569): the menuId gate
 		// runs after the Eluna/AI hooks — a stale select fires the hooks
 		// but never reaches the native arms, and the live menu stays open.
@@ -456,53 +493,68 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.sendVendorList(ctx, guid)
 		} else if item.Action == 6 { // GOSSIP_OPTION_SPIRITHEALER
 			// Player::OnGossipSelect (Player.cpp:14621-14624): the spirit
-			// healer casts 17251 (triggered, original caster = the player) on
-			// itself; the spell's resurrect effect registers a resurrect
-			// request (Spell::EffectResurrect, SpellEffects.cpp:4270-4293).
+			// healer casts 17251 on itself, non-triggered with the player
+			// as original caster (CastSpellExtraArgs defaults, Object.h:468
+			// and SpellDefines.h:178); the spell's resurrect effect registers
+			// a resurrect request (Spell::EffectResurrect,
+			// SpellEffects.cpp:4270-4293). The original-caster leg has no
+			// creature-funnel plumbing, matching the Lua CastSpell precedent.
 			// No confirm dialog: SMSG_SPIRIT_HEALER_CONFIRM is STATUS_NEVER in
 			// Opcodes.cpp:677 — the confirm/activate flow nothing sends — and
 			// no gossip close (Player.cpp:14621-14624), so the tail restores
-			// the live menu. The cast visual
-			// (SMSG_SPELL_START/GO from the creature) has no Go bridge; the
-			// mechanic is what lands here.
+			// the live menu.
 			// Player::OnGossipSelect GOSSIP_OPTION_SPIRITHEALER arm
 			// (Player.cpp:14621-14624): casts 17251 on isDead() only — no
 			// npcflag check (the menu option is already gated by the
-			// flag at menu build) and no pending-request check.
+			// flag at menu build); a pending request skips the effect leg
+			// (SpellEffects.cpp:4287-4288), the cast still fires.
 			if s.isDeadOrGhost() && s.player != nil {
-				pct := uint32(50)
-				ignoreReclaim := false
-				if s.server != nil && s.server.Data != nil {
-					if sp, found, derr := s.server.Data.Spell(17251); derr == nil && found && len(sp.Effects) > 0 {
-						if v := sp.Effects[0].CalcValueForLevel(sp, uint32(s.player.Level)); v >= 1 && v <= 100 {
-							pct = uint32(v)
-						}
-						ignoreReclaim = sp.AttributesEx3&spellAttr3IgnoreResurrectionTimer != 0
-					}
+				// The cast itself rides the creature funnel (non-triggered
+				// self-cast), so SMSG_SPELL_START/GO go out from the
+				// creature as in C++; the resurrect request below is the
+				// spell's effect leg, kept as-is.
+				if motion := s.findCreatureMotion(guid); motion != nil && s.server != nil {
+					s.server.castCreatureSpell(ctx, motion, 17251, guid)
 				}
-				health := uint32(int64(s.player.MaxHealth) * int64(pct) / 100)
-				mana := uint32(int64(s.player.MaxPowers[0]) * int64(pct) / 100)
-				name, _ := creature.Fields["Name"].(string)
-				x, _ := objectFloat32Field(creature, "X")
-				y, _ := objectFloat32Field(creature, "Y")
-				z, _ := objectFloat32Field(creature, "Z")
-				// Spell::ExecuteLogEffectResurrect (Spell.cpp:4617-4621) as
-				// flushed by SendLogExecute: caster is the creature, and the
-				// log broadcasts to nearby like C++ (was session-only).
-				// SetResurrectRequestData WorldRelocates the caster: the
-				// stored location is the spirit healer's position (the accept
-				// path teleports the ghost there before resurrecting).
-				s.setResurrectRequestData(guid, objectUint32OrZero(creature, "Map"), x, y, z, health, mana, 0)
-				// Spell::SendResurrectRequest (Spell.cpp:4693-4709): creature
-				// caster name, spirit-healer sickness flag set, reclaim-timer
-				// override from the spell's attributes. The request goes first:
-				// C++ SendDirectMessages it during EffectResurrect while the
-				// log is only flushed in FinishTargetProcessing (Spell.cpp:3612).
-				s.sendResurrectRequest(guid, name, true, !ignoreReclaim)
-				// Spell::ExecuteLogEffectResurrect (Spell.cpp:4617-4621) as
-				// flushed by SendLogExecute: caster is the creature, and the
-				// log broadcasts to nearby like C++ (was session-only).
-				s.sendResurrectLog(17251, guid, s.playerGUID)
+				// Spell::EffectResurrect returns early when a request is
+				// already pending (SpellEffects.cpp:4287-4288); the funnel's
+				// own resurrect arm applies the same skip, so this leg
+				// sends only when no request is pending.
+				if s.resurrection == nil {
+					pct := uint32(50)
+					ignoreReclaim := false
+					if s.server != nil && s.server.Data != nil {
+						if sp, found, derr := s.server.Data.Spell(17251); derr == nil && found && len(sp.Effects) > 0 {
+							if v := sp.Effects[0].CalcValueForLevel(sp, uint32(s.player.Level)); v >= 1 && v <= 100 {
+								pct = uint32(v)
+							}
+							ignoreReclaim = sp.AttributesEx3&spellAttr3IgnoreResurrectionTimer != 0
+						}
+					}
+					health := uint32(int64(s.player.MaxHealth) * int64(pct) / 100)
+					mana := uint32(int64(s.player.MaxPowers[0]) * int64(pct) / 100)
+					name, _ := creature.Fields["Name"].(string)
+					x, _ := objectFloat32Field(creature, "X")
+					y, _ := objectFloat32Field(creature, "Y")
+					z, _ := objectFloat32Field(creature, "Z")
+					// Spell::ExecuteLogEffectResurrect (Spell.cpp:4617-4621) as
+					// flushed by SendLogExecute: caster is the creature, and the
+					// log broadcasts to nearby like C++ (was session-only).
+					// SetResurrectRequestData WorldRelocates the caster: the
+					// stored location is the spirit healer's position (the accept
+					// path teleports the ghost there before resurrecting).
+					s.setResurrectRequestData(guid, objectUint32OrZero(creature, "Map"), x, y, z, health, mana, 0)
+					// Spell::SendResurrectRequest (Spell.cpp:4693-4709): creature
+					// caster name, spirit-healer sickness flag set, reclaim-timer
+					// override from the spell's attributes. The request goes first:
+					// C++ SendDirectMessages it during EffectResurrect while the
+					// log is only flushed in FinishTargetProcessing (Spell.cpp:3612).
+					s.sendResurrectRequest(guid, name, true, !ignoreReclaim)
+					// Spell::ExecuteLogEffectResurrect (Spell.cpp:4617-4621) as
+					// flushed by SendLogExecute: caster is the creature, and the
+					// log broadcasts to nearby like C++ (was session-only).
+					s.sendResurrectLog(17251, guid, s.playerGUID)
+				}
 				// No gossip close (Player.cpp:14621-14624) — the tail restores
 				// the live menu.
 			}
@@ -635,11 +687,11 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			}
 		} else if item.Action == 10 { // GOSSIP_OPTION_PETITIONER
 			// Player::OnGossipSelect (Player.cpp:14666-14668): SendCloseGossip
-			// runs before SendPetitionShowList. Go has no petition-show model
-			// (only arena-charter deletion), so only the close is bridged.
+			// runs before SendPetitionShowList (PetitionsHandler.cpp:753).
 			if !s.sendGossipComplete() {
 				return true
 			}
+			s.sendPetitionShowList(ctx, guid)
 		} else if item.Action == 12 { // GOSSIP_OPTION_BATTLEFIELD
 			// Player::OnGossipSelect (Player.cpp:14684-14696): the battleground
 			// type is derived from the creature entry via
@@ -700,7 +752,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		// above) never charge.
 		s.chargeGossipBoxMoney(ctx, boxCost)
 	}
-	if s.gossip == nil && !s.gossipClosed {
+	if !luaSelectFalse && s.gossip == nil && !s.gossipClosed {
 		// Player::OnGossipSelect arms that send no packet leave the live
 		// menu open (C++ never closes the menu for them) — restore it
 		// instead of closing the client's window.
@@ -761,16 +813,36 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 	// feign-death strip runs after the gameobject validation, before the
 	// Eluna select hook.
 	s.removeFakeDeath()
+	// MiscHandler.cpp:165-173 — the script-reload guard, same as the
+	// creature leg: a template script id that differs from the last-used
+	// one closes the gossip and ignores the select. The state banks its
+	// load-time id (GameObject.cpp:399); a runtime spawn without one
+	// initializes on first sight instead of tripping.
+	if goState != nil && s.server != nil {
+		s.server.objectsMu.Lock()
+		currentScriptID := scriptIDForName(goState.ScriptName)
+		reloaded := goState.LastUsedScriptIDKnown && currentScriptID != goState.LastUsedScriptID
+		goState.LastUsedScriptID, goState.LastUsedScriptIDKnown = currentScriptID, true
+		s.server.objectsMu.Unlock()
+		if reloaded {
+			s.debug("gameobject gossip selection rejected: script reloaded", "account", s.accountName, "guid", guid)
+			s.sendGossipComplete()
+			return true
+		}
+	}
 	// The select hook nils the live menu before firing (like the creature
 	// path), so capture it for the menuId gate and the no-close restore
 	// below.
 	prevGossip := s.gossip
 	// Eluna::OnGossipSelect[Code] fires before the native arms; a true
 	// hook return (no handler returned false) skips them
-	// (MiscHandler.cpp:198-204, 225) — i.e. a Lua false return lets the
-	// native arms proceed (Eluna polarity; see
-	// fireGameObjectGossipSelectHook).
-	if s.fireGameObjectGossipSelectHook(ctx, guid, item.Sender, item.Action, code, listID) {
+	// (MiscHandler.cpp:198-204, 225). A Lua false return lets the AI arm
+	// proceed, but the native arms must see the cleared menu — Eluna
+	// cleared it before the hooks (GossipHooks.cpp:36-61) — so they are
+	// skipped after the AI below instead of running from the prevGossip
+	// snapshot (see goLuaSelectFalse).
+	hookVetoed, goLuaSelectFalse := s.fireGameObjectGossipSelectHook(ctx, guid, item.Sender, item.Action, code, listID)
+	if hookVetoed {
 		return true
 	}
 	// SmartGameObjectAI::OnGossipSelect (SmartAI.cpp:1035-1040) runs after
@@ -792,6 +864,14 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 		if motion, _ := s.server.smartStateForGO(ctx, s.player.Map, s.player.InstanceID, guid); motion != nil && s.server.smartGossipSelect(ctx, motion, s.player.GUID, menuID, listID) {
 			return true
 		}
+	}
+	// A Lua false return leaves the menu cleared (Eluna's ClearMenus
+	// ran before the hooks, GossipHooks.cpp:36-61), so the native
+	// Player::OnGossipSelect arms find no item and do nothing
+	// (Player.cpp:14565-14569) — they must NOT run from the prevGossip
+	// snapshot. The menu stays cleared; no close packet is sent.
+	if goLuaSelectFalse {
+		return true
 	}
 	// Player::OnGossipSelect (Player.cpp:14565-14569): for gameobject
 	// sources the menuId gate runs after the hook — a stale select fires

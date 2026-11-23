@@ -207,28 +207,38 @@ func (s *session) fireGameObjectGossipHelloHook(ctx context.Context, guid uint64
 // (LuaEngine/GossipHooks.cpp:36-61): ClearMenus, then (player, go, sender,
 // action, code, listID) on the GOSSIP_EVENT_ON_SELECT bindings keyed by GO
 // entry. Eluna passes no list index; listID is a Go extension appended after
-// code (code is "" when the option has no code box, so listID is always the
-// last argument). listID is the CMSG_GOSSIP_SELECT_OPTION menu index — the
+// code (a coded select forwards the code string, a non-coded one forwards
+// nil, so listID is always the last argument).
+// listID is the CMSG_GOSSIP_SELECT_OPTION menu index — the
 // C++ gossipListId PlayerTalkClass resolves via GetGossipOptionSender/Action
 // — so select arms that index tables by gossipListId (icecrown teleport) port
 // directly, while action-branching arms read sender/action as before. menuID
 // is intentionally not forwarded: the post-hook stale-menu gate already
 // enforces it, and no ported arm branches on it.
-// HandleGossipSelectOptionOpcode runs the native arms only when the Eluna
-// hook did NOT veto (MiscHandler.cpp:198-204, 225:
+// HandleGossipSelectOptionOpcode runs the AI arm when the Eluna hook did NOT
+// veto (MiscHandler.cpp:198-204, 225:
 // `if (!sEluna->OnGossipSelect[Code](...))` then AI + native arms), and the
 // Eluna hook returns false iff a handler returned boolean false
 // (CallAllFunctionsBool(..., true), HookHelpers.h:92-117). So a Lua false
-// return lets the native select arms PROCEED; true/nothing vetoes them.
-// Returns true (skip native) when a hook is registered and no handler
-// returned false. (An older revision had this inverted; corrected
-// 2026-10-19 against the in-tree Eluna sources.)
-func (s *session) fireGameObjectGossipSelectHook(ctx context.Context, guid uint64, sender, action uint32, code string, listID uint32) bool {
+// return lets the AI arm proceed; true/nothing vetoes it. The native arms
+// never run on a Lua false return: Eluna cleared the menu before the hooks,
+// so Player::OnGossipSelect finds no item (Player.cpp:14565-14569).
+// Reports (vetoed, luaFalse). (An older revision had the polarity inverted;
+// corrected 2026-10-19 against the in-tree Eluna sources.)
+// fireGameObjectGossipSelectHook fires the Eluna gameobject select hook and
+// reports (vetoed, luaFalse): vetoed when a registered handler did NOT return
+// boolean false, luaFalse when one did. A coded select forwards the code
+// string and a non-coded one forwards nil (GossipHooks.cpp:36-61 pushes the
+// code only on the OnGossipSelectCode path), the item/player select
+// precedent. On a Lua false return the menu stays cleared (ClearMenus ran
+// before the hooks), so the caller must skip the native arms rather than
+// running them from a snapshot.
+func (s *session) fireGameObjectGossipSelectHook(ctx context.Context, guid uint64, sender, action uint32, code string, listID uint32) (bool, bool) {
 	if s == nil || s.server == nil || uint16(guid>>48) != 0xF110 {
-		return false
+		return false, false
 	}
 	if s.server.Features == nil || s.server.Features.Scripts == nil {
-		return false
+		return false, false
 	}
 	goObj := s.luaGameObject(ctx, guid)
 	if goObj == nil {
@@ -237,17 +247,21 @@ func (s *session) fireGameObjectGossipSelectHook(ctx context.Context, guid uint6
 		goObj = s.server.serverLuaGameObject(ctx, guid)
 	}
 	if goObj == nil {
-		return false
+		return false, false
 	}
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	if !s.server.Features.Scripts.HasHook(scripting.GameObjectGossipKind(entry), scripting.GossipEventOnSelect) {
-		return false
+		return false, false
 	}
 	s.gossip = nil
-	args := []any{s.luaPlayer(), goObj, sender, action, code, listID}
+	var codeArg any = code
+	if code == "" {
+		codeArg = nil
+	}
+	args := []any{s.luaPlayer(), goObj, sender, action, codeArg, listID}
 	values, err := s.server.Features.Scripts.TriggerGameObjectGossipEvent(ctx, entry, scripting.GossipEventOnSelect, args...)
 	if err != nil {
 		s.debug("lua gameobject gossip select failed", "entry", entry, "error", err)
 	}
-	return !luaCancelled(values)
+	return !luaCancelled(values), luaCancelled(values)
 }

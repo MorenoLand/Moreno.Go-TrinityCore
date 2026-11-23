@@ -552,15 +552,24 @@ type creatureMotion struct {
 	// 3s (pet_combat.go:603), which always dominates the 1-1.5s GCD.
 	GCDCooldowns map[uint32]time.Time
 
-	ThreatMgr           *ThreatManager
-	extraAttacks        uint32 // Unit::m_extraAttacks (Unit.h:802) — banked SPELL_EFFECT_ADD_EXTRA_ATTACKS swings, the creature twin of session.extraAttacks
-	comboPoints         int8   // Unit::m_comboPoints (Unit.h:1580) — banked combo points from SPELL_EFFECT_ADD_COMBO_POINTS gains, the creature twin of session.comboPoints; no client packet rides it (Unit::SendComboPoints is player-only, Unit.cpp:10689)
-	comboTarget         uint64 // Unit::m_comboTarget — GUID the banked combo points sit on
-	BossAI              BossAI
-	ScriptName          string
-	Name                string
-	EncounterMapID      uint32
-	EncounterInstanceID uint32
+	ThreatMgr    *ThreatManager
+	extraAttacks uint32 // Unit::m_extraAttacks (Unit.h:802) — banked SPELL_EFFECT_ADD_EXTRA_ATTACKS swings, the creature twin of session.extraAttacks
+	comboPoints  int8   // Unit::m_comboPoints (Unit.h:1580) — banked combo points from SPELL_EFFECT_ADD_COMBO_POINTS gains, the creature twin of session.comboPoints; no client packet rides it (Unit::SendComboPoints is player-only, Unit.cpp:10689)
+	comboTarget  uint64 // Unit::m_comboTarget — GUID the banked combo points sit on
+	BossAI       BossAI
+	ScriptName   string
+	// LastUsedScriptID is WorldObject::LastUsedScriptID (Object.h:511),
+	// banked at load (Creature.cpp:651) and refreshed by the gossip
+	// script-reload guard (MiscHandler.cpp:165-173). LastUsedScriptIDKnown
+	// marks the banked value as initialized: motions built outside the
+	// DB-spawn attach (summons, pets, totems) carry no load-time value, so
+	// the guard initializes on first sight instead of tripping on the
+	// zero value.
+	LastUsedScriptID      uint32
+	LastUsedScriptIDKnown bool
+	Name                  string
+	EncounterMapID        uint32
+	EncounterInstanceID   uint32
 
 	OwnerGUID           uint64
 	CreatedByGUID       uint64    // UNIT_FIELD_CREATEDBY (Unit.h:1149): the summoner/owner GUID, script-settable via SetCreatorGUID; seeded by summonTempCreature from the summoner (TempSummon::InitStats, TemporarySummon.cpp:356), 0 = Empty otherwise
@@ -2482,9 +2491,14 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				ReactStateKnown:    st.ReactStateKnown,
 				Name:               name,
 				ScriptName:         scriptName,
-				BaseScale:          st.Scale,
-				DisplayID:          st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
-				NativeDisplayID:    st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
+				// Creature::LoadFromDB (Creature.cpp:651): the last-used
+				// script id is banked at load, so the first gossip select
+				// after spawn never trips the reload guard.
+				LastUsedScriptID:      scriptIDForName(scriptName),
+				LastUsedScriptIDKnown: true,
+				BaseScale:             st.Scale,
+				DisplayID:             st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
+				NativeDisplayID:       st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
 			}
 			motions := s.motionMapLocked(motion.Map, instanceID)
 			motions[creatureGUID] = motion

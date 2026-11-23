@@ -5814,11 +5814,21 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 	r := protocol.NewReader(payload)
 	// PetitionsHandler.cpp:745 — `recvData >> guid`: raw 8-byte GUID.
 	npcGUID, _ := r.ReadU64()
+	s.sendPetitionShowList(ctx, npcGUID)
+	return true
+}
 
+// sendPetitionShowList mirrors WorldSession::SendPetitionShowList
+// (PetitionsHandler.cpp:753-801): the list is served only by an
+// interactable petitioner NPC, a tabard designer lists the single guild
+// charter, any other petitioner lists the three arena charters. The
+// gossip PETITIONER arm (Player.cpp:14666-14668) calls this after
+// SendCloseGossip; the CMSG handler above is the other caller.
+func (s *session) sendPetitionShowList(ctx context.Context, npcGUID uint64) {
 	// PetitionsHandler.cpp:743-749: the list is served only by an
 	// interactable petitioner NPC.
 	if !s.canInteractWithNPC(ctx, npcGUID, uint64(unitNPCFlagPetitioner)) {
-		return true
+		return
 	}
 
 	// PetitionsHandler.cpp:766-789: a non-tabard petitioner lists the
@@ -5847,7 +5857,7 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 		buf.WriteU32(5)
 		buf.WriteU32(5)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SHOWLIST), buf.Bytes(), true)
-		return true
+		return
 	}
 
 	reqSigns := uint32(9)
@@ -5871,7 +5881,6 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 	buf.WriteU32(0)                  // 0
 	buf.WriteU32(reqSigns)           // required signs
 	_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SHOWLIST), buf.Bytes(), true)
-	return true
 }
 
 // handlePetitionDecline processes MSG_PETITION_DECLINE (0x1C2).
