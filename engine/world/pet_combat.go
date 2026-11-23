@@ -1795,6 +1795,20 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			// dist <= meleeRange branch, so a ranged pet holding at
 			// spell range never swings.
 			motion.Moving = false
+		} else if motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || creatureMovementPreventedByCasting(motion, now) {
+			// ChaseMovementGenerator::Update pause arm
+			// (ChaseMovementGenerator.cpp:103-112): a rooted or
+			// casting owner stops moving and the chase launches
+			// nothing — UNIT_STATE_NOT_MOVE (root/stun/not-move
+			// aura; died rides the tick's health gate) and
+			// IsMovementPreventedByCasting, the
+			// creatureMovementPreventedByCasting twin with its
+			// move-allowed-channel exception. Only the movement
+			// launch pauses: the swing and autocast below still
+			// run, as PetAI::UpdateAI does in C++. HasLostTarget
+			// is vacuous here — the pet's chase target is its
+			// victim by construction (TargetGUID).
+			motion.Moving = false
 		} else {
 			// Run towards target. ChaseMovementGenerator with no _range
 			// (ChaseMovementGenerator.cpp:119-122, 180-211): the path is
