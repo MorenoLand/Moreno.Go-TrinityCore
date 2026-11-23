@@ -96,26 +96,10 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid message type", "type", typeID)
 		return true
 	}
-	var targetName, channel, message string
-	switch uint8(typeID) {
-	case chatWhisper:
-		targetName, err = b.ReadCString()
-		if err == nil {
-			message, err = b.ReadCString()
-		}
-	case chatChannel:
-		channel, err = b.ReadCString()
-		if err == nil {
-			message, err = b.ReadCString()
-		}
-	default:
-		message, err = b.ReadCString()
-	}
-	if err != nil {
-		s.debug("chat rejected", "account", s.accountName, "reason", "malformed message", "error", err)
-		return true
-	}
-	s.debug("chat request parsed", "account", s.accountName, "type", typeID, "language", language, "size", len(payload))
+	// Reference: ChatHandler.cpp:59-186 — the type/language gates run
+	// before the message is read, so a doubly-invalid packet answers
+	// unknown-language / mute, never malformed-message: the to/channel/msg
+	// parse lives after the 1852 silence gate below.
 	// Reference: ChatHandler.cpp:116-139 — the LANG_ADDON type gate and the
 	// CONFIG_ADDON_CHANNEL disabled check run before every other arm (the
 	// mute/speak-time legs, the 1852 GM-silence gate, the warden response):
@@ -181,6 +165,31 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852)
 		return true
 	}
+	// C++ (ChatHandler.cpp:196-224): to/channel/msg are read only after
+	// the gates above — type bound, universal/language/skill, addon-type,
+	// addon-channel config, mute, speak-time, 1852 silence — so a packet
+	// that is both gated and malformed answers the gate, never
+	// malformed-message.
+	var targetName, channel, message string
+	switch uint8(typeID) {
+	case chatWhisper:
+		targetName, err = b.ReadCString()
+		if err == nil {
+			message, err = b.ReadCString()
+		}
+	case chatChannel:
+		channel, err = b.ReadCString()
+		if err == nil {
+			message, err = b.ReadCString()
+		}
+	default:
+		message, err = b.ReadCString()
+	}
+	if err != nil {
+		s.debug("chat rejected", "account", s.accountName, "reason", "malformed message", "error", err)
+		return true
+	}
+	s.debug("chat request parsed", "account", s.accountName, "type", typeID, "language", language, "size", len(payload))
 	// C++ (ChatHandler.cpp:228-232): the message is parsed after the silence
 	// gate, and over-255-byte messages drop there — after a mute or silence
 	// notification has already fired, not before it.
@@ -528,6 +537,33 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	}
 	s.debug("chat accepted", "account", s.accountName, "type", typeID, "gm_chat", s.gmChat)
 	return true
+}
+
+// updateExpiredMutes mirrors the mute-expiry arm of Player::Update
+// (Player.cpp:1085-1094): a session whose mute has expired clears the
+// session mute AND the login row (LOGIN_UPD_MUTE_TIME with mutetime 0,
+// empty reason/by) on the player update tick, instead of lingering until
+// the player next chats. The handleMessageChat clear above stays as the
+// backstop for sessions the tick has not swept yet.
+func (s *Server) updateExpiredMutes(ctx context.Context) {
+	if s == nil || s.AuthStore == nil || s.AuthStore.DB == nil {
+		return
+	}
+	now := time.Now().Unix()
+	s.sessionsMu.RLock()
+	var expired []*session
+	for sess := range s.sessions {
+		if sess != nil && sess.muteTime > 0 && sess.muteTime <= now {
+			expired = append(expired, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range expired {
+		sess.muteTime = 0
+		if sess.accountID != 0 {
+			_, _ = s.AuthStore.DB.ExecContext(ctx, "UPDATE account SET mutetime = 0, mutereason = '', muteby = '' WHERE id = ?", sess.accountID)
+		}
+	}
 }
 
 // chatSubEvent maps the chat types Eluna routes to dedicated player events
@@ -1524,8 +1560,8 @@ func (s *session) chatTag() uint8 {
 	// Reference: Player::GetChatTag (Player.cpp:1642-1654) — CHAT_TAG_GM (0x04)
 	// is stamped only when isGMChat() (PLAYER_EXTRA_GM_CHAT, the `.gm chat`
 	// toggle), never for a merely visible GM (`.gm on` / PLAYER_FLAGS_GM).
-	// CHAT_TAG_DEV (0x10, IsDeveloper = PLAYER_FLAGS_DEVELOPER) has no Go
-	// model and is never set.
+	// CHAT_TAG_DEV (0x10) is stamped when IsDeveloper() holds
+	// (PLAYER_FLAGS_DEVELOPER, 0x8000, Player.h:955).
 	var tag uint8
 	if s.player.ExtraFlags&playerExtraGMChat != 0 || s.gmChat {
 		tag |= 0x04
@@ -1535,6 +1571,9 @@ func (s *session) chatTag() uint8 {
 	}
 	if s.player.PlayerFlags&playerFlagAFK != 0 {
 		tag |= 0x01
+	}
+	if s.player.PlayerFlags&playerFlagDeveloper != 0 {
+		tag |= 0x10
 	}
 	return tag
 }

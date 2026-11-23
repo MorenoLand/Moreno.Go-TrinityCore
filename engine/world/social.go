@@ -179,12 +179,13 @@ func (s *session) sendContactList(ctx context.Context, flags uint32) error {
 		b.WriteU32(0)
 		return s.write(uint16(protocol.OpcodeSMSG_CONTACT_LIST), b.Bytes(), true)
 	}
+	// SocialMgr.cpp:124-176 (SendSocialList): C++ iterates the whole
+	// in-memory social map — every stored row, deleted characters included
+	// (listed as offline), with only the per-flag 50 caps below. No
+	// characters join, no deleted-char filter, no row cap.
 	rows, err := cdb.QueryContext(ctx,
-		"SELECT cs.friend, cs.flags, cs.note FROM character_social cs JOIN characters c ON c.guid = cs.friend WHERE cs.guid = ? AND (c.deleteInfos_Name IS NULL OR c.deleteInfos_Name = '') ORDER BY cs.friend LIMIT 255",
+		"SELECT friend, flags, note FROM character_social WHERE guid = ? ORDER BY friend",
 		s.playerGUID)
-	if err != nil && isMissingColumn(err) {
-		rows, err = cdb.QueryContext(ctx, "SELECT friend, flags, note FROM character_social WHERE guid = ? ORDER BY friend LIMIT 255", s.playerGUID)
-	}
 	if err != nil {
 		if missingTable(err) || errors.Is(err, sql.ErrNoRows) {
 			b := protocol.NewBuffer(8)

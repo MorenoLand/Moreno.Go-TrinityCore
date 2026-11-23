@@ -145,30 +145,44 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 			sendVisual = visualEmote != 0
 		}
 	}
+	// Reference: ChatHandler.cpp:660-682 (EmoteChatBuilder) — the target
+	// name is resolved per recipient with GetNameForLocaleIdx, so each
+	// client sees the creature name in its own locale. The base name and
+	// entry resolve once here; the per-recipient packet is built in the
+	// broadcast loop below. Player targets have no locale table: their
+	// name is locale-independent, matching GetNameForLocaleIdx on players.
 	targetName := ""
+	targetEntry := uint32(0)
+	targetIsCreature := false
 	if targetGUID != 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		entryID := uint32((targetGUID >> 24) & 0x00FFFFFF)
 		var name sql.NullString
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name FROM creature_template WHERE entry = ?", entryID).Scan(&name)
 		if name.Valid {
 			targetName = name.String
+			targetEntry = entryID
+			targetIsCreature = true
 		}
 		if targetGUID>>48 == 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", uint32(targetGUID&0x00FFFFFF)).Scan(&name)
 			if name.Valid {
 				targetName = name.String
+				targetIsCreature = false
 			}
 		}
 	}
-	packet := protocol.NewBuffer(32 + len(targetName) + 1)
-	packet.WriteU64(s.playerGUID)
-	packet.WriteU32(textEmote)
-	packet.WriteU32(emoteNum)
-	packet.WriteU32(uint32(len(targetName)))
-	if len(targetName) > 1 {
-		packet.WriteCString(targetName)
-	} else {
-		packet.WriteU8(0)
+	buildTextEmotePacket := func(name string) []byte {
+		packet := protocol.NewBuffer(32 + len(name) + 1)
+		packet.WriteU64(s.playerGUID)
+		packet.WriteU32(textEmote)
+		packet.WriteU32(emoteNum)
+		packet.WriteU32(uint32(len(name)))
+		if len(name) > 1 {
+			packet.WriteCString(name)
+		} else {
+			packet.WriteU8(0)
+		}
+		return packet.Bytes()
 	}
 
 	var visPacket []byte
@@ -195,7 +209,19 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 		if distance3D(s.player.X, s.player.Y, s.player.Z, member.player.X, member.player.Y, member.player.Z) > listenRange {
 			continue
 		}
-		_ = member.write(uint16(protocol.OpcodeSMSG_TEXT_EMOTE), packet.Bytes(), true)
+		// EmoteChatBuilder localizes the target name per recipient
+		// (ChatHandler.cpp:660-682): a creature target resolves through
+		// creature_template_locale in the recipient's locale, falling
+		// back to the base name when no row exists, exactly like
+		// GetNameForLocaleIdx.
+		name := targetName
+		if targetIsCreature && member.locale != 0 && int(member.locale) < len(localeNames) && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var locName sql.NullString
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Name FROM creature_template_locale WHERE entry = ? AND locale = ?", targetEntry, localeNames[member.locale]).Scan(&locName); err == nil && locName.Valid && locName.String != "" {
+				name = locName.String
+			}
+		}
+		_ = member.write(uint16(protocol.OpcodeSMSG_TEXT_EMOTE), buildTextEmotePacket(name), true)
 		if len(visPacket) > 0 {
 			_ = member.write(uint16(protocol.OpcodeSMSG_EMOTE), visPacket, true)
 		}

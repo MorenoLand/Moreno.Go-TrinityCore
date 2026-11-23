@@ -258,23 +258,46 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	if err := db.QueryRowContext(ctx, "SELECT guid FROM group_member WHERE memberGuid = ? LIMIT 1", guid).Scan(&dbGroupID); err != nil {
 		return
 	}
-	if group := s.server.findGroupByDBID(uint64(dbGroupID)); group != nil {
-		s.groupID = group.ID
-		// CharacterHandler.cpp:865: a logging-in leader stops the
-		// leader-offline timer (Group::StopLeaderOfflineTimer).
-		s.server.stopGroupLeaderOfflineTimer(group, guid)
-		if s.player != nil {
-			s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, group.isLeader(guid))
-			s.player.DungeonDifficulty = group.DungeonDiff
-			s.player.RaidDifficulty = group.RaidDiff
-		}
+	g := s.server.findGroupByDBID(uint64(dbGroupID))
+	if g == nil {
+		g = s.server.loadGroupFromDB(ctx, dbGroupID)
+	}
+	if g == nil {
 		return
 	}
+	s.groupID = g.ID
+	// CharacterHandler.cpp:865: a logging-in leader stops the
+	// leader-offline timer (Group::StopLeaderOfflineTimer).
+	s.server.stopGroupLeaderOfflineTimer(g, guid)
+	if s.player != nil {
+		s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, g.isLeader(guid))
+		s.player.DungeonDifficulty = g.DungeonDiff
+		s.player.RaidDifficulty = g.RaidDiff
+	}
+}
+
+// loadGroupFromDB builds one persisted group into memory from its
+// `groups` + group_member rows (Group::LoadGroupFromDB /
+// LoadMemberFromDB, Group.cpp:230-293): leader, loot, icons, subgroup,
+// flags, roles, difficulties, LFG state. It returns nil when the row
+// is missing or fails the GroupMgr::LoadGroups gates (leader-deleted,
+// fewer than 2 member rows), and registers the group in s.groups. The
+// already-loaded group is returned as-is; the LFG per-member seed runs
+// only on construction, so later logins do not re-seed members who
+// have since left.
+func (s *Server) loadGroupFromDB(ctx context.Context, dbGroupID int64) *groupState {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || dbGroupID <= 0 {
+		return nil
+	}
+	if group := s.findGroupByDBID(uint64(dbGroupID)); group != nil {
+		return group
+	}
+	db := s.CharactersStore.DB
 	var leaderGUID, lootMethod, looterGUID, lootThreshold, groupType, dungeonDiff, raidDiff, masterLooterGUID int64
 	var icons [8]int64
 	err := db.QueryRowContext(ctx, "SELECT leaderGuid, lootMethod, looterGuid, lootThreshold, icon1, icon2, icon3, icon4, icon5, icon6, icon7, icon8, groupType, difficulty, raidDifficulty, masterLooterGuid FROM `groups` WHERE guid = ?", dbGroupID).Scan(&leaderGUID, &lootMethod, &looterGUID, &lootThreshold, &icons[0], &icons[1], &icons[2], &icons[3], &icons[4], &icons[5], &icons[6], &icons[7], &groupType, &dungeonDiff, &raidDiff, &masterLooterGUID)
 	if err != nil {
-		return
+		return nil
 	}
 	// GroupMgr::LoadGroups (GroupMgr.cpp) deletes groups whose leader
 	// does not exist in characters before loading any group; a
@@ -285,7 +308,7 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	// fails closed to unloaded, matching the C++ delete.
 	var leaderExists int64
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM characters WHERE guid = ?", leaderGUID).Scan(&leaderExists); err != nil || leaderExists == 0 {
-		return
+		return nil
 	}
 	if dungeonDiff < 0 || dungeonDiff >= 3 {
 		dungeonDiff = 0
@@ -299,7 +322,7 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	}
 	rows, err := db.QueryContext(ctx, "SELECT gm.memberGuid, gm.memberFlags, gm.subgroup, gm.roles, c.name FROM group_member gm JOIN characters c ON c.guid = gm.memberGuid WHERE gm.guid = ? ORDER BY gm.memberGuid", dbGroupID)
 	if err != nil {
-		return
+		return nil
 	}
 	members := make([]groupMember, 0, maxGroupSize)
 	for rows.Next() {
@@ -321,7 +344,7 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 		// attaches its survivor (a true 1-row group stays unloaded).
 		var rawMembers int64
 		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_member WHERE guid = ?", dbGroupID).Scan(&rawMembers); err != nil || rawMembers < 2 {
-			return
+			return nil
 		}
 	}
 	runtimeID := int64(0)
@@ -340,33 +363,58 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	for index, icon := range icons {
 		g.TargetIcons[index] = uint64(icon)
 	}
-	s.server.groupsMu.Lock()
-	if s.server.groups == nil {
-		s.server.groups = make(map[uint64]*groupState)
+	s.groupsMu.Lock()
+	if s.groups == nil {
+		s.groups = make(map[uint64]*groupState)
 	}
-	s.server.groups[g.ID] = g
-	s.server.groupsMu.Unlock()
-	// CharacterHandler.cpp:865: a logging-in leader stops the
-	// leader-offline timer (Group::StopLeaderOfflineTimer).
-	s.server.stopGroupLeaderOfflineTimer(g, guid)
+	s.groups[g.ID] = g
+	s.groupsMu.Unlock()
 	// Group::LoadMemberFromDB (Group.cpp:291) calls SetupGroupMember for
 	// every loaded member; LFGMgr::_LoadFromDB (LFGMgr.cpp:76-97)
 	// restores group LFG data only for DUNGEON/FINISHED rows, so only
-	// those states seed per-member entries. The already-loaded early
-	// return above keeps this startup-once: later logins do not re-seed
-	// members who have since left.
+	// those states seed per-member entries.
 	if g.IsLFG && g.LFGDungeonID != 0 &&
 		(g.LFGState == LFGStateDungeon || g.LFGState == LFGStateFinishedDungeon) &&
-		s.server.Features != nil && s.server.Features.LFG != nil {
+		s.Features != nil && s.Features.LFG != nil {
 		for _, m := range members {
-			s.server.Features.LFG.SetupGroupMember(m.GUID, g.LFGDungeonID, g.LFGState)
+			s.Features.LFG.SetupGroupMember(m.GUID, g.LFGDungeonID, g.LFGState)
 		}
 	}
-	s.groupID = g.ID
-	if s.player != nil {
-		s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, g.isLeader(guid))
-		s.player.DungeonDifficulty = g.DungeonDiff
-		s.player.RaidDifficulty = g.RaidDiff
+	return g
+}
+
+// loadGroups mirrors GroupMgr::LoadGroups (GroupMgr.cpp:128-254) at server
+// startup: the consistency deletes run first — leaderless groups,
+// groups with fewer than 2 members, orphan group_member / group_instance
+// rows, members not in characters — then every surviving group loads
+// into memory, so a group with all members offline exists before anyone
+// logs in. Group_instance saves stay DB-backed in Go
+// (instanceBindsForGroup reads them on demand); there is no in-memory
+// BoundInstancesMap to fill.
+func (s *Server) loadGroups(ctx context.Context) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.CharactersStore.DB
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM `groups` WHERE leaderGuid NOT IN (SELECT guid FROM characters)")
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM `groups` WHERE guid NOT IN (SELECT guid FROM group_member GROUP BY guid HAVING COUNT(guid) > 1)")
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM group_member WHERE guid NOT IN (SELECT guid FROM `groups`)")
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM group_instance WHERE guid NOT IN (SELECT guid FROM `groups`)")
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM group_member WHERE memberGuid NOT IN (SELECT guid FROM characters)")
+	rows, err := cdb.QueryContext(ctx, "SELECT guid FROM `groups` ORDER BY guid ASC")
+	if err != nil {
+		return
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err == nil && id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	for _, id := range ids {
+		s.loadGroupFromDB(ctx, id)
 	}
 }
 
@@ -1361,6 +1409,16 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 	}
 
 	g.Members = append(g.Members, groupMember{GUID: s.playerGUID, Name: s.player.Name, SubGroup: subGroup})
+	// Group::AddMember (Group.cpp:462-466): joining a NON-raid group clears
+	// all target icons — party members may set icons (no raid gate in
+	// parties), so stale raid icons would otherwise survive the join.
+	// The clear itself broadcasts nothing; clients learn the empty list
+	// on their next 0xFF icon-list query (Group::SendTargetIconList).
+	if !g.IsRaid {
+		for i := range g.TargetIcons {
+			g.TargetIcons[i] = 0
+		}
+	}
 	refreshGroupMaxEnchantingLevel(srv, g)
 	s.groupID = g.ID
 	groupObj := groupLuaObject(s.server, g)
@@ -1438,6 +1496,45 @@ func (s *session) handleGroupDecline(ctx context.Context, _ []byte) bool {
 	leaderGUID := s.pendingGroupLeader
 	s.pendingGroupLeader = 0
 
+	// HandleGroupDeclineOpcode (GroupHandler.cpp:274-296) runs
+	// UninviteFromGroup FIRST — the decline withdraws the invite and a
+	// created group left with one member or fewer disbands — and only
+	// then checks whether the leader is online for the SMSG_GROUP_DECLINE
+	// notice. The old order returned early on an offline leader and
+	// never ran the disband arm.
+	var inviteGroup *groupState
+	if leaderSess := s.server.findSessionByGUID(leaderGUID); leaderSess != nil && leaderSess.groupID != 0 {
+		// GroupHandler.cpp:137-148 (G4): a BG-raid leader's invite belongs
+		// to their original pre-BG group, not the BG raid; with no original
+		// group the BG raid itself stays the target.
+		inviteGroup = s.server.effectiveInviteGroup(leaderSess)
+		if inviteGroup == nil {
+			inviteGroup = s.server.findGroupByID(leaderSess.groupID)
+		}
+	} else {
+		// Inviter offline: locate the group they lead by scan — the decline
+		// only ever touches the inviter's own group (HandleGroupDeclineOpcode's
+		// GetGroupInvite arm), never a group they merely belong to. A leader
+		// holding both a BG raid and an original group invited from the
+		// original, so prefer the non-BG group on a double match.
+		s.server.groupsMu.RLock()
+		for _, g := range s.server.groups {
+			if g.LeaderGUID == leaderGUID && (inviteGroup == nil || (inviteGroup.isBGGroup() && !g.isBGGroup())) {
+				inviteGroup = g
+			}
+		}
+		s.server.groupsMu.RUnlock()
+	}
+	// Player::UninviteFromGroup (Player.cpp:2549-2563): a created group
+	// left with one member or fewer disbands silently via Disband(true),
+	// which skips SMSG_GROUP_DESTROYED. g.Members counts slots including
+	// offline members (G41), matching GetMembersCount over m_memberSlots;
+	// the uncreated-group arm needs no Go model (no ephemeral group
+	// object: the pending invite was already cleared above).
+	if inviteGroup != nil && len(inviteGroup.Members) <= 1 {
+		s.server.disbandGroup(ctx, inviteGroup, true)
+	}
+
 	leaderSess := s.server.findSessionByGUID(leaderGUID)
 	if leaderSess == nil || leaderSess.player == nil {
 		return true
@@ -1450,29 +1547,6 @@ func (s *session) handleGroupDecline(ctx context.Context, _ []byte) bool {
 	b := protocol.NewBuffer(len(name) + 1)
 	b.WriteCString(name)
 	_ = leaderSess.write(uint16(protocol.OpcodeSMSG_GROUP_DECLINE), b.Bytes(), true)
-	// Player::UninviteFromGroup (Player.cpp:2549-2563): the decline withdraws
-	// the invite (RemoveInvite — pendingGroupLeader was cleared above); a
-	// created group left with one member or fewer disbands silently via
-	// Disband(true), which skips SMSG_GROUP_DESTROYED.
-	var inviteGroup *groupState
-	if leaderSess.groupID != 0 {
-		inviteGroup = s.server.findGroupByID(leaderSess.groupID)
-	} else {
-		// Inviter offline: locate the group they lead by scan — the decline
-		// only ever touches the inviter's own group (HandleGroupDeclineOpcode's
-		// GetGroupInvite arm), never a group they merely belong to.
-		s.server.groupsMu.RLock()
-		for _, g := range s.server.groups {
-			if g.LeaderGUID == leaderGUID {
-				inviteGroup = g
-				break
-			}
-		}
-		s.server.groupsMu.RUnlock()
-	}
-	if inviteGroup != nil && len(inviteGroup.Members) <= 1 {
-		s.server.disbandGroup(ctx, inviteGroup, true)
-	}
 	return true
 }
 
@@ -2228,15 +2302,65 @@ func (s *Server) convertLeaderInstancesToGroup(ctx context.Context, leaderGUID u
 	}
 }
 
-// deleteDisbandedGroupInstanceBinds drops a disbanded group's instance
-// binds: Group::Disband (Group.cpp:929-930) unbinds via ResetInstances,
-// and a new group reuses MAX(groups.guid)+1, so a surviving row would
-// bind the recycled DBID to the dead group's instance.
+// deleteDisbandedGroupInstanceBinds runs the Group::Disband instance
+// unbind (Group.cpp:929-930): ResetInstances(INSTANCE_RESET_GROUP_DISBAND)
+// over the group's bound instances, both difficulties. Per bind
+// (Group.cpp:2192-2290): a resettable save with no players inside is
+// deleted outright (InstanceSave::DeleteFromDB — the instance,
+// character_instance and group_instance rows for that instance); any
+// other bind only loses its group_instance row. CanReset is false when
+// a player is permanently bound to the save (Player::BindToInstance,
+// Player.cpp:19172), so the save-level check reads permanent
+// character_instance rows, not the group bind's own flag — a permanent
+// group bind still unbinds, it just never deletes the save. The
+// trailing DELETE BY guid is the backstop for group_instance rows whose
+// instance row is already gone (the JOIN below drops them), and for the
+// recycled-DBID hazard: a new group reuses MAX(groups.guid)+1, so a
+// surviving row would bind the recycled DBID to the dead group's instance.
 func (s *Server) deleteDisbandedGroupInstanceBinds(ctx context.Context, dbid uint32) {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || dbid == 0 {
 		return
 	}
-	_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM group_instance WHERE guid = ?", dbid)
+	cdb := s.CharactersStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT i.map, i.id FROM group_instance AS gi JOIN instance AS i ON i.id = gi.instance WHERE gi.guid = ?`, dbid)
+	if err == nil {
+		type disbandBind struct {
+			mapID, instanceID uint32
+		}
+		var binds []disbandBind
+		for rows.Next() {
+			var mapID, instanceID int64
+			if err := rows.Scan(&mapID, &instanceID); err != nil || mapID <= 0 || instanceID <= 0 {
+				continue
+			}
+			binds = append(binds, disbandBind{mapID: uint32(mapID), instanceID: uint32(instanceID)})
+		}
+		rows.Close()
+		for _, b := range binds {
+			// InstanceSave::CanReset (InstanceSaveMgr.h:115): set false
+			// when a player is permanently bound to the save. A failed
+			// lookup fails closed to non-resettable: only the group row
+			// goes, never the save.
+			var permBinds int64
+			canReset := false
+			if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_instance WHERE instance = ? AND permanent = 1", b.instanceID).Scan(&permBinds); err == nil {
+				canReset = permBinds == 0
+			}
+			// Group::ResetInstances (Group.cpp:2204-2213): an unloaded
+			// map counts as empty; a loaded one is empty only with no
+			// players inside. The GROUP_DISBAND arm skips the reset
+			// attempt for non-resettable saves entirely and still
+			// unbinds — only the group row goes.
+			if canReset && !s.instanceHasLivePlayers(b.mapID, b.instanceID) {
+				_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_INSTANCE_BY_INSTANCE"), b.instanceID)
+				_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_CHAR_INSTANCE_BY_INSTANCE"), b.instanceID)
+				_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_INSTANCE_BY_INSTANCE"), b.instanceID)
+			} else {
+				_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_INSTANCE_BY_INSTANCE"), b.instanceID)
+			}
+		}
+	}
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM group_instance WHERE guid = ?", dbid)
 }
 
 // disbandGroup dissolves the whole group: every online member session is

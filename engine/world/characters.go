@@ -32,6 +32,7 @@ const (
 	playerFlagGhost              uint32 = 0x00000010
 	playerFlagNoXPGain           uint32 = 0x02000000 // PLAYER_FLAGS_NO_XP_GAIN (Player.h:358)
 	playerFlagOutOfBounds        uint32 = 0x00004000 // PLAYER_FLAGS_IS_OUT_OF_BOUNDS (Player.h:347) — cleared by Player::RepopAtGraveyard
+	playerFlagDeveloper          uint32 = 0x00008000 // PLAYER_FLAGS_DEVELOPER (Player.h:348) — IsDeveloper, CHAT_TAG_DEV
 	playerFlagInPVP              uint32 = 0x00000200
 	playerFlagPVPTimer           uint32 = 0x00040000
 	playerFlagTaxiBenchmark      uint32 = 0x00020000 // PLAYER_FLAGS_TAXI_BENCHMARK (Player.h:350)

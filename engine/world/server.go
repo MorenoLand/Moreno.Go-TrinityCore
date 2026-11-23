@@ -1160,6 +1160,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.repairGuildRankOverrides(ctx)
 	s.ensureCalendarEventGuildIDs(ctx)
 	s.loadCustomChannels(ctx)
+	s.loadGroups(ctx)
 	if err := s.Features.Initialize(ctx); err != nil {
 		return err
 	}
@@ -1766,6 +1767,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateContestedPvP(now)
 			s.updatePvPFlags(now)
 			s.updatePlayerRegeneration(ctx, now)
+			s.updateExpiredMutes(ctx)
 			s.flushGroupMemberStats(ctx, now)
 			s.updateGroupLeaderOfflineTimers(now)
 			s.updateLFGBootVotes(now)
