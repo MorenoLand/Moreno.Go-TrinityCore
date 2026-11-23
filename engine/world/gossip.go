@@ -580,7 +580,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			// auction level gate — not the bare 9-byte write this arm had.
 			// Player::OnGossipSelect (Player.cpp:14672-14674): no close — the
 			// tail restores the live menu.
-			s.sendAuctionHelloPacket(guid)
+			s.sendAuctionHelloPacket(ctx, guid)
 		} else if item.Action == 14 { // GOSSIP_OPTION_STABLEPET
 			// Player::OnGossipSelect (Player.cpp:14632-14634): SendStablePet
 			// with no close — the menu stays live for subsequent selects.

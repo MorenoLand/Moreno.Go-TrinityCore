@@ -69,10 +69,12 @@ func auctionCutFor(bid uint32, cutRate float64) uint32 {
 // (AuctionHouseMgr.cpp:89-118). The C++ multiplier is
 // CalculatePct(float(entry->DepositRate), 3) = DepositRate*0.03 from
 // AuctionHouse.dbc; DBCStructure.h notes DepositRate is stored "1/3 from
-// real", and the neutral house (id 7, the house-agnostic model used here)
-// stores 25 — a real 75% rate, so the multiplier is 0.75. That matches the
-// retail formula: neutral 12/24/48h deposits are 75%/150%/300% of the
-// vendor sell price (the timeHr term is 1/2/4 on those durations).
+// real", and the neutral house (id 7) stores 25 — a real 75% rate, so the
+// multiplier is 0.75. That matches the retail formula: neutral 12/24/48h
+// deposits are 75%/150%/300% of the vendor sell price (the timeHr term is
+// 1/2/4 on those durations). The multiplier stays the neutral-house rate:
+// the faction houses' own DepositRate has no Go AuctionHouse.dbc model,
+// the same scope limit as the 15% neutral consignment cut.
 func auctionDeposit(sellPrice int64, timeHr, count uint32, depositRate float64) uint32 {
 	const depositMultiplier = 0.75
 	rate := float32(depositRate)
@@ -142,22 +144,60 @@ const (
 const (
 	mailStationeryAuction uint32 = 62
 	mailAuctionType       uint8  = 2
-	// C++ AuctionHouseIds (AuctionHouseMgr.h:70-72): the house-agnostic
-	// model matches CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION, whose
-	// auctions all land in the neutral house (7); this is also the
-	// sender id C++ writes on auction mails
-	// (MailSender(AuctionEntry*) -> GetHouseId(), Mail.cpp:66-67) and
-	// the house id on MSG_AUCTION_HELLO.
-	defaultAuctionHouseID uint32 = 7
+	// C++ AuctionHouses enum (AuctionHouseMgr.h:68-73).
+	auctionHouseAlliance uint32 = 2
+	auctionHouseHorde    uint32 = 6
+	auctionHouseNeutral  uint32 = 7
+	// C++ FactionMasks (DBCEnums.h:324-328): the FactionGroup bits
+	// GetAuctionsMap / GetAuctionHouseEntry test for the house routing.
+	factionMaskAlliance   uint32 = 2
+	factionMaskHorde      uint32 = 4
 	unitNPCFlagAuctioneer uint32 = 0x00200000
 	// TrinityCore AuctionEntry::GetAuctionCut (AuctionHouseMgr.cpp:872-877):
 	// CalculatePct(bid, auctionHouseEntry->ConsignmentRate) *
-	// sWorld->getRate(RATE_AUCTION_CUT). The neutral house (id 7, the
-	// house-agnostic model used here) carries ConsignmentRate 15 — the 15%
-	// neutral cut (faction houses take 5%). There is no Go cut-rate config;
-	// the default-1 rate is folded in.
+	// sWorld->getRate(RATE_AUCTION_CUT). The neutral house (id 7) carries
+	// ConsignmentRate 15 — the 15% neutral cut (faction houses take 5%).
+	// There is no Go cut-rate config; the default-1 rate is folded in.
 	auctionConsignmentPct uint32 = 15
 )
+
+// auctionHouseForAuctioneer ports AuctionHouseMgr::GetAuctionHouseEntry
+// (AuctionHouseMgr.cpp:565-585) and GetAuctionsMap (:59-74): with
+// CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION
+// ("AllowTwoSide.Interaction.Auction", World.cpp:798, default false) every
+// house resolves to the neutral one (7); otherwise the auctioneer's faction
+// template FactionGroup routes Alliance (mask 2) to house 2, Horde (mask 4)
+// to house 6, and anything else — including an unresolvable template — to
+// neutral 7. The template id is the creature's live UNIT_FIELD_FACTIONTEMPLATE
+// (Unit.h:906): the motion record first, the creature_template.faction row
+// when the creature is outside the motion system.
+func (s *session) auctionHouseForAuctioneer(ctx context.Context, auctioneerGUID uint64) uint32 {
+	if s != nil && s.server != nil && s.server.Config.AllowTwoSideInteractionAuction {
+		return auctionHouseNeutral
+	}
+	var factionTemplate uint32
+	if motion := s.findCreatureMotion(auctioneerGUID); motion != nil {
+		factionTemplate = motion.Faction
+	} else if s != nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		low := uint32(auctioneerGUID & 0x00FFFFFF)
+		entry := uint32((auctioneerGUID >> 24) & 0x00FFFFFF)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(t.faction, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?`, low, entry).Scan(&factionTemplate)
+	}
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return auctionHouseNeutral
+	}
+	tpl, found, err := s.server.Data.FactionTemplate(factionTemplate)
+	if err != nil || !found {
+		return auctionHouseNeutral
+	}
+	if tpl.FactionGroup&factionMaskAlliance != 0 {
+		return auctionHouseAlliance
+	}
+	if tpl.FactionGroup&factionMaskHorde != 0 {
+		return auctionHouseHorde
+	}
+	return auctionHouseNeutral
+}
 
 // auctionEventRecord carries the Eluna AUCTION_EVENT_ON_* argument set
 // (ServerHooks.cpp: auctionId, owner, item, expireTime, buyout,
@@ -219,10 +259,10 @@ type auctionRecord struct {
 // ("LevelReq.Auction", default 1, World.cpp:683) the LANG_AUCTION_REQ (6607)
 // notification fires and the window never opens. The wire layout is the
 // auctioneer GUID, the auction-house id u32, then the enabled byte; the
-// faction->house-entry lookup has no Go model, so the packet carries the
-// house-agnostic neutral id (defaultAuctionHouseID) — the same id the
-// auction mails use. (The feign-death strip has no Go model.)
-func (s *session) sendAuctionHelloPacket(guid uint64) {
+// house id is the auctioneer's house-entry lookup
+// (GetAuctionHouseEntry(unit->GetFaction()), :67). (The feign-death strip
+// has no Go model.)
+func (s *session) sendAuctionHelloPacket(ctx context.Context, guid uint64) {
 	auctionLevelReq := uint32(1)
 	if s.server != nil {
 		auctionLevelReq = s.server.Config.AuctionLevelReq
@@ -233,8 +273,8 @@ func (s *session) sendAuctionHelloPacket(guid uint64) {
 	}
 	packet := protocol.NewBuffer(13)
 	packet.WriteU64(guid)
-	packet.WriteU32(defaultAuctionHouseID) // Neutral / Standard AH ID
-	packet.WriteU8(1)                      // Enabled
+	packet.WriteU32(s.auctionHouseForAuctioneer(ctx, guid))
+	packet.WriteU8(1) // Enabled
 	_ = s.write(uint16(protocol.OpcodeMSG_AUCTION_HELLO), packet.Bytes(), true)
 }
 
@@ -260,7 +300,7 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 	// level gate and packet layout live in sendAuctionHelloPacket; the
 	// gossip select arm and the gossip-hello auctioneer fallthrough route
 	// through the same helper.
-	s.sendAuctionHelloPacket(guid)
+	s.sendAuctionHelloPacket(ctx, guid)
 	s.debug("auction hello handled", "account", s.accountName, "auctioneer", guid)
 	return true
 }
@@ -339,6 +379,10 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 	}
 	// AuctionHouseHandler.cpp:781-782 — remove fake death after the interact check.
 	s.removeFakeDeath()
+	// C++ HandleAuctionListItems (AuctionHouseHandler.cpp:784) lists from
+	// the auctioneer's house map (GetAuctionsMap(creature->GetFaction())),
+	// so every scan below is scoped to that house.
+	houseID := s.auctionHouseForAuctioneer(ctx, auctioneer)
 
 	cdb := s.server.CharactersStore.DB
 	wdb := s.server.WorldStore.DB
@@ -371,8 +415,8 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 			auctions := scanAuctionRows(ctx, cdb, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count, COALESCE(ii.randomPropertyId, 0), COALESCE(ii.flags, 0)
 				FROM auctionhouse AS ah
 				INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
-				WHERE ah.time > ?
-				ORDER BY ah.id LIMIT ?`, now, maxGetAllReturn)
+				WHERE ah.houseid = ? AND ah.time > ?
+				ORDER BY ah.id LIMIT ?`, houseID, now, maxGetAllReturn)
 			packet := protocol.NewBuffer(12 + len(auctions)*120)
 			packet.WriteU32(uint32(len(auctions)))
 			for _, a := range auctions {
@@ -387,8 +431,8 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 		s.server.auctionGetAllMu.Unlock()
 	}
 
-	whereClauses := []string{"ah.time > ?"}
-	args := []interface{}{now}
+	whereClauses := []string{"ah.houseid = ?", "ah.time > ?"}
+	args := []interface{}{houseID, now}
 
 	if searchedName != "" {
 		whereClauses = append(whereClauses, "UPPER(it.name) LIKE UPPER(?) ESCAPE '\\'")
@@ -448,9 +492,9 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 	countQuery := "SELECT COUNT(*) FROM auctionhouse AS ah INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid LEFT JOIN item_template AS it ON it.entry = ii.itemEntry WHERE " + whereSQL
 	var totalCount int64
 	if err := cdb.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount); err != nil {
-		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM auctionhouse WHERE time > ?", time.Now().Unix()).Scan(&totalCount)
-		whereSQL = "ah.time > ?"
-		args = []interface{}{time.Now().Unix()}
+		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM auctionhouse WHERE houseid = ? AND time > ?", houseID, time.Now().Unix()).Scan(&totalCount)
+		whereSQL = "ah.houseid = ? AND ah.time > ?"
+		args = []interface{}{houseID, time.Now().Unix()}
 		if searchedName != "" {
 			whereSQL += " AND UPPER(it.name) LIKE UPPER(?) ESCAPE '\\'"
 			args = append(args, "%"+escapeAuctionLike(searchedName)+"%")
@@ -567,11 +611,13 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:164-169): the NPC
 	// interact check fires here, AFTER the max-money gate — an over-limit
 	// bid answers ERR_AUCTION_DATABASE_ERROR even when the player is
-	// nowhere near an auctioneer. (The faction->house-entry lookup at
-	// :171-177 has no Go model: the AH is house-agnostic.)
+	// nowhere near an auctioneer. The house id on the new auction row is
+	// the auctioneer's house-entry lookup
+	// (GetAuctionHouseEntry(creature->GetFaction()), :171-177).
 	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
 		return true
 	}
+	houseID := s.auctionHouseForAuctioneer(ctx, auctioneer)
 	// C++ HandleAuctionSellItem (AuctionHouseHandler.cpp:175-184): the client
 	// duration is in minutes; only 12/24/48 hours are accepted, anything else
 	// is silently dropped.
@@ -758,7 +804,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	// Id, houseId, itemGUIDLow, owner, buyout, expire_time, bidder, bid,
 	// startbid, deposit, Flags.
 	if _, err = cdb.ExecContext(ctx, `INSERT INTO auctionhouse (id, houseid, itemguid, itemowner, buyoutprice, time, buyguid, lastbid, startbid, deposit, Flags)
-		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0)`, nextID, defaultAuctionHouseID, auctionItemGUID, s.playerGUID, buyout, expire, bid, deposit); err != nil {
+		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0)`, nextID, houseID, auctionItemGUID, s.playerGUID, buyout, expire, bid, deposit); err != nil {
 		return sellFail(errAuctionDatabaseError)
 	}
 	// C++ AuctionHouseObject::AddAuction (AuctionHouseMgr.cpp:598) fires
@@ -815,10 +861,14 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		return true
 	}
 	var itemGUID, itemEntry, ownerGUID, buyout, bidderGUID, lastBid, deposit, startBid, itemCount, houseID, itemRandomProp, expireTime int64
+	// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:451-453): the
+	// auction is looked up in the auctioneer's house map
+	// (GetAuctionsMap(creature->GetFaction())), so an auction from another
+	// house is not found here.
 	err = cdb.QueryRowContext(ctx, `SELECT ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.buyguid, ah.lastbid, ah.deposit, ah.startbid, ii.count, ah.houseid, COALESCE(ii.randomPropertyId, 0), ah.time
 		FROM auctionhouse AS ah
 		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.id = ? LIMIT 1`, auctionID).Scan(&itemGUID, &itemEntry, &ownerGUID, &buyout, &bidderGUID, &lastBid, &deposit, &startBid, &itemCount, &houseID, &itemRandomProp, &expireTime)
+		WHERE ah.id = ? AND ah.houseid = ? LIMIT 1`, auctionID, s.auctionHouseForAuctioneer(ctx, auctioneer)).Scan(&itemGUID, &itemEntry, &ownerGUID, &buyout, &bidderGUID, &lastBid, &deposit, &startBid, &itemCount, &houseID, &itemRandomProp, &expireTime)
 	if err != nil {
 		// C++ answers ERR_AUCTION_BID_OWN with a zero auction id when the
 		// auction is missing (AuctionHouseHandler.cpp:459).
@@ -907,12 +957,15 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		// 1. If previous bidder existed and was not current buyer, refund them
 		// C++ SendAuctionOutbiddedMail (AuctionHouseMgr.cpp:263-280): the
 		// refund mail fires only when the old bidder still exists
-		// ((oldBidder || oldBidder_accId)).
+		// ((oldBidder || oldBidder_accId)). The mail sender is the
+		// auction's stored house id (MailSender(AuctionEntry*) ->
+		// GetHouseId(), Mail.cpp:66-67), not the interacting auctioneer's
+		// house — the same sender all auction mails below carry.
 		if bidderGUID > 0 && bidderGUID != int64(s.playerGUID) && lastBid > 0 && s.auctionCharExists(ctx, uint64(bidderGUID)) {
 			refundMailID := s.server.generateMailID()
 			outbidSubj := auctionMailSubject(itemEntry, itemCount, itemRandomProp, int64(auctionOutbidded), int64(auctionID))
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
-				refundMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, outbidSubj, now+30*86400, now, lastBid)
+				refundMailID, mailAuctionType, mailStationeryAuction, uint32(houseID), bidderGUID, outbidSubj, now+30*86400, now, lastBid)
 			s.sendMailNotify(uint64(bidderGUID))
 			// C++ SendAuctionOutbiddedMail (AuctionHouseMgr.cpp:263-280): the
 			// notification carries the auction house id, the NEW bidder's
@@ -941,7 +994,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 				// C++ Mail.cpp:203-204: auction mail without items and money expires after CONFIG_MAIL_DELIVERY_DELAY;
 				// the moneyDelay/eta body fields come from AuctionHouseMgr::SendAuctionSalePendingMail
 				// (AuctionHouseMgr.cpp:199,203), same config.
-				invoiceMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, pendingSubj, pendingBody, now+mailDelay, now)
+				invoiceMailID, mailAuctionType, mailStationeryAuction, uint32(houseID), ownerGUID, pendingSubj, pendingBody, now+mailDelay, now)
 			s.sendMailNotify(uint64(ownerGUID))
 		}
 
@@ -954,7 +1007,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 				// C++ Mail.cpp:197,215: expire_time = deliver_time + expire_delay (30d: money but no items/COD -> else branch);
 				// deliver_delay comes from AuctionHouseMgr::SendAuctionSuccessfulMail (AuctionHouseMgr.cpp:230),
 				// which passes CONFIG_MAIL_DELIVERY_DELAY ("MailDeliveryDelay", default 3600).
-				sellerMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, succSubj, succBody, now+mailDelay+30*86400, now+mailDelay, profit)
+				sellerMailID, mailAuctionType, mailStationeryAuction, uint32(houseID), ownerGUID, succSubj, succBody, now+mailDelay+30*86400, now+mailDelay, profit)
 			s.sendMailNotify(uint64(ownerGUID))
 			s.notifyAuctionOwner(uint64(ownerGUID), auctionID, uint32(buyout), uint32(itemEntry))
 		}
@@ -965,7 +1018,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 			wonSubj := auctionMailSubject(itemEntry, itemCount, itemRandomProp, int64(auctionWon), int64(auctionID))
 			wonBody := fmt.Sprintf("%X:%d:%d", ownerGUID, buyout, buyout)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, ?, 1, ?, ?, 0, 0, 4)",
-				nextMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, s.playerGUID, wonSubj, wonBody, now+30*86400, now)
+				nextMailID, mailAuctionType, mailStationeryAuction, uint32(houseID), s.playerGUID, wonSubj, wonBody, now+30*86400, now)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, itemGUID, s.playerGUID)
 			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, itemGUID)
 			s.sendMailNotify(uint64(s.playerGUID))
@@ -1004,7 +1057,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 			refundMailID := s.server.generateMailID()
 			outbidSubj := auctionMailSubject(itemEntry, itemCount, itemRandomProp, int64(auctionOutbidded), int64(auctionID))
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
-				refundMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, outbidSubj, now+30*86400, now, lastBid)
+				refundMailID, mailAuctionType, mailStationeryAuction, uint32(houseID), bidderGUID, outbidSubj, now+30*86400, now, lastBid)
 			s.sendMailNotify(uint64(bidderGUID))
 			// C++ SendAuctionOutbiddedMail (AuctionHouseMgr.cpp:263-280): the
 			// notification carries the auction house id, the NEW bidder's
@@ -1055,11 +1108,14 @@ func (s *session) handleAuctionListOwnerItems(ctx context.Context, payload []byt
 	if cdb == nil {
 		return true
 	}
+	// C++ HandleAuctionListOwnerItems (AuctionHouseHandler.cpp:729) lists
+	// from the auctioneer's house map (GetAuctionsMap(creature->GetFaction())).
+	houseID := s.auctionHouseForAuctioneer(ctx, auctioneer)
 	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count, COALESCE(ii.randomPropertyId, 0), COALESCE(ii.flags, 0)
 		FROM auctionhouse AS ah
 		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.itemowner = ? AND ah.time > ?
-		ORDER BY ah.id ASC`, s.playerGUID, time.Now().Unix())
+		WHERE ah.itemowner = ? AND ah.time > ? AND ah.houseid = ?
+		ORDER BY ah.id ASC`, s.playerGUID, time.Now().Unix(), houseID)
 	if err != nil {
 		return true
 	}
@@ -1124,6 +1180,7 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 		return true
 	}
 	var outbidIDs []uint32
+	var houseID uint32
 	{
 		r := protocol.NewReader(payload)
 		// Raw 8-byte auctioneer GUID (AuctionHouseHandler.cpp:657: recvData >> guid).
@@ -1151,6 +1208,10 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 		}
 		// AuctionHouseHandler.cpp:677-678 — remove fake death.
 		s.removeFakeDeath()
+		// C++ HandleAuctionListBidderItems (AuctionHouseHandler.cpp:680)
+		// lists from the auctioneer's house map
+		// (GetAuctionsMap(creature->GetFaction())).
+		houseID = s.auctionHouseForAuctioneer(ctx, auctioneer)
 		for i := uint32(0); i < outbiddedCount; i++ {
 			id, err := r.ReadU32()
 			if err == nil && id > 0 {
@@ -1166,7 +1227,7 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 		FROM auctionhouse AS ah
 		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid`
 	for _, oid := range outbidIDs {
-		for _, a := range scanAuctionRows(ctx, cdb, auctionSelect+` WHERE ah.id = ? AND ah.time > ? LIMIT 1`, oid, now) {
+		for _, a := range scanAuctionRows(ctx, cdb, auctionSelect+` WHERE ah.id = ? AND ah.houseid = ? AND ah.time > ? LIMIT 1`, oid, houseID, now) {
 			auctions = append(auctions, a)
 			count++
 			totalcount++
@@ -1175,8 +1236,8 @@ func (s *session) handleAuctionListBidderItems(ctx context.Context, payload []by
 	bidderRows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.time, ah.buyguid, ah.lastbid, ah.startbid, ah.deposit, ii.count, COALESCE(ii.randomPropertyId, 0), COALESCE(ii.flags, 0)
 		FROM auctionhouse AS ah
 		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.id IN (SELECT id FROM auctionbidders WHERE bidderguid = ?) AND ah.time > ?
-		ORDER BY ah.id ASC`, s.playerGUID, now)
+		WHERE ah.id IN (SELECT id FROM auctionbidders WHERE bidderguid = ?) AND ah.time > ? AND ah.houseid = ?
+		ORDER BY ah.id ASC`, s.playerGUID, now, houseID)
 	if err == nil {
 		defer bidderRows.Close()
 		for bidderRows.Next() {
@@ -1241,11 +1302,14 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	if cdb == nil {
 		return true
 	}
-	var itemGUID, itemEntry, ownerGUID, bidderGUID, lastBid, itemCount, itemRandomProp, buyout, startBid, expireTime int64
-	err = cdb.QueryRowContext(ctx, `SELECT ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyguid, ah.lastbid, ii.count, COALESCE(ii.randomPropertyId, 0), ah.buyoutprice, ah.startbid, ah.time
+	var itemGUID, itemEntry, ownerGUID, bidderGUID, lastBid, itemCount, itemRandomProp, buyout, startBid, expireTime, houseID int64
+	// C++ HandleAuctionRemoveItem (AuctionHouseHandler.cpp:596-598): the
+	// auction is looked up in the auctioneer's house map
+	// (GetAuctionsMap(creature->GetFaction())).
+	err = cdb.QueryRowContext(ctx, `SELECT ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyguid, ah.lastbid, ii.count, COALESCE(ii.randomPropertyId, 0), ah.buyoutprice, ah.startbid, ah.time, ah.houseid
 		FROM auctionhouse AS ah
 		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.id = ? AND ah.itemowner = ? LIMIT 1`, auctionID, s.playerGUID).Scan(&itemGUID, &itemEntry, &ownerGUID, &bidderGUID, &lastBid, &itemCount, &itemRandomProp, &buyout, &startBid, &expireTime)
+		WHERE ah.id = ? AND ah.itemowner = ? AND ah.houseid = ? LIMIT 1`, auctionID, s.playerGUID, s.auctionHouseForAuctioneer(ctx, auctioneer)).Scan(&itemGUID, &itemEntry, &ownerGUID, &bidderGUID, &lastBid, &itemCount, &itemRandomProp, &buyout, &startBid, &expireTime, &houseID)
 	if err != nil {
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionCancel, errAuctionDatabaseError), true)
 		return true
@@ -1278,7 +1342,7 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 			bidderMailID := s.server.generateMailID()
 			bidderSubj := auctionMailSubject(itemEntry, itemCount, itemRandomProp, int64(auctionCancelledToBidder), int64(auctionID))
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 4)",
-				bidderMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, bidderSubj, now+30*86400, now, lastBid)
+				bidderMailID, mailAuctionType, mailStationeryAuction, uint32(houseID), bidderGUID, bidderSubj, now+30*86400, now, lastBid)
 			s.sendMailNotify(uint64(bidderGUID))
 		}
 		s.modifyPlayerMoney(ctx, -int32(auctionCut))
@@ -1289,10 +1353,14 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	}
 
 	// Mail item back to owner
+	// C++ HandleAuctionRemoveItem (AuctionHouseHandler.cpp:626-630) mails
+	// the item back via MailDraft(..., auction) — the sender is the
+	// auction's stored house id (MailSender(AuctionEntry*) ->
+	// GetHouseId(), Mail.cpp:66-67), as on the bidder mail above.
 	nextMailID := s.server.generateMailID()
 	cancelSubj := auctionMailSubject(itemEntry, itemCount, itemRandomProp, int64(auctionCanceled), int64(auctionID))
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, 0, ?, ?, ?, '', 1, ?, ?, 0, 0, 4)",
-		nextMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, ownerGUID, cancelSubj, now+30*86400, now)
+		nextMailID, mailAuctionType, mailStationeryAuction, uint32(houseID), ownerGUID, cancelSubj, now+30*86400, now)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, receiver) VALUES (?, ?, ?)", nextMailID, itemGUID, ownerGUID)
 	s.sendMailNotify(uint64(ownerGUID))
 

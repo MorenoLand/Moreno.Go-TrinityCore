@@ -2881,30 +2881,85 @@ func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, cl
 	seen := make(map[uint32]bool)
 
 	// 1. Get starter items from CharStartOutfit DBC
+	outfitSet := make(map[uint32]bool)
 	if s.server.Data != nil {
 		if outfit, err := s.server.Data.CharStartOutfit(race, class, gender); err == nil && len(outfit) > 0 {
 			for _, id := range outfit {
 				if id > 0 && !seen[id] {
 					seen[id] = true
+					outfitSet[id] = true
 					itemIDs = append(itemIDs, id)
 				}
 			}
 		}
 	}
 
-	// 2. Also check custom items from playercreateinfo_item
+	// 2. Also check custom items from playercreateinfo_item. The amount
+	// column carries the ObjectMgr::LoadPlayerInfo semantics
+	// (ObjectMgr.cpp:3926-3970) via PlayerCreateInfoAddItemHelper
+	// (ObjectMgr.cpp:3787-3811): amount > 0 grants that many, amount == -1
+	// removes the item from the starting outfit, amount == 0 is ignored and
+	// amount < -1 is an invalid-count error.
+	var customIDs []uint32
+	customAmounts := make(map[uint32]int64)
+	removals := make(map[uint32]bool)
 	rows, err := wdb.QueryContext(ctx, "SELECT itemid, amount FROM playercreateinfo_item WHERE (race = ? OR race = 0) AND (class = ? OR class = 0)", race, class)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var customID, amount int64
-			if err := rows.Scan(&customID, &amount); err == nil && customID > 0 {
-				id := uint32(customID)
-				if !seen[id] {
-					seen[id] = true
-					itemIDs = append(itemIDs, id)
-				}
+			if err := rows.Scan(&customID, &amount); err != nil || customID <= 0 {
+				continue
 			}
+			id := uint32(customID)
+			switch {
+			case amount == 0:
+				if s.server.Logger != nil {
+					s.server.Logger.Error("playercreateinfo_item row has amount == 0, ignoring", "item", id, "race", race, "class", class)
+				}
+			case amount < -1:
+				if s.server.Logger != nil {
+					s.server.Logger.Error("Invalid count specified on item to be removed from original player create info (use -1)", "count", amount, "item", id)
+				}
+				// ObjectMgr.cpp:3795-3801: the invalid-count error logs, but
+				// the removal still runs — the helper zeroes the outfit slot
+				// for count <= 0 regardless of the error.
+				removals[id] = true
+			case amount == -1:
+				removals[id] = true
+			default:
+				if _, ok := customAmounts[id]; !ok {
+					customIDs = append(customIDs, id)
+				}
+				customAmounts[id] += amount
+			}
+		}
+	}
+
+	// A -1 row zeroes the matching CharStartOutfit slot in C++; Go has no
+	// mutable outfit store (CharStartOutfit re-reads the DBC per creation),
+	// so the removal is applied to this creation's outfit list instead.
+	if len(removals) > 0 {
+		for id := range removals {
+			if !outfitSet[id] && s.server.Logger != nil {
+				s.server.Logger.Error("Item specified to be removed from original create info not found in dbc", "item", id)
+			}
+		}
+		kept := make([]uint32, 0, len(itemIDs))
+		for _, id := range itemIDs {
+			if removals[id] {
+				delete(seen, id)
+				continue
+			}
+			kept = append(kept, id)
+		}
+		itemIDs = kept
+	}
+
+	for _, id := range customIDs {
+		if !seen[id] {
+			seen[id] = true
+			itemIDs = append(itemIDs, id)
 		}
 	}
 
@@ -2962,6 +3017,16 @@ func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, cl
 		count := int64(1)
 		if buyCount > 1 {
 			count = buyCount
+		}
+		if amount, ok := customAmounts[itemEntry]; ok {
+			// Player.cpp:635-655 grants the outfit loop and the custom-item
+			// loop as separate StoreNewItemInBestSlots calls, so an item in
+			// both is granted twice; Go grants one stack, so the counts sum.
+			if outfitSet[itemEntry] {
+				count += amount
+			} else {
+				count = amount
+			}
 		}
 
 		nextItemGUID := uint64(s.server.generateItemGUID())

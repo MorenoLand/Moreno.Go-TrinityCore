@@ -8132,14 +8132,14 @@ func (s *session) luaPlayer() *scripting.Object {
 	}
 	// SendAuctionMenu is WorldSession::SendAuctionHello
 	// (AuctionHouseHandler.cpp:59-75) via the shared arm: the level
-	// requirement gate fires first, and the house id is the neutral id
-	// (the faction->house-entry lookup has no Go model).
+	// requirement gate fires first, and the house id is the auctioneer's
+	// house-entry lookup (GetAuctionHouseEntry(unit->GetFaction()), :67).
 	methods["SendAuctionMenu"] = func(ctx context.Context, args []any) ([]any, error) {
 		guid, err := luaSendMenuObjectGUID(args)
 		if err != nil {
 			return nil, err
 		}
-		s.sendAuctionHelloPacket(guid)
+		s.sendAuctionHelloPacket(ctx, guid)
 		return []any{}, nil
 	}
 	// SendShowMailBox is WorldSession::SendShowMailBox

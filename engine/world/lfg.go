@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
@@ -264,8 +265,10 @@ func (m *LFGManager) FormSoloProposal(guid uint64) *LFGProposal {
 	}
 	m.nextProposalID++
 	prop := &LFGProposal{
-		ID:         m.nextProposalID,
-		DungeonID:  entry.Dungeons[0],
+		ID: m.nextProposalID,
+		// LFGQueue.cpp:545: the proposal dungeon is a uniform pick over
+		// the proposal dungeons, not the first selected one.
+		DungeonID:  entry.Dungeons[rand.Intn(len(entry.Dungeons))],
 		State:      LFGProposalInitiating,
 		Group:      0,
 		Leader:     guid,
@@ -606,20 +609,28 @@ func (m *LFGManager) FindGroups() []*LFGProposal {
 			allGUIDs = append(allGUIDs, guid)
 		}
 		sort.Slice(allGUIDs, func(i, j int) bool { return allGUIDs[i] < allGUIDs[j] })
-		leader := uint64(0)
+		// LFGQueue.cpp:548-556: the leader is a uniform pick among the
+		// leader-bit holders when any exist, else a uniform pick among
+		// all members — the C++ urand(0, 1) re-roll is reservoir
+		// sampling over the iterated roles.
+		var leaders []uint64
 		for _, guid := range allGUIDs {
 			if assigned[guid]&LFGRoleLeader != 0 {
-				leader = guid
-				break
+				leaders = append(leaders, guid)
 			}
 		}
-		if leader == 0 {
-			leader = allGUIDs[0]
+		leader := uint64(0)
+		if len(leaders) > 0 {
+			leader = leaders[rand.Intn(len(leaders))]
+		} else {
+			leader = allGUIDs[rand.Intn(len(allGUIDs))]
 		}
 		m.nextProposalID++
 		prop := &LFGProposal{
-			ID:         m.nextProposalID,
-			DungeonID:  dungeons[0],
+			ID: m.nextProposalID,
+			// LFGQueue.cpp:545: the proposal dungeon is a uniform pick
+			// over the intersected proposal dungeons, not the first one.
+			DungeonID:  dungeons[rand.Intn(len(dungeons))],
 			State:      LFGProposalInitiating,
 			Group:      proposalGroup,
 			Leader:     leader,
@@ -1860,6 +1871,21 @@ func (s *session) handleLFGLeave() bool {
 				buildLFGUpdateParty(LFGUpdateRoleCheckFailed, LFGQueueEntry{}))
 			return true
 		}
+		// LFGMgr::LeaveLfg (LFGMgr.cpp:754-779): the PROPOSAL arm marks
+		// the leaver DENY and removes the proposal declined.
+		// HandleLfgLeaveOpcode (LFGHandler.cpp:78-89) passes the group
+		// guid when grouped, so the guid marked is the group leader
+		// (gguid == guid ? GetLeader(gguid) : guid), not the leaver.
+		if entry, ok := lfg.Status(s.playerGUID); ok && entry.State == LFGStateProposal {
+			leaderGUID := s.playerGUID
+			if g := s.server.getGroup(s.groupID); g != nil && g.LeaderGUID != 0 {
+				leaderGUID = g.LeaderGUID
+			}
+			if prop := lfg.DeclineProposalForPlayer(leaderGUID); prop != nil {
+				s.server.sendLFGProposalDeclined(prop)
+			}
+			return true
+		}
 		// LFGMgr::LeaveLfg (LFGMgr.cpp:726-748): the QUEUED arm restores
 		// a mid-dungeon re-queued group to its dungeon state — Go's
 		// group state never leaves DUNGEON on re-queue, so an LFG group
@@ -1896,6 +1922,16 @@ func (s *session) handleLFGLeave() bool {
 		s.debug("lfg leave", "account", s.accountName)
 		for _, ms := range s.server.getGroupSessions(s.groupID) {
 			_ = ms.sendLFGUpdateParty(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: ms.playerGUID, State: LFGStateNone})
+		}
+		return true
+	}
+	// LFGMgr::LeaveLfg (LFGMgr.cpp:754-779): the PROPOSAL arm marks the
+	// leaver DENY and removes the proposal declined. Solo, the handler
+	// passes the player guid (LFGHandler.cpp:82), so the leaver is the
+	// guid marked.
+	if entry, ok := lfg.Status(s.playerGUID); ok && entry.State == LFGStateProposal {
+		if prop := lfg.DeclineProposalForPlayer(s.playerGUID); prop != nil {
+			s.server.sendLFGProposalDeclined(prop)
 		}
 		return true
 	}

@@ -4043,45 +4043,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	// Spell::CheckPower (Spell.cpp:6651-6683; called from Spell::CheckCast at
-	// Spell.cpp:5502): runs after the CheckItems block, matching C++ CheckCast
-	// relative order (CheckItems 5489 -> CheckRange 5499 -> CheckPower 5502).
-	// Client-initiated casts only — triggered casts go through castSpellDirect.
-	cost := s.calculateSpellPowerCost(spell)
-	pType := spell.PowerType
-	// Spell::CheckPower (Spell.cpp:6651-6656): health-as-power spells
-	// (PowerType == POWER_HEALTH, -2 in C++, 0xFFFFFFFE in Go's uint32
-	// field) fail with SPELL_FAILED_CASTER_AURASTATE when the caster's
-	// health is at or below the cost — and pass outright otherwise,
-	// without reaching the rune/power arms below. C++ applies the gate
-	// unconditionally (no cost > 0 guard). Runs ahead of the unknown-type
-	// arm, matching C++ relative order (health 6651 → unknown-type
-	// 6659 → rune 6665 → power amount 6673).
-	if spell.PowerType == 0xFFFFFFFE && s.player.Health <= cost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAurastate), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough health for health-cost spell", "failReason", spellFailedCasterAurastate)
-		return true
-	}
-	// Spell::CheckPower (Spell.cpp:6659-6663): a PowerType >= MAX_POWERS
-	// (7, SharedDefines.h:302) logs the TC error and fails with
-	// SPELL_FAILED_UNKNOWN (187 — "actually doesn't exist in client",
-	// SharedDefines.h:1169; C++ sends it anyway).
-	if pType != 0xFFFFFFFE && pType >= 7 {
-		s.debug("spells", "Spell::CheckPower: Unknown power type", "powerType", pType, "spell", spellID)
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnknown), true)
-		return true
-	}
-	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
-	// PowerType == POWER_RUNE; RuneCostID (Spell.dbc field 226) was loaded
-	// in store.go but never read in world/ — the earlier "wired" claim was
-	// an overclaim. Genuine logic now: Spell::CheckRuneCost parity.
-	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "runes on cooldown")
-		return true
-	}
-	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
+	// Spell.cpp:5502): see checkSpellPower.
+	cost, ok := s.checkSpellPower(spell, castID, spellID)
+	if !ok {
 		return true
 	}
 
@@ -4400,6 +4364,19 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// The OnCheckCast script hook fired above, right after
 	// CheckCasterAuras (Spell.cpp:5515) — the C++-exact position.
 
+	return s.beginNormalPlayerCast(ctx, castID, spellID, spell, target, wireObjectGUID, packetHasDst, packetHasSrc, cost)
+}
+
+// beginNormalPlayerCast runs Spell::prepare's tail for a non-triggered
+// player cast (Spell.cpp:3064-3201): SetCurrentCastSpell breaks,
+// procCastAuras, CalcCastTime, SendSpellStart, TriggerGlobalCooldown,
+// then the cast-bar timer or the instant cast(true) dispatch into
+// finishSpellCast. Shared by handleCastSpell (CMSG_CAST_SPELL) and
+// the .cast command's TRIGGERED_NONE leg (cs_cast.cpp: GetTriggerFlags
+// absent -> TRIGGERED_NONE -> Unit::CastSpell(id, TRIGGERED_NONE)) via
+// castPlayerSpellNormal; the caller runs the CheckCast gauntlet first.
+// Returns false only when SendSpellStart fails to write.
+func (s *session) beginNormalPlayerCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, wireObjectGUID uint64, packetHasDst, packetHasSrc bool, cost uint32) bool {
 	// Unit::SetCurrentCastSpell (Unit.cpp:3064-3090): registering the new cast
 	// breaks the other containers. A generic cast breaks the active channel
 	// ("generic spells always break channeled not delayed spells") and any
@@ -26352,6 +26329,304 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		s.server.triggerPetDefensive(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID, scripting.CreatureEventOnOwnerAttacked)
 	}
 	return damage
+}
+
+// checkSpellPower mirrors Spell::CheckPower (Spell.cpp:6651-6683; called
+// from Spell::CheckCast at Spell.cpp:5502). Returns the prepare-time
+// power cost and whether the cast may proceed; on failure it sends
+// SMSG_CAST_FAILED for the reason.
+func (s *session) checkSpellPower(spell wotlk.Spell, castID uint8, spellID uint32) (uint32, bool) {
+	// Spell::CheckPower (Spell.cpp:6651-6683; called from Spell::CheckCast at
+	// Spell.cpp:5502): runs after the CheckItems block, matching C++ CheckCast
+	// relative order (CheckItems 5489 -> CheckRange 5499 -> CheckPower 5502).
+	// Non-triggered casts only — triggered casts go through
+	// castSpellDirectWithOverrides, which exempts both arms.
+	cost := s.calculateSpellPowerCost(spell)
+	pType := spell.PowerType
+	// Spell::CheckPower (Spell.cpp:6651-6656): health-as-power spells
+	// (PowerType == POWER_HEALTH, -2 in C++, 0xFFFFFFFE in Go's uint32
+	// field) fail with SPELL_FAILED_CASTER_AURASTATE when the caster's
+	// health is at or below the cost — and pass outright otherwise,
+	// without reaching the rune/power arms below. C++ applies the gate
+	// unconditionally (no cost > 0 guard). Runs ahead of the unknown-type
+	// arm, matching C++ relative order (health 6651 → unknown-type
+	// 6659 → rune 6665 → power amount 6673).
+	if spell.PowerType == 0xFFFFFFFE && s.player.Health <= cost {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAurastate), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough health for health-cost spell", "failReason", spellFailedCasterAurastate)
+		return 0, false
+	}
+	// Spell::CheckPower (Spell.cpp:6659-6663): a PowerType >= MAX_POWERS
+	// (7, SharedDefines.h:302) logs the TC error and fails with
+	// SPELL_FAILED_UNKNOWN (187 — "actually doesn't exist in client",
+	// SharedDefines.h:1169; C++ sends it anyway).
+	if pType != 0xFFFFFFFE && pType >= 7 {
+		s.debug("spells", "Spell::CheckPower: Unknown power type", "powerType", pType, "spell", spellID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedUnknown), true)
+		return 0, false
+	}
+	// Spell::CheckPower (Spell.cpp:6665-6670) checks rune costs when
+	// PowerType == POWER_RUNE; RuneCostID (Spell.dbc field 226) was loaded
+	// in store.go but never read in world/ — the earlier "wired" claim was
+	// an overclaim. Genuine logic now: Spell::CheckRuneCost parity.
+	if spell.PowerType == 5 && !s.checkRuneCost(spell, time.Now().UnixMilli()) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "runes on cooldown")
+		return 0, false
+	}
+	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPower), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
+		return 0, false
+	}
+	return cost, true
+}
+
+// castPlayerSpellNormal casts a spell from the session player with
+// TRIGGERED_NONE semantics (cs_cast.cpp GetTriggerFlags absent ->
+// TRIGGERED_NONE -> Unit::CastSpell(id, TRIGGERED_NONE) ->
+// Spell::prepare): the CheckCast prepare gates below, then
+// beginNormalPlayerCast (SendSpellStart, GCD, cast-bar/instant dispatch
+// into finishSpellCast, where power is taken and proc rolls run —
+// triggeredNoProcEvents is never raised on this path). This is the .cast
+// command's no-token leg; the token leg stays on castSpellDirect
+// (TRIGGERED_FULL_MASK). Server-initiated, so castID is 0 (death.go /
+// spell-click precedent); no learned-spell gate — C++
+// CheckSpellExistsAndIsValid checks only existence/validity, which the
+// caller already ran. The gates mirror handleCastSpell's prepare-only
+// arms in C++ CheckCast order (Spell.cpp:5174-5515, 6186-6209). Arms
+// finishSpellCast revalidates at completion (reagents, totems, caster
+// auras, range, LoS, visibility, DR, trade) are not repeated here; the
+// per-effect CheckCast loop, dispel gate and trade-slot gate are not run
+// on this path — follow-up, not part of the cost/GCD/cast-time/proc fix.
+func (s *session) castPlayerSpellNormal(ctx context.Context, spellID uint32, targetGUID uint64, dest *protocol.SpellTargetLocation) {
+	if s == nil || s.player == nil || spellID == 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// SpellMgr::GetSpellForDifficultyFromSpell (SpellMgr.cpp:227-243) via
+	// the Spell constructor (Spell.cpp:524), the castSpellDirectWithOverrides twin.
+	spellID = s.spellDifficultyID(spellID)
+	var spell wotlk.Spell
+	found := false
+	if s.server != nil && s.server.Data != nil {
+		var err error
+		spell, found, err = s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			found = false
+		}
+	}
+	if !found {
+		return
+	}
+	const castID uint8 = 0
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: targetGUID}
+	if targetGUID != 0 && uint16(targetGUID>>48) == 0xF110 {
+		target.Flags = protocol.SpellTargetFlagGameObject
+	}
+	if dest != nil {
+		target.Flags |= protocol.SpellTargetFlagDestLocation
+		target.Destination = *dest
+	}
+	// CheckCast death arm (Spell.cpp:5174-5177).
+	if s.isDeadOrGhost() && spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0CastableWhileDead == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterDead), true)
+		return
+	}
+	// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080).
+	if s.spellDisabledForCaster(ctx, spellID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellUnavailable), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell disabled", "failure", spellFailedSpellUnavailable)
+		return
+	}
+	// Spell::prepare server-side gate (Spell.cpp:3082-3087).
+	if s.genericCastInProgress() && !s.autoShotNonBlockingCast(spellID) && !isNextMeleeSwingSpell(spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellInProgress), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
+		return
+	}
+	nowMs := time.Now().UnixMilli()
+	if s.isSchoolLocked(spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "school lockout active")
+		return
+	}
+	// CheckCast allow-only-ability gate (Spell.cpp:5193-5195).
+	if s.player.PlayerFlags&playerFlagAllowOnlyAbility != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellInProgress), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "allow-only-ability flag set")
+		return
+	}
+	// CheckCast cooldown block (Spell.cpp:5198-5218).
+	for _, cd := range s.player.Cooldowns {
+		if cd.Spell == spellID && cd.End > nowMs {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "on cooldown")
+			return
+		}
+	}
+	if categoryID := spell.Category; categoryID != 0 {
+		if s.playerCategoryCooldownBlocked(categoryID, nowMs) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "category cooldown active", "category", categoryID)
+			return
+		}
+	}
+	// CheckCast cheat-spell gate (Spell.cpp:5223-5227).
+	if spell.AttributesEx7&spellAttr7IsCheatSpell != 0 &&
+		s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, spellFailedCustomError, spellCustomErrorGMOnly), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cheat spell without gm mode")
+		return
+	}
+	// CheckCast GCD gate (Spell.cpp:5227-5228).
+	if s.isGCDActive(spell) {
+		reason := spellFailedNotReady
+		if spell.Attributes&spellAttr0DisabledWhileActive != 0 {
+			reason = spellFailedDontReport
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, reason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
+		return
+	}
+	// CheckCast ended-battleground gate (Spell.cpp:5229-5235): the arena
+	// WaitLeave analog; non-arena battlegrounds have no end-lifecycle model.
+	if s.server != nil {
+		if arena := s.server.findArenaStateForPlayer(s.playerGUID); arena != nil {
+			arena.mu.Lock()
+			ended := arena.Status == ArenaStatusWaitLeave
+			arena.mu.Unlock()
+			if ended {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "arena ended, waiting leave")
+				return
+			}
+		}
+	}
+	// CheckCast outdoors/indoors arms (Spell.cpp:5236-5248).
+	if spell.Attributes&spellAttr0OutdoorsOnly != 0 && !s.isOutdoors() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyOutdoors), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires outdoors", "area", s.areaID)
+		return
+	}
+	if spell.Attributes&spellAttr0IndoorsOnly != 0 && s.isOutdoors() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyIndoors), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell requires indoors", "area", s.areaID)
+		return
+	}
+	// Shapeshift/stealth requirements (Spell.cpp:5247-5275).
+	if !s.hasIgnoreShapeshiftAura(spell) {
+		if shapeResult := s.checkShapeshiftCast(spell); shapeResult != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, shapeResult), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "shapeshift requirement not met", "result", shapeResult)
+			return
+		}
+		if spell.Attributes&spellAttr0OnlyStealthed != 0 && !s.hasAuraType(spellAuraStealth) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOnlyStealthed), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "requires stealth")
+			return
+		}
+	}
+	// Spell-family block gate (Spell.cpp:5277-5278).
+	if s.spellFamilyBlockedByAura(spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSpellUnavailable), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell family blocked by aura")
+		return
+	}
+	// Caster aura state requirements (Spell.cpp:5298-5308).
+	if spell.CasterAuraState != 0 && !s.hasAuraState(spell.CasterAuraState, spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura state missing", "state", spell.CasterAuraState)
+		return
+	}
+	if spell.ExcludeCasterAuraState != 0 && s.hasAuraState(spell.ExcludeCasterAuraState, spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura state present", "state", spell.ExcludeCasterAuraState)
+		return
+	}
+	if spell.CasterAuraSpell != 0 && !s.hasAura(s.spellDifficultyID(spell.CasterAuraSpell)) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "required caster aura missing", "aura", spell.CasterAuraSpell)
+		return
+	}
+	if spell.ExcludeCasterAuraSpell != 0 && s.hasAura(s.spellDifficultyID(spell.ExcludeCasterAuraSpell)) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterAuraState), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "excluded caster aura present", "aura", spell.ExcludeCasterAuraSpell)
+		return
+	}
+	// CheckCast reqCombat arm (Spell.cpp:5311-5312).
+	if !s.auraStateReqCombatExempt(spell) && s.player != nil &&
+		s.player.UnitFlags&unitFlagInCombat != 0 && spell.Attributes&spellAttr0CantUsedInCombat != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedAffectingCombat), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot be used in combat", "result", spellFailedAffectingCombat)
+		return
+	}
+	// CheckCast moving/autorepeat arm (Spell.cpp:5316-5323).
+	if s.isMoving &&
+		!(s.isFallingFar && len(spell.Effects) > 0 && spell.Effects[0].Effect == spellEffectStuck) &&
+		(spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0 || spell.AuraInterruptFlags&auraInterruptFlagNotSeated != 0) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedMoving), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "moving autorepeat or not-seated cast")
+		return
+	}
+	// CheckCast vehicle arm (Spell.cpp:5332-5336).
+	if failure := s.checkVehicleCast(spell); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "vehicle seat restriction", "failure", failure)
+		return
+	}
+	// CheckCast conditions block (Spell.cpp:5337-5348).
+	if failReason, customErr := s.checkSpellCastConditions(ctx, spellID, target); failReason != 0 {
+		payload := buildCastFailed(castID, spellID, failReason)
+		if failReason == spellFailedCustomError {
+			payload = buildCastFailedParams(castID, spellID, failReason, customErr)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "spell cast conditions not met", "failReason", failReason)
+		return
+	}
+	// CheckPower (Spell.cpp:5502).
+	cost, ok := s.checkSpellPower(spell, castID, spellID)
+	if !ok {
+		return
+	}
+	// CheckCasterAuras (Spell.cpp:5509).
+	if result, mechanic := s.checkCasterAuras(spell); result != 0 {
+		payload := buildCastFailed(castID, spellID, result)
+		if result == spellFailedPreventedByMechanic {
+			payload = buildCastFailedParams(castID, spellID, result, mechanic)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), payload, true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "caster aura state", "failure", result, "mechanic", mechanic)
+		return
+	}
+	// SpellScript OnCheckCast (Spell.cpp:5515): the native research arms
+	// then the Lua ev8 twins.
+	if customError := s.professionResearchCheckCast(spellID); customError != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, spellFailedCustomError, customError), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "explicit-discovery research exhausted", "customError", customError)
+		return
+	}
+	if failure, customError := s.fireSpellCheckCast(ctx, spellID, spell, target); failure != 0 {
+		if failure == spellFailedCustomError {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, failure, customError), true)
+		} else {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		}
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "OnCheckCast script hook", "failure", failure)
+		return
+	}
+	// Combo-point gate (Spell.cpp:6186-6209).
+	if failure := s.checkComboPointsCast(spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "combo-point validation", "failure", failure)
+		return
+	}
+	// Spell::prepare tail (Spell.cpp:3064-3201): cast bar or instant
+	// dispatch, GCD, and the finishSpellCast tail (power, cooldown, procs).
+	s.beginNormalPlayerCast(ctx, castID, spellID, spell, target, targetGUID, dest != nil, false, cost)
 }
 
 // castSpellDirect triggers an immediate, instant cast of a spell without cast time or resource cost.

@@ -2972,14 +2972,19 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) bool {
 	// GetTriggerFlags mirror: the optional flag must be a prefix of
 	// "triggered" (e.g. "trig"); anything else fails the command. The C++
 	// match is case-sensitive (StringStartsWith, Util.h:335), so "Trig"
-	// fails. Go's command cast pipeline only models triggered-cast
-	// semantics (TRIGGERED_FULL_MASK: no cast time, power, or proc rolls),
-	// so the TRIGGERED_NONE normal-cast path is a documented fidelity gap
-	// — the flag is accepted but changes nothing.
-	if _, ok := castCommandTriggeredArg(s, args, 1, bareSyntax); !ok {
+	// fails. A present flag rides the triggered funnel (castSpellDirect,
+	// TRIGGERED_FULL_MASK: no cast time, power, or proc rolls); an absent
+	// flag rides the normal-cast funnel (castPlayerSpellNormal,
+	// TRIGGERED_NONE).
+	triggered, ok := castCommandTriggeredArg(s, args, 1, bareSyntax)
+	if !ok {
 		return false
 	}
-	s.castSpellDirect(ctx, spellID, s.selection)
+	if triggered {
+		s.castSpellDirect(ctx, spellID, s.selection)
+	} else {
+		s.castPlayerSpellNormal(ctx, spellID, s.selection, nil)
+	}
 	return true
 }
 
@@ -3061,9 +3066,9 @@ func (s *session) castCommandCreatureCast(ctx context.Context, motion *creatureM
 
 // handleCmdCastSelf wires HandleCastSelfCommand (cs_cast.cpp): the selected
 // unit casts the spell on itself. A selected player rides the player funnel
-// (triggered-only, so the flag is accepted but changes nothing, as in the
-// bare arm); a selected creature rides the creature funnel with the flag
-// honored.
+// (triggered flag honored: triggered -> castSpellDirect, absent ->
+// castPlayerSpellNormal); a selected creature rides the creature funnel with
+// the flag honored.
 func (s *session) handleCmdCastSelf(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCastSelf) {
 		return false
@@ -3093,7 +3098,11 @@ func (s *session) handleCmdCastSelf(ctx context.Context, args []string) bool {
 		return false
 	}
 	if ts := s.lookupSelectedPlayer(); ts != nil {
-		ts.castSpellDirect(ctx, spellID, ts.playerGUID)
+		if triggered {
+			ts.castSpellDirect(ctx, spellID, ts.playerGUID)
+		} else {
+			ts.castPlayerSpellNormal(ctx, spellID, ts.playerGUID, nil)
+		}
 		return true
 	}
 	motion := s.castCommandSelectedCreature()
@@ -3179,12 +3188,9 @@ func (s *session) handleCmdCastTarget(ctx context.Context, args []string) bool {
 // dist lands in the size slot (Object.cpp:3307-3311), so the point sits
 // combatReach + dist along the player's orientation at the player's z; the
 // UpdateAllowedPositionZ ground clamp and the LoS walk have no Go model
-// (transmittedClosePoint precedent). The triggered flag is validated but
-// the player funnel is triggered-only (castSpellDirectWithOverrides is
-// Go's Unit::CastSpell(id, triggered=true)), so a no-flag dist cast rides
-// the triggered path exactly like the bare arm; the TRIGGERED_NONE
-// normal-cast path is the documented triggered-only pipeline gap, not a
-// dist-specific dropped flag (audit D10 corrected).
+// (transmittedClosePoint precedent). The triggered flag is honored: a
+// present flag rides castSpellDirectWithOverrides (TRIGGERED_FULL_MASK),
+// an absent flag rides castPlayerSpellNormal (TRIGGERED_NONE).
 func (s *session) handleCmdCastDist(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCastDist) {
 		return false
@@ -3214,7 +3220,8 @@ func (s *session) handleCmdCastDist(ctx context.Context, args []string) bool {
 	if len(args) > 4 {
 		return false
 	}
-	if _, ok := castCommandTriggeredArg(s, args, 3, syntax); !ok {
+	triggered, ok := castCommandTriggeredArg(s, args, 3, syntax)
+	if !ok {
 		return false
 	}
 	if s.player == nil {
@@ -3226,13 +3233,18 @@ func (s *session) handleCmdCastDist(ctx context.Context, args []string) bool {
 		Y: s.player.Y + offset*float32(math.Sin(float64(s.player.Orientation))),
 		Z: s.player.Z,
 	}
-	s.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest, 0)
+	if triggered {
+		s.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest, 0)
+	} else {
+		s.castPlayerSpellNormal(ctx, spellID, 0, &dest)
+	}
 	return true
 }
 
 // handleCmdCastDest wires HandleCastDestCommand (cs_cast.cpp): the selected
 // unit casts the spell at the given coordinates. A selected player rides
-// the player AoF funnel (triggered-only, flag accepted but ignored); a
+// the player funnel (triggered flag honored: triggered ->
+// castSpellDirectWithOverrides, absent -> castPlayerSpellNormal); a
 // selected creature rides the creature AoF leg with the flag honored.
 func (s *session) handleCmdCastDest(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCastDest) {
@@ -3277,7 +3289,11 @@ func (s *session) handleCmdCastDest(ctx context.Context, args []string) bool {
 	}
 	if ts := s.lookupSelectedPlayer(); ts != nil {
 		dest := protocol.SpellTargetLocation{X: coords[0], Y: coords[1], Z: coords[2]}
-		ts.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest, 0)
+		if triggered {
+			ts.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest, 0)
+		} else {
+			ts.castPlayerSpellNormal(ctx, spellID, 0, &dest)
+		}
 		return true
 	}
 	motion := s.castCommandSelectedCreature()

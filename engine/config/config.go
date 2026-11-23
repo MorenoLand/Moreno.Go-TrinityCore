@@ -70,6 +70,7 @@ type Config struct {
 	AllowTwoSideInteractionGuild            bool
 	AllowTwoSideInteractionCalendar         bool
 	AllowTwoSideInteractionChannel          bool
+	AllowTwoSideInteractionAuction          bool
 	StartHonorPoints                        uint32
 	StartArenaPoints                        uint32
 	ArenaStartRating                        int32
@@ -1047,6 +1048,8 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.AllowTwoSideInteractionCalendar, key, value)
 	case "AllowTwoSide.Interaction.Channel":
 		return setBool(&c.AllowTwoSideInteractionChannel, key, value)
+	case "AllowTwoSide.Interaction.Auction":
+		return setBool(&c.AllowTwoSideInteractionAuction, key, value)
 	case "AllFlightPaths":
 		return setBool(&c.AllFlightPaths, key, value)
 	case "AllowTrackBothResources":
