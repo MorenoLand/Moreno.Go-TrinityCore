@@ -306,12 +306,12 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 	case "achievement_killed_exp_or_honor_target": // achievement_scripts.cpp:282-292
 		// Player::isHonorOrXPTarget (Player.cpp:24064-24083): the victim must be
 		// above the killer's gray level. Player victims are never critters or
-		// totems and the scaled-XP config defaults to 0, so the gray check is
-		// the modeled arm (same verdict as the kill path in death.go).
+		// totems; a nonzero MinCreatureScaledXpRatio lets gray-level victims
+		// pass (Player.cpp:24070), the same verdict as the kill path in death.go.
 		if source == nil || source.player == nil || target == nil || target.player == nil {
 			return false
 		}
-		return uint32(target.player.Level) > grayLevel(uint32(source.player.Level))
+		return uint32(target.player.Level) > grayLevel(uint32(source.player.Level)) || creatureScaledXPRatio(source.server) > 0
 
 	case "achievement_sickly_gazelle": // achievement_scripts.cpp:153-169
 		// The kill target is a mounted player (target->ToPlayer()->IsMounted()).

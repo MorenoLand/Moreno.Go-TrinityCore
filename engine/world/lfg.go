@@ -168,8 +168,10 @@ type LFGProposal struct {
 	Leader     uint64
 	CancelTime time.Time
 	Encounters uint32
-	Silent     bool
-	Players    map[uint64]*LFGProposalPlayer
+	// IsNew mirrors LfgProposal::isNew (LFGQueue.cpp:538): false only
+	// for a refill — a single LFG group whose OldState is DUNGEON.
+	IsNew   bool
+	Players map[uint64]*LFGProposalPlayer
 }
 
 // lfgWaitTime mirrors LfgWaitTime (LFGQueue.h:70-75): the running-average
@@ -200,7 +202,7 @@ type LFGManager struct {
 func NewLFGManager(soloEnable bool) *LFGManager {
 	return &LFGManager{
 		soloEnable: soloEnable,
-		options:    1, // "DungeonFinder.OptionsMask" default (World.cpp:1436)
+		options:    1, // "DungeonFinder.OptionsMask" default (World.cpp:1436); NewFeatures overrides from config.
 		queue:      make(map[uint64]LFGQueueEntry),
 		comments:   make(map[uint64]string),
 		roleChecks: make(map[uint64]*LfgRoleCheck),
@@ -263,6 +265,11 @@ func (m *LFGManager) FormSoloProposal(guid uint64) *LFGProposal {
 	if !ok || entry.State != LFGStateQueued || len(entry.Dungeons) == 0 {
 		return nil
 	}
+	// LFGQueue.cpp:507-512: the single-unit path runs CheckGroupRoles
+	// on the queued roles, resolving multi-role bits to a single role
+	// (the return is ignored there, as here).
+	roles := map[uint64]uint8{guid: entry.Roles}
+	lfgCheckGroupRoles(roles)
 	m.nextProposalID++
 	prop := &LFGProposal{
 		ID: m.nextProposalID,
@@ -273,7 +280,8 @@ func (m *LFGManager) FormSoloProposal(guid uint64) *LFGProposal {
 		Group:      0,
 		Leader:     guid,
 		CancelTime: time.Now().Add(45 * time.Second),
-		Players:    map[uint64]*LFGProposalPlayer{guid: {Role: entry.Roles, Group: 0, Accept: LFGAnswerPending}},
+		IsNew:      true,
+		Players:    map[uint64]*LFGProposalPlayer{guid: {Role: roles[guid], Group: 0, Accept: LFGAnswerPending}},
 	}
 	m.proposals[prop.ID] = prop
 	entry.State = LFGStateProposal
@@ -625,6 +633,24 @@ func (m *LFGManager) FindGroups() []*LFGProposal {
 		} else {
 			leader = allGUIDs[rand.Intn(len(allGUIDs))]
 		}
+		// LFGQueue.cpp:538: proposal.isNew = numLfgGroups != 1 ||
+		// GetOldState(gguid) != LFG_STATE_DUNGEON, where gguid is the
+		// first guid of the match — the seed unit here. The only
+		// !isNew case is a lone LFG group refilling from inside a
+		// dungeon; its members' OldState is DUNGEON (preserved by
+		// QueueGroup), which is the Go read of the group's old state.
+		numLfgGroups := 0
+		for _, idx := range combo {
+			if units[idx].groupID != 0 {
+				numLfgGroups++
+			}
+		}
+		isNew := true
+		if numLfgGroups == 1 {
+			if seedEntry, ok := m.queue[units[seed].guids[0]]; ok && seedEntry.OldState == LFGStateDungeon {
+				isNew = false
+			}
+		}
 		m.nextProposalID++
 		prop := &LFGProposal{
 			ID: m.nextProposalID,
@@ -635,10 +661,17 @@ func (m *LFGManager) FindGroups() []*LFGProposal {
 			Group:      proposalGroup,
 			Leader:     leader,
 			CancelTime: time.Now().Add(45 * time.Second),
+			IsNew:      isNew,
 			Players:    make(map[uint64]*LFGProposalPlayer, len(merged)),
 		}
 		for _, guid := range allGUIDs {
-			prop.Players[guid] = &LFGProposalPlayer{Role: assigned[guid], Group: ownerGroup[guid], Accept: LFGAnswerPending}
+			accept := LFGAnswerPending
+			// LFGQueue.cpp:551-552: members of the proposal group
+			// auto-accept on a refill (!isNew).
+			if !isNew && ownerGroup[guid] != 0 && ownerGroup[guid] == proposalGroup {
+				accept = LFGAnswerAgree
+			}
+			prop.Players[guid] = &LFGProposalPlayer{Role: assigned[guid], Group: ownerGroup[guid], Accept: accept}
 		}
 		m.proposals[prop.ID] = prop
 		for _, idx := range combo {
@@ -1021,6 +1054,7 @@ func (m *LFGManager) CreateProposal(dungeonID uint32, groupID uint64, leaderGUID
 		Group:      groupID,
 		Leader:     leaderGUID,
 		CancelTime: time.Now().Add(45 * time.Second),
+		IsNew:      true,
 		Players:    make(map[uint64]*LFGProposalPlayer, len(players)),
 	}
 	for guid, role := range players {
@@ -3382,13 +3416,19 @@ func (s *session) sendRoleCheckAnswerNotifies(rc *LfgRoleCheck, answererGUID uin
 
 func (s *session) sendLFGProposalUpdate(proposal *LFGProposal) error {
 	guid := s.playerGUID
-	// WorldSession::SendLfgUpdateProposal (LFGHandler.cpp:547): the dungeon
-	// field is the DBC entry (id + type<<24), not the stored id, and a
-	// non-silent proposal whose dungeon the recipient did not select shows
-	// the recipient's first selected dungeon instead (a random-queued player
-	// matched to a specific dungeon).
+	// WorldSession::SendLfgUpdateProposal (LFGHandler.cpp:547-552): the
+	// dungeon field is the DBC entry (id + type<<24), not the stored id.
+	// Silent is per recipient: no popup and the proposal dungeon shown
+	// when the match is a refill (!isNew) and the recipient belongs to
+	// the existing group; other members get the popup and, when they did
+	// not select the proposal dungeon, their first selected dungeon.
+	recipientGroup := uint64(0)
+	if recipient, ok := proposal.Players[guid]; ok {
+		recipientGroup = recipient.Group
+	}
+	silent := !proposal.IsNew && recipientGroup == proposal.Group
 	displayDungeon := proposal.DungeonID
-	if !proposal.Silent && s != nil && s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
+	if !silent && s != nil && s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
 		if entry, ok := s.server.Features.LFG.Status(guid); ok && len(entry.Dungeons) > 0 {
 			selected := false
 			for _, dungeon := range entry.Dungeons {
@@ -3417,7 +3457,7 @@ func (s *session) sendLFGProposalUpdate(proposal *LFGProposal) error {
 	packet.WriteU8(proposal.State)
 	packet.WriteU32(proposal.ID)
 	packet.WriteU32(proposal.Encounters)
-	if proposal.Silent {
+	if silent {
 		packet.WriteU8(1)
 	} else {
 		packet.WriteU8(0)
@@ -3430,10 +3470,6 @@ func (s *session) sendLFGProposalUpdate(proposal *LFGProposal) error {
 		playerGUIDs = append(playerGUIDs, pguid)
 	}
 	sort.Slice(playerGUIDs, func(i, j int) bool { return playerGUIDs[i] < playerGUIDs[j] })
-	recipientGroup := uint64(0)
-	if recipient, ok := proposal.Players[guid]; ok {
-		recipientGroup = recipient.Group
-	}
 	for _, pguid := range playerGUIDs {
 		pdata := proposal.Players[pguid]
 		packet.WriteU32(uint32(pdata.Role))

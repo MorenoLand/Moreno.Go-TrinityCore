@@ -1360,6 +1360,14 @@ func (s *session) calculateQuestRewardXP(ctx context.Context, questID, xpDiff ui
 	}
 	xp := roundQuestXPValue(uint32(diffFactor) * entry[xpDiff] / 10)
 	if s.server != nil {
+		// Quest::GetXPReward (QuestDef.cpp:218-221): a nonzero
+		// MinQuestScaledXPRatio floors the reward at the scaled
+		// difficulty value, before the quest XP rate.
+		if ratio := s.server.Config.MinQuestScaledXpRatio; ratio > 0 {
+			if minScaledXP := roundQuestXPValue(entry[xpDiff]) * uint32(ratio) / 100; minScaledXP > xp {
+				xp = minScaledXP
+			}
+		}
 		xp = uint32(float64(xp) * s.server.Config.XPRateQuest)
 	}
 	return xp

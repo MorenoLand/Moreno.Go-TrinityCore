@@ -114,8 +114,9 @@ func (s *Server) grantChannelDeathItems(ctx context.Context, auras []*activeAura
 				// Soul Shard only from units that grant XP or honor
 				// (Player::isHonorOrXPTarget, Player.cpp:24064-24083); the
 				// critter/totem exclusion has no Go creature-type model, so
-				// the gray-level gate is the modeled arm.
-				if victimLevel <= grayLevel(uint32(caster.player.Level)) {
+				// the gray-level gate is the modeled arm; a nonzero
+				// MinCreatureScaledXpRatio lets gray-level victims pass.
+				if victimLevel <= grayLevel(uint32(caster.player.Level)) && creatureScaledXPRatio(s) == 0 {
 					continue
 				}
 				if victimIsCreature && tapPlayerGUID != caster.playerGUID && (tapGroupID == 0 || tapGroupID != caster.groupID) {
@@ -1258,17 +1259,17 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		killerGUID = killer.playerGUID
 		// Player::isHonorOrXPTarget (Player.cpp:24064-24083): the victim
 		// must be above the killer's gray level; player victims are never
-		// critters or totems, and the scaled-XP config defaults to 0
-		// (World.cpp:757), so the gray check applies unconditionally.
+		// critters or totems, and a nonzero MinCreatureScaledXpRatio lets
+		// gray-level victims pass (Player.cpp:24070).
 		victimHonorTarget := false
 		if s.player != nil && killer.player != nil {
-			victimHonorTarget = uint32(s.player.Level) > grayLevel(uint32(killer.player.Level))
+			victimHonorTarget = uint32(s.player.Level) > grayLevel(uint32(killer.player.Level)) || creatureScaledXPRatio(s.server) > 0
 		}
 		killer.procKillAuraTriggers(ctx, s.playerGUID, killer.playerGUID, procFlagKill, victimHonorTarget)
 	}
 	attackerHonorTarget := false
 	if killer != nil && killer.player != nil && s.player != nil {
-		attackerHonorTarget = uint32(killer.player.Level) > grayLevel(uint32(s.player.Level))
+		attackerHonorTarget = uint32(killer.player.Level) > grayLevel(uint32(s.player.Level)) || creatureScaledXPRatio(s.server) > 0
 	}
 	s.procKillAuraTriggers(ctx, killerGUID, killerGUID, procFlagKilled, attackerHonorTarget)
 	s.procKillAuraTriggers(ctx, s.playerGUID, s.playerGUID, procFlagDeath, true)

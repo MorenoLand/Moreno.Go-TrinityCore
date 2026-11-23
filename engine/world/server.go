@@ -11256,7 +11256,9 @@ type Features struct {
 }
 
 func NewFeatures(c config.Config, stores *database.Set, logger *slog.Logger) *Features {
-	return &Features{Config: c, LFG: NewLFGManager(c.SoloLFGEnable), NPCBots: NewNPCBotManager(stores.Characters, stores.World, c.NPCBots), Scripts: scripting.NewRuntime(scripting.Config{Enabled: c.LuaEnabled, ScriptPath: c.LuaScriptPath, CoreName: version.Product, CoreVersion: version.String(), RealmID: c.RealmID, CoreExpansion: c.Expansion, AuthDatabase: stores.Auth.DB, CharacterDB: stores.Characters.DB, WorldDatabase: stores.World.DB, Logger: logger})}
+	lfgManager := NewLFGManager(c.SoloLFGEnable)
+	lfgManager.SetOptions(uint32(c.DungeonFinderOptionsMask))
+	return &Features{Config: c, LFG: lfgManager, NPCBots: NewNPCBotManager(stores.Characters, stores.World, c.NPCBots), Scripts: scripting.NewRuntime(scripting.Config{Enabled: c.LuaEnabled, ScriptPath: c.LuaScriptPath, CoreName: version.Product, CoreVersion: version.String(), RealmID: c.RealmID, CoreExpansion: c.Expansion, AuthDatabase: stores.Auth.DB, CharacterDB: stores.Characters.DB, WorldDatabase: stores.World.DB, Logger: logger})}
 }
 
 func (f *Features) Initialize(ctx context.Context) error {

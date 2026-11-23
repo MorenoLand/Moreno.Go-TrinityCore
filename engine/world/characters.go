@@ -2750,6 +2750,9 @@ func playableClass(class uint8) bool {
 	}
 }
 
+// raceTeam mirrors Player::TeamForRace (Player.cpp:6619-6633): 1 is
+// Alliance, 2 is Horde, and a race with no ChrRaces row defaults to
+// Alliance rather than no team.
 func raceTeam(race uint8) uint8 {
 	switch race {
 	case 1, 3, 4, 7, 11:
@@ -2757,7 +2760,7 @@ func raceTeam(race uint8) uint8 {
 	case 2, 5, 6, 8, 10:
 		return 2
 	default:
-		return 0
+		return 1
 	}
 }
 

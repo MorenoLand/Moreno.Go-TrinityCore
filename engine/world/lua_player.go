@@ -7410,10 +7410,10 @@ func (s *session) luaPlayer() *scripting.Object {
 	}
 	// IsHonorOrXPTarget is Player::isHonorOrXPTarget
 	// (PlayerMethods.h:568-574, Player.cpp:24064-24083): the victim
-	// level must clear the caller's gray level — the scaled-XP-ratio
-	// escape has no Go twin (MinDiscoveredScaledXPRatio is a different
-	// config), so the gate applies unconditionally, the same reading
-	// the death path uses. Creature victims additionally fail as live
+	// level must clear the caller's gray level — a nonzero
+	// MinCreatureScaledXpRatio lets gray-level victims pass
+	// (Player.cpp:24070), the same reading the death path uses.
+	// Creature victims additionally fail as live
 	// totems (isTotemGUID) or critters (creature_template.type 8, the
 	// live-motion CreatureType twin); player victims take the gray
 	// gate only, and the NPCBot arm has no Go counterpart. A missing
@@ -7433,7 +7433,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		if !ok {
 			return []any{false}, nil
 		}
-		if victimLevel <= grayLevel(uint32(state.Level)) {
+		if victimLevel <= grayLevel(uint32(state.Level)) && creatureScaledXPRatio(s.server) == 0 {
 			return []any{false}, nil
 		}
 		if obj.Type == "Creature" {

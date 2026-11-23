@@ -545,6 +545,15 @@ func (s *Server) baseXPForLevel(ctx context.Context, level uint32) uint32 {
 	return uint32(base)
 }
 
+// creatureScaledXPRatio reads MinCreatureScaledXPRatio (World.cpp:757)
+// with a nil-server default of 0, the C++ code default.
+func creatureScaledXPRatio(s *Server) int {
+	if s == nil {
+		return 0
+	}
+	return s.Config.MinCreatureScaledXpRatio
+}
+
 // grayLevel ports Formulas::XP::GetGrayLevel.
 func grayLevel(playerLevel uint32) uint32 {
 	switch {
@@ -602,18 +611,26 @@ func (s *Server) killXPGain(ctx context.Context, playerLevel, mobLevel uint32) u
 	if baseExp == 0 {
 		return 0
 	}
+	var gain uint32
 	if mobLevel >= playerLevel {
 		levelDiff := mobLevel - playerLevel
 		if levelDiff > 4 {
 			levelDiff = 4
 		}
-		return ((playerLevel*5+baseExp)*(20+levelDiff)/10 + 1) / 2
-	}
-	if mobLevel > grayLevel(playerLevel) {
+		gain = ((playerLevel*5+baseExp)*(20+levelDiff)/10 + 1) / 2
+	} else if mobLevel > grayLevel(playerLevel) {
 		zd := zeroDifference(playerLevel)
-		return (playerLevel*5 + baseExp) * (zd + mobLevel - playerLevel) / zd
+		gain = (playerLevel*5 + baseExp) * (zd + mobLevel - playerLevel) / zd
 	}
-	return 0
+	// Formulas::XP::BaseGain (Formulas.h:160-164): a nonzero
+	// MinCreatureScaledXPRatio floors the gain at the mob-level scaled
+	// minimum, so gray mobs still grant XP.
+	if ratio := creatureScaledXPRatio(s); ratio > 0 {
+		if minGain := (mobLevel*5 + baseExp) * uint32(ratio) / 100; minGain > gain {
+			gain = minGain
+		}
+	}
+	return gain
 }
 
 func ResolveGroupXPRate(count uint32, raid bool) float32 {
@@ -1324,7 +1341,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			// Player::isHonorOrXPTarget (Player.cpp:24064-24083): the
 			// creature must be above the killer's gray level and not a
 			// critter (excluded by the outer gate) or totem.
-			honorTarget := s.player != nil && mobLevel > grayLevel(uint32(s.player.Level)) && !s.server.isTotemGUID(target.GUID)
+			honorTarget := s.player != nil && (mobLevel > grayLevel(uint32(s.player.Level)) || creatureScaledXPRatio(s.server) > 0) && !s.server.isTotemGUID(target.GUID)
 			s.procKillAuraTriggers(ctx, target.GUID, s.playerGUID, procFlagKill, honorTarget)
 		}
 		// Unit::Kill (Unit.cpp:11283-11290): the general-arm KILL leg on
