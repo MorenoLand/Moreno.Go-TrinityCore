@@ -115,6 +115,7 @@ type creatureMotion struct {
 	MoveChase             uint32  // creature_template_movement.Chase via loadCreatureStats; 0=Run, 1=CanWalk, 2=AlwaysWalk (CreatureData.h:96-100)
 	MoveRandom            uint32  // creature_template_movement.Random via loadCreatureStats; 0=Walk, 1=CanRun, 2=AlwaysRun (CreatureData.h:103-108)
 	MoveFlight            uint32  // creature_template_movement.Flight via loadCreatureStats; 0=None, 1=DisableGravity, 2=CanFly (CreatureData.h:87-94); feeds the per-tick UpdateMovementFlags fly leg
+	MoveRooted            bool    // creature_template_movement.Rooted via loadCreatureStats (CreatureData.h:129 IsRooted, ObjectMgr.cpp:465 field 47); C++ default false; the animation-tier fold guard (Creature.cpp:3030/:3110 !GetMovementTemplate().IsRooted())
 	HoverHeight           float32 // creature_template.HoverHeight via loadCreatureStats (C++ default 1.0); feeds the UpdateMovementFlags isInAir hover tolerance
 	MechanicImmuneMask    uint32  // creature_template.MechanicImmuneMask via loadCreatureStats; bit (i-1) is mechanic immunity (Creature.cpp:2279-2313); feeds the 191 normalization cap in creatureRunSpeedRate (Unit.cpp:8755-8772)
 	MoveKnown             bool    // set at the stats-backed creation sites; pets/totems built without stats read the C++ defaults instead
@@ -2729,6 +2730,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			MoveChase:          st.MoveChase,
 			MoveRandom:         st.MoveRandom,
 			MoveFlight:         st.MoveFlight,
+			MoveRooted:         st.MoveRooted,
 			HoverHeight:        st.HoverHeight,
 			MechanicImmuneMask: st.MechanicImmuneMask,
 			MoveKnown:          true,
@@ -2977,6 +2979,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				MoveChase:          st.MoveChase,
 				MoveRandom:         st.MoveRandom,
 				MoveFlight:         st.MoveFlight,
+				MoveRooted:         st.MoveRooted,
 				HoverHeight:        st.HoverHeight,
 				MechanicImmuneMask: st.MechanicImmuneMask,
 				MoveKnown:          true,
@@ -7155,6 +7158,53 @@ func computeFallElevation(tPassed float32, safeFall bool) float32 {
 	return tPassed * (tPassed * jumpToGravity * 0.5)
 }
 
+// vehicleBaseCollisionHeight is the Unit::GetCollisionHeight twin
+// (Unit.cpp:14122-14146) for a vehicle base (Unit::_ExitVehicle,
+// Unit.cpp:13238): the base is a creature motion (the MoveFall
+// display/scale fold — script scale while known, else the template
+// base, plus the aura scale fold, floored at 0.01) or a player session
+// (the sendPlayerCollisionHeight lookup). An unresolvable base falls
+// back to the default collision height (Object.h:69) — the C++
+// zero-height arm. The display/scale snapshot runs under motionMu;
+// the aura and store reads run after the unlock (the MoveFall
+// launchCreatureFallSpline auraMu-ordering precedent).
+func (s *Server) vehicleBaseCollisionHeight(mapID, instanceID uint32, baseGUID uint64) float32 {
+	if s == nil || baseGUID == 0 {
+		return terrainDefaultCollisionHeight
+	}
+	if base := s.findCreatureMotion(mapID, instanceID, baseGUID); base != nil {
+		s.motionMu.Lock()
+		nativeDisplayID, mountDisplayID := base.NativeDisplayID, base.Mount
+		scale := base.BaseScale
+		if base.ScriptScaleKnown {
+			scale = base.ScriptScale
+		}
+		s.motionMu.Unlock()
+		if scale <= 0 {
+			scale = 1
+		}
+		if s.Data == nil {
+			return terrainDefaultCollisionHeight
+		}
+		baseKey := creatureAuraKeyForMotion(base)
+		mounted := s.creatureIsMounted(baseKey, base)
+		effective := float64(scale) + float64(s.creatureAuraScaleSum(baseKey))/100
+		if effective < 0.01 {
+			effective = 0.01
+		}
+		if h, found, err := s.Data.CollisionHeight(mountDisplayID, nativeDisplayID, mounted, float32(effective)); err == nil && found {
+			return h
+		}
+		return terrainDefaultCollisionHeight
+	}
+	if sess := s.findSessionByGUID(baseGUID); sess != nil && sess.player != nil {
+		if h, found, err := playerCollisionHeightFor(sess); err == nil && found {
+			return h
+		}
+	}
+	return terrainDefaultCollisionHeight
+}
+
 // launchCreatureFallSpline is MotionMaster::MoveFall
 // (MotionMaster.cpp:919-955) via a GenericMovementGenerator
 // (EFFECT_MOTION_TYPE 16): a falling-flag spline straight down to destZ
@@ -10139,6 +10189,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			isInAir := creatureIsInAir(motion.Z, ground, hoverH)
 			hasHoverAura := s.creatureHasAuraType(creatureAuraKeyForMotion(motion), spellAuraHover)
+			gravityBefore, hoverBefore := motion.GravityDisabled, motion.Hovering
 			if motion.MoveFlight != 0 && isInAir && !creatureIsFalling(motion) { // IsFlightAllowed (CreatureData.h:128), !IsFalling (Creature.cpp:2803)
 				if motion.MoveFlight == 2 { // CreatureFlightMovementType::CanFly
 					if !motion.Flying {
@@ -10170,6 +10221,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					motion.Hovering = true
 					s.broadcastCreatureSplineMove(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID, protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER, motion.PhaseMask)
 				}
+			}
+			// The Creature::SetHover/SetDisableGravity calls above fold
+			// the animation tier (Creature.cpp:2795-2810 via :3030-3037
+			// / :3110-3117); the helper recomputes it once from the
+			// final flags, matching C++'s coalesced values update
+			// (SetByteValue marks the field only on change).
+			if motion.GravityDisabled != gravityBefore || motion.Hovering != hoverBefore {
+				s.creatureFoldAnimationTier(motion)
 			}
 			// Creature::UpdateMovementFlags (Creature.cpp:2813-2814): once the
 			// creature is no longer in the air, the FALLING flag clears — after

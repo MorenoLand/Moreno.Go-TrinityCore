@@ -1522,8 +1522,12 @@ func (s *session) sanitizeMovementFlags(flags uint32) uint32 {
 	if flags&movementPitchUp != 0 && flags&movementPitchDown != 0 {
 		flags &^= movementPitchUp | movementPitchDown
 	}
-	// Cannot hover without SPELL_AURA_HOVER (WorldSession.cpp:973-975).
-	if flags&movementHover != 0 && !s.hasAuraType(spellAuraHover) {
+	// Cannot hover without SPELL_AURA_HOVER (WorldSession.cpp:973-975),
+	// or a script-set hover flag (playerState.Hovering, Unit::SetHover
+	// twin — the same script-flag exception as the water-walk gate
+	// below; C++ strips script-set hover too, see the DELTA in
+	// lua_player.go SetHover).
+	if flags&movementHover != 0 && !s.hasAuraType(spellAuraHover) && !(s.player != nil && s.player.Hovering) {
 		flags &^= movementHover
 	}
 	// Cannot walk on water without SPELL_AURA_WATER_WALK except for ghosts

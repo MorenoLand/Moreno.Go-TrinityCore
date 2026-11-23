@@ -214,6 +214,12 @@ type playerState struct {
 	// sanitizeMovementFlags gate honors it alongside the aura
 	// and ghost legs.
 	WaterWalking bool
+	// Hovering is the Unit::SetHover script flag (Unit.cpp:13779,
+	// Player.cpp:26874): session-only, like WaterWalking above —
+	// login recomputes the flag from auras only, so a script-set
+	// value does not survive a relog. The sanitizeMovementFlags
+	// gate honors it alongside the aura leg.
+	Hovering bool
 	// ThreatMgr is the player's Unit::m_threatManager (Unit.h:1827):
 	// every Unit carries one, including players — but a player can
 	// never hold refs in it (ThreatManager::CanHaveThreatList,

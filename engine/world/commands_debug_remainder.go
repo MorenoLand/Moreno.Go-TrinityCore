@@ -838,7 +838,9 @@ func (s *session) debugBroadcastPlayerMovement(target *session, opcode protocol.
 // (SetWalk/SetSwim/SetCanFly/SetHover/SetWaterWalk/SetDisableGravity plus
 // the new SetFeatherFall twin), the root leg latches ScriptRooted, a
 // cleared spline-enabled bit stops the motion, and the unhandled bits of
-// the final word land in MoveFlagsRaw. The heartbeat leg
+// the final word land in MoveFlagsRaw. Gravity/hover flips fold the
+// animation tier via creatureFoldAnimationTier (Creature.cpp:3030-3037
+// /:3110-3117; cs_debug.cpp:1271/:1276 call the setters). The heartbeat leg
 // (SendMovementFlagUpdate) has no creature carrier in Go — handled
 // changes already went out on the spline packets, unhandled and extra
 // bits are stored but not broadcast.
@@ -854,6 +856,7 @@ func (s *session) debugSetCreatureMoveflags(motion *creatureMotion, moveFlags ui
 		newFlags &^= debugMoveFlagMaskMoving
 	}
 	hadSpline := current&debugMoveFlagSplineEnabled != 0
+	gravityBefore, hoverBefore := motion.GravityDisabled, motion.Hovering
 	var broadcasts []protocol.Opcode
 	flip := func(currentValue, want bool, setOpcode, unsetOpcode protocol.Opcode, apply func(bool)) {
 		if currentValue == want {
@@ -887,6 +890,7 @@ func (s *session) debugSetCreatureMoveflags(motion *creatureMotion, moveFlags ui
 	flip(motion.Hovering, newFlags&debugMoveFlagHover != 0,
 		protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER, protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_HOVER,
 		func(v bool) { motion.Hovering = v })
+	tierFold := motion.GravityDisabled != gravityBefore || motion.Hovering != hoverBefore
 	motion.MoveFlagsRaw = newFlags &^ debugMoveFlagsWithHandlers
 	if moveFlagsExtra != nil {
 		motion.MoveFlagsExtra = *moveFlagsExtra
@@ -895,6 +899,11 @@ func (s *session) debugSetCreatureMoveflags(motion *creatureMotion, moveFlags ui
 	phase := motion.PhaseMask
 	stopSpline := hadSpline && newFlags&debugMoveFlagSplineEnabled == 0
 	s.server.motionMu.Unlock()
+	if tierFold {
+		// C++ folds the tier inside each setter call (cs_debug.cpp:1271
+		// /:1276), ahead of the spline packets below.
+		s.server.creatureFoldAnimationTier(motion)
+	}
 	for _, opcode := range broadcasts {
 		s.server.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
 	}

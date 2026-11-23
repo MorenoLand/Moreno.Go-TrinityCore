@@ -892,6 +892,7 @@ const (
 	splineFlagOrientationFixed uint32 = 0x00004000
 	animTierGround                    = 0
 	animTierHover                     = 2
+	animTierFly                       = 3
 	animTierNone                      = -1
 )
 
@@ -1448,6 +1449,75 @@ func (s *Server) standCreatureMotionUp(motion *creatureMotion) bool {
 	s.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagNotSeated)
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldBytes1: full})
 	return true
+}
+
+// creatureFoldAnimationTier applies the Creature::SetHover /
+// Creature::SetDisableGravity animation-tier fold (Creature.cpp:3030-3037
+// and :3110-3117): with updateAnimationTier (always true from Lua — the
+// Eluna arms take only the bool, CreatureMethods.h:923-928/1131-1136 —
+// and from the SmartAI/debug twins), a live, unrooted creature takes Fly
+// while gravity is disabled, Hover while hovering, else Ground, written
+// to UNIT_FIELD_BYTES_1 byte 3 (UNIT_BYTES_1_OFFSET_ANIM_TIER,
+// UnitDefines.h:69) via the SetByteValue twin below. The guards are the
+// strip-34 alive gate (Health > 0), HasUnitState(UNIT_STATE_ROOT) via
+// creatureUnitStateHas (conditions.go:370, UNIT_STATE_ROOT 0x400;
+// ScriptRooted or a MOD_ROOT aura), and the movement-template Rooted leg
+// (motion.MoveRooted, creature_template_movement.Rooted, ObjectMgr.cpp:465
+// field 47). A changed tier broadcasts the merged bytes1 value (the
+// standCreatureMotionUp merge: template bytes 2/3 + live stand byte 0);
+// an unchanged tier sends nothing, matching Object::SetByteValue
+// (Object.cpp:712-725), which marks the field only on change. The addon
+// seed (Creature.cpp:2645) already banks byte 3 in bytes1Cache, so the
+// fold overwrites it on each call exactly as C++ does; the cache is
+// lazily seeded (standCreatureMotionUp pattern) when a cache-less motion
+// folds first. Callers must not hold motionMu: the root read and the
+// cache write take it here.
+// C++ skips the fold when the flag is unchanged (Unit::SetHover /
+// Unit::SetDisableGravity return false, Creature.cpp:3107/:3027), so
+// callers fold only on real flips. The death leg calls the setters too
+// (Creature.cpp:2109-2110) but the alive guard makes that fold vacuous,
+// so it stays out. Player::SetHover/SetDisableGravity carry no fold
+// (Player.cpp:26835-26891), so player state never calls this.
+func (s *Server) creatureFoldAnimationTier(motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	if s.creatureUnitStateHas(motion, unitStateRoot) {
+		return
+	}
+	s.motionMu.Lock()
+	if motion.Health == 0 || motion.MoveRooted {
+		s.motionMu.Unlock()
+		return
+	}
+	tier := animTierGround
+	if motion.GravityDisabled {
+		tier = animTierFly
+	} else if motion.Hovering {
+		tier = animTierHover
+	}
+	if !motion.bytes1CacheKnown {
+		s.motionMu.Unlock()
+		cache := s.creatureTemplateBytes1(uint32(motion.GUID & 0xFFFFFF))
+		s.motionMu.Lock()
+		if !motion.bytes1CacheKnown {
+			motion.bytes1Cache, motion.bytes1CacheKnown = cache, true
+		}
+	}
+	if uint8(motion.bytes1Cache>>24) == uint8(tier) {
+		s.motionMu.Unlock()
+		return
+	}
+	motion.bytes1Cache = motion.bytes1Cache&0x00FFFFFF | uint32(tier)<<24
+	full := motion.bytes1Cache & 0xFFFFFF00
+	if motion.StandStateKnown {
+		full |= uint32(motion.StandState)
+	} else {
+		full |= motion.bytes1Cache & 0xFF
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldBytes1: full})
 }
 
 func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint32, guid uint64, fields map[int]uint32) {

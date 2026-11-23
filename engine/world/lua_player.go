@@ -2232,6 +2232,113 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil, nil
 	}
+	// SetHover is Unit::SetHover (Unit.cpp:13779-13803) as overridden for
+	// players by Player::SetHover (Player.cpp:26874-26891): the shared
+	// hover-height Z fold, then SMSG_MOVE_SET_HOVER / SMSG_MOVE_UNSET_HOVER
+	// to self plus the MSG_MOVE_HOVER broadcast to the set — the exact pair
+	// the hover-aura legs already send (spells.go). Players carry
+	// UNIT_FIELD_HOVERHEIGHT 1.0 (Player.cpp:546, 17459; Go hard-codes the
+	// same 1 in the update values), so the fold raises/drops Z by 1. The
+	// animation-tier fold stays out: Player::SetHover never calls
+	// SetAnimationTier (unlike Creature::SetHover, Creature.cpp:3111-3118).
+	// Eluna exposes SetHover on Creature only (LuaFunctions.cpp:792,
+	// CreatureMethods.h:1131); like the creature EnterVehicle arm, this is
+	// a Go-surface bridge on the C++ Player method. DELTAS: the no-op gate
+	// reads the script slot only — a hover-aura-driven hover is invisible
+	// to it, as in the SetWaterWalk arm above, and the aura remove leg
+	// clears aura-driven hover itself; C++ strips script-set hover from
+	// client movement packets without an aura (WorldSession.cpp:967-968),
+	// Go honors the slot instead, the WaterWalking exception's precedent.
+	methods["SetHover"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetHover requires a bool, got no args")
+		}
+		enable, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetHover requires a bool")
+		}
+		if s == nil || s.player == nil {
+			return nil, nil
+		}
+		if state.Hovering == enable {
+			return nil, nil
+		}
+		state.Hovering = enable
+		const hoverHeight = float32(1)
+		if s.server != nil {
+			mapID := state.Map
+			x, y, z := state.X, state.Y, state.Z
+			if enable {
+				// Unit::SetHover enable leg (Unit.cpp:13789-13792): no
+				// need to check height on ascent — raise only when the
+				// current Z sits less than hoverHeight above the floor
+				// (the GetFloorZ twin: mapStaticFloorZ first, mapHeight
+				// fallback, the strip-34 creature arm's pattern). A
+				// failed floor lookup skips the raise, matching C++
+				// where an INVALID floor leaves Z - floorZ above the
+				// height.
+				floorZ, ok := s.server.mapStaticFloorZ(mapID, x, y, z)
+				if !ok {
+					floorZ, ok = s.server.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+				}
+				if ok && z-floorZ < hoverHeight {
+					state.Z = z + hoverHeight
+				}
+			} else {
+				// Unit::SetHover disable leg (Unit.cpp:13795-13802):
+				// drop by hoverHeight, floored at the floor, then the
+				// UpdateAllowedPositionZ twin below — which reads the
+				// already cleared HOVER flag, so its hover offset is 0,
+				// as in C++ (flag cleared at :13795, clamp at :13800).
+				// No alive gate: the C++ leg runs when (!isDying() ||
+				// GetTypeId() != TYPEID_UNIT), always true for a player.
+				// A failed floor lookup leaves newZ at Z - hoverHeight
+				// and the clamp no-ops, matching C++ with an INVALID
+				// floor.
+				newZ := z - hoverHeight
+				floorZ, ok := s.server.mapStaticFloorZ(mapID, x, y, z)
+				if !ok {
+					floorZ, ok = s.server.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+				}
+				if ok && floorZ > newZ {
+					newZ = floorZ
+				}
+				// UpdateAllowedPositionZ (Object.cpp:1458-1511) in the
+				// updateAllowedPositionZForMotion shape (terrain.go):
+				// the HOVER flag is already cleared, so the hover
+				// offset is 0; a transport skips the clamp
+				// (Object.cpp:1460-1467). Flyers floor at ground
+				// (runtimeCanFly is the CAN_FLY-flag twin,
+				// Player.h:2172); players always CanSwim
+				// (Unit::CanSwim, Unit.cpp:13318-13327,
+				// PLAYER_CONTROLLED), so the swim branch
+				// (water-or-ground level) applies otherwise — never
+				// the walker snap-to-ground.
+				if state.TransportGUID == 0 {
+					if s.runtimeCanFly {
+						if ground, ok := s.server.mapHeight(mapID, x, y, newZ+terrainDefaultCollisionHeight, true, terrainDefaultHeightSearch); ok && newZ < ground {
+							newZ = ground
+						}
+					} else if maxZ, ground := s.server.mapWaterOrGroundLevel(mapID, x, y, newZ, terrainDefaultCollisionHeight); maxZ > terrainInvalidHeight {
+						if newZ > maxZ {
+							newZ = maxZ
+						} else if newZ < ground {
+							newZ = ground
+						}
+					}
+				}
+				state.Z = newZ
+			}
+		}
+		if enable {
+			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_SET_HOVER))
+			s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_HOVER, 0x40000000)
+		} else {
+			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_UNSET_HOVER))
+			s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_HOVER, 0)
+		}
+		return nil, nil
+	}
 	// setPlayerControlLeg is the shared player leg of Unit::SetConfused
 	// (Unit.cpp:11734) and Unit::SetFeared (Unit.cpp:11700): both
 	// clear the target on apply and, for a player, block/allow

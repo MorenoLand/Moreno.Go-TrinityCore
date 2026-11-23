@@ -2982,6 +2982,7 @@ type creatureStats struct {
 	MoveChase        uint32  // creature_template_movement.Chase (CreatureData.h:96-100); 0=Run, 1=CanWalk, 2=AlwaysWalk; missing row keeps the C++ default Run=0
 	MoveRandom       uint32  // creature_template_movement.Random (CreatureData.h:103-108); 0=Walk, 1=CanRun, 2=AlwaysRun; missing row keeps the C++ default Walk=0
 	MoveFlight       uint32  // creature_template_movement.Flight (CreatureData.h:87-94); 0=None, 1=DisableGravity, 2=CanFly; feeds the per-tick UpdateMovementFlags fly leg
+	MoveRooted       bool    // creature_template_movement.Rooted (CreatureData.h:129 IsRooted, ObjectMgr.cpp:465 field 47); C++ default false; the animation-tier fold guard
 	HoverHeight      float32 // creature_template.HoverHeight (Creature.cpp:537 UNIT_FIELD_HOVERHEIGHT); C++ DB default 1.0; feeds the UpdateMovementFlags isInAir hover tolerance
 	ReactState       uint8
 	ReactStateKnown  bool
@@ -3066,7 +3067,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		return stats
 	}
 
-	var maxlevel, unitClass, exp, baseAttackTime, rangeAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight, moveGround, moveSwim, moveChase, moveRandom int64
+	var maxlevel, unitClass, exp, baseAttackTime, rangeAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight, moveGround, moveSwim, moveChase, moveRandom, moveRooted int64
 	var rank int64
 	var creatureType int64
 	var mechanicImmuneMask, spellSchoolImmuneMask int64
@@ -3095,6 +3096,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ctm.Swim, 1),
 		COALESCE(ctm.Chase, 0),
 		COALESCE(ctm.Random, 0),
+		COALESCE(ctm.Rooted, 0),
 		COALESCE(ct.type, 0),
 		COALESCE(ct.MechanicImmuneMask, 0),
 		COALESCE(ct.SpellSchoolImmuneMask, 0),
@@ -3104,7 +3106,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.VehicleId, 0),
 		COALESCE(ct.HoverHeight, 1.0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &rangeAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &rank, &npcFlags, &flight, &moveGround, &moveSwim, &moveChase, &moveRandom, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID, &hoverHeight); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &rangeAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &rank, &npcFlags, &flight, &moveGround, &moveSwim, &moveChase, &moveRandom, &moveRooted, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID, &hoverHeight); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -3155,6 +3157,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.MoveSwim = moveSwim != 0
 	stats.MoveChase = uint32(moveChase)
 	stats.MoveRandom = uint32(moveRandom)
+	stats.MoveRooted = moveRooted != 0
 	stats.MechanicImmuneMask = uint32(mechanicImmuneMask)
 	stats.SpellSchoolImmuneMask = uint32(spellSchoolImmuneMask)
 

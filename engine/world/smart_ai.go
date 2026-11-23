@@ -5719,7 +5719,9 @@ func (s *Server) smartActionInstallAITemplate(ctx context.Context, motion *creat
 // SmartAI::SetDisableGravity -> Creature::SetDisableGravity. The body
 // mirrors the Lua SetDisableGravity bridge (lua_creature_events.go:
 // no-op-on-unchanged, GravityDisabled latch, SMSG_SPLINE_MOVE_GRAVITY_
-// DISABLE/ENABLE broadcast). TDB 26091: 50 rows, all SELF, param 0/1.
+// DISABLE/ENABLE broadcast). The animation-tier fold rides along via
+// creatureFoldAnimationTier (Creature.cpp:3030-3037). TDB 26091: 50 rows,
+// all SELF, param 0/1.
 func (s *Server) smartActionSetDisableGravity(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	disable := ev.row.actionParam1 != 0
 	s.motionMu.Lock()
@@ -5735,6 +5737,10 @@ func (s *Server) smartActionSetDisableGravity(ctx context.Context, motion *creat
 	mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
 	phase := motion.PhaseMask
 	s.motionMu.Unlock()
+	// SmartAI::SetDisableGravity -> Creature::SetDisableGravity folds
+	// the animation tier before the packet (Creature.cpp:3030-3037,
+	// then :3040-3045; SmartAI.cpp:738-740, SmartScript.cpp:1356).
+	s.creatureFoldAnimationTier(motion)
 	opcode := protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_ENABLE
 	if disable {
 		opcode = protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_DISABLE

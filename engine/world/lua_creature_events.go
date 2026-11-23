@@ -4368,19 +4368,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			canFly = m2.CanFly || m2.Flying
 		}
 		s.motionMu.Unlock()
-		// Unit::_ExitVehicle (Unit.cpp:13244-13249): a creature that
+		// Unit::_ExitVehicle (Unit.cpp:13238-13249): a creature that
 		// cannot fly falls from the exit position to the ground on a
 		// SetFall spline (EVENT_VEHICLE_EXIT, id 1008) instead of
-		// teleporting there. C++ compares the exit height plus the
-		// base's collision height against the ground; Go has no
-		// creature collision-height model, so the exit Z itself is
-		// compared — a creature exiting exactly at ground level keeps
-		// the teleport. The launch starts at the exit position (the
-		// horizontal base-to-exit leg rides the position write above,
-		// not a spline).
+		// teleporting there. C++ compares the exit Z plus the VEHICLE
+		// BASE's collision height against the water-or-ground level
+		// (Map.cpp:2463-2487) and lands on the ground that query
+		// writes back; the non-fall path still launches a MoveTo
+		// spline in C++, where Go keeps the teleport (the position
+		// write above already placed the creature at the exit). The
+		// launch starts at the exit position (the horizontal
+		// base-to-exit leg rides the position write above, not a spline).
 		falling := false
 		if m2ok && !canFly {
-			if ground, ok := s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch); ok && z > ground {
+			height := z + s.vehicleBaseCollisionHeight(mapID, instanceID, baseGUID)
+			level, ground := s.mapWaterOrGroundLevel(mapID, x, y, height, terrainDefaultCollisionHeight)
+			if level > terrainInvalidHeight && height > level {
 				falling = s.launchCreatureFallSpline(m2, x, y, ground, movementInformVehicleExit)
 			}
 		}
@@ -4580,9 +4583,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// flips MOVEMENTFLAG_DISABLE_GRAVITY (and clears MOVEMENTFLAG_FALLING)
 	// with the C++ no-op-on-unchanged early-out, then broadcasts
 	// SMSG_SPLINE_MOVE_GRAVITY_DISABLE/ENABLE (packed GUID only,
-	// Creature.cpp:3040-3045). The animation-tier fold (Fly/Ground/Hover)
-	// stays out — the Go engine models no animation tiers (the waypoint
-	// LAND/TAKEOFF precedent, creaturemotion.go). The falling-flag clear
+	// Creature.cpp:3040-3045). The animation-tier fold (Creature.cpp:3030-3037)
+	// rides along via creatureFoldAnimationTier (creatures.go): Fly while
+	// gravity is disabled, Hover while hovering, else Ground, on
+	// UNIT_FIELD_BYTES_1 byte 3. The falling-flag clear
 	// lands on motion.Falling (Unit::SetDisableGravity twin, Unit.cpp:13720).
 	// C++ skips the
 	// packet when the move spline is uninitialized; the Go movement model
@@ -4609,6 +4613,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
 		phase := motion.PhaseMask
 		s.motionMu.Unlock()
+		// Creature::SetDisableGravity folds the animation tier before
+		// the packet (Creature.cpp:3030-3037, then :3040-3045).
+		s.creatureFoldAnimationTier(motion)
 		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_ENABLE
 		if disable {
 			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_DISABLE
@@ -4716,8 +4723,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// then clamped through the UpdateAllowedPositionZ twin. Both legs are
 	// server-side only (Unit::UpdateHeight, Unit.cpp:13442-13447, does not
 	// broadcast to client), so the spline hover packet above is the whole
-	// broadcast — no MSG_MOVE_TELEPORT goes out. The animation-tier
-	// fold stays out (SetDisableGravity above). DELTAS: the disable leg's
+	// movement broadcast — no MSG_MOVE_TELEPORT goes out. The
+	// animation-tier fold (Creature.cpp:3110-3117) rides along via
+	// creatureFoldAnimationTier (creatures.go). DELTAS: the disable leg's
 	// !isDying() reads motion.Health > 0 (the per-tick hover leg's alive
 	// gate); Go models no JUST_DIED state, so a corpse skips the drop
 	// where C++ would still drop it once out of JUST_DIED.
@@ -4787,6 +4795,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				s.relocatePassengers(mapID, instanceID, guid, x, y, newZ, o)
 			}
 		}
+		// Creature::SetHover folds the animation tier before the
+		// packet (Creature.cpp:3110-3117, then :3121-3126).
+		s.creatureFoldAnimationTier(motion)
 		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_HOVER
 		if enable {
 			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER
@@ -4799,8 +4810,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// Unit.cpp:13748; the moving-fly mask clears on disable, :13751) with
 	// the C++ no-op-on-unchanged early-out, then broadcasts
 	// SMSG_SPLINE_MOVE_SET_FLYING/UNSET_FLYING (packed GUID only,
-	// Creature.cpp:3067-3071). The animation-tier fold stays out (the
-	// SetDisableGravity precedent, above).
+	// Creature.cpp:3067-3071). Creature::SetCanFly carries no tier fold
+	// (Creature.cpp:3060-3071), so none runs here.
 	methods["SetCanFly"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("SetCanFly requires a bool, got no args")
