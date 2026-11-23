@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 const (
@@ -145,7 +146,13 @@ func writeModelSpawn(writer io.Writer, spawn mapSpawnRecord) error {
 }
 
 func calculateM2Bound(srcDir string, spawn *mapSpawnRecord) error {
-	data, err := os.ReadFile(filepath.Join(srcDir, spawn.Name))
+	// C++ owner: TileAssembler::calculateTransformedBound appends the
+	// spawn name and opens it through c_str, so a trailing NUL in the
+	// dir_bin name record (kept verbatim by ModelSpawn::readFromFile)
+	// terminates the path. Truncate here, not at read time: the stored
+	// name and the bytes writeModelSpawn emits must keep the NUL like C++.
+	modelName, _, _ := strings.Cut(spawn.Name, "\x00")
+	data, err := os.ReadFile(filepath.Join(srcDir, modelName))
 	if err != nil {
 		return err
 	}

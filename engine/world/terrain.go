@@ -730,7 +730,13 @@ func (s *Server) terrainModel(name string) *terrainModel {
 		return model
 	}
 	s.terrainMu.Unlock()
-	model, err := readTerrainModel(filepath.Join(s.Config.GameDataDir, "vmaps", filepath.FromSlash(strings.ReplaceAll(name, "\\", "/"))+".vmo"))
+	// C++ owner: VMapManager2::acquireModelInstance passes basepath +
+	// filename + ".vmo" to WorldModel::readFile, which opens it through
+	// c_str — a trailing NUL in the .vmtree spawn name terminates the
+	// path (eating the ".vmo" suffix), so the model the assembler
+	// wrote to the truncated name still loads.
+	modelPath, _, _ := strings.Cut(filepath.Join(s.Config.GameDataDir, "vmaps", filepath.FromSlash(strings.ReplaceAll(name, "\\", "/"))+".vmo"), "\x00")
+	model, err := readTerrainModel(modelPath)
 	s.terrainMu.Lock()
 	s.terrainModels[name] = model
 	s.terrainMu.Unlock()

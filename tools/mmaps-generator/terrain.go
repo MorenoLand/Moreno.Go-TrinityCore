@@ -125,7 +125,14 @@ func (tb *TerrainBuilder) LoadVMap(mapID, tileX, tileY uint32, md *MeshData) boo
 		}
 		wm, ok := models[spawn.name]
 		if !ok {
-			wm, err = readWorldModelFile(filepath.Join(tb.vmapsDir, spawn.name+".vmo"))
+			// C++ owner: VMapManager2::acquireModelInstance passes
+			// basepath + filename + ".vmo" to WorldModel::readFile,
+			// which opens it through c_str — a trailing NUL in the
+			// .vmtree spawn name terminates the path (eating the
+			// ".vmo" suffix), so the model the assembler wrote to
+			// the truncated name still loads.
+			modelPath, _, _ := strings.Cut(filepath.Join(tb.vmapsDir, spawn.name+".vmo"), "\x00")
+			wm, err = readWorldModelFile(modelPath)
 			if err != nil {
 				continue
 			}
