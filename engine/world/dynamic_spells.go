@@ -1074,7 +1074,7 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 			if s.dynobjCreatureTargetImmune(ctx, spell, guid, object.Map, object.InstanceID, s.creatureFriendlyToTarget(caster, guid)) {
 				continue
 			}
-			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil, true, &sharedDelayMs, mask, false)
+			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil, true, &sharedDelayMs, mask, false, false)
 		}
 		object.AuraHolders[guid] = struct{}{}
 		if object.AuraHolderMasks == nil {

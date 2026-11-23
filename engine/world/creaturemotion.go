@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -2299,7 +2300,8 @@ func scriptIDForName(name string) uint32 {
 // RemoveAllAurasOnDeath (no creature-side primitives), zoneScript
 // OnUnitDeath (no Go twin), the formation-leader reset, MoveFall,
 // ChooseCreatureFlags unit/dynamic-flags re-init (no template bank on
-// the motion; only the NPC-flags latch exists), LoadCreaturesAddon,
+// the motion; only the NPC-flags latch exists), the LoadCreaturesAddon
+// value legs (the auras leg rides the JUST_RESPAWNED arm below),
 // and any JustDied hook — C++ setDeathState fires none either, so a
 // scripted JUST_DIED deliberately bypasses the kill funnel's JustDied
 // event. Go alive/dead reads stay health-based (session IsDead reads
@@ -2439,6 +2441,12 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 		} else {
 			s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Health: 0, MaxHealth: maxHealth, Level: uint8(level)}, respawnHealth, time.Now())
 		}
+	}
+	// Creature::setDeathState JUST_RESPAWNED (Creature.cpp:2152):
+	// LoadCreaturesAddon re-applies the addon auras once the creature
+	// is ALIVE again, the last leg of the respawn arm.
+	if state == creatureDeathJustRespawned {
+		s.reapplyCreatureAddonAuras(ctx, motion)
 	}
 }
 
@@ -5544,9 +5552,11 @@ func (s *Server) charmerResolvesInInstance(mapID, instanceID uint32, guid uint64
 // entirely for charmed/player-owned creatures (vacuous here — OwnerGUID != 0
 // motions return through updatePetMotion ahead of the combat tick, so they never
 // reach this function). CombatStop(true) is bridged (threat own-table and
-// victim halves, c3701e6/dc4885d; attack stop). LoadCreaturesAddon has no bridge —
-// Go models only creature_addon/creature_template_addon's path_id (loadCreaturePathID);
-// addon flags/emotes/auras/mount are unmodeled. SetLootRecipient(nullptr) is
+// victim halves, c3701e6/dc4885d; attack stop). LoadCreaturesAddon's auras leg is
+// bridged at evade start (reapplyCreatureAddonAuras, CreatureAI.cpp:308); Go models
+// only creature_addon/creature_template_addon's path_id (loadCreaturePathID) plus the
+// addon auras — the value legs (mount/bytes/emote) are not re-applied at evade start.
+// SetLootRecipient(nullptr) is
 // bridged via the tap reset below (TapPlayerGUID/TapGroupID=0, TAPPED flag
 // clear); ResetPlayerDamageReq is bridged (PlayerDamageReq=MaxHealth/2);
 // SetLastDamagedTime(0) is bridged (LastDamaged zeroed, CreatureAI.cpp:311).
@@ -6507,6 +6517,10 @@ func (s *Server) retryPendingScriptMove(ctx context.Context, motion *creatureMot
 		// SetSpawnHealth ahead of JustReachedHome, Vehicle::Reset(true)
 		// ahead of it, BossAI::_JustReachedHome (me->setActive(false)).
 		s.restoreCreatureSpawnHealth(motion)
+		// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:148):
+		// LoadCreaturesAddon re-applies the addon auras ahead of
+		// JustReachedHome.
+		s.reapplyCreatureAddonAuras(ctx, motion)
 		s.resetVehicleKitOnReachHome(ctx, motion)
 		motion.Active = false
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
@@ -7656,7 +7670,7 @@ func (s *Server) clearCreatureVisualTarget(motion *creatureMotion) {
 // from the c.curhealth row); mana restores to MaxMana, the c.curmana leg
 // having no separate Go bank. _regenerateHealthLock (motion.RegenHealthDisabled)
 // skips the restore outright. LoadCreaturesAddon, called beside it in
-// DoFinalize, has no Go bridge (creaturemotion.go:1245).
+// DoFinalize, re-applies the addon auras via reapplyCreatureAddonAuras.
 func (s *Server) restoreCreatureSpawnHealth(motion *creatureMotion) {
 	if motion == nil || motion.RegenHealthDisabled {
 		return
@@ -7669,6 +7683,77 @@ func (s *Server) restoreCreatureSpawnHealth(motion *creatureMotion) {
 			unitFieldHealth: motion.MaxHealth,
 			unitFieldPower1: motion.MaxMana,
 		})
+	}
+}
+
+// reapplyCreatureAddonAuras is the auras leg of Creature::LoadCreaturesAddon
+// (Creature.cpp:2624-2703): the creature_addon / creature_template_addon
+// `auras` list (space-separated spell ids, GetCreatureAddon precedence,
+// Creature.cpp:2611-2621 — the guid row wins, the template row fills a
+// missing guid row, and a row-less creature falls back to its template
+// row) is re-applied to the creature itself, skipping spells with no
+// DBC data (the sSpellMgr->GetSpellInfo null leg, Creature.cpp:2686-2689)
+// and spells already present (the HasAura skip, Creature.cpp:2694-2695).
+// Each aura lands through the direct Unit::AddAura path
+// (serverApplyAuraToCreatureTarget with allowEvading: a direct AddAura
+// carries no cast, so the cast-target evade gate does not apply — C++
+// runs this leg inside _EnterEvadeMode while IsInEvadeMode() is true,
+// CreatureAI.cpp:308), with the DBC duration at the creature's level
+// (SpellInfo::GetDuration; a non-positive duration means permanent,
+// matching the apply path's durationMs==0 arm). Only the auras leg is
+// carried: mount/bytes1/bytes2/emote/visibility/path_id already ride
+// the spawn-query COALESCE + motion fields + the per-sweep re-affirm,
+// so re-applying them here would be a no-op; the script-override reset
+// (Known latches surviving an evade where C++ resets them) stays a
+// documented residual. Called at every Go twin of a C++
+// LoadCreaturesAddon site with a live motion: Home finalize
+// (HomeMovementGenerator.cpp:148), evade start (CreatureAI.cpp:308),
+// respawn (Creature.cpp:2152). Never called with motionMu held:
+// serverApplyAuraToCreatureTarget takes it via findCreatureMotion.
+func (s *Server) reapplyCreatureAddonAuras(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
+		return
+	}
+	lowGUID := uint32(motion.GUID & 0xFFFFFF)
+	var auras string
+	// GetCreatureAddon (Creature.cpp:2611-2621) is whole-row: a guid row
+	// wins entirely, even with no auras — the template row fills only a
+	// missing guid row, never an aura-less one.
+	if err := s.WorldStore.DB.QueryRowContext(context.Background(),
+		`SELECT COALESCE(auras, '') FROM creature_addon WHERE guid = ?`, lowGUID).Scan(&auras); err != nil {
+		if motion.Entry == 0 {
+			return
+		}
+		if err := s.WorldStore.DB.QueryRowContext(context.Background(),
+			`SELECT COALESCE(auras, '') FROM creature_template_addon WHERE entry = ?`, motion.Entry).Scan(&auras); err != nil || auras == "" {
+			return
+		}
+	} else if auras == "" {
+		return
+	}
+	lvl := motion.Level
+	if lvl == 0 {
+		lvl = 80
+	}
+	for _, field := range strings.Fields(auras) {
+		spellID, err := strconv.ParseUint(field, 10, 32)
+		if err != nil || spellID == 0 {
+			continue
+		}
+		if s.creatureSpellTargetHasAura(motion, motion.GUID, uint32(spellID)) {
+			continue
+		}
+		spell, found, err := s.Data.Spell(uint32(spellID))
+		if err != nil || !found {
+			continue
+		}
+		var durationMs uint32
+		if spell.DurationIndex > 0 {
+			if dur, ok, derr := s.Data.SpellDuration(spell.DurationIndex, uint32(lvl)); derr == nil && ok && dur > 0 {
+				durationMs = uint32(dur)
+			}
+		}
+		s.serverApplyAuraToCreatureTarget(ctx, motion, spell, durationMs, motion.GUID, nil, false, nil, 0, false, true)
 	}
 }
 
@@ -7878,6 +7963,10 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.DynamicFlags &^= unitDynFlagTapped
 	if s != nil {
 		s.clearCreatureAuras(creatureAuraKeyForMotion(motion))
+		// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:308): LoadCreaturesAddon
+		// re-applies the addon auras right after the evade clear above
+		// (RemoveAurasOnEvade, CombatStop, then the addon leg, in C++ order).
+		s.reapplyCreatureAddonAuras(ctx, motion)
 		// Health no longer restores here (see above) — this broadcast now
 		// carries only the tapped-flag clear.
 		s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{
@@ -8036,6 +8125,10 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 					// DoFinalize restores spawn health/mana on the immediate
 					// finalize too, ahead of JustReachedHome.
 					s.restoreCreatureSpawnHealth(motion)
+					// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:148):
+					// LoadCreaturesAddon re-applies the addon auras ahead of
+					// JustReachedHome.
+					s.reapplyCreatureAddonAuras(ctx, motion)
 					// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 					s.resetVehicleKitOnReachHome(ctx, motion)
 					// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
@@ -8090,6 +8183,10 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 				// hook, exactly as DoFinalize orders SetSpawnHealth before
 				// JustReachedHome (HomeMovementGenerator.cpp:139-151).
 				s.restoreCreatureSpawnHealth(motion)
+				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:148):
+				// LoadCreaturesAddon re-applies the addon auras ahead of
+				// JustReachedHome.
+				s.reapplyCreatureAddonAuras(ctx, motion)
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
 				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
@@ -10332,6 +10429,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// SetSpawnHealth runs ahead of JustReachedHome on every informed
 				// finalize, including a scripted MoveHome.
 				s.restoreCreatureSpawnHealth(motion)
+				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:148):
+				// LoadCreaturesAddon re-applies the addon auras ahead of
+				// JustReachedHome.
+				s.reapplyCreatureAddonAuras(ctx, motion)
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
 				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
@@ -10438,6 +10539,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// (CritterAI::OnMovementGeneratorFinalized, PassiveAI.cpp:81-86) whose
 				// home generator finalizes immediately on the failed launch, so
 				// AI()->JustReachedHome() still fires (HomeMovementGenerator.cpp:139-151).
+				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:147):
+				// SetSpawnHealth runs ahead of JustReachedHome on every informed
+				// finalize.
+				s.restoreCreatureSpawnHealth(motion)
+				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:148):
+				// LoadCreaturesAddon re-applies the addon auras ahead of
+				// JustReachedHome.
+				s.reapplyCreatureAddonAuras(ctx, motion)
 				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
 				s.resetVehicleKitOnReachHome(ctx, motion)
 				// BossAI::_JustReachedHome (ScriptedCreature.cpp:524): me->setActive(false).
@@ -13927,6 +14036,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:139-151)
 		// restores spawn health/mana ahead of JustReachedHome.
 		s.restoreCreatureSpawnHealth(motion)
+		// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:148):
+		// LoadCreaturesAddon re-applies the addon auras ahead of
+		// JustReachedHome.
+		s.reapplyCreatureAddonAuras(ctx, motion)
 		// Home-move completion: HomeMovementGenerator<Creature>::DoFinalize
 		// (HomeMovementGenerator.cpp:151) calls AI()->JustReachedHome() when
 		// the spline finalizes after evade — Eluna::JustReachedHome

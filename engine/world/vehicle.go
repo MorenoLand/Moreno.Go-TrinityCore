@@ -664,7 +664,8 @@ func (s *Server) applyVehicleImmunities(motion *creatureMotion) {
 // resetVehicleKitOnReachHome mirrors the Vehicle::Reset(true) leg of
 // HomeMovementGenerator<Creature>::DoFinalize (HomeMovementGenerator.cpp:139-151):
 // SetSpawnHealth and LoadCreaturesAddon run ahead of it (the evade arms
-// restore health at evade start; the addon load has no Go twin), then
+// restore health at evade start; the addon auras re-apply via
+// reapplyCreatureAddonAuras), then
 // Reset(true) re-applies ApplyAllImmunities and, while the base is alive,
 // InstallAllAccessories(true) — MINION accessories only, with NO
 // RemoveAllPassengers first (Vehicle.cpp:84-100: the removal runs only

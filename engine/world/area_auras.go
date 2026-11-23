@@ -552,7 +552,7 @@ func (s *Server) applyAreaAuraToHolder(ctx context.Context, state *areaAuraState
 		if s.dynobjCreatureTargetImmune(ctx, state.spell, holderGUID, state.mapID, state.instanceID, s.creatureFriendlyToTarget(caster, holderGUID)) {
 			return false
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, caster, state.spell, state.durationMs, holderGUID, nil, true, nil, mask, false)
+		s.serverApplyAuraToCreatureTarget(ctx, caster, state.spell, state.durationMs, holderGUID, nil, true, nil, mask, false, false)
 	}
 	return s.areaAuraPresent(state, holderGUID)
 }

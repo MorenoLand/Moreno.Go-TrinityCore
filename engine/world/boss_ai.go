@@ -10497,7 +10497,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			}
 			continue
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false, nil, 0, triggered)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent, false, nil, 0, triggered, false)
 	}
 	if hasAreaAura {
 		// Caster-owned area-aura fan-out (area_auras.go): runs after
@@ -10740,7 +10740,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		if d := object.NextAuraTick.Sub(now); d > 0 {
 			sharedDelayMs = uint32(d / time.Millisecond)
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true, &sharedDelayMs, mask, false)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil, true, &sharedDelayMs, mask, false, false)
 	}
 }
 
@@ -10764,7 +10764,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 // schedule, not a private period later. Nil keeps the default
 // periodicTickInitialDelay; the merge re-arm never takes it, like the
 // session twin.
-func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool, periodicInitialDelay *uint32, allowedMask uint8, triggered bool) {
+func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState, persistentAreaAura bool, periodicInitialDelay *uint32, allowedMask uint8, triggered bool, allowEvading bool) {
 	if s == nil || m == nil || targetGUID == 0 {
 		return
 	}
@@ -10775,7 +10775,12 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 	if target.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 		return
 	}
-	if s.isCreatureEvadingInInstance(m.Map, m.InstanceID, targetGUID) {
+	// The evade gate models cast targeting (an evading creature cannot
+	// be spell-hit); a direct Unit::AddAura carries no cast, so the
+	// LoadCreaturesAddon self-apply bypasses it via allowEvading (C++
+	// runs that leg inside _EnterEvadeMode while IsInEvadeMode() is
+	// true, CreatureAI.cpp:308).
+	if !allowEvading && s.isCreatureEvadingInInstance(m.Map, m.InstanceID, targetGUID) {
 		return
 	}
 	targetKey := creatureAuraKeyForMotion(target)
