@@ -6428,9 +6428,10 @@ func (s *Server) smartActionActivateGObject(ctx context.Context, motion *creatur
 		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, 1, invokerGUID)
 		s.useDoorOrButton(motion.Map, motion.InstanceID, tgt.guid, false, 0)
 		// GameObject::UseDoorOrButton (GameObject.cpp:1443) leaves the
-		// GO GO_ACTIVATED (loot state 2); the Go twin tracks state via
-		// the GO_STATE/flag broadcast only, so the loot-state tail is
-		// written here to match the C++ end state.
+		// GO GO_ACTIVATED (loot state 2); useDoorOrButton records that
+		// state itself, so this write only re-asserts it to fire the
+		// GO_LOOT_STATE_CHANGED SmartAI event (SetLootState,
+		// GameObject.cpp:2371-2382), which the use path does not dispatch.
 		s.setGameObjectLootState(motion.Map, motion.InstanceID, tgt.guid, 2, invokerGUID)
 	}
 }

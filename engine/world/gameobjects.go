@@ -668,7 +668,9 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 			}
 		}
 	}
-	// linkedTrapId has no Go trap model (documented).
+	// GameObject.cpp:1675-1676: the linked trap fires after kill credit
+	// and before the GO_ACTIVATED state change below.
+	s.triggerLinkedTrapGameObject(ctx, goState, tpl.linkedTrapID)
 	// GO_FLAG_IN_USE is transient here (C++ sets it at use and the
 	// GO_ACTIVATED update arm drops it at the next tick), so it is not
 	// modeled; the state moves to ACTIVE with the custom anim, or to
@@ -941,7 +943,7 @@ func (s *session) useGameObjectTypeArms(ctx context.Context, payload []byte, goS
 	case GameObjectTypeButton:
 		// GameObject::Use GAMEOBJECT_TYPE_BUTTON arm (GameObject.cpp:1520):
 		// doors and buttons share the identical arm — UseDoorOrButton(0,
-		// false, user) — so the button runs the same IN_USE gate, state
+		// false, user) — so the button runs the same loot-state gate, state
 		// flip and template autoCloseTime (data2) reset as doors.
 		s.server.useDoorOrButton(goState.Map, goState.InstanceID, guid, false, 0)
 
@@ -1526,6 +1528,64 @@ type gooberTemplateData struct {
 	spellID       uint32 // data10
 	linkedTrapID  uint32 // data12
 	gossipID      uint32 // data19
+}
+
+// triggerLinkedTrapGameObject ports GameObject::TriggeringLinkedGameObject
+// (GameObject.cpp:1399-1413) for the goober Use arm (GameObject.cpp:1675-1676):
+// the linked template must be a TRAP whose spell resolves, and the trap GO
+// casts that spell on the user — non-triggered, with the trap GO as caster
+// (WorldObject::CastSpell, Object.cpp:2904). The linked trap is the GO C++
+// spawns at the goober's position at Create time (GameObject.cpp:409-420),
+// so the live record is found by entry near the goober; when no record
+// exists — Go has no Create-time linked-spawn twin — the cast rides a
+// transient motion at the goober's position carrying the trap entry, so the
+// spell still lands on the user. Residual gap: that fallback names the
+// goober's GUID as the caster in SMSG_SPELL_START instead of the trap GO's,
+// which has no live GUID in Go. An unknown trap spell fizzles silently in
+// the cast path (spellKnown gate), matching C++'s GetSpellInfo null return.
+func (s *session) triggerLinkedTrapGameObject(ctx context.Context, goState *dynamicGameObjectState, linkedTrapID uint32) {
+	if s == nil || goState == nil || linkedTrapID == 0 {
+		return
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var trapType, trapSpellID int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0), COALESCE(Data3, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", linkedTrapID).Scan(&trapType, &trapSpellID); err != nil || trapType != int64(GameObjectTypeTrap) || trapSpellID == 0 {
+		return
+	}
+	spellID := uint32(trapSpellID)
+	// Nearest live or static trap GO of the linked entry: C++ spawns the
+	// linked trap at the goober's exact position, so a 10yd radius covers
+	// DB placement jitter without sweeping in unrelated traps.
+	var trapGUID uint64
+	bestDist := float64(10)
+	s.scanNearbyGameObjectsAt(ctx, goState.Map, goState.InstanceID, goState.X, goState.Y, 10, func(g nearbyGameObject) {
+		if g.entry != linkedTrapID {
+			return
+		}
+		if d := distance3D(goState.X, goState.Y, goState.Z, g.x, g.y, g.z); d <= bestDist {
+			bestDist = d
+			trapGUID = g.guid
+		}
+	})
+	var motion *creatureMotion
+	if trapGUID != 0 {
+		// A static-row GUID has no live record, so syntheticGOMotion
+		// returns nil for it and the transient motion below fires the
+		// cast from the same spot instead.
+		motion = s.server.syntheticGOMotion(goState.Map, goState.InstanceID, trapGUID)
+	}
+	if motion == nil {
+		// No live linked trap: cast from the goober's spot with the
+		// trap's entry (see the header comment for the GUID caveat).
+		motion = &creatureMotion{
+			GUID: goState.GUID, Entry: linkedTrapID, Map: goState.Map, InstanceID: goState.InstanceID,
+			X: goState.X, Y: goState.Y, Z: goState.Z, Orientation: goState.Orientation,
+			PhaseMask: goState.PhaseMask, AIName: "SmartAI", BaseIsGameObject: true,
+		}
+	}
+	s.server.castCreatureSpell(ctx, motion, spellID, s.playerGUID)
 }
 
 // loadGooberTemplate fetches the template data fields the goober use-arm reads.

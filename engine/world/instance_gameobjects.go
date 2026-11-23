@@ -301,13 +301,24 @@ func (s *Server) materializeStaticGameObjectState(mapID, instanceID uint32, guid
 
 // goFlagInUse is GO_FLAG_IN_USE (SharedDefines.h:1637): disables interaction
 // while animated. Doors/buttons set it in UseDoorOrButton (via
-// SwitchDoorOrButton) and ResetDoorOrButton clears it; it doubles as the Go
-// twin of the lootState != GO_READY re-use gate.
+// SwitchDoorOrButton) and ResetDoorOrButton clears it.
 const goFlagInUse uint32 = 0x00000001
 
+// Loot-state values (GameObject.h:68-74): GO_NOT_READY 0, GO_READY 1,
+// GO_ACTIVATED 2, GO_JUST_DEACTIVATED 3. dynamicGameObjectState.LootState
+// carries them only when LootStateSet; an unset record reads as GO_READY
+// (the spawn snapshot, gameobjects.go:119).
+const (
+	goLootStateNotReady        uint8 = 0
+	goLootStateReady           uint8 = 1
+	goLootStateActivated       uint8 = 2
+	goLootStateJustDeactivated uint8 = 3
+)
+
 // useDoorOrButton mirrors GameObject::UseDoorOrButton + SwitchDoorOrButton
-// (GameObject.cpp:1434-1484): a use while activated is dropped (the
-// lootState != GO_READY early-out, keyed on GO_FLAG_IN_USE here). With
+// (GameObject.cpp:1434-1484): a use while the loot state is not GO_READY is
+// dropped (GameObject.cpp:1436) — the flag is never consulted by the C++
+// gate. With
 // alternative set (GameObjectActions::Destroy, SpellEffects.cpp:3986) a
 // closed door flips to GO_STATE_DESTROYED (SharedDefines.h:1663) instead of
 // ACTIVE; an open or destroyed door flips back to READY. GO_FLAG_IN_USE goes
@@ -343,12 +354,22 @@ func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternat
 			return
 		}
 	}
-	if st.Flags&goFlagInUse != 0 {
+	// GameObject::UseDoorOrButton (GameObject.cpp:1436) early-outs on
+	// m_lootState != GO_READY and never consults GO_FLAG_IN_USE; an unset
+	// loot state reads as GO_READY (the spawn snapshot). A door left
+	// GO_NOT_READY / GO_JUST_DEACTIVATED by a Lua or SmartAI SetLootState
+	// is blocked here even with the flag clear.
+	if st.LootStateSet && st.LootState != goLootStateReady {
 		s.objectsMu.Unlock()
 		return
 	}
 	entry := st.Entry
 	st.Flags |= goFlagInUse
+	// GameObject.cpp:1444: SetLootState(GO_ACTIVATED, user) — the
+	// loot-state half of the use; the flag is the client-visible
+	// SwitchDoorOrButton half. The reset arm restores GO_READY.
+	st.LootState = goLootStateActivated
+	st.LootStateSet = true
 	newState := GameObjectStateReady
 	if st.State == GameObjectStateReady {
 		newState = GameObjectStateActive
@@ -760,17 +781,24 @@ func (s *Server) gameObjectTemplateGooberConsumable(entry uint32) bool {
 
 // resetDoorOrButtonLocked mirrors GameObject::ResetDoorOrButton
 // (GameObject.cpp:1422-1431); the caller must hold objectsMu. It is a no-op
-// when the door/button was never activated (or already reset) — the IN_USE
-// flag is the Go twin of the GO_READY/GO_JUST_DEACTIVATED early-out.
-// Otherwise the flag is cleared and the spawn state (m_prevGoState, set once
-// in GameObject::Create, GameObject.cpp:349) is restored. It returns the
-// values to broadcast.
+// when the loot state is GO_READY or GO_JUST_DEACTIVATED (the C++ early-out;
+// an unset loot state reads as GO_READY, the first-tick end state for doors
+// — GameObject.cpp:545 flips NOT_READY to READY with no delay — so it
+// early-outs too), never on the flag. Otherwise the
+// flag is cleared and the spawn state (m_prevGoState, set once
+// in GameObject::Create, GameObject.cpp:349) is restored. Go has no periodic
+// GO Update tick to walk GO_JUST_DEACTIVATED -> GO_NOT_READY -> GO_READY
+// (GameObject.cpp:776-860), so the reset lands the door at GO_READY directly
+// — the C++ end state for a re-readying door — instead of stranding it
+// mid-chain. It returns the values to broadcast.
 func (s *Server) resetDoorOrButtonLocked(st *dynamicGameObjectState) (flags, bytes1 uint32, newState uint8, ok bool) {
-	if st == nil || st.Flags&goFlagInUse == 0 {
+	if st == nil || !st.LootStateSet || st.LootState == goLootStateReady || st.LootState == goLootStateJustDeactivated {
 		return 0, 0, 0, false
 	}
 	st.Flags &^= goFlagInUse
 	st.State = st.SpawnState
+	st.LootState = goLootStateReady
+	st.LootStateSet = true
 	flags = st.Flags
 	newState = st.State
 	bytes1 = uint32(newState) | uint32(st.Type)<<8 | uint32(st.ArtKit)<<16 | uint32(st.AnimProgress)<<24
