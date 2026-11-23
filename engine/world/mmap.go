@@ -111,6 +111,61 @@ func newMMapManager(dataDir string) *MMapManager {
 	}
 }
 
+// mmapPathfindingEnabled mirrors DisableMgr::IsPathfindingEnabled
+// (DisableMgr.cpp:418-422): CONFIG_ENABLE_MMAPS and no DISABLE_TYPE_MMAP
+// (7) disables row for the map. The PathGenerator constructor gates on
+// it (PathGenerator.cpp:41-46); the session twin
+// (commands_mmaps.go: mmapPathfindingEnabled) now shares this check.
+func (s *Server) mmapPathfindingEnabled(mapID uint32) bool {
+	if s == nil || !s.Config.EnableMmaps {
+		return false
+	}
+	return !s.mmapPathfindingDisabledFor(mapID)
+}
+
+// mmapPathfindingDisabledFor mirrors the DISABLE_TYPE_MMAP leg of
+// DisableMgr::IsDisabledFor (DisableMgr.cpp:397-399): a row disables on
+// mere presence (MMAP_DISABLE_PATHFINDING is 0x0, DisableMgr.h:58), so
+// flags are ignored. Rows are cached per map on the vmapDisabledFor
+// pattern (terrain.go) and dropped by .reload disables, matching C++
+// LoadDisables rebuilding the in-memory map.
+func (s *Server) mmapPathfindingDisabledFor(mapID uint32) bool {
+	if s == nil {
+		return false
+	}
+	s.mmapDisableMu.RLock()
+	disabled, ok := s.mmapDisableFlags[mapID]
+	s.mmapDisableMu.RUnlock()
+	if ok {
+		return disabled
+	}
+	disabled = false
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		var one int
+		if err := s.WorldStore.DB.QueryRow("SELECT 1 FROM disables WHERE sourceType = 7 AND entry = ?", mapID).Scan(&one); err == nil {
+			disabled = true
+		}
+	}
+	s.mmapDisableMu.Lock()
+	if s.mmapDisableFlags == nil {
+		s.mmapDisableFlags = make(map[uint32]bool)
+	}
+	s.mmapDisableFlags[mapID] = disabled
+	s.mmapDisableMu.Unlock()
+	return disabled
+}
+
+// invalidateMmapDisableFlags drops the cached DISABLE_TYPE_MMAP rows so
+// the next pathfinding check re-reads the disables table.
+func (s *Server) invalidateMmapDisableFlags() {
+	if s == nil {
+		return
+	}
+	s.mmapDisableMu.Lock()
+	s.mmapDisableFlags = nil
+	s.mmapDisableMu.Unlock()
+}
+
 // mmapManager is the Server's lazy accessor for the MMapManager singleton,
 // the Go twin of MMAP::MMapFactory::createOrGetMMapManager
 // (MMapFactory.cpp:25-31). There is no Go twin of MMapFactory::clear: the

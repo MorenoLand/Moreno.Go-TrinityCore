@@ -225,11 +225,13 @@ func (s *session) runReloadArm(ctx context.Context, arm reloadArm, quiet bool) b
 	if arm.table == "battleground_template" {
 		s.server.invalidateBattlegroundTemplates()
 	}
-	// The disables arm drops the cached DISABLE_TYPE_VMAP flags (terrain.go):
-	// the one disables cache in Go. The C++ handler (cs_reload.cpp:1000-1008)
+	// The disables arm drops the cached DISABLE_TYPE_VMAP flags
+	// (terrain.go) and DISABLE_TYPE_MMAP flags (mmap.go): the two
+	// disables caches in Go. The C++ handler (cs_reload.cpp:1000-1008)
 	// also runs CheckQuestDisables, which has no Go leg (see the file header).
 	if arm.table == "disables" {
 		s.server.invalidateVMapDisableFlags()
+		s.server.invalidateMmapDisableFlags()
 	}
 	// The smart_scripts store is load-once (loadSmartScripts), so the
 	// reload arm must drop it or the next lookup would keep serving

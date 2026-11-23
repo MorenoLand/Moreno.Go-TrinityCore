@@ -426,8 +426,14 @@ type Server struct {
 	// Server.vmapDisabledFor (terrain.go); .reload disables drops the cache
 	// (commands_reload.go). Every other disables row is read live, but the
 	// terrain path is too hot for a query per LOS/height call.
-	vmapDisableMu      sync.RWMutex
-	vmapDisableFlags   map[uint32]uint8
+	vmapDisableMu    sync.RWMutex
+	vmapDisableFlags map[uint32]uint8
+	// mmapDisableMu/mmapDisableFlags cache the DISABLE_TYPE_MMAP rows
+	// (disables sourceType 7) per map, lazily loaded by
+	// Server.mmapPathfindingDisabledFor (mmap.go); .reload disables drops
+	// the cache (commands_reload.go).
+	mmapDisableMu      sync.RWMutex
+	mmapDisableFlags   map[uint32]bool
 	weatherMu          sync.Mutex
 	weather            map[uint32]*zoneWeather
 	weatherOverrides   map[uint32]zoneWeatherOverride

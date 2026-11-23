@@ -21,7 +21,7 @@ import (
 // line. Trinity checks permission only on the invoker leaf node, so each
 // arm gates exactly its own C++ permission (RBAC.h:405-409).
 //
-// Of the 5 arms, 3 are native and 2 are documented-blocked:
+// All 5 arms are native:
 //
 //   - `loadedtiles` is native: the manager's navmesh/query gate and the
 //     per-slot tile scan (cs_mmaps.cpp:189-212) run over Server.mmaps.
@@ -33,17 +33,17 @@ import (
 //     per-tile dtNavMesh aggregate lines (cs_mmaps.cpp:214-260) run over
 //     Server.mmaps; a map with no mesh loaded still reports exactly
 //     "NavMesh not loaded for current map." like C++.
-//   - `path` has no Go bridge: PathGenerator lands in a sibling unit. The
-//     C++ handler gates on the navmesh (cs_mmaps.cpp:97-101) before
-//     printing "mmap path:" (:103), so with no navmesh loaded the output
-//     is exactly the missing report.
-//   - `testarea` has no Go bridge: PathGenerator lands in a sibling unit.
-//     The creature range search runs over the live motion map (same map +
-//     instance, alive only, the AnyUnitInObjectRangeCheck terms —
-//     phase-mask overlap, 40yd 3D plus both combat reaches, strict < on
-//     squared distance, GridNotifiers.h:1050-1055), but no path is actually
-//     computed: the paths count mirrors C++'s unconditional per-creature
-//     attempt count (cs_mmaps.cpp:282-287) over the measured sweep time.
+//   - `path` is native: the navmesh gate (cs_mmaps.cpp:67-71) then a
+//     PathGenerator from the selected unit to the player
+//     (pathgenerator.go), with the exact C++ message lines; only the
+//     VISUAL_WAYPOINT summon per point (:120-121) has no Go bridge (no
+//     command-layer temp-summon spawns at an arbitrary position).
+//   - `testarea` is native: the creature range search runs over the live
+//     motion map (same map + instance, alive only, the
+//     AnyUnitInObjectRangeCheck terms — phase-mask overlap, 40yd 3D plus
+//     both combat reaches, strict < on squared distance,
+//     GridNotifiers.h:1050-1055), then one real PathGenerator per
+//     creature (cs_mmaps.cpp:282-287) over the measured sweep time.
 //
 // Console-vs-chat branches are moot (Go commands are always sessioned).
 //
@@ -91,7 +91,7 @@ func (s *session) handleCmdMMap(ctx context.Context, args []string) bool {
 	case "loc":
 		return s.handleMmapLocCommand(ctx)
 	case "path":
-		return s.handleMmapPathCommand(ctx)
+		return s.handleMmapPathCommand(ctx, args[1:])
 	case "stats":
 		return s.handleMmapStatsCommand(ctx)
 	case "testarea":
@@ -183,39 +183,101 @@ func (s *session) handleMmapLocCommand(ctx context.Context) bool {
 	return true
 }
 
-// handleMmapPathCommand mirrors HandleMmapPathCommand (cs_mmaps.cpp:65-124,
-// RBAC 539). Documented-blocked: PathGenerator lands in a sibling unit.
-func (s *session) handleMmapPathCommand(ctx context.Context) bool {
+// handleMmapPathCommand mirrors HandleMmapPathCommand (cs_mmaps.cpp:
+// 65-124, RBAC 539): the navmesh gate, then a PathGenerator from the
+// selected unit (the getSelectedUnit twin: debugSelectedUnit falls back
+// to the invoker, Chat.cpp:312-321, so the C++ "Invalid target/source
+// selection" leg is unreachable for a sessioned player) to the player's
+// position, with the exact C++ message lines. The VISUAL_WAYPOINT summon
+// per point (cs_mmaps.cpp:120-121) has no Go bridge: no command-layer
+// temp-summon spawns a creature at an arbitrary position with a 9s
+// despawn, so the markers are not summoned; every text line is native.
+func (s *session) handleMmapPathCommand(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandMMapPath) {
 		return false
 	}
-	// The C++ handler gates on the navmesh (cs_mmaps.cpp:67-71) before
-	// printing "mmap path:" (:73), so with no navmesh loaded the output
-	// is exactly the missing report; the target-selection check is
-	// unreachable here.
-	s.sendSysMessage("NavMesh not loaded for current map.")
+	if s.server == nil || s.player == nil {
+		s.sendSysMessage("NavMesh not loaded for current map.")
+		return true
+	}
+	if s.server.mmapManager().GetNavMesh(s.player.Map) == nil {
+		s.sendSysMessage("NavMesh not loaded for current map.")
+		return true
+	}
+
+	s.sendSysMessage("mmap path:")
+
+	targetName, source := s.mmapPathTarget()
+
+	useStraightPath := false
+	useRaycast := false
+	if len(args) > 0 {
+		switch args[0] {
+		case "true":
+			useStraightPath = true
+		case "line", "ray", "raycast":
+			useRaycast = true
+		}
+	}
+
+	path := NewPathGenerator(s.server, source)
+	path.SetUseStraightPath(useStraightPath)
+	path.SetUseRaycast(useRaycast)
+	result := path.CalculatePath(s.player.X, s.player.Y, s.player.Z, false)
+
+	pointPath := path.PathPoints()
+	s.sendSysMessage(fmt.Sprintf("%s's path to %s:", targetName, s.player.Name))
+	building := "SmoothPath"
+	if useStraightPath {
+		building = "StraightPath"
+	} else if useRaycast {
+		building = "Raycast"
+	}
+	s.sendSysMessage(fmt.Sprintf("Building: %s", building))
+	resultStr := "false"
+	if result {
+		resultStr = "true"
+	}
+	s.sendSysMessage(fmt.Sprintf("Result: %s - Length: %d - Type: %d", resultStr, len(pointPath), uint32(path.PathType())))
+	start := path.StartPosition()
+	end := path.EndPosition()
+	actualEnd := path.ActualEndPosition()
+	s.sendSysMessage(fmt.Sprintf("StartPosition     (%.3f, %.3f, %.3f)", start.X, start.Y, start.Z))
+	s.sendSysMessage(fmt.Sprintf("EndPosition       (%.3f, %.3f, %.3f)", end.X, end.Y, end.Z))
+	s.sendSysMessage(fmt.Sprintf("ActualEndPosition (%.3f, %.3f, %.3f)", actualEnd.X, actualEnd.Y, actualEnd.Z))
+
+	if !sessionIsGameMaster(s) {
+		s.sendSysMessage("Enable GM mode to see the path points.")
+	}
 	return true
 }
 
-// mmapPathfindingEnabled mirrors DisableMgr::IsPathfindingEnabled
-// (DisableMgr.cpp:418-422): CONFIG_ENABLE_MMAPS and no DISABLE_TYPE_MMAP
-// (7) disables row for the map. For MMAP disables IsDisabledFor returns true
-// on the entry's mere presence (DisableMgr.cpp:404-405), so flags are ignored.
-// This stats display is the only Go enforcement of MMAP disables: the C++
-// pathfinding gate (PathGenerator.cpp:41) and tile-load gate (Map.cpp:169)
-// have no Go counterpart yet — Go runs no navmesh pathfinder
-// (creaturemotion.go:3920) and no Map/Grid driver calls MMapManager.LoadMap.
-func (s *session) mmapPathfindingEnabled(ctx context.Context, mapID uint32) bool {
-	if s.server == nil || !s.server.Config.EnableMmaps {
-		return false
-	}
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		var one int
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM disables WHERE sourceType = ? AND entry = ?", disableTypeMMap, mapID).Scan(&one); err == nil {
-			return false
+// mmapPathTarget resolves the .mmap path source the getSelectedUnit way
+// (Chat.cpp:312-321): the selected creature across instances, else the
+// selected player, else the invoker.
+func (s *session) mmapPathTarget() (string, pathGeneratorSource) {
+	if s.selection != 0 && s.server != nil {
+		if m := s.debugSelectedCreatureMotion(); m != nil {
+			return m.Name, newCreaturePathSource(s.server, m)
+		}
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+			return ts.player.Name, newPlayerPathSource(ts)
 		}
 	}
-	return true
+	return s.player.Name, newPlayerPathSource(s)
+}
+
+// mmapPathfindingEnabled mirrors DisableMgr::IsPathfindingEnabled
+// (DisableMgr.cpp:418-422) via the server-level check (mmap.go): the
+// PathGenerator constructor gates on the same check
+// (PathGenerator.cpp:41-46). For MMAP disables IsDisabledFor returns
+// true on the entry's mere presence (DisableMgr.cpp:397-399), so flags
+// are ignored; rows are cached per map and dropped by .reload disables.
+func (s *session) mmapPathfindingEnabled(ctx context.Context, mapID uint32) bool {
+	if s.server == nil {
+		return false
+	}
+	return s.server.mmapPathfindingEnabled(mapID)
 }
 
 // handleMmapStatsCommand mirrors HandleMmapStatsCommand (cs_mmaps.cpp:
@@ -269,9 +331,9 @@ func (s *session) handleMmapStatsCommand(ctx context.Context) bool {
 // handleMmapTestAreaCommand mirrors HandleMmapTestArea (cs_mmaps.cpp:262-295,
 // RBAC 541): creatures within 40 yards of the invoker (alive only, same map
 // + instance + phase, reach-extended strict distance — the
-// AnyUnitInObjectRangeCheck terms), then one path generation per creature.
-// PathGenerator has no Go bridge, so the paths count is C++'s per-creature
-// attempt count, not computed paths.
+// AnyUnitInObjectRangeCheck terms), then one PathGenerator per creature to
+// the invoker's position; the paths count is C++'s per-creature attempt
+// count (cs_mmaps.cpp:282-287) over the measured sweep time.
 func (s *session) handleMmapTestAreaCommand(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandMMapTestArea) {
 		return false
@@ -282,7 +344,7 @@ func (s *session) handleMmapTestAreaCommand(ctx context.Context) bool {
 	}
 	const radius = 40.0
 	start := time.Now()
-	count := 0
+	var targets []*creatureMotion
 	if s.server != nil {
 		// AnyUnitInObjectRangeCheck (GridNotifiers.h:1050-1055) is IsAlive()
 		// && IsWithinDistInMap(u, 40): same map (motionMapLocked) + phase-mask
@@ -306,16 +368,26 @@ func (s *session) handleMmapTestAreaCommand(ctx context.Context) bool {
 			maxDist := radius + ownReach + float64(m.CombatReach)
 			dx, dy, dz := float64(m.X-s.player.X), float64(m.Y-s.player.Y), float64(m.Z-s.player.Z)
 			if dx*dx+dy*dy+dz*dz < maxDist*maxDist {
-				count++
+				targets = append(targets, m)
 			}
 		}
 		s.server.motionMu.Unlock()
 	}
-	if count == 0 {
+	if len(targets) == 0 {
 		s.sendSysMessage("No creatures in 40.000000 yard range.")
 		return true
 	}
-	s.sendSysMessage(fmt.Sprintf("Found %d Creatures.", count))
-	s.sendSysMessage(fmt.Sprintf("Generated %d paths in %d ms", count, time.Since(start).Milliseconds()))
+	s.sendSysMessage(fmt.Sprintf("Found %d Creatures.", len(targets)))
+	// One PathGenerator per creature (cs_mmaps.cpp:282-287), to the
+	// invoker's position. Paths run after the sweep lock is released:
+	// CalculatePath reads terrain state, which must not run under
+	// motionMu. The count is C++'s per-creature attempt count.
+	paths := 0
+	for _, m := range targets {
+		path := NewPathGenerator(s.server, newCreaturePathSource(s.server, m))
+		path.CalculatePath(s.player.X, s.player.Y, s.player.Z, false)
+		paths++
+	}
+	s.sendSysMessage(fmt.Sprintf("Generated %d paths in %d ms", paths, time.Since(start).Milliseconds()))
 	return true
 }
