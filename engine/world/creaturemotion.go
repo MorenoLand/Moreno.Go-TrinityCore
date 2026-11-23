@@ -7223,6 +7223,19 @@ func (s *Server) finishCreatureSeekAssistance(ctx context.Context, motion *creat
 	}
 	s.motionMu.Unlock()
 	s.callCreatureAssistance(ctx, motion)
+	if alive {
+		// AssistanceDistractMovementGenerator inherits
+		// DistractMovementGenerator::Initialize (IdleMovementGenerator
+		// .cpp:168-169): distracted creatures stand up if not standing —
+		// the assist-distract install stands up too
+		// (MotionMaster::MoveSeekAssistanceDistract,
+		// MotionMaster.cpp:972-977, from
+		// AssistanceMovementGenerator::Finalize,
+		// PointMovementGenerator.cpp:183-197; Initialize runs on the
+		// next MotionMaster update, MotionMaster.cpp:306-309, after
+		// CallAssistance).
+		s.standCreatureMotionUp(motion)
+	}
 }
 
 // clearCreatureVisualTarget is the engine half of Creature::SetTarget

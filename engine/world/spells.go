@@ -60437,7 +60437,7 @@ func buildSetProficiency(itemClass uint8, mask uint32) []byte {
 // aggro still works, matching C++ where the generator does not suppress
 // acquisition), and the turn-in-place rides the Final_Angle arm of
 // SMSG_MONSTER_MOVE. Player hit targets have no Go motion model (documented
-// no-bridge); the stand-up arm has no Go stand-state model (documented).
+// no-bridge); the creature stand-up arm rides standCreatureMotionUp.
 func (s *session) handleEffectDistract(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, target protocol.SpellTargetData) {
 	if s == nil || s.server == nil || s.player == nil {
 		return
@@ -60485,6 +60485,11 @@ func (s *session) handleEffectDistract(ctx context.Context, spell wotlk.Spell, e
 		motion.DistractedFromAssist = false
 		motion.Moving = false
 		s.server.motionMu.Unlock()
+		// DistractMovementGenerator::Initialize (IdleMovementGenerator
+		// .cpp:168-169): distracted creatures stand up if not standing —
+		// the stand runs ahead of the spline launch in C++, so it runs
+		// ahead of the turn packet here.
+		s.server.standCreatureMotionUp(motion)
 		// DistractMovementGenerator::Initialize launches an in-place
 		// MoveTo+SetFacing spline; Go reuses the facing arm of the monster
 		// move packet for the client-side turn.
