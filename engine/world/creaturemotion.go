@@ -902,9 +902,15 @@ type creatureMotion struct {
 	// PathStarted marks a path run in progress: at least one node has
 	// launched. It distinguishes the pre-first-node NextIdx==0 from the
 	// post-last-node wrap the one-shot finalize keys on.
-	PathStarted    bool
-	LastWaypointID uint32 // node id of the last waypoint arrival (Creature::_currentWaypointNodeInfo.first, WaypointMovementGenerator.cpp:264); 0 before the first arrival, the C++ (0,0) default
-	Walking        bool   // persistent MOVEMENTFLAG_WALKING (Creature::SetWalk, Creature.cpp:3012); folded into creatureSplineVelocity, distinct from per-spline walk velocity
+	PathStarted bool
+	// WaypointInterrupted is the WaypointMovementGenerator INTERRUPTED
+	// latch (MovementGenerator.h:36, 0x008): set when a NOT_MOVE /
+	// casting-prevented block spans a waypoint leg's landing, so the
+	// arrival event is deferred until the block clears instead of
+	// firing mid-block (WaypointMovementGenerator.cpp:141-167).
+	WaypointInterrupted bool
+	LastWaypointID      uint32 // node id of the last waypoint arrival (Creature::_currentWaypointNodeInfo.first, WaypointMovementGenerator.cpp:264); 0 before the first arrival, the C++ (0,0) default
+	Walking             bool   // persistent MOVEMENTFLAG_WALKING (Creature::SetWalk, Creature.cpp:3012); folded into creatureSplineVelocity, distinct from per-spline walk velocity
 
 	Moving   bool
 	Evading  bool
@@ -4150,6 +4156,7 @@ func (s *Server) startCreatureWaypoint(ctx context.Context, motion *creatureMoti
 	motion.NextIdx = 0
 	motion.PathOneShot = false
 	motion.PathStarted = false
+	motion.WaypointInterrupted = false
 	motion.MoveType = 2
 	motion.WaitUntil = time.Now().Add(time.Second)
 	// RandomMovementGenerator::DoFinalize /
@@ -4196,6 +4203,7 @@ func (s *Server) startCreaturePath(ctx context.Context, motion *creatureMotion, 
 	motion.NextIdx = 0
 	motion.PathOneShot = !repeatable
 	motion.PathStarted = false
+	motion.WaypointInterrupted = false
 	motion.MoveType = 2
 	motion.WaitUntil = time.Now().Add(time.Second)
 	// RandomMovementGenerator::DoFinalize /
@@ -7543,8 +7551,11 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:300-312): the reset
 	// clears the cannot-reach flag (SetCannotReachTarget(false), :312).
 	// The clear sits after the veto above: a vetoed evade never ran the
-	// C++ reset, so the flag survives it, as in C++.
+	// C++ reset, so the flag survives it, as in C++. Evade finalizes the
+	// waypoint generator, so a deferred-arrival latch from the abandoned
+	// leg clears with it (a vetoed evade never reaches here).
 	motion.CannotReachTarget = false
+	motion.WaypointInterrupted = false
 	motion.CannotReachSince = time.Time{}
 	if motion.ThreatMgr != nil {
 		motion.ThreatMgr.ClearThreat()
@@ -14141,6 +14152,25 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if now.Before(motion.MoveEnds) {
 			return
 		}
+		// WaypointMovementGenerator::DoUpdate INTERRUPTED arm
+		// (WaypointMovementGenerator.cpp:141-146): a NOT_MOVE /
+		// casting-prevented block mid-leg cancels the spline and latches
+		// INTERRUPTED, so the arrival does not fire while blocked. Go's
+		// atomic spline already sits at the node and its mid-leg
+		// StopMoving is unbridgeable, so the portable half is the
+		// deferral: latch here and fire the arrival on the first
+		// unblocked tick (the relaunch arm below), instead of firing it
+		// mid-block at the landing. Waypoint-only: other generators
+		// carry no deferred-arrival twin. The predicate uses
+		// creatureMovementPreventedByCasting, not the raw CastingUntil
+		// the launch gate below reads, so a move-allowed channel
+		// (IsMovementPreventedByCasting false in C++) never latches.
+		if motion.MoveType == 2 && (motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || creatureMovementPreventedByCasting(motion, now)) {
+			motion.WaypointInterrupted = true
+			motion.Moving = false
+			motion.MoveEnds = time.Time{}
+			return
+		}
 		motion.Moving = false
 		motion.WaitUntil = motion.MoveEnds
 		if motion.SeekAssistPending {
@@ -14197,6 +14227,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if motion.ScriptFollowTargetGUID != 0 {
 			motion.FollowLastTargetKnown = false
 		}
+		return
+	}
+	// WaypointMovementGenerator::DoUpdate INTERRUPTED relaunch
+	// (WaypointMovementGenerator.cpp:148-167): on the first tick the
+	// block clears, an INITIALIZED generator whose timer passed (or
+	// whose arrival never fired) re-targets its current node. Go's
+	// atomic spline already sits at the node, so the relaunch
+	// collapses to the deferred arrival: fire it now and return, so
+	// the stamped node delay is honored by the WaitUntil gate on the
+	// next tick instead of launching the following node immediately.
+	// PathStarted is the INITIALIZED twin; combat/evade abandon the
+	// leg, so a stale latch never fires a post-combat arrival.
+	if motion.WaypointInterrupted && motion.MoveType == 2 && motion.PathStarted && !motion.InCombat && !motion.Evading {
+		motion.WaypointInterrupted = false
+		s.waypointNodeArrival(ctx, motion, now)
 		return
 	}
 	// ConfusedMovementGenerator::DoUpdate
@@ -14292,6 +14337,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.Walking = false
 			motion.PathOneShot = false
 			motion.PathStarted = false
+			motion.WaypointInterrupted = false
 			// SmartAI::WaypointPathEnded (SmartAI.cpp:387-394): a
 			// non-repeating path end fires WAYPOINT_ENDED for a
 			// non-escorting creature; the escort end rides UpdatePath's

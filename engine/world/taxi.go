@@ -1365,6 +1365,14 @@ func (s *session) finishTaxiArrival(f *taxiFlight) {
 		s.taxiMu.Unlock()
 		return
 	}
+	// FlightPathMovementGenerator::DoFinalize reads the destination
+	// before clearing it: the final node is the last entry of the
+	// remaining destinations (hop pops slice from the front, and the
+	// final hop is never popped — popTaxiHop / onTaxiHopArrival).
+	dest := uint32(0)
+	if len(f.nodes) > 0 {
+		dest = f.nodes[len(f.nodes)-1]
+	}
 	s.taxiFlight = nil
 	s.inFlight = false
 	s.taxiMu.Unlock()
@@ -1385,6 +1393,23 @@ func (s *session) finishTaxiArrival(f *taxiFlight) {
 	}
 	s.taxiDismount()
 	s.clearTaxiBenchmarkMode()
+	// FlightPathMovementGenerator::DoFinalize
+	// (FlightPathMovementGenerator.cpp:164-175): on natural arrival the
+	// player teleports to the destination taxi node exactly — the
+	// spline's last point is near but not on it — with fall info reset
+	// to the node Z. The interrupt path already carries this leg
+	// (MoveClear, lua_player.go:5942-5960, via endTaxiFlight's
+	// destination capture); only the natural-arrival path lacked it.
+	if dest != 0 && s.server != nil && s.server.Data != nil {
+		if node, found, err := s.server.Data.TaxiNode(dest); err == nil && found {
+			ori := s.player.Orientation
+			if s.validTrinityMapLocation(uint32(node.ContinentID), node.X, node.Y, node.Z, ori) {
+				if s.teleportTo(uint32(node.ContinentID), node.X, node.Y, node.Z, ori) {
+					s.lastFallZ, s.lastFallTime = node.Z, 0
+				}
+			}
+		}
+	}
 }
 
 // isInFlight mirrors Unit::IsInFlight (UNIT_STATE_IN_FLIGHT).

@@ -1135,6 +1135,18 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 		return
 	}
 
+	// PetAI::UpdateAI tail (PetAI.cpp:199-201) refreshes RUN/WALK/FLIGHT
+	// every tick ("to prevent dropping too far behind and despawning").
+	// WALK is a no-op in C++ (Unit::UpdateSpeed returns early, Unit.cpp:
+	// 8679) and FLIGHT is read live in Go (creatureFlightSpeedRate), so
+	// the RUN+SWIM refresh below is the whole leg. It must run per tick,
+	// not just on pet aura events: the minion-follow borrow folds the
+	// owner's live rate, so an owner who mounts up leaves the pet's
+	// banked RunSpeed stale until the next pet aura event, and the pet
+	// falls behind instead of catching up. The DB-row sweep's refresh
+	// never reaches pets (PetID motions are excluded from its set).
+	s.refreshCreatureRunSpeedMotion(motion)
+
 	// 1. Pet Stay Command
 	if motion.PetCommand == PetCommandStay {
 		if motion.InCombat && motion.TargetGUID != 0 {
