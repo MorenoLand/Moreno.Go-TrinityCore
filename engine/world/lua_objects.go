@@ -182,7 +182,13 @@ func luaWorldObjectSoundMethods(srv *Server, self *session, sourceGUID uint64, m
 }
 
 func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Object {
-	if uint16(guid>>48) != 0xF130 {
+	// ObjectAccessor::GetCreatureOrPetOrVehicle (ObjectAccessor.cpp:222):
+	// creature (0xF130) and vehicle (0xF150, Creature.cpp:1640 — a
+	// VehicleId template mints the vehicle high on the same creature
+	// row) GUIDs resolve from the map's creature store. Pets (0xF140)
+	// have no creature row and live only as motions; they resolve via
+	// the motion map in mapWorldObject/luaUnitObjectForGUID, not here.
+	if high := uint16(guid >> 48); high != 0xF130 && high != 0xF150 {
 		return nil
 	}
 	low := uint32(guid & 0x00FFFFFF)
@@ -210,29 +216,45 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	if s.player == nil || state.Map != s.player.Map {
 		return nil
 	}
+	// The DB spawn row above is the in-map creature store
+	// (ObjectAccessor::GetCreatureOrPetOrVehicle resolves any in-map
+	// creature, not only live-motion ones): a DB-spawned creature with
+	// no motion record still resolves, with the spawn position and
+	// template stats standing in for the live fields the motion would
+	// carry. The instance is the player's, the luaGameObject twin's
+	// shape (lua_objects.go:4144-4154). The motion, when it exists,
+	// wins for the live fields exactly as before.
+	state.GUID = guid
+	state.InstanceID = s.player.InstanceID
+	state.DisplayID = uint32(displayID)
+	state.GossipMenuID, state.NPCFlags = uint32(gossipMenuID), uint32(npcFlags)
 	s.server.motionMu.Lock()
 	motion := s.server.findCreatureMotionLocked(state.Map, s.player.InstanceID, guid)
-	if motion == nil || motion.Entry != entry {
+	if motion == nil {
 		s.server.motionMu.Unlock()
-		return nil
-	}
-	state.GUID = guid
-	state.InstanceID = motion.InstanceID
-	state.DisplayID, state.Health, state.MaxHealth, state.Level = uint32(displayID), motion.Health, motion.MaxHealth, motion.Level
-	state.X, state.Y, state.Z = motion.X, motion.Y, motion.Z
-	npcFlagsKnown, liveNPCFlags := motion.NPCFlagsKnown, motion.NPCFlags
-	s.server.motionMu.Unlock()
-	state.GossipMenuID, state.NPCFlags = uint32(gossipMenuID), uint32(npcFlags)
-	if npcFlagsKnown {
-		// A Lua arm overrode the live NPC flags (event-surface SetNPCFlags /
-		// SetFlag(82) / RemoveFlag(82)): the server-side hello gates
-		// (gossip.go, quest_details.go, taxi.go) must see the live value,
-		// not the DB-template snapshot, or e.g. a questgiver flag set on
-		// Reset would still fail the quest-hello gate. Untouched creatures
-		// keep the DB/game-event value above (a Lua override intentionally
-		// replaces the game-event OR, matching C++ SetUInt32Value
-		// semantics).
-		state.NPCFlags = liveNPCFlags
+		st := s.server.loadCreatureStats(ctx, entry)
+		state.Health, state.MaxHealth, state.Level = st.Health, st.MaxHealth, st.Level
+	} else {
+		if motion.Entry != entry {
+			s.server.motionMu.Unlock()
+			return nil
+		}
+		state.InstanceID = motion.InstanceID
+		state.Health, state.MaxHealth, state.Level = motion.Health, motion.MaxHealth, motion.Level
+		state.X, state.Y, state.Z = motion.X, motion.Y, motion.Z
+		npcFlagsKnown, liveNPCFlags := motion.NPCFlagsKnown, motion.NPCFlags
+		s.server.motionMu.Unlock()
+		if npcFlagsKnown {
+			// A Lua arm overrode the live NPC flags (event-surface SetNPCFlags /
+			// SetFlag(82) / RemoveFlag(82)): the server-side hello gates
+			// (gossip.go, quest_details.go, taxi.go) must see the live value,
+			// not the DB-template snapshot, or e.g. a questgiver flag set on
+			// Reset would still fail the quest-hello gate. Untouched creatures
+			// keep the DB/game-event value above (a Lua override intentionally
+			// replaces the game-event OR, matching C++ SetUInt32Value
+			// semantics).
+			state.NPCFlags = liveNPCFlags
+		}
 	}
 	state.Rank, state.FlagsExtra, state.TypeFlags, state.Family, state.UnitFlags = uint32(rank), uint32(flagsExtra), uint32(typeFlags), uint32(family), uint32(unitFlags)
 	state.CreatureType = uint32(creatureType)

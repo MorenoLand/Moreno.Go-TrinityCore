@@ -47,10 +47,11 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 // helloCreatureNPC is the shared creature-hello flow behind CMSG_GOSSIP_HELLO
 // and CMSG_QUESTGIVER_HELLO. The two C++ handlers differ in the NPC-flag gate
 // (UNIT_NPC_FLAG_GOSSIP vs UNIT_NPC_FLAG_QUESTGIVER) and in the arms the
-// questgiver path skips: it has no spirit-guide arm and no trainer/vendor/
-// flightmaster/banker/tabard/auctioneer/stable service fallthroughs — it goes
-// straight from the script hooks to PrepareGossipMenu + SendPreparedGossip
-// (QuestHandler.cpp:78 vs NPCHandler.cpp:147).
+// questgiver path skips: it has no spirit-guide arm. Both go straight from
+// the script hooks to PrepareGossipMenu + SendPreparedGossip
+// (NPCHandler.cpp:186-193, QuestHandler.cpp:78): a hello never opens a
+// service window directly — trainer/vendor/etc. options arrive as menu-0
+// items and open their windows from OnGossipSelect.
 func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, requiredFlag uint32, questPath bool) bool {
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
@@ -167,43 +168,16 @@ func (s *session) helloCreatureNPC(ctx context.Context, payload []byte, required
 			_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
 			return true
 		}
-		// The service fallthroughs exist only on the gossip path; the questgiver
-		// hello never opens trainer/vendor/etc. windows (QuestHandler.cpp:78).
-		if !questPath && defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 0 {
-			if npcFlags&0x70 != 0 { // UNIT_NPC_FLAG_TRAINER (0x10, 0x20, 0x40)
-				return s.sendTrainerList(ctx, guid)
-			}
-			if npcFlags&0x1F80 != 0 { // UNIT_NPC_FLAG_VENDOR (0x80..0x1000)
-				return s.sendVendorList(ctx, guid)
-			}
-			if npcFlags&0x2000 != 0 { // UNIT_NPC_FLAG_FLIGHTMASTER (0x2000)
-				return s.sendTaxiMenu(ctx, guid)
-			}
-			if npcFlags&0x20000 != 0 { // UNIT_NPC_FLAG_BANKER (0x20000)
-				bank := protocol.NewBuffer(8)
-				bank.WriteU64(guid)
-				return s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), bank.Bytes(), true) == nil
-			}
-			if npcFlags&0x80000 != 0 { // UNIT_NPC_FLAG_TABARDDESIGNER (0x80000)
-				tabard := protocol.NewBuffer(8)
-				tabard.WriteU64(guid)
-				return s.write(uint16(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE), tabard.Bytes(), true) == nil
-			}
-			if npcFlags&0x200000 != 0 { // UNIT_NPC_FLAG_AUCTIONEER (0x200000)
-				// Routes through WorldSession::SendAuctionHello
-				// (AuctionHouseHandler.cpp:59-75): the 13-byte layout
-				// (guid + u32 house id + u8 enabled) and the auction level
-				// gate, not the bare 9-byte write this fallthrough had.
-				s.gossipClosed = true
-				s.sendAuctionHelloPacket(guid)
-				return true
-			}
-			if npcFlags&0x400000 != 0 { // UNIT_NPC_FLAG_STABLEMASTER (0x400000)
-				stableBuf := protocol.NewBuffer(8)
-				stableBuf.WriteU64(guid)
-				return s.handleListStabledPets(ctx, stableBuf.Bytes())
-			}
-		}
+		// WorldSession::HandleGossipHelloOpcode (NPCHandler.cpp:186-193)
+		// ends in PrepareGossipMenu + SendPreparedGossip with no service
+		// fallthrough: an empty default menu sends the empty
+		// SMSG_GOSSIP_MESSAGE, it never opens a trainer/vendor/etc.
+		// window directly. The service options arrive as menu-0 items
+		// (PrepareGossipMenu, Player.cpp:14371): the vendor option is
+		// hidden for a repair-only NPC — GOSSIP_OPTION_ARMORER is never
+		// menu-listed (Player.cpp:14404) — and the battlemaster option
+		// is gated on isCanInteractWithBattleMaster, both ported in
+		// loadCreatureGossipOptions below.
 		// Player::SendPreparedGossip (Player.cpp:14536-14548): on the
 		// questgiver-hello path a flagless questgiver with a non-empty quest
 		// menu goes through SendPreparedQuest (Player.cpp:14816) — a single
@@ -798,13 +772,11 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 	if err != nil || goState == nil || goState.IconName == "Point" {
 		return true
 	}
-	maxUseDist := 10.0
-	switch goState.Type {
-	case GameObjectTypeFishingNode:
-		maxUseDist = 100.0
-	case GameObjectTypeFishingHole:
-		maxUseDist = 20.5
-	}
+	// GameObject::IsWithinDistInMap (GameObject.cpp:2760-2763): IsInMap &&
+	// InSamePhase && AtInteractDistance — the range gate below is the
+	// AtInteractDistance leg, GameObject::GetInteractionDistance
+	// (GameObject.cpp:2639-2675), shared with handleGameObjectUse.
+	maxUseDist := gameObjectInteractionDistance(goState.Type)
 	if goState.Map != s.player.Map || goState.InstanceID != s.player.InstanceID ||
 		distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > maxUseDist {
 		return true
