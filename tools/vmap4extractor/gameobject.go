@@ -69,6 +69,11 @@ func (e *extractor) extractGameobjectModels() error {
 		if !result {
 			continue
 		}
+		// C++ owner: gameobject_extract.cpp ExtractSingleModel takes
+		// the path by reference and rewrites .mdx/.mdl to .m2 in place,
+		// so the index row carries the .m2 name (the name pointer reads
+		// the mutated buffer).
+		name = gameobjectModelRowName(name, strings.ToLower(ext))
 		displayID, err := dbc.getUInt(id, 0)
 		if err != nil {
 			continue
@@ -89,4 +94,13 @@ func (e *extractor) extractGameobjectModels() error {
 	}
 	fmt.Println("Done!")
 	return nil
+}
+
+// gameobjectModelRowName mirrors the C++ ExtractSingleModel by-reference
+// mutation: a .mdx/.mdl model is recorded under its .m2 output name.
+func gameobjectModelRowName(name, ext string) string {
+	if ext == ".mdx" || ext == ".mdl" {
+		return name[:len(name)-2] + "2"
+	}
+	return name
 }

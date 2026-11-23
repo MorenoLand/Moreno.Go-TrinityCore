@@ -175,14 +175,23 @@ func (e *extractor) doodadExtractSet(doodadData *wmoDoodadData, wmo adtMODF, map
 		doodad := doodadData.Spawns[ref]
 		modelInstName := fixedPlainName(doodadData.Paths[doodad.NameIndex])
 		// C++ rewrites a trailing .mdx/.mdl to .m2 for the output name.
+		rewritten := false
 		if n := len(modelInstName); n > 3 {
 			ext := modelInstName[n-4:]
 			if ext == ".mdx" || ext == ".mdl" {
 				modelInstName = modelInstName[:n-2] + "2"
+				rewritten = true
 			}
 		}
 		if !e.wmoHasVertices(modelInstName) {
 			continue
+		}
+		if rewritten {
+			// C++ owner: model.cpp ExtractSet — nlen is computed before
+			// the rewrite and never updated, so the record writes nlen
+			// bytes of the shortened name: the .m2 name plus its
+			// terminating NUL.
+			modelInstName += "\x00"
 		}
 		doodadID++
 		// position = wmoPosition + wmoRotation * doodad.Position

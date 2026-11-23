@@ -56,7 +56,9 @@ type wmoGroupInfo struct {
 	Vertices   [][3]float32
 	// C++ owner: wmo.cpp WMOGroup::open + ConvertToVMAPGroupWmo. Liquid is
 	// the MOGP groupLiquid field after GetLiquidTypeId mapping; LiquFlags
-	// bit 1 = MLIQ chunk present, bit 2 = Liquid != 0.
+	// is reset at the top of every chunk iteration (wmo.cpp:191-192), so
+	// only the last chunk's arm leaves flags behind: bit 2 (MOGP liquid)
+	// never survives, bit 1 survives only when MLIQ is the final chunk.
 	Liquid     uint32
 	LiquFlags  uint32
 	LiquidData *wmoLiquidHeader
@@ -71,17 +73,24 @@ func normalizeWMOName(name string) string {
 	return strings.ToLower(filepath.ToSlash(name))
 }
 
+// isWMOGroupName mirrors the C++ ExtractSingleWmo group-file skip
+// (vmapexport.cpp): the 4 characters starting at the last '_' hold
+// exactly 3 digits (the '_' itself is not one), so a plain name whose
+// last '_' is followed by three digits is a group file — including
+// _NNNN names, where only the first three digits are examined.
 func isWMOGroupName(name string) bool {
-	base := strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))
-	if len(base) < 4 || base[len(base)-4] != '_' {
+	base := plainName(name)
+	idx := strings.LastIndexByte(base, '_')
+	if idx < 0 || len(base)-idx < 4 {
 		return false
 	}
-	for _, value := range base[len(base)-3:] {
-		if value < '0' || value > '9' {
-			return false
+	digits := 0
+	for _, c := range base[idx : idx+4] {
+		if c >= '0' && c <= '9' {
+			digits++
 		}
 	}
-	return strings.EqualFold(filepath.Ext(name), ".wmo")
+	return digits == 3
 }
 
 func parseWMORoot(data []byte) (wmoRootInfo, error) {
@@ -197,9 +206,15 @@ func parseWMOGroup(data []byte, rootFlags uint32, precise bool) (wmoGroupInfo, e
 	var movi []byte
 	var movt []byte
 	var moba []byte
-	var rawLiquid uint32
 	var liquid *wmoLiquidHeader
+	// C++ owner: wmo.cpp WMOGroup::open — groupLiquid starts 0 and is
+	// set by the MOGP arm (mapped) or the MLIQ arm (legacy tile scan);
+	// liquflags is reset at the top of every chunk iteration, so only
+	// the last chunk's arm leaves flags behind.
+	groupLiquid := uint32(0)
+	liquFlags := uint32(0)
 	for _, chunk := range chunks {
+		liquFlags = 0
 		switch chunk.Name {
 		case "MOGP":
 			if len(chunk.Data) < 60 {
@@ -211,8 +226,21 @@ func parseWMOGroup(data []byte, rootFlags uint32, precise bool) (wmoGroupInfo, e
 				group.High[i] = mathFloat32(chunk.Data[24+i*4:])
 			}
 			group.ID = binary.LittleEndian.Uint32(chunk.Data[56:60])
-			// C++ owner: wmo.cpp MOGP arm reads groupLiquid at offset 52.
-			rawLiquid = binary.LittleEndian.Uint32(chunk.Data[52:56])
+			// C++ owner: wmo.cpp MOGP arm reads groupLiquid at offset 52
+			// and maps it immediately (root flags & 4 -> direct, 15 -> 0,
+			// else +1); a nonzero result sets bit 2, wiped by the next
+			// chunk's reset unless MOGP is last.
+			rawLiquid := binary.LittleEndian.Uint32(chunk.Data[52:56])
+			if rootFlags&4 != 0 {
+				groupLiquid = getLiquidTypeID(rawLiquid, group.Flags)
+			} else if rawLiquid == 15 {
+				groupLiquid = 0
+			} else {
+				groupLiquid = getLiquidTypeID(rawLiquid+1, group.Flags)
+			}
+			if groupLiquid != 0 {
+				liquFlags |= 2
+			}
 		case "MOPY":
 			mopy = chunk.Data
 		case "MOVI":
@@ -233,6 +261,9 @@ func parseWMOGroup(data []byte, rootFlags uint32, precise bool) (wmoGroupInfo, e
 			// C++ owner: wmo.cpp MLIQ arm. Packed header is 30 bytes
 			// (4 int32 + 3 float32 + int16), then xverts*yverts 8-byte
 			// verts (only heights are kept), then xtiles*ytiles bytes.
+			// The arm sets bit 1; the legacy tile scan runs here, with
+			// the groupLiquid value in force at MLIQ time.
+			liquFlags |= 1
 			if len(chunk.Data) < 30 {
 				return group, errors.New("truncated MLIQ chunk")
 			}
@@ -256,36 +287,25 @@ func parseWMOGroup(data []byte, rootFlags uint32, precise bool) (wmoGroupInfo, e
 				liquid.Heights[i] = mathFloat32(chunk.Data[30+i*8+4:])
 			}
 			liquid.TileBytes = chunk.Data[30+vertCount*8 : need]
-		}
-	}
-	// C++ owner: wmo.cpp MOGP arm, applied after the chunk walk (MOGP is
-	// first in practice, MLIQ may still refine it below).
-	if rootFlags&4 != 0 {
-		group.Liquid = getLiquidTypeID(rawLiquid, group.Flags)
-	} else if rawLiquid == 15 {
-		group.Liquid = 0
-	} else {
-		group.Liquid = getLiquidTypeID(rawLiquid+1, group.Flags)
-	}
-	if group.Liquid != 0 {
-		group.LiquFlags |= 2
-	}
-	if liquid != nil {
-		group.LiquFlags |= 1
-		group.LiquidData = liquid
-		// C++ owner: wmo.cpp MLIQ arm — only when the MOGP-derived
-		// liquid is still 0, the first non-15 tile byte decides it.
-		if group.Liquid == 0 {
-			for _, b := range liquid.TileBytes {
-				if b&0xF != 15 {
-					group.Liquid = getLiquidTypeID(uint32(b&0xF)+1, group.Flags)
-					break
+			// C++ owner: wmo.cpp MLIQ arm — only when the groupLiquid in
+			// force at MLIQ time is still 0, the first non-15 tile byte
+			// decides it (MOGP seen later overwrites it).
+			if groupLiquid == 0 {
+				for _, b := range liquid.TileBytes {
+					if b&0xF != 15 {
+						groupLiquid = getLiquidTypeID(uint32(b&0xF)+1, group.Flags)
+						break
+					}
 				}
 			}
-			if group.Liquid != 0 {
-				group.LiquFlags |= 2
-			}
 		}
+	}
+	// The per-iteration reset above leaves only the last chunk's flags:
+	// bit 1 iff MLIQ is the final chunk, bit 2 effectively never.
+	group.Liquid = groupLiquid
+	group.LiquFlags = liquFlags
+	if liquid != nil {
+		group.LiquidData = liquid
 	}
 	if len(mopy) < 2 || len(movi) == 0 || len(movi)%2 != 0 || len(movt) == 0 || len(movt)%12 != 0 {
 		return group, errors.New("WMO group geometry chunks are incomplete")
@@ -302,7 +322,12 @@ func parseWMOGroup(data []byte, rootFlags uint32, precise bool) (wmoGroupInfo, e
 	}
 	if precise {
 		// C++ owner: wmo.cpp ConvertToVMAPGroupWmo precise arm — every
-		// triangle and vertex is written verbatim, no filtering.
+		// triangle and vertex is written verbatim, no filtering, but
+		// exactly nTriangles*3 indices where nTriangles = MOPY size/2;
+		// surplus MOVI entries past that are not written.
+		if want := len(mopy) / 2 * 3; want < len(indices) {
+			indices = indices[:want]
+		}
 		group.Vertices = vertices
 		group.Indices = indices
 	} else {

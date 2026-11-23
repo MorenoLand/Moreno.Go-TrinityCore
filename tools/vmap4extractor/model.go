@@ -63,7 +63,7 @@ func extractM2(data []byte) ([]byte, error) {
 	_ = binary.Write(&output, binary.LittleEndian, uint32(0))
 	writeRawChunk(&output, "GRP ", 8)
 	_ = binary.Write(&output, binary.LittleEndian, uint32(1))
-	_ = binary.Write(&output, binary.LittleEndian, uint32(0))
+	_ = binary.Write(&output, binary.LittleEndian, nIndices)
 	writeRawChunk(&output, "INDX", 4+nIndices*2)
 	_ = binary.Write(&output, binary.LittleEndian, nIndices)
 	_ = binary.Write(&output, binary.LittleEndian, indices)

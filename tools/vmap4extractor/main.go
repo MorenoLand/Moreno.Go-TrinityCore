@@ -23,24 +23,25 @@ func main() {
 	input := flag.String("input", "", "WoW client installation root or directory containing MPQ archives (e.g. Data/)")
 	dataDir := flag.String("d", "", "Path to the vector data source folder (C++ -d)")
 	output := flag.String("output", "Buildings", "Output directory for extracted raw building models")
-	verbose := flag.Bool("l", false, "Enable verbose logging")
+	verbose := flag.Bool("v", false, "Enable verbose logging")
 	small := flag.Bool("s", false, "Small size (data size optimization), the default")
 	precise := flag.Bool("precise", false, "Large size: keep all WMO triangles/vertices (C++ -l)")
+	large := flag.Bool("l", false, "Large size: keep all WMO triangles/vertices (C++ -l)")
 	help := flag.Bool("?", false, "Show this message")
 	flag.Parse()
 
 	// C++ owner: vmapexport.cpp processArgv — -s is the default small
 	// mode, -l selects large/precise vector data, -d sets the input
-	// path, -? prints usage. The Go tool historically used -l for
-	// verbose logging, so -l keeps that meaning here and -precise is
-	// the large-mode switch; -s is accepted as a no-op for CLI parity.
+	// path, -? prints usage. -precise is a Go alias for -l; -v is the
+	// verbose switch; -s is accepted as a no-op for CLI parity.
 	_ = small
 	if *help {
 		fmt.Println("Extract V4.00 2012_02.")
-		fmt.Printf("%s [-?][-s][-l][-precise][-d <path>][-input <path>][-output <dir>]\n", os.Args[0])
+		fmt.Printf("%s [-?][-s][-l][-precise][-v][-d <path>][-input <path>][-output <dir>]\n", os.Args[0])
 		fmt.Println("   -s : (default) small size (data size optimization), ~500MB less vmap data.")
-		fmt.Println("   -l : verbose logging (Go extension; C++ -l means large/precise, use -precise).")
-		fmt.Println("   -precise : large size, ~500MB more vmap data. (might contain more details)")
+		fmt.Println("   -l : large size, ~500MB more vmap data. (might contain more details)")
+		fmt.Println("   -precise : same as -l (large size).")
+		fmt.Println("   -v : verbose logging.")
 		fmt.Println("   -d <path>: Path to the vector data source folder.")
 		os.Exit(0)
 	}
@@ -63,7 +64,7 @@ func main() {
 
 	if *input == "" {
 		fmt.Fprintln(os.Stderr, "Error: -input flag or client Data directory is required.")
-		fmt.Fprintln(os.Stderr, "Usage: vmap4extractor -input <path to WoW client or Data/> [-output Buildings] [-l]")
+		fmt.Fprintln(os.Stderr, "Usage: vmap4extractor -input <path to WoW client or Data/> [-output Buildings] [-v]")
 		os.Exit(1)
 	}
 
@@ -97,7 +98,7 @@ func main() {
 	// run (gOpenArchives); MPQFile resolves each name against them in
 	// precedence order. The extractor keeps them open and indexes their
 	// listfiles for first-hit-wins reads.
-	ext := newExtractor(*output, *verbose, *precise)
+	ext := newExtractor(*output, *verbose, *precise || *large)
 	opened := 0
 	for _, archivePath := range archives {
 		if err := ext.addArchive(archivePath); err != nil {

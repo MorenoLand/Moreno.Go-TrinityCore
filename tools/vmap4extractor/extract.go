@@ -170,6 +170,13 @@ func (e *extractor) extractSingleWmo(fname string) bool {
 	if fileExists(output) {
 		return true
 	}
+	// C++ owner: vmapexport.cpp ExtractSingleWmo — group files (_NNN)
+	// are skipped with a true return and no file written. The main.go
+	// scan filters them first, but ADT/WDT/gameobject callers reach
+	// this function directly, so the guard lives here.
+	if isWMOGroupName(name) {
+		return true
+	}
 	rootData, err := e.readMPQFile(fname)
 	if err != nil {
 		return false
