@@ -51,7 +51,7 @@
 //     ground/max clamps.
 //
 // Flagged gaps, NOT fabricated:
-//   - Unit::IsFalling in the far-from-poly leg (:283-284): the creature
+//   - Unit::IsFalling in the far-from-poly leg (:236): the creature
 //     adapter reads creatureIsFalling (Unit::IsFalling twin: the FALLING
 //     latch OR the MoveFall spline marker), so the falling shortcut fires
 //     for falling creatures as well as falling players. The player adapter

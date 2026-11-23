@@ -8302,7 +8302,8 @@ func applyCreatureAddonToMotion(motion *creatureMotion, addon creatureAddonRow) 
 // HOVER flag is set). The flag comes from UpdateMovementFlags
 // (Creature.cpp:2779-2816): a Ground==Hover creature hovers unless
 // flight-allowed and in air (the isInAir test at :2795-2796, mirrored
-// here on the raw spawn Z with the per-tick twin's mapHeight test); a
+// here on the raw spawn Z with the per-tick twin's GetFloorZ test
+// (mapStaticFloorZ first, mapHeight fallback); a
 // CREATURE_FLAG_EXTRA_NO_MOVE_FLAGS_UPDATE creature skips that update,
 // so only the bytes1 arm of LoadCreaturesAddon (Creature.cpp:2650-2656)
 // can set its HOVER flag. A failed height lookup fails open to the
@@ -8320,7 +8321,10 @@ func (s *Server) creatureHoverSpawnOffset(mapID uint32, x, y, z float32, moveGro
 	if moveFlight == 0 {
 		return hoverHeight
 	}
-	ground, ok := s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+	ground, ok := s.mapStaticFloorZ(mapID, x, y, z)
+	if !ok {
+		ground, ok = s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+	}
 	if !ok {
 		return hoverHeight
 	}
@@ -10116,7 +10120,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// when it fails to resolve — the dynamic game-object-floor leg
 		// (Map::GetGameObjectFloor, Map.h:576) has no Go model, so the
 		// bounded-ray height stands in for it. A failed lookup keeps
-		// the current flags. The !IsFalling() gate (:2803) reads
+		// the current flags. The !IsFalling() gate (:2795) reads
 		// creatureIsFalling (Unit::IsFalling twin, Unit.cpp:13313-13316:
 		// the FALLING latch OR the MoveFall spline marker), and the
 		// !isInAir RemoveUnitMovementFlag(FALLING) leg (:2813-2814)
@@ -10179,7 +10183,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// Creature::UpdateMovementFlags swim leg (Creature.cpp:2779-2816):
 		// SetSwim(IsSwimAllowed() && IsInWater()) — the movement-template
 		// Swim flag (motion.MoveSwim, creature_template_movement.Swim) and
-		// the map liquid state. C++ runs this leg LAST (:2812), after the
+		// the map liquid state. C++ runs this leg LAST (:2816), after the
 		// fly/gravity/hover legs above, so a tick that flips both swim and
 		// fly broadcasts the fly packets first. The C++ gates ride along:
 		// a player-controlled creature (m_playerMovingMe) keeps script-set

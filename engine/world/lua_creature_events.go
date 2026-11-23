@@ -4483,8 +4483,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// fall spline to the ground height (SetFall, MoveSplineInit.h:150),
 	// duration computeFallTime(drop) (FallInitializer,
 	// MoveSpline.cpp:94-101). The ground resolves via Server.mapHeight
-	// (Map::GetHeight twin) with the MAX_FALL_DISTANCE search
-	// (MotionMaster.cpp:922, Map.h:286); a failed lookup launches nothing,
+	// (the WorldObject::GetMapHeight twin, Object.cpp:3661-3668: the
+	// search z carries the unit's collision height) with the
+	// MAX_FALL_DISTANCE search (MotionMaster.cpp:922, Map.h:286); a
+	// failed lookup launches nothing,
 	// like C++ (MotionMaster.cpp:923-929). The FALLING latch (motion.Falling)
 	// is set at launch and cleared by the UpdateMovementFlags fold on
 	// landing (Creature.cpp:2813-2814).
@@ -4507,6 +4509,26 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				return nil, err
 			}
 		}
+		// WorldObject::GetMapHeight (Object.cpp:3661-3668) adds the
+		// unit's collision height to z before the Map::GetHeight search,
+		// and MotionMaster::MoveFall (MotionMaster.cpp:922) resolves its
+		// ground through it — the search starts at head height, not the
+		// unit's center (the C++ z == MAX_HEIGHT guard at Object.cpp:3662 is
+		// not replicated: MoveFall z is a live position, never the sentinel).
+		// The height is the Unit::GetCollisionHeight twin
+		// (Unit.cpp:14122-14146) via Store.CollisionHeight (the
+		// sendPlayerCollisionHeight precedent), on the creature's live
+		// object scale (the SetScale twin: script override while known,
+		// else the template base, plus the aura scale fold, floored at
+		// 0.01) and the creatureIsMounted gate (Unit.h:932). A missing
+		// DBC model or store falls back to the default collision height
+		// (terrainDefaultCollisionHeight, Object.h:69) — the C++ zero
+		// height arm. The aura reads run before motionMu (the
+		// launchCreatureFallSpline auraMu-ordering precedent); the
+		// height query runs after the unlock.
+		auraKey := creatureAuraKeyForMotion(motion)
+		mounted := s.creatureIsMounted(auraKey, motion)
+		scaleSum := s.creatureAuraScaleSum(auraKey)
 		s.motionMu.Lock()
 		m, ok := s.motionMapLocked(motion.Map, motion.InstanceID)[motion.GUID]
 		if !ok || m.ScriptRooted || m.ScriptStunned {
@@ -4514,8 +4536,26 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, nil
 		}
 		mapID, x, y, z := m.Map, m.X, m.Y, m.Z
-		ground, groundOK := s.mapHeight(mapID, x, y, z, true, terrainMaxFallSearch)
+		nativeDisplayID, mountDisplayID := m.NativeDisplayID, m.Mount
+		scale := m.BaseScale
+		if m.ScriptScaleKnown {
+			scale = m.ScriptScale
+		}
+		if scale <= 0 {
+			scale = 1
+		}
 		s.motionMu.Unlock()
+		collisionHeight := terrainDefaultCollisionHeight
+		if s.Data != nil {
+			effective := float64(scale) + float64(scaleSum)/100
+			if effective < 0.01 {
+				effective = 0.01
+			}
+			if h, found, err := s.Data.CollisionHeight(mountDisplayID, nativeDisplayID, mounted, float32(effective)); err == nil && found {
+				collisionHeight = h
+			}
+		}
+		ground, groundOK := s.mapHeight(mapID, x, y, z+collisionHeight, true, terrainMaxFallSearch)
 		if groundOK {
 			s.launchCreatureFallSpline(m, x, y, ground, id)
 		}
@@ -4669,10 +4709,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// SetHover is Creature::SetHover (Creature.cpp:3105): flips
 	// MOVEMENTFLAG_HOVER with the C++ no-op-on-unchanged early-out, then
 	// broadcasts SMSG_SPLINE_MOVE_SET_HOVER/UNSET_HOVER (packed GUID only,
-	// Creature.cpp:3121-3126). The hover-height Z fold (Unit.cpp:13789-13803,
-	// GetFloatValue UNIT_FIELD_HOVERHEIGHT) stays out — the Go engine models
-	// no creature hover height; the animation-tier fold stays out with it
-	// (SetDisableGravity above).
+	// Creature.cpp:3121-3126). The hover-height Z fold (Unit::SetHover,
+	// Unit.cpp:13789-13803) rides along: on enable the Z rises by
+	// UNIT_FIELD_HOVERHEIGHT when it sits less than that height above the
+	// floor; on disable it drops by the same height, floored at the floor,
+	// then clamped through the UpdateAllowedPositionZ twin. Both legs are
+	// server-side only (Unit::UpdateHeight, Unit.cpp:13442-13447, does not
+	// broadcast to client), so the spline hover packet above is the whole
+	// broadcast — no MSG_MOVE_TELEPORT goes out. The animation-tier
+	// fold stays out (SetDisableGravity above). DELTAS: the disable leg's
+	// !isDying() reads motion.Health > 0 (the per-tick hover leg's alive
+	// gate); Go models no JUST_DIED state, so a corpse skips the drop
+	// where C++ would still drop it once out of JUST_DIED.
 	methods["SetHover"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("SetHover requires a bool, got no args")
@@ -4687,9 +4735,58 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, nil
 		}
 		motion.Hovering = enable
-		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		mapID, instanceID, x, y, z, o, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.Orientation, motion.GUID
 		phase := motion.PhaseMask
+		hoverHeight := motion.HoverHeight
+		alive := motion.Health > 0
 		s.motionMu.Unlock()
+		if hoverHeight != 0 {
+			if enable {
+				// Unit::SetHover enable leg (Unit.cpp:13789-13792): no
+				// need to check height on ascent — raise only when
+				// the current Z sits less than hoverHeight above the
+				// floor (the GetFloorZ twin: mapStaticFloorZ first,
+				// mapHeight fallback, the strip-33 per-tick leg's
+				// pattern). A failed floor lookup skips the raise,
+				// matching C++ where an INVALID floor leaves Z - floorZ
+				// above the height.
+				floorZ, ok := s.mapStaticFloorZ(mapID, x, y, z)
+				if !ok {
+					floorZ, ok = s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+				}
+				if ok && z-floorZ < hoverHeight {
+					newZ := z + hoverHeight
+					s.motionMu.Lock()
+					motion.Z = newZ
+					s.motionMu.Unlock()
+					// Unit::UpdateHeight relocates vehicle passengers
+					// (Unit.cpp:13442-13447); no kit is a no-op.
+					s.relocatePassengers(mapID, instanceID, guid, x, y, newZ, o)
+				}
+			} else if alive {
+				// Unit::SetHover disable leg (Unit.cpp:13795-13802):
+				// drop by hoverHeight, floored at the floor, then the
+				// UpdateAllowedPositionZ twin — which reads the
+				// already cleared HOVER flag, so its hover offset is 0,
+				// as in C++ (flag cleared at :13795, clamp at :13800).
+				// A failed floor lookup leaves newZ at Z - hoverHeight
+				// and the clamp no-ops, matching C++ with an INVALID
+				// floor.
+				newZ := z - hoverHeight
+				floorZ, ok := s.mapStaticFloorZ(mapID, x, y, z)
+				if !ok {
+					floorZ, ok = s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+				}
+				if ok && floorZ > newZ {
+					newZ = floorZ
+				}
+				newZ, _ = s.updateAllowedPositionZForMotion(motion, x, y, newZ)
+				s.motionMu.Lock()
+				motion.Z = newZ
+				s.motionMu.Unlock()
+				s.relocatePassengers(mapID, instanceID, guid, x, y, newZ, o)
+			}
+		}
 		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_HOVER
 		if enable {
 			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER
