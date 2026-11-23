@@ -781,6 +781,14 @@ func (s *session) handleGameObjectGossipSelect(ctx context.Context, guid uint64,
 		distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > maxUseDist {
 		return true
 	}
+	// InSamePhase leg (Object.h:324): a zero stored mask is the C++ PHASEMASK_NORMAL default. A forged opcode could otherwise select a phased-out GO's gossip.
+	goPhase := goState.PhaseMask
+	if goPhase == 0 {
+		goPhase = 1
+	}
+	if goPhase&s.currentPlayerPhaseMask() == 0 {
+		return true
+	}
 	// MiscHandler.cpp:162-164 (HandleGossipSelectOptionOpcode) — the
 	// feign-death strip runs after the gameobject validation, before the
 	// Eluna select hook.
