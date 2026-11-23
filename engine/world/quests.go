@@ -1009,6 +1009,11 @@ func (s *session) questDialogEnderRewardRep(ctx context.Context, questID uint32)
 // the rep variants, autocomplete repeatables the reward-rep variants, and
 // gray quests the low-level variants.
 func (s *session) questDialogStarterStatus(ctx context.Context, questID uint32) uint8 {
+	// Player::GetQuestDialogStatus (Player.cpp:16328-16330): a starter quest
+	// failing CONDITION_SOURCE_TYPE_QUEST_AVAILABLE shows no icon at all.
+	if meets, err := s.meetQuestConditions(ctx, questID); err != nil || !meets {
+		return questDialogNone
+	}
 	status, err := s.characterQuestStatus(ctx, questID)
 	if err != nil || status != int64(questStatusNoneValue) {
 		return questDialogNone

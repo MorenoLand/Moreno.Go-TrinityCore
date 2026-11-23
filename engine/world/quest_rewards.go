@@ -308,21 +308,12 @@ func (s *session) loadQuestRewardView(ctx context.Context, questID uint32) (ques
 	return view, nil
 }
 
+// hasQuestRequiredItems mirrors the DELIVER arm of Player::CanRewardQuest
+// (Player.cpp:15082-15094): Player::GetItemCount counts carried items only,
+// so a quest whose deliver items sit in the bank cannot be turned in. The
+// carried-only twin below holds the predicate.
 func (s *session) hasQuestRequiredItems(ctx context.Context, items []questRewardItem) (bool, error) {
-	for _, item := range items {
-		var count int64
-		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?", s.playerGUID, item.ID).Scan(&count)
-		if err != nil {
-			if missingTable(err) {
-				return false, nil
-			}
-			return false, err
-		}
-		if count < int64(item.Quantity) {
-			return false, nil
-		}
-	}
-	return true, nil
+	return s.hasQuestRequiredItemsCarried(ctx, items)
 }
 
 // canCompleteRepeatableQuest mirrors Player::CanCompleteRepeatableQuest

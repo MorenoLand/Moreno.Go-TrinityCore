@@ -134,6 +134,23 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "quest not visible to start")
 		return true
 	}
+	// Player::CanRewardQuest (Player.cpp:15059-15109) re-validates the
+	// day/week/month/seasonal, level, skill, and reputation gates at turn-in
+	// (QuestHandler.cpp:302-303): a quest accepted before filling the 25-daily
+	// roster, or whose skill/rep requirements no longer hold, fails here and
+	// re-sends the OfferReward screen, like the item/money arms below. The
+	// status and rewarded-state arms live in the gates above; the DELIVER
+	// item and money arms follow. The InvalidReason packet rides the same
+	// msg=true path as the C++ Satisfy* arms; silent arms report
+	// questInvalidSilent and send nothing.
+	if ok, reason := s.satisfyQuestRewardGates(ctx, questID, view.Detail.Flags); !ok {
+		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "can reward quest re-validation failed")
+		if reason != questInvalidSilent {
+			_ = s.sendQuestGiverQuestInvalid(reason)
+		}
+		_ = s.sendQuestOfferReward(view, giverGUID, true)
+		return true
+	}
 	// QuestHandler.cpp:284 — only reward >= QUEST_REWARD_CHOICES_COUNT (6) is
 	// rejected up front; an in-range index with an empty slot
 	// (RewardChoiceItemId[reward] == 0) simply grants no choice item
@@ -191,6 +208,97 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	}
 	s.fireGameObjectQuestHook(ctx, giverGUID, scripting.GameObjectEventOnQuestReward, s.luaQuest(ctx, questID), reward)
 	return true
+}
+
+// satisfyQuestRewardGates mirrors the re-validation arms of
+// Player::CanRewardQuest (Player.cpp:15059-15109) that the ChooseReward
+// handler otherwise skips: SatisfyQuestDay/Week/Month/Seasonal, Level, Skill,
+// and Reputation. The status, rewarded-state, DELIVER-item, and money arms
+// are the handler's own gates and are not repeated here. The returned reason
+// is the QuestFailedReason the C++ msg=true path sends for that arm, or
+// questInvalidSilent where C++ sends nothing. The DisableMgr arm (C36) has
+// no Go model and stays out.
+func (s *session) satisfyQuestRewardGates(ctx context.Context, questID uint32, flags uint32) (bool, uint32) {
+	if s == nil || s.player == nil {
+		return true, questInvalidSilent
+	}
+	// Player::SatisfyQuestDay/Week/Seasonal (Player.cpp:15954+), msg=false
+	// arms, plus the monthly arm from canTakeQuest.
+	if !s.satisfyQuestRepeatGates(ctx, questID, int64(flags)) {
+		return false, s.questRewardDailyFailReason(ctx, questID, flags)
+	}
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var specialFlags int64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+		if specialFlags&questSpecialMonthly != 0 {
+			var count int64
+			if s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_monthly WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&count) == nil && count > 0 {
+				return false, questInvalidSilent
+			}
+		}
+	}
+	// Player::SatisfyQuestLevel (Player.cpp:15619-15643): the min/max level
+	// gate; a too-high level has no specific reason in C++.
+	t := s.loadQuestDialogTemplate(ctx, questID)
+	playerLevel := int64(s.player.Level)
+	if playerLevel < t.minLevel {
+		return false, questInvalidLowLevel
+	}
+	if t.maxLevel > 0 && playerLevel > t.maxLevel {
+		return false, questInvalidDontHaveReq
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true, questInvalidSilent
+	}
+	wdb := s.server.WorldStore.DB
+	var reqSkillID, reqSkillPoints, reqMinRepFaction, reqMinRepValue, reqMaxRepFaction, reqMaxRepValue sql.NullInt64
+	_ = wdb.QueryRowContext(ctx, `SELECT RequiredSkillID, RequiredSkillPoints, RequiredMinRepFaction, RequiredMinRepValue, RequiredMaxRepFaction, RequiredMaxRepValue
+		FROM quest_template_addon WHERE ID = ?`, questID).Scan(&reqSkillID, &reqSkillPoints, &reqMinRepFaction, &reqMinRepValue, &reqMaxRepFaction, &reqMaxRepValue)
+	// Player::SatisfyQuestSkill (Player.cpp:15595).
+	if reqSkillID.Valid && reqSkillPoints.Valid && reqSkillID.Int64 > 0 {
+		if s.playerSkillTotalValue(uint32(reqSkillID.Int64)) < int32(reqSkillPoints.Int64) {
+			return false, questInvalidDontHaveReq
+		}
+	}
+	// Player::SatisfyQuestReputation (Player.cpp:15830), including the
+	// RepObjectiveFaction2 accept gate.
+	if reqMinRepFaction.Valid && reqMinRepFaction.Int64 > 0 && reqMinRepValue.Valid {
+		if s.reputationStanding(uint32(reqMinRepFaction.Int64)) < int32(reqMinRepValue.Int64) {
+			return false, questInvalidDontHaveReq
+		}
+	}
+	if reqMaxRepFaction.Valid && reqMaxRepFaction.Int64 > 0 && reqMaxRepValue.Valid {
+		if s.reputationStanding(uint32(reqMaxRepFaction.Int64)) >= int32(reqMaxRepValue.Int64) {
+			return false, questInvalidDontHaveReq
+		}
+	}
+	var repObjFaction2, repObjValue2 sql.NullInt64
+	if wdb.QueryRowContext(ctx, "SELECT COALESCE(RequiredFactionId2, 0), COALESCE(RequiredFactionValue2, 0) FROM quest_template WHERE ID = ?", questID).Scan(&repObjFaction2, &repObjValue2) == nil &&
+		repObjFaction2.Valid && repObjFaction2.Int64 > 0 && repObjValue2.Valid {
+		if s.reputationStanding(uint32(repObjFaction2.Int64)) >= int32(repObjValue2.Int64) {
+			return false, questInvalidDontHaveReq
+		}
+	}
+	return true, questInvalidSilent
+}
+
+// questRewardDailyFailReason resolves the InvalidReason for a failed
+// day/week/seasonal repeat gate: Player::SatisfyQuestDay (Player.cpp:15980)
+// sends INVALIDREASON_DAILY_QUESTS_REMAINING only when the 25-daily roster
+// is full; an already-done daily, weekly, or seasonal quest fails silently.
+func (s *session) questRewardDailyFailReason(ctx context.Context, questID uint32, flags uint32) uint32 {
+	if flags&questFlagsDaily == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return questInvalidSilent
+	}
+	cdb := s.server.CharactersStore.DB
+	var done, total int64
+	if cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_daily WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&done) == nil && done > 0 {
+		return questInvalidSilent
+	}
+	if cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_daily WHERE guid = ?", s.playerGUID).Scan(&total) == nil && total >= 25 {
+		return questInvalidDailyRemaining
+	}
+	return questInvalidSilent
 }
 
 // rewardTrackingQuest mirrors the TRACKING arm of Player::CompleteQuest

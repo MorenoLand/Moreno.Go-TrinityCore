@@ -185,9 +185,15 @@ func (s *session) failQuest(ctx context.Context, questID uint32) {
 
 // QuestFailedReason values for SMSG_QUESTGIVER_QUEST_INVALID (QuestDef.h:48).
 const (
-	questInvalidDontHaveReq = 0
-	questInvalidAlreadyDone = 7
-	questInvalidAlreadyOn   = 13
+	questInvalidDontHaveReq    = 0
+	questInvalidLowLevel       = 1
+	questInvalidAlreadyDone    = 7
+	questInvalidAlreadyOn      = 13
+	questInvalidDailyRemaining = 26
+	// questInvalidSilent is not a QuestFailedReason value: CanRewardQuest arms
+	// whose C++ msg path sends nothing report it so the caller skips
+	// SMSG_QUESTGIVER_QUEST_INVALID.
+	questInvalidSilent = 0xFFFFFFFF
 )
 
 type questRewardItem struct {
