@@ -6684,7 +6684,7 @@ func (s *Server) launchCreaturePolySpline(motion *creatureMotion, points []pathV
 // the points ship as given — so this launches straight through
 // launchCreaturePolySpline, and the landing gate fires
 // MovementInform(EFFECT_MOTION_TYPE, pointId) on event 28
-// (creaturemotion.go:10271), exactly as
+// (creaturemotion.go:10323), exactly as
 // GenericMovementGenerator::MovementInform does.
 // MoveSplineInit::Launch overwrites path[0] with the creature's
 // real position (MoveSplineInit.cpp:92), so the interpolated spline
