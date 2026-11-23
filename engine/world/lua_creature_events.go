@@ -6797,6 +6797,38 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.launchCreatureJumpSpline(motion, x, y, z, zSpeed, maxHeight, id)
 		return nil, nil
 	}
+	// MoveJumpTo is MotionMaster::MoveJumpTo (MotionMaster.cpp:763-777):
+	// the hop is dist = 2 * (speedZ / gravity) * speedXY along the
+	// owner's orientation plus the angle (GetNearPoint2D with a null
+	// searcher adds no reach), Z kept — the UpdateAllowedPositionZ
+	// ground clamp has no Go model, the charge/pull snap precedent —
+	// launched as a parabolic spline with the MoveJump default id
+	// (EVENT_JUMP 1004), the jumpToCreatureTarget twin (boss_ai.go).
+	// MoveJumpTo returns early for players; this is the creature
+	// surface only. The launch refuses a sub-0.01 horizontal speed
+	// (MoveJump, MotionMaster.cpp:789-791) via the parabolic core.
+	methods["MoveJumpTo"] = func(_ context.Context, args []any) ([]any, error) {
+		angle, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		speedXY, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		speedZ, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		ox, oy, oz, orientation := motion.X, motion.Y, motion.Z, motion.Orientation
+		s.motionMu.Unlock()
+		dist := 2 * (float64(speedZ) / jumpToGravity) * float64(speedXY)
+		destX := ox + float32(dist*math.Cos(float64(orientation+angle)))
+		destY := oy + float32(dist*math.Sin(float64(orientation+angle)))
+		s.launchCreatureJumpSpline(motion, destX, destY, oz, speedXY, speedZ, 1004)
+		return nil, nil
+	}
 	// GetMovementType is UnitMethods::GetMovementType
 	// (UnitMethods.h:1430-1444) = MotionMaster:->
 	// GetCurrentMovementGeneratorType, via the creatureMovementType

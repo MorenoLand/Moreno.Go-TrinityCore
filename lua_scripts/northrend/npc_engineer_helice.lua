@@ -7,9 +7,9 @@
 -- Eluna creature events: 31 OnQuestAccept, 4 JustDied.
 -- Ported arms:
 -- - OnQuestAccept (zone_sholazar_basin.cpp:141-149, event 31):
---   quest id 12688 (QUEST_DISASTER) -> SetFaction(113
---   FACTION_ESCORTEE_N_NEUTRAL_PASSIVE) + StartEscort(player) +
---   Talk(SAY_WP_1 0). The C++ MoveJumpTo hop has no bridge.
+--   quest id 12688 (QUEST_DISASTER) -> MoveJumpTo(0, 0.4, 0.4) hop
+--   + SetFaction(113 FACTION_ESCORTEE_N_NEUTRAL_PASSIVE) +
+--   StartEscort(player) + Talk(SAY_WP_1 0), in C++ order.
 -- - JustDied (zone_sholazar_basin.cpp:116-122, event 4): if
 --   escorting, the escort player fails quest 12688 (injured-goblin
 --   precedent; IsEscorted + GetEscortPlayer bridges live,
@@ -27,12 +27,13 @@ local SAY_WP_1 = 0
 
 local FACTION_ESCORTEE_N_NEUTRAL_PASSIVE = 113
 
--- C++ OnQuestAccept for quest 12688: SetFaction(113) + Start
--- escort + Talk(0).
+-- C++ OnQuestAccept for quest 12688: MoveJumpTo(0, 0.4, 0.4) hop +
+-- SetFaction(113) + Start escort + Talk(0), in C++ order.
 local function onQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_DISASTER then
         return
     end
+    creature:MoveJumpTo(0, 0.4, 0.4)
     creature:SetFaction(FACTION_ESCORTEE_N_NEUTRAL_PASSIVE)
     creature:StartEscort(player)
     creature:Talk(SAY_WP_1)

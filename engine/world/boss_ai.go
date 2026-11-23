@@ -3600,7 +3600,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 					s.creatureEffectTriggerSpell(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 				}
 			case spellEffectCharge:
-				s.creatureEffectCharge(ctx, m, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectCharge(ctx, m, spellInfo, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectChargeDest:
 				s.creatureEffectChargeDest(ctx, m, hasDest, destX, destY, destZ)
 			case spellEffectJump:
@@ -6414,7 +6414,9 @@ func (s *Server) creatureDispelMechanicPlayerTarget(m *creatureMotion, eff wotlk
 // MoveKnockbackFrom leg through knockBackCreatureTarget (root/stun gate,
 // non-melee interrupt, then the spline-endpoint snap with passenger
 // fan-out, the charge/pull snap precedent — the parabolic spline itself
-// has no Go model and the mmap first-collision clamp stays out). The
+// has no Go model; the destination takes the
+// MovePositionToFirstCollision raycast clamp
+// (knockbackFirstCollisionDest)). The
 // world-boss / dungeon-boss gate (which C++ applies only when the caster
 // has an affecting player) still runs first on the creature leg.
 func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hasDest bool, dx, dy, dz float32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
@@ -6623,6 +6625,53 @@ func (s *Server) jumpToCreatureTargetDest(tm *creatureMotion, absoluteAngle floa
 	s.launchCreatureJumpSpline(tm, destX, destY, oz, speedXY, speedZ, 1004)
 }
 
+// knockbackFirstCollisionDest mirrors the destination leg of
+// MotionMaster::MoveKnockbackFrom (MotionMaster.cpp:735-763): the
+// straight-line endpoint is shortened to the first collision along the
+// ray — WorldObject::MovePositionToFirstCollision (Object.cpp:3386-3420)
+// runs a detour raycast (PathGenerator with SetUseRaycast) and takes the
+// path's last point, under the PATHFIND type gate (:3401-3403: a type
+// carrying a bit outside NORMAL/SHORTCUT/INCOMPLETE/FARFROMPOLY_END while
+// NOT_USING_PATH is clear leaves the position at the origin — NOPATH
+// knocks nowhere). The VMAP static-LOS and dynamic-GO hit checks that run
+// on the NOT_USING_PATH arm have no positional Go model (no vmap raycast
+// returning a hit point), so the shortcut end stands there, its z already
+// ground-clamped by the path normalizer. The ray starts at the
+// interpolated spline position (tx, ty, tz), the owner's live position
+// C++ tracks along the spline — not the snapped destination. Returns the
+// straight-line dest unchanged when no raycast result is usable.
+func (s *Server) knockbackFirstCollisionDest(tm *creatureMotion, tx, ty, tz, destX, destY float32) (float32, float32, float32) {
+	if s == nil || tm == nil {
+		return destX, destY, tz
+	}
+	s.motionMu.Lock()
+	src := newCreaturePathSource(s, tm)
+	mapID := tm.Map
+	s.motionMu.Unlock()
+	if snap, ok := src.(*pathSourceSnapshot); ok {
+		// Start the ray at the interpolated spline position, not the
+		// snapped destination the snapshot carries mid-flight.
+		snap.x, snap.y, snap.z = tx, ty, tz
+		snap.inWater = s.mapIsInWater(mapID, tx, ty, tz)
+		snap.underWater = s.mapIsUnderWater(mapID, tx, ty, tz)
+	}
+	gen := NewPathGenerator(s, src)
+	gen.SetUseRaycast(true)
+	if !gen.CalculatePath(destX, destY, tz, false) {
+		return destX, destY, tz
+	}
+	pt := gen.PathType()
+	if pt&pathfindNotUsingPath == 0 && pt&^(pathfindNormal|pathfindShortcut|pathfindIncomplete|pathfindFarFromPolyEnd) != 0 {
+		return tx, ty, tz
+	}
+	pts := gen.PathPoints()
+	if len(pts) == 0 {
+		return tx, ty, tz
+	}
+	last := pts[len(pts)-1]
+	return last.X, last.Y, last.Z
+}
+
 // knockBackCreatureTarget mirrors MotionMaster::MoveKnockbackFrom
 // (MotionMaster.cpp:735) for a creature hit target, shared by the creature
 // and player caster twins (the boss gate already ran at the call site).
@@ -6634,11 +6683,16 @@ func (s *Server) jumpToCreatureTargetDest(tm *creatureMotion, absoluteAngle floa
 // 2 * (speedZ / gravity) * speedXY along the away-from-source direction
 // (GetRelativeAngle + PI through MovePositionToFirstCollision nets the
 // source-to-target direction; the <0.001 coincidence arm takes a random
-// angle, the GetSinCos twin), Z kept — the mmap first-collision clamp
-// has no Go model, the charge/pull snap precedent. The origin is the
-// interpolated spline position (MoveKnockbackFrom reads the owner's
-// live position, which C++ tracks along the spline), not the snapped
-// destination. The flight rides launchCreatureKnockbackSpline: a
+// angle, the GetSinCos twin). The landing point takes the
+// MovePositionToFirstCollision raycast clamp
+// (knockbackFirstCollisionDest): the straight-line endpoint shortens to
+// the first navmesh hit, its z ground-clamped by the path normalizer; on
+// a NOT_USING_PATH shortcut the end stands (the VMAP static-LOS /
+// dynamic-GO hit legs have no positional Go model), and on NOPATH the
+// knockback lands at the origin, as C++ leaves the position unchanged.
+// The origin is the interpolated spline position (MoveKnockbackFrom reads
+// the owner's live position, which C++ tracks along the spline), not the
+// snapped destination. The flight rides launchCreatureKnockbackSpline: a
 // parabolic spline (SetParabolic(max_height, 0), SetOrientationFixed,
 // velocity speedXY, id 0), so clients arc through the flight and the
 // landing gate fires MovementInform(EFFECT, 0). Orientation is fixed
@@ -6676,7 +6730,8 @@ func (s *Server) knockBackCreatureTarget(tm *creatureMotion, fromX, fromY float6
 	flight := 2 * moveTimeHalf * float64(speedXY)
 	destX := tx + float32(flight*vcos)
 	destY := ty + float32(flight*vsin)
-	s.launchCreatureKnockbackSpline(tm, destX, destY, tz, speedXY, speedZ)
+	destX, destY, destZ := s.knockbackFirstCollisionDest(tm, tx, ty, tz, destX, destY)
+	s.launchCreatureKnockbackSpline(tm, destX, destY, destZ, speedXY, speedZ)
 	s.syncCreatureVehiclePassengers(tm)
 }
 
@@ -8204,11 +8259,14 @@ func (s *Server) creatureEffectTeleUnitsFaceCaster(ctx context.Context, m *creat
 // attacks off a charge, and the fall-information leg is player-caster-only
 // too. The caster moves to the target's first-collision position (target
 // reach along the target-to-caster line, the player helper's geometry);
-// the pre-generated path and the MoveCharge spline have no Go model, so
-// the position snaps like the teleport arm. A reflected target retargets
-// to the caster, whose own first-collision position is the mechanical
-// C++ outcome.
-func (s *Server) creatureEffectCharge(ctx context.Context, m *creatureMotion, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+// when the pre-generated path builds (creatureEffectChargePrepath —
+// MotionMaster::MoveCharge(PathGenerator), MotionMaster.cpp:722-733) the
+// caster walks the poly path and the arrival inform carries
+// EVENT_CHARGE_PREPATH (1005); when it does not build, the position snaps
+// like the teleport arm and the inform carries EVENT_CHARGE (1003). A
+// reflected target retargets to the caster, whose own first-collision
+// position is the mechanical C++ outcome.
+func (s *Server) creatureEffectCharge(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
 	}
@@ -8225,6 +8283,9 @@ func (s *Server) creatureEffectCharge(ctx context.Context, m *creatureMotion, hi
 		}
 		tx, ty, tz, reach, ok := s.creatureTargetPosition(m, guid)
 		if !ok {
+			continue
+		}
+		if s.creatureEffectChargePrepath(ctx, m, spell, tx, ty, tz, reach) {
 			continue
 		}
 		angle := math.Atan2(float64(m.Y-ty), float64(m.X-tx))
@@ -8253,6 +8314,65 @@ func (s *Server) creatureEffectCharge(ctx context.Context, m *creatureMotion, hi
 		// teleport arms above.
 		s.syncCreatureVehiclePassengers(m)
 	}
+}
+
+// creatureEffectChargePrepath mirrors MotionMaster::MoveCharge(PathGenerator)
+// (MotionMaster.cpp:722-733) for a creature caster: the pre-generated path
+// from Spell::CheckCast (Spell.cpp:5688-5703) is walked with MovebyPath at
+// the spell speed — SPEED_CHARGE 42 (MovementDefines.h:23), the Go spell
+// record carries no Speed field (spells.go:56533) — and the
+// PointMovementGenerator created with EVENT_CHARGE_PREPATH never launches
+// its own spline (PointMovementGenerator.cpp:51-56, 95-101), so the arrival
+// inform is MovementInform(POINT_MOTION_TYPE, EVENT_CHARGE_PREPATH 1005,
+// SharedDefines.h:3348), re-stamped on the poly launch like the smooth-path
+// arm. The path is generated here at effect time: the creature cast drivers
+// carry no CheckCast twin and no per-cast path carrier, so there is no
+// CheckCast-time path to reuse; the range limit (GetMaxRange(true) * 1.5 +
+// reach, Spell.cpp:5690) and the SHORT/NOPATH/INCOMPLETE/
+// IsInvalidDestinationZ gates ride along, and a gated path falls back to
+// the caller's straight-line snap (the cast already hit in Go's model, so
+// failing the movement here would strand the hit). GetSpellModOwner is
+// player-only (SpellInfo.cpp:3061-3072 folds SPELLMOD_RANGE through the mod
+// owner), so a creature caster's DBC MaxFriendly stands unmodified. Returns
+// false when no path walk launched.
+func (s *Server) creatureEffectChargePrepath(ctx context.Context, m *creatureMotion, spell wotlk.Spell, tx, ty, tz, reach float32) bool {
+	if s == nil || m == nil {
+		return false
+	}
+	_ = ctx
+	gen := NewPathGenerator(s, newCreaturePathSource(s, m))
+	if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+		gen.SetPathLengthLimit(float32(spellDBCMaxRange(true, rangeEntry))*1.5 + reach)
+	}
+	if !gen.CalculatePath(tx, ty, tz, false) {
+		return false
+	}
+	pt := gen.PathType()
+	if pt&pathfindShort != 0 || pt&(pathfindNopath|pathfindIncomplete) != 0 {
+		return false
+	}
+	if gen.IsInvalidDestinationZ(tz) {
+		return false
+	}
+	gen.ShortenPathUntilDist(pathVec{tx, ty, tz}, reach)
+	points := gen.PathPoints()
+	if len(points) < 2 {
+		return false
+	}
+	end := points[len(points)-1]
+	facing := float32(math.Atan2(float64(ty-end.Y), float64(tx-end.X)))
+	// SPEED_CHARGE (MovementDefines.h:23); the launcher caps it like the
+	// Lua MoveCharge bridge (capSplineVelocity).
+	if !s.launchCreaturePolySpline(m, points, false, movementGeneratorPoint, facing, true, 42, time.Now(), 42) {
+		return false
+	}
+	// launchCreaturePolySpline stamps ScriptMovePointID 0; the prepath
+	// inform id is re-stamped after, the smooth-path shape.
+	s.motionMu.Lock()
+	m.ScriptMovePointID = 1005 // EVENT_CHARGE_PREPATH (SharedDefines.h:3348)
+	s.motionMu.Unlock()
+	s.syncCreatureVehiclePassengers(m)
+	return true
 }
 
 // creatureEffectChargeDest mirrors Spell::EffectChargeDest

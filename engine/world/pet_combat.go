@@ -1608,6 +1608,7 @@ func (s *Server) petSelectNextTarget(motion *creatureMotion, ownerGUID uint64) u
 		return 0
 	}
 	var petAttackers, ownerAttackers []uint64
+	var petPlayerAttackers, ownerPlayerAttackers []uint64
 	s.motionMu.Lock()
 	for guid, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
 		if m == nil || guid == motion.GUID || m.Health == 0 || !m.InCombat {
@@ -1620,10 +1621,70 @@ func (s *Server) petSelectNextTarget(motion *creatureMotion, ownerGUID uint64) u
 		}
 	}
 	s.motionMu.Unlock()
+	// Unit::getAttackerForHelper (Unit.cpp:5627-5644) picks PvP combat
+	// refs before PvE refs, the pet's refs before the owner's — the
+	// motion-map scan above only sees creature (PvE) attackers, so a
+	// player beating on the pet or the owner was invisible here and a
+	// defensive pet stood idle. A player's attackTarget is the Go PvP-ref
+	// twin (Unit::Attack victim, set on attack start, cleared on attack
+	// stop/death); a spell-only attacker with no attackTarget has no Go
+	// model — there is no combat-ref index — and is missed the same way
+	// petAttackerForHelperTarget documents.
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
+		if sess == nil || sess.player == nil || sess.player.Map != motion.Map || sess.player.InstanceID != motion.InstanceID {
+			continue
+		}
+		if sess.playerGUID == ownerGUID || sess.player.Health == 0 || sess.isDeadOrGhost() {
+			continue
+		}
+		if sess.attackTarget == motion.GUID {
+			petPlayerAttackers = append(petPlayerAttackers, sess.playerGUID)
+		} else if ownerGUID != 0 && sess.attackTarget == ownerGUID {
+			ownerPlayerAttackers = append(ownerPlayerAttackers, sess.playerGUID)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, guid := range petPlayerAttackers {
+		if sess := s.findSessionByGUID(guid); sess != nil && !s.petVictimHasBreakableCC(motion, guid, true, sess) {
+			return guid
+		}
+	}
+	for _, guid := range ownerPlayerAttackers {
+		if sess := s.findSessionByGUID(guid); sess != nil && !s.petVictimHasBreakableCC(motion, guid, true, sess) {
+			return guid
+		}
+	}
 	for _, candidates := range [][]uint64{petAttackers, ownerAttackers} {
 		for _, guid := range candidates {
 			if !s.petVictimHasBreakableCC(motion, guid, false, nil) {
 				return guid
+			}
+		}
+	}
+	// PetAI::SelectNextTarget owner-victim leg (PetAI.cpp:335-337): the
+	// owner's victim is returned unconditionally — no CC check, no
+	// CanAttack check (AttackStart gates that, PetAI.cpp:268). The
+	// owner's attackTarget is the in-tree GetVictim twin
+	// (petAttackerForHelperTarget); a dead or ghost target resolves to
+	// no victim. This is the KilledUnit re-engage (PetAI.cpp:232-248):
+	// a pet whose victim died re-engages what its owner is still
+	// fighting instead of disengaging — previously petSelectNextTarget
+	// returned 0 here and the pet walked home while the owner fought on.
+	if ownerSess := s.findSessionByGUID(ownerGUID); ownerSess != nil && ownerSess.attackTarget != 0 {
+		victimGUID := ownerSess.attackTarget
+		if victimGUID != motion.GUID {
+			if sess := s.findSessionByGUID(victimGUID); sess != nil && sess.player != nil {
+				if !sess.isDeadOrGhost() && sess.player.Health > 0 {
+					return victimGUID
+				}
+			} else {
+				s.motionMu.Lock()
+				vm := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, victimGUID)
+				s.motionMu.Unlock()
+				if vm != nil && vm.Health > 0 {
+					return victimGUID
+				}
 			}
 		}
 	}
@@ -1864,6 +1925,16 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			// chase leg below. The victim is kept: C++ keeps it until
 			// NeedToStop or death clears it.
 			motion.Moving = false
+			// PetAI::UpdateAI COMMAND_STAY arm (PetAI.cpp:84-95) skips
+			// only the melee swing out of range — the autocast block
+			// (:114-196) still runs below it, so a stay pet holding
+			// out of melee range still casts self/friendly autocast
+			// spells (Spirit Mend, Devour Magic on a debuffed ally);
+			// the enemy legs stay CanAttack-gated, hence allowEnemy=false.
+			// Previously this return skipped autocast entirely.
+			if !ccHoldAttacks && len(motion.AutocastSpells) > 0 {
+				s.executePetAutocast(ctx, motion, targetGUID, now, false)
+			}
 			return
 		}
 		// PetAI::DoAttack (PetAI.cpp:408-433) chases with ChaseRange(0,
@@ -1981,7 +2052,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 	// PetAI.cpp:124-131). Suppressed by the breakable-CC arm above,
 	// like the swing.
 	if !ccHoldAttacks && len(motion.AutocastSpells) > 0 {
-		s.executePetAutocast(ctx, motion, targetGUID, now)
+		s.executePetAutocast(ctx, motion, targetGUID, now, true)
 	}
 }
 
@@ -2989,7 +3060,7 @@ func petSpellCanTargetEnemy(spell wotlk.Spell) bool {
 // Spell::CanAutoCast aura-stack precheck rides petCanAutoCastTarget, and
 // the containment tail rides the pre-filter in the loop below (power,
 // strict range, self-cast).
-func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion, targetGUID uint64, now time.Time) {
+func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion, targetGUID uint64, now time.Time, allowEnemy bool) {
 	if s == nil || motion == nil || len(motion.AutocastSpells) == 0 || s.Data == nil {
 		return
 	}
@@ -3065,12 +3136,14 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 			// here because Go only runs autocast on the in-combat path,
 			// where C++ CheckPetCast fails a CANT_USED_IN_COMBAT spell.
 			spellUsed := false
-			if enemyTarget := s.petAttackerForHelperTarget(ctx, motion, owner, targetGUID); enemyTarget != 0 && usableInCombat &&
-				petSpellCanTargetEnemy(spell) &&
-				s.petCanAutoCastTarget(ctx, owner, motion, spell, enemyTarget) &&
-				s.checkCreatureSpellRange(motion, spell, enemyTarget, modOwner) {
-				candidates = append(candidates, petAutocastCandidate{spell: spell, target: enemyTarget})
-				spellUsed = true
+			if allowEnemy {
+				if enemyTarget := s.petAttackerForHelperTarget(ctx, motion, owner, targetGUID); enemyTarget != 0 && usableInCombat &&
+					petSpellCanTargetEnemy(spell) &&
+					s.petCanAutoCastTarget(ctx, owner, motion, spell, enemyTarget) &&
+					s.checkCreatureSpellRange(motion, spell, enemyTarget, modOwner) {
+					candidates = append(candidates, petAutocastCandidate{spell: spell, target: enemyTarget})
+					spellUsed = true
+				}
 			}
 			jumpToEnemy := false
 			for _, eff := range spell.Effects {
@@ -3121,7 +3194,7 @@ func (s *Server) executePetAutocast(ctx context.Context, motion *creatureMotion,
 					break
 				}
 			}
-		} else if !selfCast && targetGUID != 0 && motion.InCombat && usableInCombat &&
+		} else if allowEnemy && !selfCast && targetGUID != 0 && motion.InCombat && usableInCombat &&
 			s.petCanAutoCastTarget(ctx, owner, motion, spell, targetGUID) &&
 			s.checkCreatureSpellRange(motion, spell, targetGUID, modOwner) {
 			candidates = append(candidates, petAutocastCandidate{spell: spell, target: targetGUID})
@@ -6232,7 +6305,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 		case spellEffectInterruptCast:
 			s.server.creatureEffectInterruptCast(ctx, motion, spell, spell.Effects[i], bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectCharge:
-			s.server.creatureEffectCharge(ctx, motion, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			s.server.creatureEffectCharge(ctx, motion, spell, bossConeEffectTargetsFiltered(i, spell.Effects[i], hitTargets, petConePart), launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectChargeDest:
 			s.server.creatureEffectChargeDest(ctx, motion, hasDest, dx, dy, dz)
 		case spellEffectJump:

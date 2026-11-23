@@ -12651,7 +12651,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					case spellEffectInterruptCast:
 						s.creatureEffectInterruptCast(ctx, motion, inlineSpell, inlineSpell.Effects[i], bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), launchReflected, evadedSet, immuneSet, missSet)
 					case spellEffectCharge:
-						s.creatureEffectCharge(ctx, motion, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), launchReflected, evadedSet, immuneSet, missSet)
+						s.creatureEffectCharge(ctx, motion, inlineSpell, bossConeEffectTargetsFiltered(i, inlineSpell.Effects[i], hitTargets, inlineConePart), launchReflected, evadedSet, immuneSet, missSet)
 					case spellEffectChargeDest:
 						s.creatureEffectChargeDest(ctx, motion, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z)
 					case spellEffectJump:
@@ -15283,8 +15283,9 @@ func (s *Server) creatureSightInvisibilityBlocked(motion *creatureMotion, ts *se
 // stunned scanners, which have no motion field, and JUMPING rides the
 // MoveJump spline window (JumpUntil, set only by
 // launchCreatureJumpSpline). CHARGING stays a documented gap: the
-// spell-charge effect snaps to the destination (creatureEffectCharge
-// has no MoveCharge spline model); the Lua MoveCharge bridge exists
+// spell-charge effect walks a poly path when one builds and snaps to the
+// destination otherwise (creatureEffectChargePrepath /
+// creatureEffectCharge); the Lua MoveCharge bridge exists
 // but launches a plain script spline, and the tick-head Moving gate
 // returns while it is in flight, so a creature scanner never spans a
 // charge window in Go.

@@ -450,16 +450,37 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	dist := distance3D(fromX, fromY, fromZ, pt.X, pt.Y, pt.Z)
 	run.LinkActualMs += splineDurationMs(float64(dist), speed)
 	// The wait for the next link runs from this link's launch
-	// (SplineChainMovementGenerator::_msToNext), so it is armed
-	// once the link's last point is sent and its actual duration
-	// is known; until then advanceSplineChain must not re-send
-	// the in-flight link. The arm is re-asserted at landing with
-	// the identical value (LinkActualMs is final by then). A resumed
-	// run's WaitFixed wait counts down from the resume instead, so
-	// the launch-derived arming must not overwrite it.
+	// (SplineChainMovementGenerator::_msToNext, set at SendSplineFor
+	// from the link's TimeToNext and scaled by actual/expected
+	// duration), so it is armed at the link's first point with the
+	// whole link's duration precomputed from the launch position
+	// (MoveSplineInit::Launch, MoveSplineInit.cpp:60-68, starts from
+	// the interpolated position; later legs run point to point, so
+	// the precomputed total equals the accumulated LinkActualMs the
+	// last-point send used to arm). Arming at launch — not at the
+	// last point — is what lets advanceSplineChain cut the running
+	// spline at the true deadline (Update, :149-171, sends the next
+	// link even mid-spline): a wait shorter than the link used to
+	// fire a leg late, after the link had already landed. The arm
+	// is re-asserted at the last-point send and at landing with the
+	// identical value (LinkActualMs is final by then). Intermediate
+	// sends leave the point-0 arm standing. A final link arms
+	// nothing — C++ parks _msToNext at 0 and waits for finalize —
+	// and disarms any wait the previous link left, so the advance
+	// cannot re-send the in-flight leg. A resumed run's WaitFixed
+	// wait counts down from the resume instead, so the
+	// launch-derived arming must not overwrite it.
 	if !run.WaitFixed {
-		run.WaitArmed = false
-		if run.PointIndex == len(link.Points)-1 && run.LinkIndex < len(run.Links)-1 {
+		if run.LinkIndex >= len(run.Links)-1 {
+			run.WaitArmed = false
+		} else if run.PointIndex == 0 {
+			totalMs := run.LinkActualMs
+			for i := 1; i < len(link.Points); i++ {
+				totalMs += splineDurationMs(float64(distance3D(link.Points[i-1].X, link.Points[i-1].Y, link.Points[i-1].Z, link.Points[i].X, link.Points[i].Y, link.Points[i].Z)), speed)
+			}
+			run.WaitUntil = run.LinkLaunchedAt.Add(time.Duration(splineChainWaitMs(link, totalMs)) * time.Millisecond)
+			run.WaitArmed = true
+		} else if run.PointIndex == len(link.Points)-1 {
 			run.WaitUntil = run.LinkLaunchedAt.Add(time.Duration(splineChainWaitMs(link, run.LinkActualMs)) * time.Millisecond)
 			run.WaitArmed = true
 		}
@@ -467,7 +488,20 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	pointID, walk := run.PointID, run.Walk
 	flying, animTier := run.Flying, run.AnimTier
 	s.motionMu.Unlock()
-	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, flying, animTier, false, explicitSpeed, 0, false)
+	launched := s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed, flying, animTier, false, explicitSpeed, 0, false)
+	if !launched {
+		// A failed launch must not leave an armed wait behind:
+		// advanceSplineChain would re-send the same point every
+		// tick on the expired deadline (the old per-send reset
+		// cleared it). The run stalls like a launch C++ never made
+		// until a fresh launch supersedes it.
+		s.motionMu.Lock()
+		if motion.SplineChain == run {
+			run.WaitArmed = false
+		}
+		s.motionMu.Unlock()
+	}
+	return launched
 }
 
 // splineChainClosedLength is the closed-loop length of a chain link's

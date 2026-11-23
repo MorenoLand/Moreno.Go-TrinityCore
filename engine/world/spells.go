@@ -180,6 +180,7 @@ const (
 	spellFailedEquippedItemClassOffhand  uint8  = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
 	spellFailedNotInFront                uint8  = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
 	spellFailedLineOfSight               uint8  = 47  // SPELL_FAILED_LINE_OF_SIGHT (SharedDefines.h:1029)
+	spellFailedNoPath                    uint8  = 56  // SPELL_FAILED_NOPATH (SharedDefines.h:1038)
 	spellFailedCustomError               uint8  = 172 // SPELL_FAILED_CUSTOM_ERROR (SharedDefines.h:1154)
 	spellFailedCantDoThatRightNow        uint8  = 173 // SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW (SharedDefines.h:1155)
 	spellFailedReagents                  uint8  = 100 // SPELL_FAILED_REAGENTS (SharedDefines.h:1082)
@@ -5337,8 +5338,8 @@ func (s *session) checkCastAuraAt(ctx context.Context, spell wotlk.Spell, index 
 // the SPELL_EFFECT_CHARGE arm (Spell.cpp:5678-5702) for a triggered cast:
 // the root leg opens on !TRIGGERED_IGNORE_CASTER_AURAS (Spell.cpp:5675-5676)
 // and the full triggered mask carries that flag, so a triggered charge is
-// never rooted-failed. The PathGenerator NOPATH arms stay unbridged (no
-// navmesh), as on the client twin.
+// never rooted-failed. The m_preGeneratedPath validation runs here too
+// (chargePreGeneratedPath), the same CheckCast arm as the client twin.
 func (s *session) checkTriggeredChargeCast(ctx context.Context, spell wotlk.Spell, targetGUID uint64) uint8 {
 	if s == nil || s.player == nil || s.server == nil {
 		return 0
@@ -5353,6 +5354,61 @@ func (s *session) checkTriggeredChargeCast(ctx context.Context, spell wotlk.Spel
 		if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
 			return spellFailedLineOfSight
 		}
+		if fail := s.chargePreGeneratedPath(spell, tgt); fail != 0 {
+			return fail
+		}
+	}
+	return 0
+}
+
+// chargePreGeneratedPath mirrors the m_preGeneratedPath build in the
+// SPELL_EFFECT_CHARGE arm of Spell::CheckCast (Spell.cpp:5688-5703):
+// for a spell needing an explicit unit target, the path from the caster
+// to the target is generated up front (SetPathLengthLimit with
+// GetMaxRange(true) * 1.5 + target combat reach, then CalculatePath),
+// and the cast fails SPELL_FAILED_NOPATH when the path is too long
+// (PATHFIND_SHORT), unbuildable or partial (PATHFIND_NOPATH /
+// PATHFIND_INCOMPLETE), or ends more than 5 yards above the target
+// (IsInvalidDestinationZ). The built path itself is not stored: Go has
+// no per-cast carrier between CheckCast and the LAUNCH_TARGET effect,
+// so the movement legs rebuild the geometry at effect time — the
+// player snap in handleEffectCharge, the poly walk in
+// creatureEffectChargePrepath. A nil path source (no live player)
+// skips validation, like the unresolvable-target skip above. Returns
+// the SPELL_FAILED_* result code, 0 on success.
+func (s *session) chargePreGeneratedPath(spell wotlk.Spell, tgt combatTarget) uint8 {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0
+	}
+	src := newPlayerPathSource(s)
+	if src == nil {
+		return 0
+	}
+	// SpellInfo::GetMaxRange(true) (SpellInfo.cpp:3061-3072) is the
+	// friendly DBC max with SPELLMOD_RANGE folded through the mod
+	// owner — the same read as the area/cone zero-radius fallback.
+	maxRange := float32(0)
+	if rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+		maxRange = float32(s.applySpellModFloat(spell, spellModRange, spellDBCMaxRange(true, rangeEntry)))
+	}
+	reach := tgt.CombatReach
+	if reach <= 0 {
+		reach = 1.5
+	}
+	gen := NewPathGenerator(s.server, src)
+	gen.SetPathLengthLimit(maxRange*1.5 + reach)
+	if !gen.CalculatePath(tgt.X, tgt.Y, tgt.Z, false) {
+		return spellFailedNoPath
+	}
+	pt := gen.PathType()
+	if pt&pathfindShort != 0 {
+		return spellFailedNoPath
+	}
+	if pt&(pathfindNopath|pathfindIncomplete) != 0 {
+		return spellFailedNoPath
+	}
+	if gen.IsInvalidDestinationZ(tgt.Z) {
+		return spellFailedNoPath
 	}
 	return 0
 }
@@ -5746,15 +5802,17 @@ func spellNeedsToBeTriggeredByCaster(triggered, triggering wotlk.Spell) bool {
 // the m_caster->ToUnit() null arm is vacuous (client casts always come from
 // a player session); the TRIGGERED_IGNORE_CASTER_AURAS arm of the root check
 // is vacuous on this path (handleCastSpell serves client-initiated casts
-// only; triggered casts go through castSpellDirect). No bridge: the
-// Warbringer script-override arm (Spell.cpp:5668-5673 —
+// only; triggered casts go through castSpellDirect). The PathGenerator
+// arms (Spell.cpp:5688-5701: PATHFIND_SHORT/PATHFIND_NOPATH/
+// PATHFIND_INCOMPLETE/IsInvalidDestinationZ → SPELL_FAILED_NOPATH) run
+// in chargePreGeneratedPath; the ShortenPathUntilDist back-off has no
+// CheckCast consumer — the built path is not stored, so the back-off
+// lives in the creature effect-time rebuild
+// (creatureEffectChargePrepath). No bridge: the Warbringer
+// script-override arm (Spell.cpp:5668-5673 —
 // Unit::IsScriptOverriden reads SPELL_AURA_OVERRIDE_CLASS_SCRIPTS (112)
 // aura effects with MiscValue 6953, Unit.cpp:4764-4774; Go has no aura-112
-// model) and the PathGenerator arms (Spell.cpp:5688-5701:
-// PATHFIND_SHORT/PATHFIND_NOPATH/PATHFIND_INCOMPLETE/
-// IsInvalidDestinationZ → SPELL_FAILED_NOPATH, plus the
-// ShortenPathUntilDist back-off — Go builds no navmesh,
-// commands_mmaps.go:34). Returns the SPELL_FAILED_* result code, 0 on
+// model). Returns the SPELL_FAILED_* result code, 0 on
 // success.
 func (s *session) checkChargeCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
 	if s == nil || s.player == nil {
@@ -5788,6 +5846,9 @@ func (s *session) checkChargeCast(ctx context.Context, spell wotlk.Spell, target
 			// spell-check path (hasLineOfSightSpellCheck skips M2).
 			if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
 				return spellFailedLineOfSight
+			}
+			if fail := s.chargePreGeneratedPath(spell, tgt); fail != 0 {
+				return fail
 			}
 		}
 	}
@@ -56505,7 +56566,11 @@ func spellIsLootCrafting(spell wotlk.Spell) bool {
 // point, facing the target; the spell-Speed-vs-SPEED_CHARGE selection has
 // no consumer without splines. HIT_TARGET arm: a non-positive charge spell
 // makes a player caster attack the target (Unit::Attack(target, true)).
-// The m_preGeneratedPath arm has no Go consumer (no path model).
+// The m_preGeneratedPath arm is built and validated at CheckCast
+// (chargePreGeneratedPath) but the path itself is not stored — the player
+// has no MovebyPath spline model, so the walk lands as the same contact
+// point; the creature twin rebuilds and walks the path at effect time
+// (creatureEffectChargePrepath).
 func (s *session) handleEffectCharge(ctx context.Context, targetGUID uint64, spell wotlk.Spell) {
 	if targetGUID == 0 || s == nil || s.player == nil {
 		return
