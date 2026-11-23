@@ -274,7 +274,15 @@ func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byt
 		// (Player.cpp:16290-16296).
 		s.fireCreatureQuestHook(ctx, guid, scripting.CreatureEventOnDialogStatus)
 		s.fireGameObjectQuestHook(ctx, guid, scripting.GameObjectEventOnDialogStatus)
-		if st, err := s.questDialogStatus(ctx, entry); err == nil {
+		// Player::GetQuestDialogStatus (Player.cpp:16272-16290): a
+		// gameobject questgiver reads the gameobject relations, not the
+		// creature ones — a GO giver otherwise always answers
+		// DIALOG_STATUS_NONE.
+		if uint16(guid>>48) == 0xF110 {
+			if st, err := s.questDialogStatusFromRelations(ctx, entry, "gameobject_questender", "gameobject_queststarter"); err == nil {
+				status = st
+			}
+		} else if st, err := s.questDialogStatus(ctx, entry); err == nil {
 			status = st
 		}
 	}

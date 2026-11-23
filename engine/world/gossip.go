@@ -654,6 +654,14 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 				return true
 			}
 			defaultMenu.Quests = nil
+			// Player::SendPreparedGossip (Player.cpp:14555-14562): the
+			// re-prepare sets the live menu id to 0, so the menuId arm is
+			// falsy and the default-text lookup stands — the title comes
+			// from the source's default gossip menu
+			// (GetGossipTextId(source)), not DEFAULT_GOSSIP_MESSAGE.
+			if titleID, terr := s.loadGossipMenuTitleID(ctx, objectUint32OrZero(creature, "GossipMenuID"), entry, guid); terr == nil {
+				defaultMenu.TitleID = titleID
+			}
 			s.gossip = defaultMenu
 			if sendErr := s.sendGossipMenu(); sendErr != nil {
 				s.debug("gossip spiritguide response failed", "account", s.accountName, "entry", entry, "error", sendErr)
@@ -1036,14 +1044,18 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 			return nil, err
 		}
 	}
-	// Player::PrepareGossipMenu (Player.cpp:14465-14468): a TAXIVENDOR option
+	// Player::PrepareGossipMenu (Player.cpp:14431-14434): a TAXIVENDOR option
 	// that survives the npcflag/condition gates learns an unknown flight node
-	// and aborts the menu build; the flight map opens through the taxi option
-	// afterwards. The arm is per-option, not per-creature — a flightmaster
-	// hello whose menu holds no taxivendor option still shows its menu.
-	for _, option := range options {
+	// and returns from the menu build mid-loop — the options already added
+	// stay, the taxivendor option itself and everything after it are
+	// dropped, and the caller still sends the partial menu via
+	// SendPreparedGossip. The arm is per-option, not per-creature — a
+	// flightmaster hello whose menu holds no taxivendor option still shows
+	// its menu.
+	for i, option := range options {
 		if option.Item.Action == 4 && s.learnNewTaxiNode(ctx, guid) {
-			return nil, nil
+			options = options[:i]
+			break
 		}
 	}
 	for _, option := range options {
