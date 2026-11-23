@@ -890,7 +890,18 @@ type session struct {
 	timedCriteria      map[uint32]*time.Timer
 	inFlight           bool
 	taxiFlight         *taxiFlight
-	taxiMu             sync.Mutex // guards taxiFlight, inFlight and flight progress
+	taxiMu             sync.Mutex // guards taxiFlight, inFlight, taxiMounted and flight progress
+	// taxiMounted marks a taxi flight that ran Unit::Mount
+	// (SendDoFlight, TaxiHandler.cpp:115-125): the UNIT_FLAG_MOUNT
+	// leg, so sendPlayerMountUpdate keeps the flag while the flight
+	// runs instead of deriving it from the mounted aura alone.
+	taxiMounted bool
+	// lfgDesyncRedirect marks a login whose saved position was
+	// relocated to homebind by the LFG groupless-desync arm
+	// (LFGScripts.cpp:93-100): lfgOnMapChanged at login still runs
+	// the arm's LeaveLfg + aura legs for it. Consumed (cleared) by
+	// that call, and reset at the top of handlePlayerLogin.
+	lfgDesyncRedirect  bool
 	buyback            [12]*buybackSlot
 	currentBuybackSlot uint8
 	arenaTeamInvited   uint32

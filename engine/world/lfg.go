@@ -407,6 +407,45 @@ func (m *LFGManager) restoreStateLocked(guid uint64) {
 	m.queue[guid] = entry
 }
 
+// repairLFGLoginDesync mirrors the LFGPlayerScript::OnLogin desync repair
+// (LFGScripts.cpp:55-78): when the player's live group differs from the
+// group their LFG data names, the member takes the live group's dungeon
+// and state via SetupGroupMember, and the desync is logged. Go keeps no
+// LFG-saved group guid — group membership lives in groupState.Members,
+// not in the LFG manager — so the comparison runs on the observable
+// result: the entry's dungeon selection and state against the live
+// group's. A missing entry with a NONE-state group is already in sync
+// (there is nothing to store); any other mismatch repairs, including a
+// non-LFG live group, whose dungeon 0 / state NONE clears a stale entry
+// exactly like C++'s GetDungeon/GetState on a group with no LFG data.
+func (s *session) repairLFGLoginDesync(g *groupState) {
+	if s == nil || s.server == nil || g == nil || s.server.Features == nil || s.server.Features.LFG == nil {
+		return
+	}
+	lfg := s.server.Features.LFG
+	if lfg.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return
+	}
+	entry, ok := lfg.Status(s.playerGUID)
+	inSync := false
+	if !ok {
+		inSync = g.LFGState == LFGStateNone
+	} else if entry.State == g.LFGState {
+		if g.LFGState == LFGStateNone || g.LFGState == LFGStateFinishedDungeon {
+			inSync = len(entry.Dungeons) == 0
+		} else {
+			inSync = len(entry.Dungeons) == 1 && entry.Dungeons[0] == g.LFGDungeonID
+		}
+	}
+	if inSync {
+		return
+	}
+	if s.server.Logger != nil {
+		s.server.Logger.Error("lfg login desync: live group differs from LFG data, fixing", "guid", s.playerGUID, "group", g.ID, "lfgDungeon", g.LFGDungeonID, "lfgState", g.LFGState)
+	}
+	lfg.SetupGroupMember(s.playerGUID, g.LFGDungeonID, g.LFGState)
+}
+
 // SetupGroupMember mirrors LFGMgr::SetupGroupMember (LFGMgr.cpp:2240-2248):
 // the member takes the group's single dungeon as their whole selection,
 // then takes the group's state; NONE and FINISHED clear the selection
@@ -2757,12 +2796,57 @@ func (s *session) leaveLFGGroupForMapChange(g *groupState, leaderGUID uint64) {
 	}
 }
 
+// relocateLoginLFGDesync runs the groupless homebind arm of
+// LFGPlayerScript::OnMapChanged (LFGScripts.cpp:93-100) at login, at
+// placement stage: a groupless player whose saved position is an LFG
+// dungeon map relocates to homebind before any dungeon admission or
+// placement runs, instead of a teleport in the middle of the login
+// packet flow. The in-dungeon test is the groupless analog of
+// inLfgDungeonMap (lfgEntryInDungeonMap), read off the not-yet-placed
+// state. On success the lfgDesyncRedirect flag tells the login
+// lfgOnMapChanged call to still run the arm's LeaveLfg + aura legs;
+// when the homebind recovery itself fails the state is untouched and
+// the flag stays clear, leaving the pre-existing login residual.
+func (s *session) relocateLoginLFGDesync(ctx context.Context, state *playerState) {
+	if s == nil || s.server == nil || state == nil || s.server.Features == nil || s.server.Features.LFG == nil || s.server.Data == nil {
+		return
+	}
+	lfg := s.server.Features.LFG
+	if lfg.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) == 0 {
+		return
+	}
+	if s.groupID != 0 {
+		return
+	}
+	entry, ok := lfg.Status(s.playerGUID)
+	if !ok || entry.State != LFGStateDungeon || len(entry.Dungeons) == 0 {
+		return
+	}
+	dungeon, found, err := s.server.Data.LFGDungeon(entry.Dungeons[0] & 0x00FFFFFF)
+	if err != nil || !found || dungeon.MapID < 0 || uint32(dungeon.MapID) != state.Map {
+		return
+	}
+	diff := uint32(state.DungeonDifficulty)
+	if mapEntry, found, err := s.server.Data.Map(state.Map); err == nil && found && mapEntry.IsRaid() {
+		diff = uint32(state.RaidDifficulty)
+	}
+	if dungeon.Difficulty != diff {
+		return
+	}
+	if err := s.recoverLoginHomebindOrStart(ctx, state); err != nil {
+		return
+	}
+	s.lfgDesyncRedirect = true
+	s.debug("lfg login desync: groupless player in LFG dungeon map, relocated to homebind", "guid", s.playerGUID, "map", dungeon.MapID, "dungeon", entry.Dungeons[0])
+}
+
 // lfgOnMapChanged mirrors LFGPlayerScript::OnMapChanged (LFGScripts.cpp:93-131)
 // at Go's map-change completion points: the tail of completeWorldPort and the
 // login enter-world path in handlePlayerLogin. allowTeleport is false at
-// login: the groupless homebind redirect needs placement-stage handling, not
-// a teleport in the middle of the login packet flow, so login runs only the
-// LeaveLfg + aura legs (a documented residual, not a silent skip).
+// login: the groupless homebind redirect runs at placement stage instead
+// (relocateLoginLFGDesync, before admission), so the login call still runs
+// the LeaveLfg + aura legs for a redirected player via the
+// lfgDesyncRedirect flag — the teleport itself is already done.
 //
 // The in-dungeon branch's name-query sends have no Go twin and are skipped
 // deliberately: the client already learns group members' names from
@@ -2804,7 +2888,13 @@ func (s *session) lfgOnMapChanged(ctx context.Context, allowTeleport bool) {
 		return
 	}
 	if grp == nil {
-		if entry, ok := lfg.Status(s.playerGUID); ok && s.lfgEntryInDungeonMap(entry) {
+		// A login redirect already moved the player to homebind
+		// (relocateLoginLFGDesync); the flag is consumed here so the
+		// LeaveLfg + aura legs still run for that player, and a later
+		// map change never re-fires them.
+		redirect := s.lfgDesyncRedirect
+		s.lfgDesyncRedirect = false
+		if entry, ok := lfg.Status(s.playerGUID); ok && (s.lfgEntryInDungeonMap(entry) || redirect) {
 			s.leaveLFGPlayerForMapChange()
 			s.removeAura(lfgSpellLuckOfTheDraw)
 			if allowTeleport {

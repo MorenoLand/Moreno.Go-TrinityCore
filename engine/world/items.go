@@ -4530,11 +4530,15 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "location check", "zone", zoneID, "area", areaID, "failure", locationFail)
 				return true
 			}
-			// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SpellInfo.cpp:1529-1550): no bridge.
-			// The strict leg needs AreaTableEntry flyability AND
-			// Player::CanFlyInZone (Cold Weather Flying known-spell check via
-			// GetVirtualMapForMapAndZone); Go has no WorldMapArea store and no
-			// known-spell model for the flight check.
+			// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND, strict leg
+			// (SpellInfo::CheckLocation, SpellInfo.cpp:1529-1550): the
+			// flyable-area + CanFlyInZone gate, shared with the
+			// book-cast twin.
+			if !s.checkLocationOutlandStrict(spell, zoneID, areaID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedIncorrectArea), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "incorrect area (outland only)", "zone", zoneID, "area", areaID)
+				return true
+			}
 		}
 		// CheckCast mounted gate (Spell::CheckCast, Spell.cpp:5465-5476):
 		// mounted players cannot cast spells lacking

@@ -205,6 +205,16 @@ func (s *session) updateAreaDependentAuras(ctx context.Context, zoneID, areaID u
 				continue
 			}
 		}
+		// Continent leg, non-strict (SpellInfo::CheckLocation,
+		// SpellInfo.cpp:1529-1550, strict=false, as called from
+		// Player::UpdateAreaDependentAuras, Player.cpp:24291): a
+		// CAST_ONLY_IN_OUTLAND aura leaves with the player when the
+		// new zone's virtual map is not an expansion continent.
+		if spell.AttributesEx4&spellAttr4CastOnlyInOutland != 0 && !s.checkLocationOutlandContinent(s.player.Map, zoneID) {
+			s.removeAreaRestrictedAura(ctx, aura.SpellID)
+			changed = true
+			continue
+		}
 		rules, hasRules := s.spellAreaRules(ctx, aura.SpellID)
 		if !hasRules || s.spellAreaRulesFit(ctx, aura.SpellID, rules, zoneID, areaID) {
 			continue

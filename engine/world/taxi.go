@@ -877,6 +877,140 @@ func (s *session) chargeTaxiLegAmount(ctx context.Context, cost uint32) {
 // trims that many merged vertices (Player::ContinueTaxiFlight's startNode
 // search); chargeFirstHop mirrors the departure firstcost deduction (false
 // on the ContinueTaxiFlight path, whose current hop was already charged).
+// isTaxiMounted reads the taxiMounted latch under taxiMu.
+func (s *session) isTaxiMounted() bool {
+	if s == nil {
+		return false
+	}
+	s.taxiMu.Lock()
+	defer s.taxiMu.Unlock()
+	return s.taxiMounted
+}
+
+// setTaxiMounted writes the taxiMounted latch under taxiMu.
+func (s *session) setTaxiMounted(mounted bool) {
+	if s == nil {
+		return
+	}
+	s.taxiMu.Lock()
+	s.taxiMounted = mounted
+	s.taxiMu.Unlock()
+}
+
+// creatureHasStunAura reports a live MOD_STUN aura on a creature — the Go
+// shape of UNIT_STATE_STUNNED for the Dismount charm-unstun guard
+// (Unit.cpp:8410-8411), which clears the Mount stun flag only when the
+// unit carries no stun state. ScriptStunned is the other half of that
+// state, read off the motion.
+func (s *Server) creatureHasStunAura(key creatureAuraKey) bool {
+	if s == nil {
+		return false
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura != nil && aura.AuraType == spellAuraModStun {
+			return true
+		}
+	}
+	return false
+}
+
+// stunCharmedUnit runs Unit::Mount's charmed-NPC leg (Unit.cpp:8352-8355):
+// a creature charmed by the player gains UNIT_FLAG_STUNNED. The motion's
+// UnitFlagsKnown latch (set at charm) keeps the sweep from wiping the
+// flag. The flag mutates under motionMu; the values update broadcasts
+// after the unlock (it takes motionMu itself).
+func (s *session) stunCharmedUnit() {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	type charmedFlag struct {
+		mapID, instanceID uint32
+		guid              uint64
+		flags             uint32
+	}
+	var changed []charmedFlag
+	s.server.motionMu.Lock()
+	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if motion != nil && motion.CharmerGUID == s.playerGUID {
+			motion.UnitFlags |= unitFlagStunned
+			changed = append(changed, charmedFlag{motion.Map, motion.InstanceID, motion.GUID, motion.UnitFlags})
+		}
+	}
+	s.server.motionMu.Unlock()
+	for _, c := range changed {
+		s.server.broadcastCreatureValuesUpdateInInstance(c.mapID, c.instanceID, c.guid, map[int]uint32{unitFieldFlags: c.flags})
+	}
+}
+
+// unstunCharmedUnit runs Unit::Dismount's charmed-NPC leg
+// (Unit.cpp:8408-8412): the Mount stun flag clears only when the charmed
+// unit carries it without a stun unit state — a script stun or a live
+// MOD_STUN aura keeps the flag, so a genuinely stunned charmed unit is
+// never unstunned by the dismount.
+func (s *session) unstunCharmedUnit() {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	type charmedFlag struct {
+		mapID, instanceID uint32
+		guid              uint64
+		key               creatureAuraKey
+		stunned           bool
+	}
+	var candidates []charmedFlag
+	s.server.motionMu.Lock()
+	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if motion != nil && motion.CharmerGUID == s.playerGUID && motion.UnitFlags&unitFlagStunned != 0 {
+			candidates = append(candidates, charmedFlag{motion.Map, motion.InstanceID, motion.GUID, creatureAuraKeyForMotion(motion), motion.ScriptStunned})
+		}
+	}
+	s.server.motionMu.Unlock()
+	for _, c := range candidates {
+		if c.stunned || s.server.creatureHasStunAura(c.key) {
+			continue
+		}
+		var flags uint32
+		cleared := false
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(c.mapID, c.instanceID, c.guid); motion != nil && motion.UnitFlags&unitFlagStunned != 0 && !motion.ScriptStunned {
+			motion.UnitFlags &^= unitFlagStunned
+			flags, cleared = motion.UnitFlags, true
+		}
+		s.server.motionMu.Unlock()
+		if cleared {
+			s.server.broadcastCreatureValuesUpdateInInstance(c.mapID, c.instanceID, c.guid, map[int]uint32{unitFieldFlags: flags})
+		}
+	}
+}
+
+// taxiDismount runs the Unit::Dismount legs (Unit.cpp:8365-8415) for a taxi
+// flight end — natural arrival (finishTaxiArrival) and interruption
+// (endTaxiFlight) alike, matching CleanupAfterTaxiFlight
+// (Player.cpp:21713-21718) and FlightPathMovementGenerator::DoFinalize.
+// The guard is Dismount's `if (!IsMounted()) return;` (IsMounted is
+// flag-only, Unit.h:932) with the display id as the co-guard the
+// spell-dismount twin uses. The vehicle leg is vacuous (SendDoFlight
+// mounts with no VehicleId); the arena pet-unstun leg is vacuous too
+// (the Mount arena leg never stuns — no taxi starts in an arena — and
+// the temp-unsummoned pet returns through resummonTemporaryPet).
+func (s *session) taxiDismount() {
+	if s == nil || s.player == nil {
+		return
+	}
+	if s.player.UnitFlags&unitFlagMount == 0 && s.player.MountDisplayID == 0 {
+		return
+	}
+	s.setTaxiMounted(false)
+	s.player.MountDisplayID = 0
+	s.sendPlayerMountUpdate()
+	s.sendPlayerDismount()
+	s.removeAurasWithInterruptFlags(auraInterruptFlagNotMounted)
+	s.resummonTemporaryPet(context.Background())
+	s.unstunCharmedUnit()
+}
+
 func (s *session) beginTaxiFlight(ctx context.Context, nodes []uint32, pathIDs []uint32, prices []uint64, discount float64, faction, mount uint32, resumePt int, chargeFirstHop bool) bool {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || len(nodes) < 2 || len(pathIDs) != len(nodes)-1 || len(prices) != len(pathIDs) {
 		return false
@@ -926,6 +1060,26 @@ func (s *session) beginTaxiFlight(ctx context.Context, nodes []uint32, pathIDs [
 	s.taxiFlight = f
 	s.inFlight = true
 	s.taxiMu.Unlock()
+	// Unit::Mount legs (SendDoFlight, TaxiHandler.cpp:115-125 ->
+	// Unit::Mount, Unit.cpp:8310-8362), run once at flight start
+	// (and on login resume, where C++ ContinueTaxiFlight re-runs
+	// SendDoFlight, Player.cpp:21768): display + UNIT_FLAG_MOUNT
+	// via sendPlayerMountUpdate (the taxiMounted latch keeps the
+	// flag while the flight runs), the pet temp-unsummon, the
+	// charmed-NPC stun, and the MOUNT-interrupt strip. The vehicle
+	// leg is vacuous (SendDoFlight mounts with no VehicleId) and the
+	// arena pet-stun leg is vacuous too (no taxi starts in an
+	// arena); the feign-death strip already ran at activation
+	// (removeFakeDeath). A zero mount skips the whole leg, like
+	// C++'s `if (mountDisplayId)` gate.
+	if mount != 0 {
+		s.setTaxiMounted(true)
+		s.player.MountDisplayID = mount
+		s.sendPlayerMountUpdate()
+		s.temporarilyUnsummonPet(ctx)
+		s.stunCharmedUnit()
+		s.removeAurasWithInterruptFlags(auraInterruptFlagMount)
+	}
 	if chargeFirstHop {
 		// Player::ActivateTaxiPathTo (Player.cpp:21668): the first leg is
 		// deducted at departure; later legs on hop arrival.
@@ -1229,10 +1383,7 @@ func (s *session) finishTaxiArrival(f *taxiFlight) {
 	if s.pvpHostile {
 		s.castSpellDirect(context.Background(), 2479, s.playerGUID)
 	}
-	if s.currentPlayer() != nil {
-		s.player.MountDisplayID = 0
-		s.sendPlayerMountUpdate()
-	}
+	s.taxiDismount()
 	s.clearTaxiBenchmarkMode()
 }
 
@@ -1288,10 +1439,7 @@ func (s *session) endTaxiFlight() (uint32, bool) {
 		return 0, false
 	}
 	s.player.TaxiPath = ""
-	if s.currentPlayer() != nil && s.player.MountDisplayID != 0 {
-		s.player.MountDisplayID = 0
-		s.sendPlayerMountUpdate()
-	}
+	s.taxiDismount()
 	s.clearTaxiBenchmarkMode()
 	return dest, ok
 }

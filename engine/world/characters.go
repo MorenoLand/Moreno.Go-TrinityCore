@@ -820,6 +820,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	var loginInstanceCommitted, loginAdmissionReserved, loginAdmissionCommitted bool
 	s.playerLoading = true
 	s.loginFarTeleport = false
+	s.lfgDesyncRedirect = false
 	s.worldReady.Store(false)
 	s.setPendingBind(0, 0, 0, 0)
 	defer func() {
@@ -878,6 +879,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
+	// LFGPlayerScript::OnMapChanged groupless arm (LFGScripts.cpp:93-100)
+	// at placement stage: a groupless player saved in an LFG dungeon map
+	// relocates to homebind here, before dungeon admission or placement.
+	s.relocateLoginLFGDesync(ctx, &state)
 	s.initialLoginPending = true
 	mapEntry, mapFound, err := s.server.Data.Map(state.Map)
 	if err != nil || !mapFound {

@@ -367,6 +367,14 @@ func (m MapEntry) IsRaid() bool {
 	return m.InstanceType == 2
 }
 
+// IsContinent mirrors MapEntry::IsContinent (DBCStructure.h:1117): the
+// four continent maps — Eastern Kingdoms (0), Kalimdor (1), Outland
+// (530), Northrend (571). Used by the non-strict continent arm of
+// SpellInfo::CheckLocation (SpellInfo.cpp:1529-1550).
+func (m MapEntry) IsContinent() bool {
+	return m.ID == 0 || m.ID == 1 || m.ID == 530 || m.ID == 571
+}
+
 func (m MapEntry) IsDynamicDifficultyMap() bool {
 	return m.Flags&MapFlagDynamicDifficulty != 0
 }

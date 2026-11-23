@@ -269,6 +269,12 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	// CharacterHandler.cpp:865: a logging-in leader stops the
 	// leader-offline timer (Group::StopLeaderOfflineTimer).
 	s.server.stopGroupLeaderOfflineTimer(g, guid)
+	// LFGPlayerScript::OnLogin (LFGScripts.cpp:55-78): a group that
+	// was already in memory does not re-seed its members (the seed
+	// runs only on construction in loadGroupFromDB), so a member
+	// whose live group changed while offline gets the desync repair
+	// here, at login.
+	s.repairLFGLoginDesync(g)
 	if s.player != nil {
 		s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, g.isLeader(guid))
 		s.player.DungeonDifficulty = g.DungeonDiff

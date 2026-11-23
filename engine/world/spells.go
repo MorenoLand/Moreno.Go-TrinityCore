@@ -70,6 +70,7 @@ const (
 	spellAttr7IgnoreDurationMods           uint32 = 0x00000002 // SPELL_ATTR7_IGNORE_DURATION_MODS (SharedDefines.h:672) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7SummonPlayerTotem            uint32 = 0x00000020 // SPELL_ATTR7_SUMMON_PLAYER_TOTEM (SharedDefines.h:676) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr7InterruptOnlyNonplayer       uint32 = 0x00000800 // SPELL_ATTR7_INTERRUPT_ONLY_NONPLAYER (SharedDefines.h:682) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
+	spellAttr7IgnoreColdWeatherFlying      uint32 = 0x00400000 // SPELL_ATTR7_IGNORE_COLD_WEATHER_FLYING (SharedDefines.h:693) — ATTR7 is Go's AttributesEx7 (Spell.dbc field 11 = AttributesExG)
 	spellAttr6AssistIgnoreImmuneFlag       uint32 = 0x00000008 // SPELL_ATTR6_ASSIST_IGNORE_IMMUNE_FLAG (SharedDefines.h:637) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6CanTargetUntargetable        uint32 = 0x01000000 // SPELL_ATTR6_CAN_TARGET_UNTARGETABLE (SharedDefines.h:658) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr6DontConsumeProcCharges       uint32 = 0x00000020 // SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES (SharedDefines.h:639) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
@@ -316,6 +317,7 @@ const (
 	spellFailedOnlyOutdoors              uint8  = 93    // SPELL_FAILED_ONLY_OUTDOORS (SharedDefines.h:1075)
 
 	areaFlagNoFlyZone  uint32 = 0x20000000 // AREA_FLAG_NO_FLY_ZONE (DBCEnums.h:275) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
+	areaFlagOutland    uint32 = 0x00000400 // AREA_FLAG_OUTLAND (DBCEnums.h:257) — AreaTableEntry.Flags bit tested by AreaTableEntry::IsFlyable (DBCStructure.h:209)
 	areaFlagAllowDuels uint32 = 0x00000040 // AREA_FLAG_ALLOW_DUELS (DBCEnums.h:253) — AreaTableEntry.Flags bit tested by Spell::EffectDuel (SpellEffects.cpp:3812-3823)
 	areaFlagInside     uint32 = 0x02000000 // AREA_FLAG_INSIDE (DBCEnums.h:272) — used for determining spell related inside/outside questions in Map::IsOutdoors
 	areaFlagOutside    uint32 = 0x04000000 // AREA_FLAG_OUTSIDE (DBCEnums.h:273) — used for determining spell related inside/outside questions in Map::IsOutdoors
@@ -2449,6 +2451,80 @@ func (s *Server) relocateSpellTargetSrc(target protocol.SpellTargetData) protoco
 	return target
 }
 
+// virtualMapForMapAndZone mirrors GetVirtualMapForMapAndZone
+// (DBCStores.cpp:727-735): only Outland (530) and Northrend (571) consult
+// WorldMapArea, keyed by zone; the row's DisplayMapID wins when non-negative,
+// else its MapID. Every other map is its own virtual map.
+func (s *session) virtualMapForMapAndZone(mapID, zoneID uint32) uint32 {
+	if mapID != 530 && mapID != 571 {
+		return mapID
+	}
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return mapID
+	}
+	if wma, found, err := s.server.Data.WorldMapArea(zoneID); err == nil && found {
+		if wma.DisplayMapID >= 0 {
+			return uint32(wma.DisplayMapID)
+		}
+		return wma.MapID
+	}
+	return mapID
+}
+
+// canFlyInZone mirrors Player::CanFlyInZone (Player.cpp:25163-25171): only
+// Northrend (virtual map 571) gates flight, on the Cold Weather Flying
+// spell (54197) — unless the spell ignores the restriction.
+func (s *session) canFlyInZone(mapID, zoneID uint32, spell wotlk.Spell) bool {
+	if s.virtualMapForMapAndZone(mapID, zoneID) == 571 && spell.AttributesEx7&spellAttr7IgnoreColdWeatherFlying == 0 {
+		return playerHasSpell(s.player, 54197)
+	}
+	return true
+}
+
+// checkLocationOutlandStrict mirrors the strict arm of
+// SpellInfo::CheckLocation's continent limitation
+// (SpellInfo.cpp:1529-1550, strict=true): a CAST_ONLY_IN_OUTLAND spell
+// casts only in a flyable area — AreaTableEntry::IsFlyable
+// (DBCStructure.h:205-213) needs the OUTLAND flag without NO_FLY_ZONE —
+// with the area row falling back to the zone row, and only where
+// CanFlyInZone passes. Spells without the attribute always pass; a
+// missing data store fails open (the bridge convention), but a missing
+// area row fails closed, like C++'s !areaEntry arm.
+func (s *session) checkLocationOutlandStrict(spell wotlk.Spell, zoneID, areaID uint32) bool {
+	if spell.AttributesEx4&spellAttr4CastOnlyInOutland == 0 {
+		return true
+	}
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return true
+	}
+	area, found, err := s.server.Data.Area(areaID)
+	if err != nil || !found {
+		area, found, err = s.server.Data.Area(zoneID)
+	}
+	if err != nil || !found {
+		return false
+	}
+	if area.Flags&areaFlagOutland == 0 || area.Flags&areaFlagNoFlyZone != 0 {
+		return false
+	}
+	return s.canFlyInZone(s.player.Map, zoneID, spell)
+}
+
+// checkLocationOutlandContinent mirrors the non-strict arm of
+// SpellInfo::CheckLocation's continent limitation
+// (SpellInfo.cpp:1529-1550, strict=false): the virtual map's entry must
+// exist, be from expansion 1 or later, and be a continent map.
+func (s *session) checkLocationOutlandContinent(mapID, zoneID uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return true
+	}
+	entry, found, err := s.server.Data.Map(s.virtualMapForMapAndZone(mapID, zoneID))
+	if err != nil || !found {
+		return false
+	}
+	return entry.ExpansionID >= 1 && entry.IsContinent()
+}
+
 func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server.Data == nil {
 		return true
@@ -3695,11 +3771,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "location check", "zone", zoneID, "area", areaID, "failure", locationFail)
 			return true
 		}
-		// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SpellInfo.cpp:1529-1550): no bridge.
-		// The strict leg needs AreaTableEntry flyability AND
-		// Player::CanFlyInZone (Cold Weather Flying known-spell check via
-		// GetVirtualMapForMapAndZone); Go has no WorldMapArea store and no
-		// known-spell model for the flight check.
+		// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND, strict leg
+		// (SpellInfo::CheckLocation, SpellInfo.cpp:1529-1550): the
+		// flyable-area + CanFlyInZone gate — a CAST_ONLY_IN_OUTLAND
+		// spell (flying mounts) casts only where the area is flyable
+		// and the player can fly in the zone.
+		if !s.checkLocationOutlandStrict(spell, zoneID, areaID) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedIncorrectArea), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "incorrect area (outland only)", "zone", zoneID, "area", areaID)
+			return true
+		}
 	}
 	// CheckCast mounted gate (Spell::CheckCast, Spell.cpp:5477-5488): client-initiated
 	// casts only — triggered casts go through castSpellDirect, not this path
@@ -27576,12 +27657,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				return
 			}
 		}
-		// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SpellInfo.cpp:1529-1550): no bridge.
-		// The strict leg needs AreaTableEntry flyability AND
-		// Player::CanFlyInZone (Cold Weather Flying known-spell check via
-		// GetVirtualMapForMapAndZone); Go has no WorldMapArea store and no
-		// known-spell model for the flight check (the client-path twin's
-		// stay-out, shared here).
+		// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND, strict leg
+		// (SpellInfo::CheckLocation, SpellInfo.cpp:1529-1550): the
+		// flyable-area + CanFlyInZone gate, shared with the client-path
+		// twin above.
+		if !s.checkLocationOutlandStrict(spell, zoneID, areaID) {
+			rejectTriggeredCast("triggered spell cast outside flyable Outland/Northrend area")
+			return
+		}
 	}
 	// CheckCast mounted gate (Spell.cpp:5465-5476): EXEMPT on this path.
 	// TRIGGERED_FULL_MASK carries

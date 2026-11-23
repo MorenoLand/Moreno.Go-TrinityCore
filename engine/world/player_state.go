@@ -4977,14 +4977,15 @@ func (s *session) sendPlayerQuestLogUpdate(slot int) {
 
 // sendPlayerMountUpdate pushes UNIT_FIELD_MOUNTDISPLAYID as a values update.
 // C++ IsMounted() is flag-only (Unit.h:932): the flag follows the mounted
-// aura, never the display id — taxi and .modify-mount displays ride
-// SendDoFlight / the display field without setting it.
+// aura — and a taxi flight, whose SendDoFlight runs Unit::Mount
+// (TaxiHandler.cpp:115-125) with no mounted aura behind it. A bare
+// .modify-mount display still rides the display field without the flag.
 func (s *session) sendPlayerMountUpdate() {
 	if s.player == nil {
 		return
 	}
 	flags := s.player.UnitFlags
-	if s.hasAuraType(spellAuraMounted) {
+	if s.hasAuraType(spellAuraMounted) || s.isTaxiMounted() {
 		flags |= unitFlagMount
 	} else {
 		flags &^= unitFlagMount
