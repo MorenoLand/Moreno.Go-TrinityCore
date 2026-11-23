@@ -361,7 +361,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	// lua_worldobject_range.go; the sender chat tag is the player's
 	// GetChatTag value, like C++ BuildChatPacket's player-sender arm.
 	methods["SendChatMessageToPlayer"] = func(_ context.Context, args []any) ([]any, error) {
-		return s.server.luaSendChatMessageToPlayer(state.GUID, s.chatTag(), args)
+		return s.server.luaSendChatMessageToPlayer(state.GUID, s.chatTag(), s.player.Name, args)
 	}
 	methods["GetGender"] = luaNoArgs(func() any { return state.Gender })
 	// GetDisplayId is Unit::GetDisplayId (Unit.h): the UNIT_FIELD_DISPLAYID

@@ -237,9 +237,27 @@ func (s *session) sendGuildLoginInfo(ctx context.Context) {
 	s.broadcastGuildMemberLogin()
 }
 
+// ensureStartingGuild is the MorenoCore-custom forced-guild arm (no C++
+// counterpart): with StartingGuild enabled, a guildless player is put into
+// the configured guild at create/login. Out-of-box the target guild row
+// must exist or be created here: on a fresh DB guild 1 does not exist until
+// someone charters a guild, so a missing target guild is bootstrapped with
+// the configured StartingGuild.Name (default "Adventurers"), the five
+// default ranks (Guild.cpp:2428) and motd "No message set."
+// (Guild.cpp:1098), and the miss is logged loudly instead of silently
+// assigning nothing. The bootstrap guild has leaderguid 0 — no player is
+// made leader automatically; an operator should set one (e.g. via the GM
+// .guild leader command) or charter the guild normally. If the configured
+// name is already taken by another guild the bootstrap is refused with a
+// loud log and no assignment happens.
 func (s *session) ensureStartingGuild(ctx context.Context, playerGUID uint64) error {
 	if s == nil || s.server == nil || !s.server.Config.StartingGuildEnable || s.server.Config.StartingGuildID == 0 || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return nil
+	}
+	logStartingGuild := func(msg string, args ...any) {
+		if s.server.Logger != nil {
+			s.server.Logger.Error(msg, args...)
+		}
 	}
 	var guildID uint32
 	var memberRank uint32
@@ -252,10 +270,43 @@ func (s *session) ensureStartingGuild(ctx context.Context, playerGUID uint64) er
 			return err
 		}
 		if err := tx.QueryRowContext(txCtx, "SELECT guildid FROM guild WHERE guildid = ? LIMIT 1", s.server.Config.StartingGuildID).Scan(&guildID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
 			}
-			return err
+			// The target guild does not exist: bootstrap it instead of
+			// silently assigning nothing.
+			guildName := s.server.Config.StartingGuildName
+			if guildName == "" {
+				guildName = "Adventurers"
+			}
+			logStartingGuild("starting guild does not exist; creating bootstrap guild", "guildID", s.server.Config.StartingGuildID, "name", guildName)
+			var nameTaken uint32
+			if err := tx.QueryRowContext(txCtx, "SELECT guildid FROM guild WHERE UPPER(name) = UPPER(?) LIMIT 1", guildName).Scan(&nameTaken); err == nil {
+				logStartingGuild("starting guild bootstrap refused: name already taken", "guildID", s.server.Config.StartingGuildID, "name", guildName, "takenByGuildID", nameTaken)
+				return nil
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			guildID = s.server.Config.StartingGuildID
+			if _, err := tx.ExecContext(txCtx, `INSERT INTO guild (guildid, name, leaderguid, info, motd, createdate, EmblemStyle, EmblemColor, BorderStyle, BorderColor, BackgroundColor, BankMoney)
+				VALUES (?, ?, 0, '', 'No message set.', ?, 0, 0, 0, 0, 0, 0)`, guildID, guildName, time.Now().Unix()); err != nil {
+				return err
+			}
+			defaultRanks := []struct {
+				name   string
+				rights uint32
+			}{
+				{"Guild Master", guildRightAll},
+				{"Officer", guildRightAll},
+				{"Veteran", guildRightGChatListen | guildRightGChatSpeak},
+				{"Member", guildRightGChatListen | guildRightGChatSpeak},
+				{"Initiate", guildRightGChatListen | guildRightGChatSpeak},
+			}
+			for rid, r := range defaultRanks {
+				if _, err := tx.ExecContext(txCtx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, ?, ?, ?, 0)", guildID, rid, r.name, r.rights); err != nil {
+					return err
+				}
+			}
 		}
 		var rank sql.NullInt64
 		if err := tx.QueryRowContext(txCtx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&rank); err != nil {
@@ -560,15 +611,12 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 		}
 		rightsRows.Close()
 	}
-	if len(ranks) == 0 {
-		ranks = []guildRankInfo{
-			{RankID: 0, Name: "Guild Master", Rights: 0xFFFFFFFF, GoldLimit: 1000000},
-			{RankID: 1, Name: "Officer", Rights: 0x000000FF, GoldLimit: 500000},
-			{RankID: 2, Name: "Veteran", Rights: 0x00000040, GoldLimit: 100000},
-			{RankID: 3, Name: "Member", Rights: 0x00000040, GoldLimit: 50000},
-			{RankID: 4, Name: "Initiate", Rights: 0x00000040, GoldLimit: 0},
-		}
-	}
+	// Guild::HandleRoster (Guild.cpp:1234-1251) sends exactly the ranks in
+	// m_ranks: with zero guild_rank rows it sends zero ranks. No fallback
+	// ranks are fabricated — a rank-less guild is a degenerate-DB state and
+	// the roster must show it as such (the old code invented 5 ranks with
+	// GM rights 0xFFFFFFFF and gold limits up to 1000000, where C++ sends
+	// none; _HasRankRight on a missing rank row denies, guild.go:1818).
 	viewOfficerNote := false
 	for _, rank := range ranks {
 		if rank.RankID == uint32(s.player.GuildRank) {

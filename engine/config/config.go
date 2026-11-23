@@ -130,6 +130,7 @@ type Config struct {
 	MaxResultsLookupCommands                uint32
 	StartingGuildEnable                     bool
 	StartingGuildID                         uint32
+	StartingGuildName                       string
 	ChatFloodMessageCount                   uint32
 	ChatFloodMessageDelay                   uint32
 	ChatFloodMuteTime                       uint32
@@ -367,6 +368,7 @@ func Default() Config {
 	c.ArenaMatchmakerRatingModifier = 24.0
 	c.MaxResultsLookupCommands = 50
 	c.StartingGuildID = 1
+	c.StartingGuildName = "Adventurers"
 	c.RestOfflineInTavernOrCityRate = 1
 	c.RestOfflineInWildernessRate = 1
 	c.RestInGameRate = 1
@@ -583,6 +585,7 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_MAX_RESULTS_LOOKUP_COMMANDS"] = "MaxResultsLookupCommands"
 	values["MORENOCORE_STARTING_GUILD_ENABLE"] = "StartingGuild.Enable"
 	values["MORENOCORE_STARTING_GUILD_ID"] = "StartingGuild.GuildID"
+	values["MORENOCORE_STARTING_GUILD_NAME"] = "StartingGuild.Name"
 	values["MORENOCORE_GAME_TYPE"] = "GameType"
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_TAVERN_OR_CITY"] = "Rate.Rest.Offline.InTavernOrCity"
 	values["MORENOCORE_RATE_REST_OFFLINE_IN_WILDERNESS"] = "Rate.Rest.Offline.InWilderness"
@@ -1203,6 +1206,9 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.StartingGuildEnable, key, value)
 	case "StartingGuild.GuildID":
 		return setUint32(&c.StartingGuildID, key, value)
+	case "StartingGuild.Name":
+		c.StartingGuildName = value
+		return nil
 	case "ChatFlood.MessageCount":
 		return setUint32(&c.ChatFloodMessageCount, key, value)
 	case "ChatFlood.MessageDelay":

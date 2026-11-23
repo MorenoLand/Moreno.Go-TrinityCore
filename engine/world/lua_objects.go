@@ -2347,7 +2347,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if s == nil || s.player == nil {
 			return nil, nil
 		}
-		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildChatMessage(0x0F, 0, state.GUID, s.player.GUID, message, ""), true)
+		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildMonsterChatMessage(0x0F, 0, state.GUID, state.Name, message), true)
 	}
 	// TextEmote(message) is Unit::TextEmote (Unit.cpp:14058): the
 	// plain-string emote == SMSG_MESSAGECHAT with CHAT_MSG_MONSTER_EMOTE
@@ -2365,7 +2365,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if s == nil || s.player == nil {
 			return nil, nil
 		}
-		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildChatMessage(0x10, 0, state.GUID, s.player.GUID, message, ""), true)
+		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildMonsterChatMessage(0x10, 0, state.GUID, state.Name, message), true)
 	}
 	// SendUnitSay/SendUnitYell/SendUnitWhisper/SendUnitEmote are the
 	// UnitMethods twins of the handler-surface family in
@@ -2848,7 +2848,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// (UnitMethods.h:2095-2113), shared in lua_worldobject_range.go;
 	// creatures carry no chat tag, so the tag byte is 0.
 	methods["SendChatMessageToPlayer"] = func(_ context.Context, args []any) ([]any, error) {
-		return s.server.luaSendChatMessageToPlayer(state.GUID, 0, args)
+		return s.server.luaSendChatMessageToPlayer(state.GUID, 0, state.Name, args)
 	}
 	// IsAttackingPlayer is Unit::isAttackingPlayer (Unit.cpp:5849-5865),
 	// shared in lua_worldobject_range.go; a motion that has since

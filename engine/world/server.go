@@ -1767,6 +1767,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updatePvPFlags(now)
 			s.updatePlayerRegeneration(ctx, now)
 			s.flushGroupMemberStats(ctx, now)
+			s.updateGroupLeaderOfflineTimers(now)
 			s.updateLFGBootVotes(now)
 			s.updateLFGRoleCheckExpiry(now)
 			s.updateLFGProposalExpiry(now)

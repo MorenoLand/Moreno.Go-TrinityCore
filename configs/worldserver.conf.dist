@@ -4187,6 +4187,36 @@ SoloLFG.Announce = 1
 #
 ###################################################################################################
 
+###################################################################################################
+# STARTING GUILD (MorenoCore custom)
+#
+#    StartingGuild.Enable
+#        Description: Put every guildless player into the starting guild
+#                     at character creation and login.
+#        Default:     0  - (Disabled)
+#                     1  - (Enabled)
+#
+#    StartingGuild.GuildID
+#        Description: Guild id new players are assigned to when
+#                     StartingGuild.Enable is 1.
+#        Default:     1
+#
+#    StartingGuild.Name
+#        Description: Name used when the starting guild does not exist yet:
+#                     the server bootstraps a guild with this id and name
+#                     (five default ranks, motd "No message set.", no
+#                     leader — set one with the GM .guild leader command).
+#                     When a guild with this name already exists under a
+#                     different id the bootstrap is refused and logged.
+#        Default:     "Adventurers"
+
+StartingGuild.Enable = 0
+StartingGuild.GuildID = 1
+StartingGuild.Name = "Adventurers"
+
+#
+###################################################################################################
+
 
 ###################################################################################################
 # NPCBOT CONFIGURATION

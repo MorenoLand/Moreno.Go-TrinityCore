@@ -1020,14 +1020,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				chatType = 0x2A
 			}
 		}
-		packet := protocol.BuildChatMessage(chatType, language, state.GUID, receiverGUID, message, "")
+		packet := protocol.BuildMonsterChatMessage(chatType, language, state.GUID, state.Name, message)
 		return nil, receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
 	}
 	// SendChatMessageToPlayer is UnitMethods::SendChatMessageToPlayer
 	// (UnitMethods.h:2095-2113), shared in lua_worldobject_range.go;
 	// creatures carry no chat tag, so the tag byte is 0.
 	methods["SendChatMessageToPlayer"] = func(_ context.Context, args []any) ([]any, error) {
-		return s.luaSendChatMessageToPlayer(state.GUID, 0, args)
+		return s.luaSendChatMessageToPlayer(state.GUID, 0, state.Name, args)
 	}
 	// IsAttackingPlayer is Unit::isAttackingPlayer (Unit.cpp:5849-5865),
 	// shared in lua_worldobject_range.go; the map/instance/GUID triple

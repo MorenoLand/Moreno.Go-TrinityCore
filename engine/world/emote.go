@@ -71,14 +71,13 @@ func (s *session) handleEmote(ctx context.Context, payload []byte) bool {
 	packet := protocol.NewBuffer(12)
 	packet.WriteU32(emote)
 	packet.WriteU64(s.playerGUID)
-	s.server.sessionsMu.RLock()
-	defer s.server.sessionsMu.RUnlock()
-	for member := range s.server.sessions {
-		if !member.worldReady.Load() || member.player == nil || member.player.Map != s.player.Map || member.player.InstanceID != s.player.InstanceID {
-			continue
-		}
-		_ = member.write(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), true)
-	}
+	// Unit::HandleEmoteCommand (Unit.cpp:1610-1616) sends through
+	// SendMessageToSet (Object.cpp:1808-1811), which limits delivery to
+	// GetVisibilityRange — not the whole map+instance. The self leg goes out
+	// directly (SendMessageToSet self=true); the set fan-out excludes the
+	// source and applies the phase, seer and 3D-distance gates.
+	_ = s.write(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), true)
+	s.server.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s.server.visibilityRangeForMap(s.player.Map), s)
 	s.debug("emote sent", "account", s.accountName, "emote", emote)
 	return true
 }

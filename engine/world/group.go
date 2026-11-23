@@ -55,6 +55,12 @@ type groupState struct {
 	LFGKicksLeft uint8     // LfgGroupData::m_KicksLeft (LFGGroupData.h:28); reset to LFG_GROUP_MAX_KICKS on new LFG groups
 	TargetIcons  [8]uint64 // raid target icons, index=icon, value=target GUID
 	counter      uint32
+	// leaderOfflineSince is the Group::m_isLeaderOffline /
+	// m_leaderOfflineTimer twin (Group.cpp:101-148, 2739-2748): the
+	// instant the leader logged out. Zero while the leader is online.
+	// Group::Update only ticks the timer for NORMAL/RAID groups, so the
+	// world tick skips BG groups; login clears it (CharacterHandler.cpp:865).
+	leaderOfflineSince time.Time
 	// MaxEnchantingLevel mirrors Group::m_maxEnchantingLevel: the highest
 	// enchanting skill among members. Group::GroupLoot/NeedBeforeGreed gate
 	// the disenchant roll option on m_maxEnchantingLevel >=
@@ -254,6 +260,9 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	}
 	if group := s.server.findGroupByDBID(uint64(dbGroupID)); group != nil {
 		s.groupID = group.ID
+		// CharacterHandler.cpp:865: a logging-in leader stops the
+		// leader-offline timer (Group::StopLeaderOfflineTimer).
+		s.server.stopGroupLeaderOfflineTimer(group, guid)
 		if s.player != nil {
 			s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, group.isLeader(guid))
 			s.player.DungeonDifficulty = group.DungeonDiff
@@ -337,6 +346,9 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 	}
 	s.server.groups[g.ID] = g
 	s.server.groupsMu.Unlock()
+	// CharacterHandler.cpp:865: a logging-in leader stops the
+	// leader-offline timer (Group::StopLeaderOfflineTimer).
+	s.server.stopGroupLeaderOfflineTimer(g, guid)
 	// Group::LoadMemberFromDB (Group.cpp:291) calls SetupGroupMember for
 	// every loaded member; LFGMgr::_LoadFromDB (LFGMgr.cpp:76-97)
 	// restores group LFG data only for DUNGEON/FINISHED rows, so only
@@ -356,6 +368,44 @@ func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
 		s.player.DungeonDifficulty = g.DungeonDiff
 		s.player.RaidDifficulty = g.RaidDiff
 	}
+}
+
+// stopGroupLeaderOfflineTimer mirrors Group::StopLeaderOfflineTimer
+// (Group.cpp:2746-2748), run at login when the returning player is the
+// group leader (CharacterHandler.cpp:865).
+func (s *Server) stopGroupLeaderOfflineTimer(g *groupState, guid uint64) {
+	if s == nil || g == nil || g.LeaderGUID != guid {
+		return
+	}
+	s.groupsMu.Lock()
+	if g.LeaderGUID == guid {
+		g.leaderOfflineSince = time.Time{}
+	}
+	s.groupsMu.Unlock()
+}
+
+// buildEmptyGroupList builds the empty SMSG_GROUP_LIST a removed or
+// disbanded player receives: Group::RemoveMember (Group.cpp:655-662) and
+// Group::Disband (Group.cpp:898-905) write type byte 0x10, the group's
+// counter, count 0 and leader GUID 0 — not the caller's own GUID, a zero
+// counter, or the normal type byte.
+func buildEmptyGroupList(g *groupState) []byte {
+	var counter uint32
+	var id uint64
+	if g != nil {
+		counter = atomic.LoadUint32(&g.counter)
+		id = g.ID
+	}
+	b := protocol.NewBuffer(1 + 1 + 1 + 1 + 8 + 4 + 4 + 8)
+	b.WriteU8(0x10)
+	b.WriteU8(0)
+	b.WriteU8(0)
+	b.WriteU8(0)
+	b.WriteU64(groupGUID(id))
+	b.WriteU32(counter)
+	b.WriteU32(0)
+	b.WriteU64(0)
+	return b.Bytes()
 }
 
 func (s *session) sendLoadedGroup() {
@@ -434,12 +484,11 @@ func groupIsFull(g *groupState) bool {
 }
 
 // groupSlotFull mirrors Group::IsFull (Group.cpp:2451-2453) for DB-persisted
-// groups: m_memberSlots persists offline members, while Go's Members roster
-// is online-only (logout detaches the slot), so len(Members) undercounts a
-// group with offline slots. For a DBID group the group_member rows are the
-// slot list (rows are added on join and deleted on leave), so the row count
-// is the C++ slot count; DBID-0 groups (runtime/BG/LFG) keep the runtime
-// count, as before.
+// groups: m_memberSlots persists offline members, and so does Go's Members
+// roster (logout keeps the slot), so len(Members) is already the C++ slot
+// count for in-memory groups. For a DBID group the group_member rows are
+// still the authoritative slot list (rows are added on join and deleted on
+// leave); DBID-0 groups (runtime/BG/LFG) keep the runtime count, as before.
 func (s *Server) groupSlotFull(ctx context.Context, g *groupState) bool {
 	if g == nil {
 		return false
@@ -834,6 +883,18 @@ func (s *Server) getGroup(id uint64) *groupState {
 	return s.findGroupByID(id)
 }
 
+// removeSessionFromGroup detaches a logging-out session from its group
+// WITHOUT removing the member: Group::RemoveMember is never called on
+// logout (Group.cpp:565-749 runs only on explicit leave/kick), so the
+// member slot stays in m_memberSlots, the group survives all-offline, no
+// OnGroupRemoveMember/OnGroupDisband Lua events fire, and no leader is
+// promoted. WorldSession::LogoutPlayer (WorldSession.cpp:600-607) instead
+// sends the group update, recomputes the enchanting level, and — when the
+// logging-out player is the leader — starts the 2-minute leader-offline
+// timer (Group::StartLeaderOfflineTimer, Group.cpp:2739-2744); the world
+// tick promotes a new leader only when that timer expires
+// (updateGroupLeaderOfflineTimers). Relog reattaches through
+// loadPlayerGroup, which clears the timer (CharacterHandler.cpp:865).
 func (s *Server) removeSessionFromGroup(member *session) {
 	if s == nil || member == nil || member.groupID == 0 {
 		return
@@ -845,55 +906,86 @@ func (s *Server) removeSessionFromGroup(member *session) {
 		return
 	}
 	s.groupsMu.Lock()
-	groupObj := groupLuaObject(s, g)
-	index := -1
-	for i, value := range g.Members {
+	inGroup := false
+	for _, value := range g.Members {
 		if value.GUID == member.playerGUID {
-			index = i
+			inGroup = true
 			break
 		}
 	}
-	if index >= 0 {
-		g.Members = append(g.Members[:index], g.Members[index+1:]...)
-	}
-	// WorldSession logout (WorldSession.cpp:604) recomputes m_maxEnchantingLevel
-	// over the remaining online members; the full recompute matches.
+	// WorldSession logout (WorldSession.cpp:604) recomputes
+	// m_maxEnchantingLevel over the remaining online members; the full
+	// recompute matches.
 	refreshGroupMaxEnchantingLevel(s, g)
+	if inGroup && g.LeaderGUID == member.playerGUID {
+		g.leaderOfflineSince = time.Now()
+	}
 	member.groupID = 0
 	member.pendingGroupLeader = 0
-	s.onPlayerLeaveGroupRolls(member.playerGUID, g.ID)
-	disbanded := len(g.Members) == 0
-	if disbanded {
-		delete(s.groups, g.ID)
-		s.groupsMu.Unlock()
-		// C++ Group::RemoveMember fires OnGroupRemoveMember (Group.cpp:569)
-		// and disbands a 1-or-fewer-member group, which fires OnGroupDisband.
-		s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, member.playerGUID, uint8(groupRemoveMethodDefault))
-		s.triggerGroupEvent(scripting.GroupEventOnDisband, groupObj)
+	s.groupsMu.Unlock()
+	// Group::SendUpdate (WorldSession.cpp:602-603): the remaining members
+	// see the leader go offline (status 0 in the list); nothing is sent to
+	// the logging-out player.
+	s.broadcastGroupList(g)
+}
+
+// updateGroupLeaderOfflineTimers mirrors GroupMgr::Update
+// (GroupMgr.cpp:112-117) driving Group::Update (Group.cpp:101-148): a
+// group whose leader has been offline for 2 minutes promotes a new leader
+// via SelectNewPartyOrRaidLeader (Group.cpp:116-147) — the main assistant
+// first in raids, else the first connected member — and sends the group
+// update. With nobody connected the timer simply lapses with no promotion
+// (C++ finds no newLeader and clears m_isLeaderOffline). BG groups never
+// tick (Group.cpp:103 gates on GROUPTYPE_NORMAL/RAID).
+func (s *Server) updateGroupLeaderOfflineTimers(now time.Time) {
+	if s == nil {
 		return
 	}
-	// C++ Group::RemoveMember (Group.cpp:712-720): when the removed member
-	// was the leader, the first remaining CONNECTED member is promoted via
-	// ChangeLeader. Pick the candidate here; the full ChangeLeader path runs
-	// after unlock.
-	leaderWasRemoved := g.LeaderGUID == member.playerGUID
-	var leaderCandidate uint64
-	if leaderWasRemoved {
-		for _, m := range g.Members {
-			if cs := s.findSessionByGUID(m.GUID); cs != nil && cs.player != nil {
-				leaderCandidate = m.GUID
-				break
-			}
+	s.groupsMu.RLock()
+	var due []*groupState
+	for _, g := range s.groups {
+		if g != nil && !g.leaderOfflineSince.IsZero() && !g.isBGGroup() &&
+			!now.Before(g.leaderOfflineSince.Add(2*time.Minute)) {
+			due = append(due, g)
 		}
 	}
-	s.groupsMu.Unlock()
-	s.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, member.playerGUID, uint8(groupRemoveMethodDefault))
-	if leaderWasRemoved && leaderCandidate != 0 {
-		if !s.setGroupLeader(g, leaderCandidate) {
+	s.groupsMu.RUnlock()
+	for _, g := range due {
+		s.groupsMu.Lock()
+		if g.leaderOfflineSince.IsZero() {
+			s.groupsMu.Unlock()
+			continue
+		}
+		g.leaderOfflineSince = time.Time{}
+		var candidate uint64
+		if g.IsRaid {
+			for _, m := range g.Members {
+				if !g.isAssistant(m.GUID) {
+					continue
+				}
+				if cs := s.findSessionByGUID(m.GUID); cs != nil && cs.player != nil {
+					candidate = m.GUID
+					break
+				}
+			}
+		}
+		if candidate == 0 {
+			for _, m := range g.Members {
+				if cs := s.findSessionByGUID(m.GUID); cs != nil && cs.player != nil {
+					candidate = m.GUID
+					break
+				}
+			}
+		}
+		s.groupsMu.Unlock()
+		if candidate != 0 {
+			// setGroupLeader runs the full Group::ChangeLeader arm and
+			// broadcasts the updated list (Group::SelectNewPartyOrRaidLeader
+			// calls ChangeLeader then SendUpdate, Group.cpp:141-143).
+			s.setGroupLeader(g, candidate)
+		} else {
 			s.broadcastGroupList(g)
 		}
-	} else {
-		s.broadcastGroupList(g)
 	}
 }
 
@@ -948,6 +1040,25 @@ func (s *Server) getGroupSessions(groupID uint64) []*session {
 // -----------------------------------------------------------------
 // Handlers
 // -----------------------------------------------------------------
+
+// effectiveInviteGroup mirrors the battleground arms of
+// WorldSession::HandleGroupInviteOpcode (GroupHandler.cpp:137-148): a player
+// whose current group is a battleground raid invites from — and is checked
+// against — their original pre-BG group instead (Player::GetOriginalGroup).
+// Nil when the player has no original group (groupless before the BG).
+func (s *Server) effectiveInviteGroup(sess *session) *groupState {
+	if s == nil || sess == nil || sess.groupID == 0 {
+		return nil
+	}
+	g := s.findGroupByID(sess.groupID)
+	if g == nil {
+		return nil
+	}
+	if g.isBGGroup() {
+		return s.findGroupByID(sess.originalGroupID)
+	}
+	return g
+}
 
 // handleGroupInvite processes CMSG_GROUP_INVITE (0x06E).
 // TrinityCore: WorldSession::HandleGroupInviteOpcode.
@@ -1019,13 +1130,18 @@ func (s *session) handleGroupInvite(ctx context.Context, payload []byte) bool {
 		return s.sendPartyResult(partyOpInvite, memberName, errInviteRestricted)
 	}
 
+	// GroupHandler.cpp:137-148: a BG-raid member invites from (and is
+	// checked against) their original pre-BG group, not the BG raid.
+	inviterGroup := s.server.effectiveInviteGroup(s)
+	inviteeGroup := s.server.effectiveInviteGroup(invitedSess)
+
 	// Invited player already in a group or has a pending invite. C++ runs
 	// this check (GroupHandler.cpp:149-168) BEFORE the inviter's own group
 	// permission check, so a pending invitee inviting an already-grouped
 	// player gets ALREADY_IN_GROUP, not the pending arm's silent drop.
-	if invitedSess.groupID != 0 || invitedSess.pendingGroupLeader != 0 {
+	if inviteeGroup != nil || invitedSess.pendingGroupLeader != 0 {
 		_ = s.sendPartyResult(partyOpInvite, memberName, errAlreadyInGroupS)
-		if invitedSess.groupID != 0 {
+		if inviteeGroup != nil {
 			_ = invitedSess.write(uint16(protocol.OpcodeSMSG_GROUP_INVITE), buildGroupInvite(0, s.player.Name), true)
 		}
 		return true
@@ -1033,20 +1149,20 @@ func (s *session) handleGroupInvite(ctx context.Context, payload []byte) bool {
 
 	// The inviter is themselves only invited (GroupHandler.cpp:143-156): C++
 	// invites into that pending group — silently dropped while it is
-	// uncreated, ERR_NOT_LEADER once the inviter's inviter formed it.
-	if s.groupID == 0 && s.pendingGroupLeader != 0 {
-		if leaderSess := s.server.findSessionByGUID(s.pendingGroupLeader); leaderSess != nil && leaderSess.groupID != 0 {
+	// uncreated, ERR_NOT_LEADER once the inviter's inviter formed it. A BG
+	// inviter with an original group is not in this arm: their group is the
+	// original group, checked below.
+	if inviterGroup == nil && s.pendingGroupLeader != 0 {
+		if leaderSess := s.server.findSessionByGUID(s.pendingGroupLeader); leaderSess != nil && s.server.effectiveInviteGroup(leaderSess) != nil {
 			return s.sendPartyResult(partyOpInvite, "", errNotLeader)
 		}
 		return true
 	}
 
 	// Inviting player must be leader or assistant if already in a group
-	if s.groupID != 0 {
-		g := s.server.findGroupByID(s.groupID)
-		if g == nil {
-			s.groupID = 0
-		} else if !g.isLeaderOrAssistant(s.playerGUID) {
+	if inviterGroup != nil {
+		g := inviterGroup
+		if !g.isLeaderOrAssistant(s.playerGUID) {
 			return s.sendPartyResult(partyOpInvite, "", errNotLeader)
 		} else if s.server.groupSlotFull(ctx, g) {
 			return s.sendPartyResult(partyOpInvite, "", errGroupFull)
@@ -1061,10 +1177,8 @@ func (s *session) handleGroupInvite(ctx context.Context, payload []byte) bool {
 	// C++ builds an ephemeral Group and fires once for the leader (via
 	// AddLeaderInvite) and once for the invitee; with an existing group it
 	// fires only for the invitee.
-	if s.groupID != 0 {
-		if g := s.server.findGroupByID(s.groupID); g != nil {
-			s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, groupLuaObject(s.server, g), invitedSess.playerGUID)
-		}
+	if inviterGroup != nil {
+		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, groupLuaObject(s.server, inviterGroup), invitedSess.playerGUID)
 	} else {
 		ephemeral := scripting.NewGroupObject(groupGUID(0), scripting.GroupLive{
 			Load: func() (scripting.GroupSnapshot, bool) {
@@ -1126,7 +1240,18 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 
 	var g *groupState
 	if leaderSess != nil && leaderSess.groupID != 0 {
+		// GroupHandler.cpp:137-148: a BG-raid leader's invite belongs to
+		// their original pre-BG group, not the BG raid (direct map access:
+		// groupsMu is held here, so no effectiveInviteGroup RLock). With
+		// no original group the BG raid itself stays the target, as before:
+		// the C++ ephemeral invite group has no Go model, and forming a
+		// new group here would clobber the leader's BG-raid link.
 		g = srv.groups[leaderSess.groupID]
+		if g != nil && g.isBGGroup() {
+			if og := srv.groups[leaderSess.originalGroupID]; og != nil {
+				g = og
+			}
+		}
 	}
 	if g == nil {
 		// C++ resolves the invite group off the invitee's pending invite
@@ -1195,6 +1320,10 @@ func (s *session) handleGroupAccept(ctx context.Context, payload []byte) bool {
 				}
 			}
 		}
+		// Group::Create (Group.cpp:224) copies the leader's permanent
+		// instance binds to the group (ConvertLeaderInstancesToGroup,
+		// switchLeader=false), including the non-raid-dungeon takeover leg.
+		srv.convertLeaderInstancesToGroup(ctx, leaderGUID, g, false, leaderSess)
 		// Group::Create (Group.cpp:158) sets PLAYER_FLAGS_GROUP_LEADER on
 		// the leader at creation; the update packet goes out after the
 		// group lock is released, like setGroupLeader.
@@ -1547,9 +1676,29 @@ func (s *session) kickOfflineGroupMember(ctx context.Context, g *groupState, nam
 	srv.groupsMu.Lock()
 	groupObj := groupLuaObject(srv, g)
 	// Group::RemoveMember (Group.cpp:676): an offline removal reevaluates
-	// the enchanting level unconditionally.
+	// the enchanting level unconditionally. The slot itself drops too:
+	// logout now keeps offline slots in the roster (Group.cpp:565-749),
+	// so a kicked offline member must leave g.Members, not just the DB row.
+	for i, m := range g.Members {
+		if m.GUID == memberGUID {
+			g.Members = append(g.Members[:i], g.Members[i+1:]...)
+			break
+		}
+	}
 	refreshGroupMaxEnchantingLevel(srv, g)
+	// Group::RemoveMember (Group.cpp:571-585) strips group buffs both
+	// directions; the offline victim's own auras are not loaded, so only
+	// the victim's buffs on the connected remaining members can come off.
+	stripGUIDs := make([]uint64, 0, len(g.Members))
+	for _, m := range g.Members {
+		stripGUIDs = append(stripGUIDs, m.GUID)
+	}
 	srv.groupsMu.Unlock()
+	for _, rguid := range stripGUIDs {
+		if sess := srv.findSessionByGUID(rguid); sess != nil {
+			sess.removeAllGroupBuffsFromCaster(memberGUID)
+		}
+	}
 	srv.triggerGroupEvent(scripting.GroupEventOnMemberRemove, groupObj, memberGUID, groupRemoveMethodKick)
 	// Group::RemoveMember (Group.cpp:731): fewer than 2 slots left disbands.
 	var remaining int64
@@ -1631,10 +1780,27 @@ func (s *session) removeFromGroup(ctx context.Context, g *groupState, target *se
 	for _, m := range g.Members {
 		notifyGUIDs = append(notifyGUIDs, m.GUID)
 	}
+	// Group::RemoveMember (Group.cpp:571-585) strips group buffs both
+	// directions (RemoveAllGroupBuffsFromCaster); the strip runs on the
+	// snapshot of remaining members after unlock.
+	stripGUIDs := make([]uint64, 0, len(g.Members))
+	for _, m := range g.Members {
+		stripGUIDs = append(stripGUIDs, m.GUID)
+	}
 	if disbanded {
 		delete(srv.groups, g.ID)
 	}
 	srv.groupsMu.Unlock()
+
+	// Group::RemoveMember (Group.cpp:571-585): the removed member's group
+	// buffs on the remaining members come off, and the remaining members'
+	// group buffs on the removed member come off.
+	for _, guid := range stripGUIDs {
+		if sess := srv.findSessionByGUID(guid); sess != nil {
+			sess.removeAllGroupBuffsFromCaster(target.playerGUID)
+			target.removeAllGroupBuffsFromCaster(guid)
+		}
+	}
 
 	// LFGGroupScript::OnRemoveMember native arms (LFGScripts.cpp:183-228).
 	srv.lfgGroupMemberRemoved(g, target, method)
@@ -1651,7 +1817,7 @@ func (s *session) removeFromGroup(ctx context.Context, g *groupState, target *se
 				// for every connected member, same as on single removal.
 				srv.homebindIfInstance(sess)
 				_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
-				emptyList := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: guid}, guid, 0)
+				emptyList := buildEmptyGroupList(g)
 				_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
 			}
 		}
@@ -1704,7 +1870,7 @@ func (s *session) removeFromGroup(ctx context.Context, g *groupState, target *se
 	if method == groupRemoveMethodKick || method == groupRemoveMethodKickLFG {
 		_ = target.write(uint16(protocol.OpcodeSMSG_GROUP_UNINVITE), nil, true)
 	}
-	emptyList := buildGroupList(srv, &groupState{ID: g.ID, LeaderGUID: target.playerGUID}, target.playerGUID, 0)
+	emptyList := buildEmptyGroupList(g)
 	_ = target.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
 
 	if leaderCandidate != 0 {
@@ -1762,8 +1928,9 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 	}
 	// C++ Group::RemoveMember (Group.cpp:710-720): when the removed member
 	// was the leader, the first remaining CONNECTED member is promoted via
-	// ChangeLeader — the offline slot-drop path must run the same arm as
-	// removeSessionFromGroup. The full ChangeLeader path runs after unlock.
+	// ChangeLeader — the offline slot-drop path runs the same arm as the
+	// online removal in removeFromGroup. The full ChangeLeader path runs
+	// after unlock.
 	leaderWasRemoved := g.LeaderGUID == guid
 	var leaderCandidate uint64
 	if leaderWasRemoved && !disbanded {
@@ -1774,7 +1941,19 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 			}
 		}
 	}
+	// Group::RemoveMember (Group.cpp:571-585) strips group buffs both
+	// directions; the offline victim's own auras are not loaded, so only
+	// the victim's buffs on the connected remaining members can come off.
+	stripGUIDs := make([]uint64, 0, len(g.Members))
+	for _, m := range g.Members {
+		stripGUIDs = append(stripGUIDs, m.GUID)
+	}
 	s.groupsMu.Unlock()
+	for _, rguid := range stripGUIDs {
+		if sess := s.findSessionByGUID(rguid); sess != nil {
+			sess.removeAllGroupBuffsFromCaster(guid)
+		}
+	}
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER"), guid)
 	}
@@ -1797,7 +1976,7 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 				sess.groupID = 0
 				s.homebindIfInstance(sess)
 				_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_DESTROYED), nil, true)
-				emptyList := buildGroupList(s, &groupState{ID: g.ID, LeaderGUID: rguid}, rguid, 0)
+				emptyList := buildEmptyGroupList(g)
 				_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), emptyList, true)
 			}
 		}
@@ -1864,7 +2043,8 @@ func (s *session) handleGroupSetLeader(_ context.Context, payload []byte) bool {
 // of the member list, and broadcasts SMSG_GROUP_SET_LEADER plus the refreshed
 // group list. The new leader must be a member (and, mirroring
 // Group::ChangeLeader in Group.cpp:752, online). The instance-binding rewrite
-// in ChangeLeader has no Go bridge.
+// runs here too (Group.cpp:767-801): permanent binds for unentered instances
+// drop, then the new leader's binds are copied to the group.
 func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 	s.groupsMu.Lock()
 	// Check target is a member
@@ -1896,6 +2076,20 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 		}
 	}
 	s.groupsMu.Unlock()
+
+	// Group::ChangeLeader (Group.cpp:767-801) rewrites the instance binds
+	// for non-BG/non-BF groups before persisting the new leader: permanent
+	// binds for instances nobody entered drop, then the new leader's binds
+	// are copied to the group (ConvertLeaderInstancesToGroup, switchLeader).
+	// The leader-offline timer lapses with the promotion: the new leader is
+	// online by the ChangeLeader gate above.
+	s.groupsMu.Lock()
+	g.leaderOfflineSince = time.Time{}
+	s.groupsMu.Unlock()
+	if g.DBID != 0 && !g.isBGGroup() && s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		s.dropUnenteredGroupPermanentBinds(context.Background(), g)
+		s.convertLeaderInstancesToGroup(context.Background(), guid, g, true, nil)
+	}
 
 	// Group::ChangeLeader (Group.cpp:767-801) persists the new leader for
 	// non-BG/non-BF groups (CHAR_UPD_GROUP_LEADER); BG groups are DBID-0
@@ -1932,6 +2126,127 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 	s.sessionsMu.RUnlock()
 	s.broadcastGroupList(g)
 	return true
+}
+
+// instanceCopyHasOnlinePlayer is the Go analog of sMapMgr->FindMap
+// returning a map for an instance id: Go has no loaded-map registry, so an
+// instance copy counts as created while any connected session stands
+// inside it (same approximation as mapHasOnlinePlayers).
+func (s *Server) instanceCopyHasOnlinePlayer(instanceID int64) bool {
+	if s == nil || instanceID == 0 {
+		return false
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess != nil && sess.playerLoaded && sess.player != nil && int64(sess.player.InstanceID) == instanceID {
+			return true
+		}
+	}
+	return false
+}
+
+// dropUnenteredGroupPermanentBinds mirrors the first half of
+// Group::ChangeLeader (Group.cpp:767-790): the group's permanent instance
+// binds are dropped unless the instance copy already has a map created —
+// a new leader who entered the instance keeps its bind (a new instance
+// with another leader requires disbanding). Go reads "map created" as an
+// online player standing inside that instance copy.
+func (s *Server) dropUnenteredGroupPermanentBinds(ctx context.Context, g *groupState) {
+	if s == nil || g == nil || g.DBID == 0 || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.CharactersStore.DB.QueryContext(ctx, `SELECT gi.instance FROM group_instance AS gi WHERE gi.guid = ? AND gi.permanent != 0`, g.DBID)
+	if err != nil {
+		return
+	}
+	var instances []int64
+	for rows.Next() {
+		var instanceID int64
+		if rows.Scan(&instanceID) == nil {
+			instances = append(instances, instanceID)
+		}
+	}
+	rows.Close()
+	for _, instanceID := range instances {
+		if s.instanceCopyHasOnlinePlayer(instanceID) {
+			continue
+		}
+		_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_INSTANCE_PERM_BINDING"), g.DBID, uint32(instanceID))
+	}
+}
+
+// convertLeaderInstancesToGroup mirrors Group::ConvertLeaderInstancesToGroup
+// (Group.cpp:821-856): the leader's instance binds are copied to the group
+// (CHAR_REP_GROUP_INSTANCE). With switchLeader=true (ChangeLeader,
+// Group.cpp:794) a bind the group already holds at the same map/difficulty
+// is not recopied, and the leader's non-permanent binds are removed from
+// the leader (permanent binds stay). With switchLeader=false (Create,
+// Group.cpp:219) the leader keeps every bind, and a leader standing in a
+// non-raid dungeon whose instance save nobody is bound to lets the group
+// take it over. Only unexpired binds (extendState != 0) are copied. BG
+// groups hold no binds (Group::BindToInstance returns null for them,
+// Group.cpp:2334-2338) and DBID-0 groups have no group_instance key, so
+// both skip.
+func (s *Server) convertLeaderInstancesToGroup(ctx context.Context, leaderGUID uint64, g *groupState, switchLeader bool, leaderSess *session) {
+	if s == nil || g == nil || g.DBID == 0 || g.isBGGroup() || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.CharactersStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.instance, ci.permanent, ci.extendState, i.map, i.difficulty FROM character_instance AS ci JOIN instance AS i ON i.id = ci.instance WHERE ci.guid = ?`, leaderGUID)
+	if err != nil {
+		return
+	}
+	type leaderBind struct {
+		instanceID  int64
+		permanent   bool
+		extendState int64
+		mapID       int64
+		difficulty  int64
+	}
+	var binds []leaderBind
+	for rows.Next() {
+		var b leaderBind
+		var perm int64
+		if rows.Scan(&b.instanceID, &perm, &b.extendState, &b.mapID, &b.difficulty) != nil {
+			continue
+		}
+		b.permanent = perm != 0
+		binds = append(binds, b)
+	}
+	rows.Close()
+	for _, b := range binds {
+		if b.extendState == 0 {
+			continue
+		}
+		copyBind := true
+		if switchLeader {
+			var existing int64
+			if err := cdb.QueryRowContext(ctx, `SELECT i.id FROM group_instance AS gi JOIN instance AS i ON i.id = gi.instance WHERE gi.guid = ? AND i.map = ? AND i.difficulty = ? LIMIT 1`, g.DBID, b.mapID, b.difficulty).Scan(&existing); err == nil {
+				copyBind = false
+			}
+		}
+		if copyBind {
+			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_REP_GROUP_INSTANCE"), g.DBID, uint32(b.instanceID), b.permanent)
+		}
+		if switchLeader && !b.permanent {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ?", leaderGUID, b.instanceID)
+		}
+	}
+	// Takeover leg (Group.cpp:842-855, Create only): a leader in a
+	// non-raid dungeon map whose instance save has no group or player
+	// bound to it lets the group take over the save as a non-permanent bind.
+	if !switchLeader && leaderSess != nil && leaderSess.player != nil && leaderSess.player.InstanceID != 0 {
+		mapID := leaderSess.player.Map
+		if dungeonMapID(s, mapID) && !raidMapID(s, mapID) {
+			var bound int64
+			if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_instance WHERE instance = ?", leaderSess.player.InstanceID).Scan(&bound); err == nil && bound == 0 {
+				if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_instance WHERE instance = ?", leaderSess.player.InstanceID).Scan(&bound); err == nil && bound == 0 {
+					_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_REP_GROUP_INSTANCE"), g.DBID, leaderSess.player.InstanceID, false)
+				}
+			}
+		}
+	}
 }
 
 // deleteDisbandedGroupInstanceBinds drops a disbanded group's instance
@@ -1993,7 +2308,7 @@ func (s *Server) disbandGroup(ctx context.Context, g *groupState, hideDestroy bo
 		// Group::Disband (Group.cpp:908): _homebindIfInstance runs for every
 		// connected member, same as on single-member removal.
 		s.homebindIfInstance(sess)
-		empty := buildGroupList(s, &groupState{ID: g.ID, LeaderGUID: guid}, guid, 0)
+		empty := buildEmptyGroupList(g)
 		_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), empty, true)
 	}
 	if s.CharactersStore != nil {
@@ -2466,9 +2781,9 @@ func (s *session) handleReadyCheck(ctx context.Context, payload []byte) bool {
 		// Offline ready check — Group::OfflineReadyCheck (Group.cpp:1848) walks
 		// m_memberSlots, which still holds offline members, and broadcasts
 		// MSG_RAID_READY_CHECK_CONFIRM (guid, 0) to leaders/assistants for
-		// every member with no connected session. Go's g.Members is
-		// online-only (removeSessionFromGroup detaches on logout), so the DB
-		// group_member roster supplies the offline GUIDs.
+		// every member with no connected session. The DB group_member roster
+		// supplies the offline GUIDs (it is the slot list for persisted
+		// groups, same rows g.Members is built from).
 		srv.sessionsMu.RLock()
 		connected := make(map[uint64]struct{}, len(srv.sessions))
 		var leaders []*session

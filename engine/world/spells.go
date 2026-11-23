@@ -7867,6 +7867,57 @@ func (s *session) removeAurasByTypeExcept(auraType uint32, exceptSpellID uint32)
 	}
 }
 
+// spellIsGroupBuff mirrors SpellInfo::IsGroupBuff (SpellInfo.cpp:1182-1197):
+// a spell is a group buff when any effect's implicit target resolves to a
+// party/raid check — TARGET_UNIT_NEARBY_PARTY (3), CASTER_AREA_PARTY (20),
+// SRC/DEST_AREA_PARTY (33/34), TARGET_PARTY (35),
+// LASTTARGET_AREA_PARTY (37), CASTER_AREA_RAID (56), TARGET_RAID (57),
+// NEARBY_RAID (58), TARGET_AREA_RAID_CLASS (61) (SpellInfo.cpp:223-281).
+// A spell missing from the DBC is not provably a group buff and reads false.
+func (s *Server) spellIsGroupBuff(spellID uint32) bool {
+	if s == nil || s.Data == nil {
+		return false
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found {
+		return false
+	}
+	isGroupTarget := func(target uint32) bool {
+		switch target {
+		case 3, 20, 33, 34, 35, 37, 56, 57, 58, 61:
+			return true
+		}
+		return false
+	}
+	for _, eff := range spell.Effects {
+		if isGroupTarget(eff.ImplicitTargetA) || isGroupTarget(eff.ImplicitTargetB) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeAllGroupBuffsFromCaster mirrors Unit::RemoveAllGroupBuffsFromCaster
+// (Unit.cpp:4439-4451): every aura this unit carries that was cast by
+// casterGUID and whose spell is a group buff comes off. Snapshot under
+// castMu, remove outside it, like removeAurasByTypeFromCaster.
+func (s *session) removeAllGroupBuffsFromCaster(casterGUID uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	var ids []uint32
+	s.castMu.Lock()
+	for _, aura := range s.activeAuras {
+		if aura != nil && aura.CasterGUID == casterGUID && s.server.spellIsGroupBuff(aura.SpellID) {
+			ids = append(ids, aura.SpellID)
+		}
+	}
+	s.castMu.Unlock()
+	for _, id := range ids {
+		s.removeAura(id)
+	}
+}
+
 // removeFakeDeath mirrors the feign-death strip repeated across the C++
 // handlers (AuctionHouseHandler.cpp:52-53, ItemHandler.cpp:398,
 // BankHandler.cpp:56-57): a player faking death — UNIT_STATE_DIED, which the

@@ -756,11 +756,14 @@ func luaRangeMethods(srv *Server, origin func() luaRangeOrigin) map[string]scrip
 // (MAX_CHAT_MSG_TYPE 0x34, SharedDefines.h:3216; LANGUAGES_COUNT 19,
 // SharedDefines.h:789); the target must be a Player object like C++
 // CHECKOBJ<Player>, and a target with no live session drops silently,
-// the Unit::Whisper null-target precedent. DELTAS: the packet uses the
-// shared BuildChatMessage builder, so monster-type senderName and the
-// GM-message opcode legs are unmodeled (same delta as SendUnitWhisper);
-// a channel type writes an empty channel name (C++ asserts non-empty).
-func (s *Server) luaSendChatMessageToPlayer(senderGUID uint64, senderChatTag uint8, args []any) ([]any, error) {
+// the Unit::Whisper null-target precedent. Monster chat types
+// (CHAT_MSG_MONSTER_SAY/PARTY/YELL/WHISPER/EMOTE, RAID_BOSS_EMOTE/WHISPER,
+// BATTLENET — Chat.cpp:203-220) route through BuildMonsterChatMessage so
+// the packet carries the sender name; other types use the generic builder.
+// DELTAS: a channel type writes an empty channel name (C++ asserts
+// non-empty); the receiverName leg for non-player/non-pet receivers is
+// unmodeled (no Go caller passes such a receiver).
+func (s *Server) luaSendChatMessageToPlayer(senderGUID uint64, senderChatTag uint8, senderName string, args []any) ([]any, error) {
 	chatType, err := luaUint32Arg(args, 0)
 	if err != nil {
 		return nil, err
@@ -797,7 +800,13 @@ func (s *Server) luaSendChatMessageToPlayer(senderGUID uint64, senderChatTag uin
 	if receiver == nil || receiver.player == nil {
 		return nil, nil
 	}
-	packet := protocol.BuildChatMessageWithOptions(uint8(chatType), lang, senderGUID, targetGUID, message, "", false, "", senderChatTag)
+	var packet []byte
+	switch uint8(chatType) {
+	case 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x29, 0x2A, 0x2F:
+		packet = protocol.BuildMonsterChatMessage(uint8(chatType), lang, senderGUID, senderName, message)
+	default:
+		packet = protocol.BuildChatMessageWithOptions(uint8(chatType), lang, senderGUID, targetGUID, message, "", false, "", senderChatTag)
+	}
 	return nil, receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
 }
 
