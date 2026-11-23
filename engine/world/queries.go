@@ -209,6 +209,21 @@ func (s *session) loadGameObjectQueryData(ctx context.Context, entry uint32) (ga
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, query, args...).Scan(values...); err != nil {
 		return data, err
 	}
+	if s.locale != 0 && int(s.locale) < len(localeNames) {
+		// GameObjectTemplate::BuildQueryData (GameObject.cpp:65-69): Name
+		// + CastBarCaption localize from gameobject_template_locale;
+		// IconName is never localized. GetLocaleString overrides only
+		// non-empty strings (the creature-query arm's convention).
+		var locName, locCastBar sql.NullString
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, castBarCaption FROM gameobject_template_locale WHERE entry = ? AND locale = ?", entry, localeNames[s.locale]).Scan(&locName, &locCastBar); err == nil {
+			if locName.Valid && locName.String != "" {
+				name = locName.String
+			}
+			if locCastBar.Valid && locCastBar.String != "" {
+				castBar = locCastBar.String
+			}
+		}
+	}
 	data.Entry = entry
 	data.Type, data.DisplayID, data.Name, data.IconName, data.CastBar, data.Unknown, data.Size = uint32(objectType), uint32(displayID), name, iconName, castBar, unknown, float32(size)
 	for index, value := range raw {

@@ -2211,7 +2211,15 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 			chance = 1
 		}
 	}
-	success := forceSuccess || s.fishingHoleNearby(ctx, goState) || rand.Intn(100)+1 <= chance
+	poolEntry, poolFound := s.fishingHoleEntryNearby(ctx, goState)
+	success := forceSuccess || poolFound || rand.Intn(100)+1 <= chance
+	if requireOwner && poolFound {
+		// GameObject.cpp:1772-1776: a pool catch calls fishingPool->Use(player);
+		// the FISHINGHOLE arm (GameObject.cpp:1998-2002) credits
+		// ACHIEVEMENT_CRITERIA_TYPE_FISH_IN_GAMEOBJECT with the pool's
+		// entry. The direct-hole use credits its own entry in useGameObject.
+		s.updateAchievementCriteria(criteriaTypeFishInGameObject, poolEntry, 1)
+	}
 	loadRows := func(entry uint32, lootMode uint32) error {
 		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0), COALESCE(t.Flags, 0),
 			COALESCE(t.RandomProperty, 0), COALESCE(t.RandomSuffix, 0), COALESCE(t.ItemLevel, 0), COALESCE(t.InventoryType, 0),
@@ -2370,28 +2378,28 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	return true
 }
 
-func (s *session) fishingHoleNearby(ctx context.Context, bobber *dynamicGameObjectState) bool {
+func (s *session) fishingHoleEntryNearby(ctx context.Context, bobber *dynamicGameObjectState) (uint32, bool) {
 	if s == nil || s.server == nil || bobber == nil {
-		return false
+		return 0, false
 	}
 	s.server.objectsMu.RLock()
 	for _, object := range s.server.dynamicGameObjects {
 		// GameObject.cpp:1763: LookupFishingHoleAround(20.0f + CONTACT_DISTANCE).
 		if object != nil && object.Type == GameObjectTypeFishingHole && object.Map == bobber.Map && distance3D(object.X, object.Y, object.Z, bobber.X, bobber.Y, bobber.Z) <= 20.5 {
 			s.server.objectsMu.RUnlock()
-			return true
+			return object.Entry, true
 		}
 	}
 	s.server.objectsMu.RUnlock()
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return false
+		return 0, false
 	}
-	var found int
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT 1
+	var entry int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT g.id
 		FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id
 		WHERE g.map = ? AND t.type = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?
-		LIMIT 1`, bobber.Map, GameObjectTypeFishingHole, bobber.X-20.5, bobber.X+20.5, bobber.Y-20.5, bobber.Y+20.5).Scan(&found)
-	return err == nil && found == 1
+		LIMIT 1`, bobber.Map, GameObjectTypeFishingHole, bobber.X-20.5, bobber.X+20.5, bobber.Y-20.5, bobber.Y+20.5).Scan(&entry)
+	return uint32(entry), err == nil
 }
 
 // finishLootOpen completes a successful loot open: after the response is on

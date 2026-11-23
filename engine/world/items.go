@@ -6328,6 +6328,15 @@ func (s *session) handlePageTextQuery(ctx context.Context, payload []byte) bool 
 				found = true
 			}
 		}
+		if found && s.locale != 0 && int(s.locale) < len(localeNames) {
+			// QueryHandler.cpp:303-307: a non-enUS session reads the
+			// page_text_locale row; GetLocaleString overrides only a
+			// non-empty string.
+			var locText sql.NullString
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text FROM page_text_locale WHERE ID = ? AND locale = ?", pageID, localeNames[s.locale]).Scan(&locText); err == nil && locText.Valid && locText.String != "" {
+				text = locText.String
+			}
+		}
 
 		buf := protocol.NewBuffer(32 + len(text))
 		buf.WriteU32(pageID)

@@ -700,11 +700,18 @@ func (s *session) useGooberGameObject(ctx context.Context, guid uint64, entry ui
 		s.server.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 0, false)
 	}
 	// The spell is data10 in this TrinityCore layout (GameObjectData.h:171);
-	// the old code cast data1 (the questId) as the spell. C++ casts it at
-	// the end of Use() with the GO as caster; Go's castSpellDirect casts as
-	// the player (documented).
+	// the old code cast data1 (the questId) as the spell. GameObject.cpp:1686-1696
+	// sets spellCaster = nullptr, so the Use() tail (GameObject.cpp:2092-2097)
+	// casts with the GO itself as caster (Object::CastSpell, non-triggered)
+	// — not the user. The cast rides the creature pipeline on a synthetic
+	// BaseIsGameObject motion, the SmartAI GO-cast precedent
+	// (smartActionCastGO), which exempts the unit-only CheckCast arms for a
+	// non-unit caster; the deferred-fire rebuild leg covers cast-time
+	// goober spells via syntheticGOMotion.
 	if tpl.spellID != 0 {
-		s.castSpellDirect(ctx, tpl.spellID, s.playerGUID)
+		if motion := s.server.syntheticGOMotion(goState.Map, goState.InstanceID, guid); motion != nil {
+			s.server.castCreatureSpell(ctx, motion, tpl.spellID, s.playerGUID)
+		}
 	}
 
 }
@@ -1036,12 +1043,37 @@ func (s *session) useGameObjectTypeArms(ctx context.Context, payload []byte, goS
 		// unconditionally in the arm — even when allowMounted (data3) kept
 		// the player mounted through the Use() head's !IsUsableMounted gate.
 		s.removeAurasByType(spellAuraMounted)
-		// AddUse() has no Go use-count model (documented).
+		// GameObject::AddUse (GameObject.h:202) + the GO_READY Update arm
+		// (GameObject.cpp:686-692): each use increments m_usetimes, and a
+		// charges-bearing spellcaster deactivates (m_usetimes reset,
+		// GO_JUST_DEACTIVATED) once uses reach GetCharges()
+		// (spellcaster.charges, data1; GameObjectData.h:512-520). Go has
+		// no periodic GO Update tick, so the exhaustion check runs on the
+		// use that reaches the limit — a same-tick re-use would still cast
+		// once more in C++ before the next Update tick.
+		s.server.objectsMu.Lock()
+		goState.UseCount++
+		exhausted := tpl[1] != 0 && goState.UseCount >= tpl[1]
+		if exhausted {
+			goState.UseCount = 0
+		}
+		s.server.objectsMu.Unlock()
 		if tpl[0] != 0 { // spellcaster.spellId (data0)
 			// Use() tail: spellCaster defaults to the user, so the user
 			// casts on themselves (GameObject.cpp:1487,2092); Go's
 			// castSpellDirect casts as the player on the player — exact.
 			s.castSpellDirect(ctx, tpl[0], s.playerGUID)
+		}
+		if exhausted {
+			// The GO_JUST_DEACTIVATED terminal arm (GameObject.cpp:774-830):
+			// a summoned spellcaster is deleted, a DB spawn despawns for
+			// its respawn cycle — the trap type-1 / ritual arm pattern.
+			if goState.IsRuntimeSpawn {
+				s.server.despawnDynamicGameObjectInInstance(goState.Map, goState.InstanceID, guid)
+			} else {
+				s.server.setGameObjectHiddenInInstance(goState.Map, goState.InstanceID, guid, true)
+				s.server.broadcastGameObjectDespawn(goState.Map, guid)
+			}
 		}
 
 	case GameObjectTypeMeetingStone:
@@ -1250,6 +1282,17 @@ func (s *session) useSummoningRitual(ctx context.Context, goState *dynamicGameOb
 		return
 	}
 	srv := s.server
+	// GameObject.cpp:1816-1825: when the GO has an owner, the ritual arm
+	// returns at once unless the owner is a player — a creature/pet owner
+	// never falls through to the ritual-owner leg below. Player GUIDs are
+	// bare low GUIDs (characters.go:872); creature/pet/vehicle owners
+	// carry high bits (the 0xF130 creature mark, creaturemotion.go:3004),
+	// so a non-player owner is recognizable even when no session
+	// resolves for it (playerSessionForGUID returns nil for both an
+	// offline player and a creature).
+	if goState.OwnerGUID != 0 && uint16(goState.OwnerGUID>>48) != 0 {
+		return
+	}
 	var ownerSess *session
 	if goState.OwnerGUID != 0 {
 		ownerSess = srv.playerSessionForGUID(goState.OwnerGUID)

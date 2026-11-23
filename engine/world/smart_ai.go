@@ -967,6 +967,27 @@ func (s *Server) smartFireAreaTrigger(ctx context.Context, sess *session, trigge
 	return true
 }
 
+// syntheticGOMotion builds the bare BaseIsGameObject motion for a live GO
+// record — the smartStateForGO motion without the smart-row attach, so a
+// GO can cast (GameObject::Use goober arm, D18) and a cast-time GO cast
+// can rebuild its caster after the deferral even when the GO carries no
+// SmartAI rows. Nil when the GO has no live state (despawned), which is
+// the C++ drop condition (the GO's m_Events die with it).
+func (s *Server) syntheticGOMotion(mapID, instanceID uint32, guid uint64) *creatureMotion {
+	if s == nil || guid == 0 {
+		return nil
+	}
+	goState := s.gameObjectState(mapID, instanceID, guid)
+	if goState == nil || goState.Entry == 0 {
+		return nil
+	}
+	return &creatureMotion{
+		GUID: goState.GUID, Entry: goState.Entry, Map: mapID, InstanceID: instanceID,
+		X: goState.X, Y: goState.Y, Z: goState.Z, Orientation: goState.Orientation,
+		PhaseMask: goState.PhaseMask, AIName: "SmartAI", BaseIsGameObject: true,
+	}
+}
+
 // smartStateForGO returns the gameobject's SmartScript state plus a
 // synthetic motion carrying the GO as the script base, attaching the
 // state on first use when the GO entry has src-1 script rows
