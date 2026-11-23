@@ -1589,12 +1589,13 @@ func (s *Server) creatureSpeedAlwaysMultiplierFor(key creatureAuraKey, auraType 
 
 // creatureIsMounted mirrors the IsMounted() gate of Unit::UpdateSpeed's
 // MOVE_RUN mounted branch (Unit.cpp:8683, Unit.h:932 UNIT_FLAG_MOUNT):
-// the live flag mirror on the motion (set by the Lua Mount bridge and the
-// SetFlag twin, read by the IsMounted bridge), or a live 207 mounted
-// aura — C++ HandleAuraMounted sets the flag on apply, and the aura
-// fallback covers the creature apply path if it has not mirrored it
-// yet. A template mount display alone does not count: C++ sets the
-// display at spawn without the flag.
+// the live flag mirror on the motion (set by the addon seed at spawn,
+// the Lua Mount bridge and the SetFlag twin, read by the IsMounted
+// bridge), or a live 207 mounted aura — C++ HandleAuraMounted sets the
+// flag on apply, and the aura fallback covers the creature apply path
+// if it has not mirrored it yet. Unit::Mount (Unit.cpp:8310-8318)
+// writes the display AND the flag, so an addon-mounted creature
+// carries the flag from spawn.
 func (s *Server) creatureIsMounted(key creatureAuraKey, motion *creatureMotion) bool {
 	if motion != nil && motion.UnitFlags&0x08000000 != 0 {
 		return true
@@ -2619,6 +2620,13 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID u
 	// creature on the map, so it fires here — after the lock is released,
 	// since Lua handlers can call back into the motion registry.
 	if created {
+		// Creature::LoadCreaturesAddon auras leg (Creature.cpp:645,
+		// UpdateEntry): the addon auras land at spawn, before the
+		// creature is added to the world — so before the
+		// instance-create / OnAdd / spawn events below. Runs after
+		// the lock is released: reapplyCreatureAddonAuras takes
+		// motionMu via findCreatureMotion.
+		s.reapplyCreatureAddonAuras(ctx, motion)
 		s.triggerInstanceCreatureCreate(motion)
 		// Eluna CREATURE_EVENT_ON_ADD (36): Eluna::OnAddToWorld
 		// (CreatureHooks.cpp:73-78, args (event, creature)) fires from
@@ -2662,6 +2670,11 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 		if st.MaxHealth > 0 && health > st.MaxHealth {
 			health = st.MaxHealth
 		}
+		// Creature::LoadCreaturesAddon (Creature.cpp:645, UpdateEntry)
+		// runs at spawn: the addon row seeds the live motion below and
+		// the hover Z bump rides the same row (bytes1 arm).
+		addon := s.loadCreatureAddonRow(ctx, guid, entry)
+		spawnZ := z + s.creatureHoverSpawnOffset(mapID, x, y, z, st.MoveGround, st.MoveFlight, st.HoverHeight, st.FlagsExtra, addon.Bytes1)
 		motion = &creatureMotion{
 			GUID:        key,
 			LootMode:    lootModeDefault,
@@ -2670,20 +2683,20 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			InstanceID:  instanceID,
 			HomeX:       x,
 			HomeY:       y,
-			HomeZ:       z,
+			HomeZ:       spawnZ,
 			HomeO:       orientation,
 			WanderRefX:  x,
 			WanderRefY:  y,
-			WanderRefZ:  z,
+			WanderRefZ:  spawnZ,
 			SpawnX:      x,
 			SpawnY:      y,
-			SpawnZ:      z,
+			SpawnZ:      spawnZ,
 			SpawnO:      orientation,
 			SpawnKnown:  true,
 			Orientation: orientation,
 			X:           x,
 			Y:           y,
-			Z:           z,
+			Z:           spawnZ,
 			Speed:       creatureWalkVelocity(float64(walkSpeedRate)),
 			RunSpeed:    creatureRunVelocity(float64(runSpeedRate)),
 			BaseRunRate: runSpeedRate,
@@ -2733,6 +2746,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			motion.Mana = st.Mana
 			motion.BaseMaxPowers[0] = st.Mana
 		}
+		applyCreatureAddonToMotion(motion, addon)
 		if motion.ThreatMgr == nil {
 			motion.ThreatMgr = NewThreatManager(motion)
 		}
@@ -8198,10 +8212,142 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	}
 }
 
+// creatureAddonRow is one winning Creature::GetCreatureAddon row
+// (Creature.cpp:2611-2621): the guid row wins entirely, the template
+// row fills only a missing guid row. The auras leg is not carried here
+// (reapplyCreatureAddonAuras owns it); the rest of LoadCreaturesAddon
+// (Creature.cpp:2624-2703) reads from this row.
+type creatureAddonRow struct {
+	Mount                  uint32
+	Bytes1                 uint32
+	Bytes2                 uint32
+	Emote                  uint32
+	VisibilityDistanceType uint8
+	Found                  bool
+}
+
+// loadCreatureAddonRow reads the winning addon row whole-row-first
+// (the strip-30 fold pattern): guid row only, template row only on a
+// missing guid row, never a per-field merge. An empty row means no
+// addon applies (pets, row-less summons); callers keep C++ defaults.
+func (s *Server) loadCreatureAddonRow(ctx context.Context, guid, entry uint32) creatureAddonRow {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return creatureAddonRow{}
+	}
+	var row creatureAddonRow
+	if err := s.WorldStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(mount, 0), COALESCE(bytes1, 0), COALESCE(bytes2, 0), COALESCE(emote, 0), COALESCE(visibilityDistanceType, 0) FROM creature_addon WHERE guid = ?`, guid).Scan(&row.Mount, &row.Bytes1, &row.Bytes2, &row.Emote, &row.VisibilityDistanceType); err != nil {
+		if entry == 0 {
+			return creatureAddonRow{}
+		}
+		if err := s.WorldStore.DB.QueryRowContext(ctx,
+			`SELECT COALESCE(mount, 0), COALESCE(bytes1, 0), COALESCE(bytes2, 0), COALESCE(emote, 0), COALESCE(visibilityDistanceType, 0) FROM creature_template_addon WHERE entry = ?`, entry).Scan(&row.Mount, &row.Bytes1, &row.Bytes2, &row.Emote, &row.VisibilityDistanceType); err != nil {
+			return creatureAddonRow{}
+		}
+	}
+	row.Found = true
+	return row
+}
+
+// applyCreatureAddonToMotion applies the non-aura legs of
+// Creature::LoadCreaturesAddon (Creature.cpp:2624-2703) to a live
+// motion: Mount (Unit::Mount, Unit.cpp:8310-8318, sets the display and
+// UNIT_FLAG_MOUNT), bytes1 stand state (byte 0) with the full template
+// bytes1 banked for the create-block overlay, bytes2 sheath state
+// (byte 0; byte 1 is deliberately never set, Creature.cpp:2665), emote,
+// visibility distance type. Plain field writes only: no DB, no lock,
+// safe under motionMu. The mount flag is paired with UnitFlagsKnown so
+// the sweep's template re-affirm cannot wipe it (the sweep re-affirms
+// UnitFlags from the template whenever the latch is clear).
+func applyCreatureAddonToMotion(motion *creatureMotion, addon creatureAddonRow) {
+	if motion == nil || !addon.Found {
+		return
+	}
+	if addon.Mount != 0 {
+		motion.Mount = addon.Mount
+		motion.MountKnown = true
+		motion.UnitFlags |= unitFlagMount
+		motion.UnitFlagsKnown = true
+	}
+	if addon.Bytes1 != 0 {
+		motion.StandState = uint8(addon.Bytes1 & 0xFF)
+		motion.StandStateKnown = true
+	}
+	motion.bytes1Cache = addon.Bytes1
+	motion.bytes1CacheKnown = true
+	if addon.Bytes2 != 0 {
+		motion.SheathState = uint8(addon.Bytes2 & 0xFF)
+		motion.SheathStateKnown = true
+	}
+	if addon.Emote != 0 {
+		motion.EmoteState = addon.Emote
+		motion.EmoteStateKnown = true
+	}
+	if addon.VisibilityDistanceType != 0 {
+		motion.VisibilityDistType = addon.VisibilityDistanceType
+	}
+}
+
+// creatureHoverSpawnOffset is the Creature::Create spawn-Z bump
+// (Creature.cpp:1169-1170, m_positionZ += GetHoverOffset(), "Need to
+// be called after LoadCreaturesAddon - MOVEMENTFLAG_HOVER is set
+// there"; GetHoverOffset, Unit.h:1648-1651, is HoverHeight iff the
+// HOVER flag is set). The flag comes from UpdateMovementFlags
+// (Creature.cpp:2779-2816): a Ground==Hover creature hovers unless
+// flight-allowed and in air (the isInAir test at :2795-2796, mirrored
+// here on the raw spawn Z with the per-tick twin's mapHeight test); a
+// CREATURE_FLAG_EXTRA_NO_MOVE_FLAGS_UPDATE creature skips that update,
+// so only the bytes1 arm of LoadCreaturesAddon (Creature.cpp:2650-2656)
+// can set its HOVER flag. A failed height lookup fails open to the
+// bump, matching the per-tick twin's keep-current-flags arm.
+func (s *Server) creatureHoverSpawnOffset(mapID uint32, x, y, z float32, moveGround, moveFlight uint32, hoverHeight float32, flagsExtra uint32, bytes1 uint32) float32 {
+	if moveGround != 2 {
+		return 0
+	}
+	if flagsExtra&creatureFlagExtraNoMoveFlagsUpdate != 0 {
+		if bytes1 == 0 {
+			return 0
+		}
+		return hoverHeight
+	}
+	if moveFlight == 0 {
+		return hoverHeight
+	}
+	ground, ok := s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+	if !ok {
+		return hoverHeight
+	}
+	if z > ground+hoverHeight+terrainGroundTolerance || z < ground-terrainGroundTolerance {
+		return 0
+	}
+	return hoverHeight
+}
+
 func (s *Server) loadCreaturePathID(ctx context.Context, guid, entry uint32) uint32 {
 	var pathID int64
-	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(ca.path_id, 0), NULLIF(cta.path_id, 0), ?) FROM creature AS c LEFT JOIN creature_addon AS ca ON ca.guid = c.guid LEFT JOIN creature_template_addon AS cta ON cta.entry = c.id WHERE c.guid = ?", guid, guid).Scan(&pathID); err != nil {
-		return guid
+	// GetCreatureAddon (Creature.cpp:2611-2621) is whole-row: a guid row
+	// wins entirely, even with path_id 0 — the template row fills only a
+	// missing guid row, never a zero-path one. The old COALESCE across the
+	// join let a template path_id win over an explicit guid-row 0.
+	// LoadCreaturesAddon (Creature.cpp:2679-2680) then sets _waypointPathId
+	// only when the winning row's path_id != 0, so a guid row with path_id
+	// 0 leaves the path at 0 (GetWaypointPath, Creature.h:304, returns
+	// _waypointPathId verbatim; no guid fallback exists in C++ —
+	// WaypointMovementGenerator::DoInitialize
+	// (WaypointMovementGenerator.cpp:104-115) takes GetWaypointPath() and
+	// GetPath(0) is null, so a pathless creature does not patrol).
+	// The guid return below is a Go-side DB-convention holdover, not C++:
+	// waypoint_data rows for pathless patrollers are keyed by spawn guid,
+	// so a 0 resolves to the guid-keyed rows (or none) instead of
+	// patrolling the template's path.
+	if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(path_id, 0) FROM creature_addon WHERE guid = ?`, guid).Scan(&pathID); err != nil {
+		if entry == 0 {
+			return guid
+		}
+		if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(path_id, 0) FROM creature_template_addon WHERE entry = ?`, entry).Scan(&pathID); err != nil || pathID == 0 {
+			return guid
+		}
+		return uint32(pathID)
 	}
 	if pathID == 0 {
 		return guid

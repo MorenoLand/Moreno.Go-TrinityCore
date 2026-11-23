@@ -3010,6 +3010,14 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				motion.FollowState = 0
 				motion.FollowQuestID = 0
 				motion.PlayerDamageReq = respawn.Health / 2
+				// Creature::setDeathState JUST_RESPAWNED (Creature.cpp:2152)
+				// re-runs LoadCreaturesAddon: the death leg zeroed the mount
+				// display and emote, so the addon legs re-seed here, and the
+				// hover Z re-bumps from the raw record position (C++ re-raises
+				// via the SetHover fold on respawn).
+				addon := s.loadCreatureAddonRow(ctx, respawn.GUID, respawn.Entry)
+				applyCreatureAddonToMotion(motion, addon)
+				motion.Z = respawn.Z + s.creatureHoverSpawnOffset(respawn.Map, respawn.X, respawn.Y, respawn.Z, motion.MoveGround, motion.MoveFlight, motion.HoverHeight, motion.FlagsExtra, addon.Bytes1)
 			}
 			s.motionMu.Unlock()
 			broadcastMap := respawn.Map
@@ -3028,6 +3036,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				// Respawn Vehicle::Reset ejects all passengers and
 				// reinstalls every accessory fresh (InstallAllAccessories(false)).
 				s.resetVehicleKitOnRespawn(ctx, motion)
+				// Creature::setDeathState JUST_RESPAWNED (Creature.cpp:2152)
+				// re-runs LoadCreaturesAddon inside setDeathState, ahead
+				// of ai->Reset() and the JustAppeared trigger — so the
+				// auras re-apply here, before the spawn hooks below.
+				s.reapplyCreatureAddonAuras(ctx, motion)
 				s.fireCreatureSpawned(ctx, motion)
 				// Creature::Respawn (Creature.cpp:2198): ai->Reset() runs on
 				// every respawn — the instance path already calls OnReset;
@@ -3105,6 +3118,14 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			motion.TapPlayerGUID, motion.TapGroupID = 0, 0
 			motion.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
 			motion.PlayerDamageReq = respawn.Health / 2
+			// Creature::setDeathState JUST_RESPAWNED (Creature.cpp:2152)
+			// re-runs LoadCreaturesAddon: the death leg zeroed the mount
+			// display and emote, so the addon legs re-seed here, and the
+			// hover Z re-bumps from the raw record position (C++ re-raises
+			// via the SetHover fold on respawn).
+			addon := s.loadCreatureAddonRow(ctx, respawn.GUID, respawn.Entry)
+			applyCreatureAddonToMotion(motion, addon)
+			motion.Z = respawn.Z + s.creatureHoverSpawnOffset(respawn.Map, respawn.X, respawn.Y, respawn.Z, motion.MoveGround, motion.MoveFlight, motion.HoverHeight, motion.FlagsExtra, addon.Bytes1)
 		}
 		s.motionMu.Unlock()
 		s.reseatRespawnedEntry(ctx, motion, respawn.Entry)
@@ -3117,6 +3138,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			// pre-fire (Eluna::JustRespawned, CreatureHooks.cpp:210-216) —
 			// ahead of the native boss reset, matching ElunaCreatureAI::
 			// JustAppeared calling sEluna before ScriptedAI::JustAppeared.
+			// Creature::setDeathState JUST_RESPAWNED (Creature.cpp:2152)
+			// re-runs LoadCreaturesAddon inside setDeathState, ahead of
+			// ai->Reset() and the JustAppeared trigger — so the auras
+			// re-apply here, before the spawn hooks below.
+			s.reapplyCreatureAddonAuras(ctx, motion)
 			s.fireCreatureSpawned(ctx, motion)
 			if motion.BossAI != nil {
 				motion.BossAI.OnReset(ctx, s, motion)

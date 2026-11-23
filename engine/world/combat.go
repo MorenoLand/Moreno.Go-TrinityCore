@@ -3347,6 +3347,12 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 			motion.CombatReach = target.CombatReach
 		}
 	} else {
+		// Creature::Create (Creature.cpp:1105) runs LoadCreaturesAddon
+		// at spawn, so this materialization seeds the addon legs and
+		// the hover Z bump like the motionForLocked fresh branch; the
+		// DB-row target.Z above is raw.
+		addon := s.loadCreatureAddonRow(ctx, lowGUID, uint32(entry))
+		combatZ := target.Z + s.creatureHoverSpawnOffset(target.Map, target.X, target.Y, target.Z, st.MoveGround, st.MoveFlight, st.HoverHeight, st.FlagsExtra, addon.Bytes1)
 		motion := &creatureMotion{
 			GUID:            target.GUID,
 			DisplayID:       st.Model, // native template display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
@@ -3357,10 +3363,10 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 			InstanceID:      instanceID,
 			HomeX:           target.X,
 			HomeY:           target.Y,
-			HomeZ:           target.Z,
+			HomeZ:           combatZ,
 			X:               target.X,
 			Y:               target.Y,
-			Z:               target.Z,
+			Z:               combatZ,
 			Speed:           2.5,
 			RunSpeed:        7.0,
 			UnitFlags:       target.UnitFlags,
@@ -3382,6 +3388,7 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 			CombatReach:      target.CombatReach,
 			Refreshed:        time.Now(),
 		}
+		applyCreatureAddonToMotion(motion, addon)
 		motions := s.motionMapLocked(target.Map, instanceID)
 		motions[target.GUID] = motion
 		if guid != target.GUID {

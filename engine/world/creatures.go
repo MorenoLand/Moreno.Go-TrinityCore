@@ -190,11 +190,11 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), NULLIF(t.modelid2, 0), NULLIF(t.modelid3, 0), NULLIF(t.modelid4, 0), 1),
 		t.faction, (t.npcflag | ` + npcFlagExpr + `), t.unit_flags, t.dynamicflags,
 		t.maxlevel, c.curhealth, t.RegenHealth, c.curmana, t.scale, t.HoverHeight, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime,
-		COALESCE(ca.mount, cta.mount, 0),
-		COALESCE(ca.bytes1, cta.bytes1, 0),
-		COALESCE(ca.bytes2, cta.bytes2, 0),
-		COALESCE(ca.emote, cta.emote, 0),
-		COALESCE(ca.visibilityDistanceType, cta.visibilityDistanceType, 0),
+		CASE WHEN ca.guid IS NOT NULL THEN COALESCE(ca.mount, 0) ELSE COALESCE(cta.mount, 0) END,
+		CASE WHEN ca.guid IS NOT NULL THEN COALESCE(ca.bytes1, 0) ELSE COALESCE(cta.bytes1, 0) END,
+		CASE WHEN ca.guid IS NOT NULL THEN COALESCE(ca.bytes2, 0) ELSE COALESCE(cta.bytes2, 0) END,
+		CASE WHEN ca.guid IS NOT NULL THEN COALESCE(ca.emote, 0) ELSE COALESCE(cta.emote, 0) END,
+		CASE WHEN ca.guid IS NOT NULL THEN COALESCE(ca.visibilityDistanceType, 0) ELSE COALESCE(cta.visibilityDistanceType, 0) END,
 		COALESCE(eq.ItemID1, 0),
 		COALESCE(eq.ItemID2, 0),
 		COALESCE(eq.ItemID3, 0),
@@ -455,7 +455,7 @@ func (s *Server) anyFarVisibleCreature(mapID, instanceID uint32) bool {
 // rows on the map, mapped through the VisibilityDistances table
 // (ObjectDefines.h:28-37, Object.cpp:58-66; Creature.cpp:2675-2676), or 0
 // when no row carries one. The guid addon wins over the template addon
-// per row, matching the per-row COALESCE in buildNearbyCreatureUpdates
+// per row, matching the whole-row CASE in buildNearbyCreatureUpdates
 // (Creature::GetCreatureAddon precedence, Creature.cpp:2611-2621).
 // Cached per map: addon rows are static for the life of the process (no
 // runtime mutation path), and the sweep runs on every player move. A
@@ -543,7 +543,18 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 			spawn.Emote = motion.EmoteState
 			spawn.emoteStateKnown = true
 		}
-		if motion.StandStateKnown {
+		if motion.bytes1CacheKnown {
+			// The seeded template bytes1 carries bytes 2/3 (vis flag /
+			// anim tier) the stand-state arm below would drop; byte 0
+			// stays the live stand state when a script set one. For DB
+			// spawns this is identity with the sweep query's whole-row
+			// bytes1; for summons it is the only path those bytes take.
+			spawn.Bytes1 = motion.bytes1Cache
+			if motion.StandStateKnown {
+				spawn.Bytes1 = (spawn.Bytes1 & 0xFFFFFF00) | uint32(motion.StandState)
+			}
+			spawn.standStateKnown = true
+		} else if motion.StandStateKnown {
 			spawn.Bytes1 = (spawn.Bytes1 & 0xFFFFFF00) | uint32(motion.StandState)
 			spawn.standStateKnown = true
 		}

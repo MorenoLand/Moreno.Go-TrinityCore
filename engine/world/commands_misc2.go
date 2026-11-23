@@ -2089,12 +2089,27 @@ func (s *Server) respawnCreatureNow(ctx context.Context, motion *creatureMotion,
 		motion.AlreadySearchedAssistance = false
 		motion.TapPlayerGUID, motion.TapGroupID = 0, 0
 		motion.PlayerDamageReq = health / 2
+		// Creature::setDeathState JUST_RESPAWNED (Creature.cpp:2152)
+		// re-runs LoadCreaturesAddon: the death leg zeroed the mount
+		// display and emote, so the addon legs re-seed here. The hover
+		// Z re-bumps only on the found branch, whose record position is
+		// raw DB Z; the no-record branch returns to home Z, already
+		// bumped at spawn (C++ re-raises via the SetHover fold).
+		addon := s.loadCreatureAddonRow(ctx, spawnGUID, entry)
+		applyCreatureAddonToMotion(motion, addon)
+		if found {
+			motion.Z = hz + s.creatureHoverSpawnOffset(broadcastMap, hx, hy, hz, motion.MoveGround, motion.MoveFlight, motion.HoverHeight, motion.FlagsExtra, addon.Bytes1)
+		}
 		s.motionMu.Unlock()
 	}
 	s.reseatRespawnedEntry(ctx, motion, entry)
 	s.clearLootState(broadcastMap, broadcastInstance, rawGUID)
 	s.broadcastCreatureValuesUpdateInInstance(broadcastMap, broadcastInstance, rawGUID, map[int]uint32{unitFieldHealth: health, unitFieldDynamicFlags: 0})
 	if motion != nil {
+		// Creature::setDeathState JUST_RESPAWNED (Creature.cpp:2152)
+		// re-runs LoadCreaturesAddon inside setDeathState, ahead of
+		// ai->Reset() and the JustAppeared trigger.
+		s.reapplyCreatureAddonAuras(ctx, motion)
 		s.fireCreatureSpawned(ctx, motion)
 		if motion.BossAI != nil {
 			motion.BossAI.OnReset(ctx, s, motion)
