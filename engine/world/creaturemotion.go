@@ -6677,6 +6677,49 @@ func (s *Server) launchCreaturePolySpline(motion *creatureMotion, points []pathV
 	return true
 }
 
+// launchCreatureSmoothPath is MotionMaster::MoveSmoothPath
+// (MotionMaster.cpp:867-885): a GenericMovementGenerator
+// (EFFECT_MOTION_TYPE 16) walking the given points with MovebyPath
+// + SetSmooth + SetWalk(walk). C++ paths through no CalculatePath —
+// the points ship as given — so this launches straight through
+// launchCreaturePolySpline, and the landing gate fires
+// MovementInform(EFFECT_MOTION_TYPE, pointId) on event 28
+// (creaturemotion.go:10271), exactly as
+// GenericMovementGenerator::MovementInform does.
+// MoveSplineInit::Launch overwrites path[0] with the creature's
+// real position (MoveSplineInit.cpp:92), so the interpolated spline
+// position is prepended: a path whose first point is not the
+// creature's position still starts where the creature stands.
+// SetSmooth has no Go spline-interpolation model: the poly launch
+// carries the same points at the same speed, so the path shape is
+// the polyline, not the Catmull-Rom curve. The "not correct"
+// caveat in C++ (GenericMovementGenerator does not affect
+// UNIT_STATE_ROAMING_MOVE) rides along for free — Go sets no
+// roaming state on a script spline either.
+func (s *Server) launchCreatureSmoothPath(motion *creatureMotion, pointID uint32, points []pathVec, walk bool) bool {
+	if s == nil || motion == nil || len(points) == 0 {
+		return false
+	}
+	now := time.Now()
+	s.motionMu.Lock()
+	fromX, fromY, fromZ := creatureSplinePosition(motion, now)
+	s.motionMu.Unlock()
+	pts := make([]pathVec, 0, len(points)+1)
+	pts = append(pts, pathVec{X: fromX, Y: fromY, Z: fromZ})
+	pts = append(pts, points...)
+	speed := creatureSplineVelocity(motion, walk)
+	if !s.launchCreaturePolySpline(motion, pts, walk, movementGeneratorEffect, 0, false, speed, now, 0) {
+		return false
+	}
+	// launchCreaturePolySpline stamps ScriptMovePointID 0; the id is
+	// re-stamped after, the same shape as the Point/Home genPath arm
+	// in launchCreatureScriptSplineSpeed.
+	s.motionMu.Lock()
+	motion.ScriptMovePointID = pointID
+	s.motionMu.Unlock()
+	return true
+}
+
 // launchCreatureConfusedSpline launches one ConfusedMovementGenerator
 // hop (ConfusedMovementGenerator.cpp DoUpdate:84-124): the
 // destination picks around the DoInitialize origin snapshot

@@ -6371,6 +6371,58 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return nil, nil
 	}
+	// MoveSmoothPath is MotionMaster::MoveSmoothPath
+	// (MotionMaster.cpp:867-885): a GenericMovementGenerator
+	// (EFFECT_MOTION_TYPE 16) walking the given points with MovebyPath
+	// + SetSmooth + SetWalk(walk), so the arrival gate fires
+	// MovementInform(EFFECT_MOTION_TYPE, id) on event 28
+	// (creaturemotion.go:10271). Arg order follows the Lua MoveTo
+	// family (id first), not the C++ (id, points, size, walk) order:
+	// MoveSmoothPath(id, walk, x1, y1, z1, x2, y2, z2, ...) — the
+	// points ride flat float triples (table.unpack in Lua) because
+	// the bridge layer has no table-arg reader; at least one point
+	// is required, and the launch prepends the creature's current
+	// position (MoveSplineInit.cpp:92). Backs the headless-horseman
+	// intro flight path (boss_headless_horseman.cpp:415) and the
+	// Violet Hold boss intros (instance_violet_hold.cpp:560-696).
+	// The player surface stays out (client-driven movement).
+	methods["MoveSmoothPath"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 2 {
+			return nil, fmt.Errorf("MoveSmoothPath requires a walk bool")
+		}
+		walk, ok := args[1].(bool)
+		if !ok {
+			return nil, fmt.Errorf("MoveSmoothPath requires a walk bool")
+		}
+		rest := len(args) - 2
+		if rest < 3 || rest%3 != 0 {
+			return nil, fmt.Errorf("MoveSmoothPath requires at least one x/y/z point, got %d coords", rest)
+		}
+		points := make([]pathVec, 0, rest/3)
+		for i := 2; i < len(args); i += 3 {
+			x, err := luaFloat32Arg(args, i)
+			if err != nil {
+				return nil, err
+			}
+			y, err := luaFloat32Arg(args, i+1)
+			if err != nil {
+				return nil, err
+			}
+			z, err := luaFloat32Arg(args, i+2)
+			if err != nil {
+				return nil, err
+			}
+			points = append(points, pathVec{X: x, Y: y, Z: z})
+		}
+		if !s.launchCreatureSmoothPath(motion, id, points, walk) {
+			return nil, fmt.Errorf("MoveSmoothPath failed validation")
+		}
+		return nil, nil
+	}
 	// MoveCharge is MotionMaster::MoveCharge (MotionMaster.cpp:698-720)
 	// = a PointMovementGenerator (POINT_MOTION_TYPE 8), the same
 	// generator type MovePoint runs, so it shares the script-spline

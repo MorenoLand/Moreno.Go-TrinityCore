@@ -69,9 +69,11 @@
 --   with FindNearestCreature head/boss lookups, MoveTo + ev28 arrival,
 --   conflagrate + pumpkin phase timers. See the machine code below.
 -- - DoAction's ACTION_HORSEMAN_EVENT_START (flight-path intro via
---   MoveSmoothPath + yell-timer/laugh auras) stays out (no
---   MoveSmoothPath bridge); REQUEST_BODY / RETURN_TO_BODY / IS_DEAD
---   are PORTED on ev38 (below).
+--   MoveSmoothPath + yell-timer/laugh auras): PORTED (MoveSmoothPath
+--   bridge, item-20 strip 27) — the arm fires only when the instance
+--   script calls DoAction(101) (instance_scarlet_monastery.cpp:131,
+--   unported); REQUEST_BODY / RETURN_TO_BODY / IS_DEAD are PORTED on
+--   ev38 (below).
 -- - EVENT_CONFLAGRATE (phase 2) and EVENT_SUMMON_PUMPKIN (phase 3):
 --   PORTED 2026-11-14 (round109) as phase timers (conflagrateTick /
 --   pumpkinTick); the 52236 pumpkin-spawn machinery itself is the
@@ -80,8 +82,9 @@
 -- - Reset/JustReachedHome/InitializeAI legs: the SetDisableGravity/
 --   SetHover legs port on event 5 (InitializeAI twin, both bridged —
 --   stale "no bridge" retracted); the POINT_HORSEMAN_FINISH_PATH
---   disable legs ride the unported intro flight-path machine (DoAction
---   ACTION_HORSEMAN_EVENT_START / MoveSmoothPath, documented above).
+--   disable legs are PORTED (item-20 strip 27) in onMovementInform
+--   below, and the Reset _introDone-gated SetImmuneToPC(false) clear
+--   is PORTED in onCombatEnd below.
 -- - Reset/JustReachedHome legs: _summons.DespawnAll is PORTED
 --   2026-11-14 (round109) — the tracked horsemanSummons table (now
 --   storing the summoned objects, felblood phoenix precedent) drains
@@ -89,10 +92,10 @@
 --   precedent); SetReactState (SetReactState IS bridged — frozen_core
 --   precedent, lua_creature_events.go:524; the JustReachedHome
 --   REACT_AGGRESSIVE leg is PORTED in onReachHome below),
---   SetImmuneToPC (twin bridged — SetFlag/RemoveFlag(59, 0x100); the Reset
---   clear stays out on its _introDone gate: _introDone is set only by the
---   unported POINT_HORSEMAN_FINISH_PATH flight-path leg, so no clear can
---   fire in the Lua model). HandleInitialSetup's
+--   SetImmuneToPC (twin bridged — SetFlag/RemoveFlag(59, 0x100);
+--   PORTED (item-20 strip 27): the finish-path clear rides
+--   onMovementInform and the Reset clear rides onCombatEnd behind
+--   the horsemanIntroDone gate). HandleInitialSetup's
 --   DoCastSelf(42413/43877) self-casts were
 --   "stranded halves" (rageclaw/phoenix_tk precedent) only before the ev5
 --   spawn bridge landed; they now port on event 5 below, which fires at the
@@ -161,6 +164,7 @@ local GO_LOOSELY_TURNED_SOIL = 186314
 -- EVENT_RAIN_OF_TREATS SetFlag leg (bridged creature:SetFlag).
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100 -- Unit.cpp:8440-8449 (SetImmuneToPC twin, opera precedent)
 local SPELL_HEAD_VISUAL = 42413
 local SPELL_ONKILL_PROC = 43877
 
@@ -169,6 +173,7 @@ local SAY_KILL_PLAYER = 5
 local SAY_SPROUTING_PUMPKINS = 3 -- boss_headless_horseman.cpp:53
 local SOUNDID_MANIACAL_LAUGH = 11975 -- boss_headless_horseman.cpp:150
 local SPELL_MANIACAL_LAUGH_AURA = 43893 -- boss_headless_horseman.cpp:814
+local SPELL_HEADLESS_HORSEMAN_YELL_TIMER = 42432 -- boss_headless_horseman.cpp:63
 local SPELL_SUMMON_PUMPKIN_BURST_DELAY = 52236 -- boss_headless_horseman.cpp:934
 local SPELL_SUMMONING_RHYME_AURA = 42879 -- boss_headless_horseman.cpp:90
 local SPELL_SUMMONING_RHYME_SHAKE_SMALL = 42910 -- boss_headless_horseman.cpp:92
@@ -188,6 +193,9 @@ local ACTION_HEAD_HP_34 = 3
 local ACTION_HEAD_IS_DEAD = 4
 local ACTION_HORSEMAN_REQUEST_BODY = 5
 local ACTION_HEAD_RETURN_TO_BODY = 6
+-- scarlet_monastery.h:84 — the instance dispatches this right after
+-- summoning the horseman (instance_scarlet_monastery.cpp:131).
+local ACTION_HORSEMAN_EVENT_START = 101
 -- EventMap phases (HeadlessHorsemanMisc): the boss phase machine runs
 -- on a Lua-side phase variable (horsemanPhase, below); the head's own
 -- _phase runs on headPhase.
@@ -197,6 +205,7 @@ local PHASE_3 = 3
 local PHASE_LAST = 4
 local HEAD_PHASE_DEAD = 5
 local POINT_HEAD = 2
+local POINT_HORSEMAN_FINISH_PATH = 1 -- boss_headless_horseman.cpp:147
 local SAY_REJOINED = 1
 local SAY_CONFLAGRATION = 2
 local SAY_HEAD_REQUEST_BODY = 1
@@ -300,6 +309,28 @@ end
 -- and is SKIPPED as a documented deviation — HandleStartPhase's
 -- MoveRandom(30) repositions the head anyway.
 local horsemanPhase = {}
+
+-- HeadlessHorsemanFlightPoints (boss_headless_horseman.cpp:157-176),
+-- flat x/y/z triples for the MoveSmoothPath bridge
+-- (creature:MoveSmoothPath takes table.unpack of this table).
+local HORSEMAN_FLIGHT_PATH = {
+    1765.00, 1347.00, 19.00, 1784.00, 1346.80, 25.40,
+    1803.30, 1347.60, 33.00, 1824.00, 1350.00, 42.60,
+    1838.80, 1353.20, 49.80, 1852.00, 1357.60, 55.70,
+    1861.30, 1364.00, 59.40, 1866.30, 1374.80, 61.70,
+    1864.00, 1387.30, 63.20, 1854.80, 1399.40, 64.10,
+    1844.00, 1406.90, 64.10, 1824.30, 1411.40, 63.30,
+    1801.00, 1412.30, 60.40, 1782.00, 1410.10, 55.50,
+    1770.50, 1405.20, 50.30, 1765.20, 1400.70, 46.60,
+    1761.40, 1393.40, 41.70, 1759.10, 1386.70, 36.60,
+    1757.80, 1378.20, 29.00, 1758.00, 1367.00, 19.51,
+}
+
+-- _introDone twin (boss_headless_horseman.cpp:342, :367-369): set by
+-- the POINT_HORSEMAN_FINISH_PATH arrival, read by Reset's
+-- SetImmuneToPC(false) leg in onCombatEnd. C++ never clears it in
+-- Reset, so this table never clears either.
+local horsemanIntroDone = {}
 
 -- Forward-declared here (tharon_ja / gal_darah idiom): the
 -- horsemanSummons table itself is declared with the JustSummoned
@@ -479,12 +510,21 @@ local function onDamageTaken(_, creature, attacker, damage)
 end
 
 -- C++ boss_headless_horseman::DoAction (boss_headless_horseman.cpp:
--- 430-469) on ev38 (creature:DoAction bridge, lua_creature_events.go:
--- 845). ACTION_HORSEMAN_EVENT_START (intro flight path) stays out
--- (no MoveSmoothPath bridge).
+-- 408-469) on ev38 (creature:DoAction bridge, lua_creature_events.go:
+-- 845). ACTION_HORSEMAN_EVENT_START ports on the MoveSmoothPath
+-- bridge (lua_creature_events.go MoveSmoothPath); its only live
+-- caller is the instance script (instance_scarlet_monastery.cpp:131,
+-- unported), so the arm is live once the instance port lands.
 local function onDoAction(_, creature, action)
-    if action == ACTION_HORSEMAN_REQUEST_BODY then
-        -- :447-457: remove confuse, clear motion, whirlwind self-cast
+    if action == ACTION_HORSEMAN_EVENT_START then
+        -- :412-415: yell-timer + maniacal-laugh self-casts
+        -- (triggered), then the intro flight path (walk=false).
+        creature:CastSpell(creature, SPELL_HEADLESS_HORSEMAN_YELL_TIMER, true)
+        creature:CastSpell(creature, SPELL_MANIACAL_LAUGH_AURA, true)
+        creature:MoveSmoothPath(POINT_HORSEMAN_FINISH_PATH, false,
+            table.unpack(HORSEMAN_FLIGHT_PATH))
+    elseif action == ACTION_HORSEMAN_REQUEST_BODY then
+        -- :417-425: remove confuse, clear motion, whirlwind self-cast
         -- (triggered), then walk to the head (MoveTo bridges MovePoint,
         -- lua_creature_events.go:5424; arrival via ev28 below).
         creature:RemoveAura(SPELL_BODY_REGEN_CONFUSE)
@@ -496,7 +536,7 @@ local function onDoAction(_, creature, action)
             creature:MoveTo(POINT_HEAD, head:GetX(), head:GetY(), head:GetZ())
         end
     elseif action == ACTION_HEAD_RETURN_TO_BODY then
-        -- :458-464: remove confuse/immune/transform, Talk(SAY_REJOINED),
+        -- :427-432: remove confuse/immune/transform, Talk(SAY_REJOINED),
         -- re-engage delayed 3s.
         creature:RemoveAura(SPELL_BODY_REGEN_CONFUSE)
         creature:RemoveAura(SPELL_BODY_REGEN_IMMUNE)
@@ -507,22 +547,39 @@ local function onDoAction(_, creature, action)
             startNextPhaseDelayed(creature, guid)
         end)
     elseif action == ACTION_HEAD_IS_DEAD then
-        -- :465-469: remove immune, self-cast body-death (triggered).
+        -- :434-437: remove immune, self-cast body-death (triggered).
         creature:RemoveAura(SPELL_BODY_REGEN_IMMUNE)
         creature:CastSpell(creature, SPELL_BODY_DEATH, true)
     end
 end
 
 -- C++ boss_headless_horseman::MovementInform (boss_headless_horseman.
--- cpp:515-534) on ev28: POINT_HEAD arrival -> walk off, whirlwind
--- removal, confuse self-cast (triggered). The intro finish-path leg
--- stays out (MoveSmoothPath). MoveTo is the only motion the boss uses
--- in this file, so the pointId gate alone is exact.
+-- cpp:514-534) on ev28: POINT_HEAD arrival -> walk off, whirlwind
+-- removal, confuse self-cast (triggered); POINT_HORSEMAN_FINISH_PATH
+-- arrival -> intro-done + unimmune + gravity/hover off + home reset +
+-- stage-1 self-cast (NOT triggered) + aggressive + zone combat. The
+-- type gate (:515-518) admits POINT (8) and EFFECT (16) only; the
+-- finish path arrives as EFFECT (MoveSmoothPath is a GenericMovement-
+-- Generator), the head walk as POINT.
 local function onMovementInform(_, creature, moveType, pointId)
+    if moveType ~= 8 and moveType ~= 16 then
+        return
+    end
     if pointId == POINT_HEAD then
         creature:SetWalk(false)
         creature:RemoveAura(SPELL_HORSEMANS_WHIRLWIND)
         creature:CastSpell(creature, SPELL_BODY_REGEN_CONFUSE, true)
+    elseif pointId == POINT_HORSEMAN_FINISH_PATH then
+        -- :521-531 arm order.
+        horsemanIntroDone[creature:GetGUIDLow()] = true
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        creature:SetDisableGravity(false)
+        creature:SetHover(false)
+        creature:SetHomePosition(creature:GetX(), creature:GetY(),
+            creature:GetZ(), creature:GetO())
+        creature:CastSpell(creature, SPELL_BODY_STAGE_1)
+        creature:SetReactState(2)
+        creature:DoZoneInCombat()
     end
 end
 
@@ -536,12 +593,18 @@ end
 local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() then
-        -- C++ Reset (boss_headless_horseman.cpp:378-388): phase 1 +
-        -- _summons.DespawnAll + SetWalk(false). Ev2/ev23 both route
+        -- C++ Reset (boss_headless_horseman.cpp:362-371): phase 1 +
+        -- _summons.DespawnAll + SetWalk(false) + the _introDone-gated
+        -- SetImmuneToPC(false) clear (:367-369). Ev2/ev23 both route
         -- through Reset on evade; the death path returns early
         -- (moroes precedent), so a dead boss keeps its summons.
+        -- _introDone is never cleared in Reset, so horsemanIntroDone
+        -- stays set here too.
         horsemanPhase[creature:GetGUIDLow()] = PHASE_1
         drainHorsemanSummons()
+        if horsemanIntroDone[creature:GetGUIDLow()] then
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        end
         creature:SetWalk(false)
     end
 end
