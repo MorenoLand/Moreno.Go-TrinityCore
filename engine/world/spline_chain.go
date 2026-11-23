@@ -82,6 +82,15 @@ type splineChainRun struct {
 	// expired), so without the arm the mid-flight advance would
 	// re-send the in-flight link every tick and it could never land.
 	WaitArmed bool
+	// WaitFixed says the armed wait is a resumed run's captured
+	// remainder (SplineChainResumeInfo TimeToNext, counted down from
+	// the resume — SplineChainMovementGenerator::Initialize keeps the
+	// info's TimeToNext on the partial-spline arm), not the
+	// launch-derived wait: sendSplineChainLink and landSplineChainLink
+	// must not overwrite it when the resumed link's last point ships
+	// or lands. advanceSplineChain clears it when the wait fires, so
+	// the next link arms its own wait normally.
+	WaitFixed bool
 }
 
 // loadSplineChains is the SystemMgr::LoadScriptSplineChains twin
@@ -187,6 +196,188 @@ func (s *Server) moveAlongSplineChain(ctx context.Context, motion *creatureMotio
 	return s.sendSplineChainLink(ctx, motion, time.Now())
 }
 
+// splineChainResumeInfo is SplineChainResumeInfo (SplineChain.h): the
+// capture of a running spline chain that ResumeSplineChain later
+// reinstalls. Chain is nil when empty (the C++ Chain == nullptr arm);
+// SplineIndex is the link being walked, PointIndex the last point the
+// creature reached within it (MoveSpline::_currentSplineIdx, the
+// segment start — the next point is PointIndex+1), TimeToNext the
+// remaining ms until the next link may be sent.
+type splineChainResumeInfo struct {
+	PointID     uint32
+	Chain       []splineChainLink
+	IsWalkMode  bool
+	SplineIndex uint8
+	PointIndex  uint8
+	TimeToNext  uint32
+}
+
+func (info splineChainResumeInfo) empty() bool { return info.Chain == nil }
+
+// splineChainResumeRemainingMs rebuilds the _msToNext a capture would
+// carry for a run whose link is in flight: the armed deadline when the
+// wait is set, else the link's scaled msUntilNext counted down from
+// its launch (LinkActualMs is partial until the last point ships, so
+// it reads low mid-link and clamps to 1ms — the Initialize arm maps a
+// 0 remainder to 1 the same way). The final link carries no wait.
+func splineChainResumeRemainingMs(links []splineChainLink, linkIndex int, waitArmed bool, waitUntil time.Time, linkLaunchedAt time.Time, linkActualMs uint32, now time.Time) uint32 {
+	if linkIndex >= len(links)-1 {
+		return 0
+	}
+	if waitArmed {
+		rem := waitUntil.Sub(now).Milliseconds()
+		if rem < 0 {
+			rem = 0
+		}
+		return uint32(rem)
+	}
+	waitTotal := splineChainWaitMs(links[linkIndex], linkActualMs)
+	if linkActualMs == 0 {
+		waitTotal = links[linkIndex].MsUntilNext
+		if waitTotal < 1 {
+			waitTotal = 1
+		}
+	}
+	rem := linkLaunchedAt.Add(time.Duration(waitTotal) * time.Millisecond).Sub(now).Milliseconds()
+	if rem < 1 {
+		rem = 1
+	}
+	return uint32(rem)
+}
+
+// splineChainResumeInfoFor is the SplineChainMovementGenerator::GetResumeInfo
+// twin (member, SplineChainMovementGenerator.cpp:208-222, plus the static
+// arm :224-238): the capture of the motion's active spline-chain run as
+// a resume record, or an empty record when no chain is active (the
+// static arm clears), when the run is a circle path (MoveCirclePath is
+// a GenericMovementGenerator, not a chain), or when the optional id
+// does not match the run's point id. The three member arms, mapped
+// onto Go's per-point walk (LinkIndex is the link in flight, PointIndex
+// the leg being approached — C++ _nextIndex runs one ahead, incremented
+// at send, while Go increments LinkIndex at landing):
+//   - nothing sent yet (_nextIndex == 0): (id, chain, walk, 0, 0, 0);
+//   - spline finalized between links: (id, chain, walk, LinkIndex, 0, 1),
+//     empty once the last link landed;
+//   - mid-spline: (id, chain, walk, LinkIndex, PointIndex-1, remaining
+//     wait) — _currentSplineIdx is the last point reached, so the
+//     resume re-walks it first (Launch overwrites the partial spline's
+//     first vertex with the creature's current position,
+//     MoveSplineInit.cpp:60-68); an in-flight first point records 0 and
+//     re-sends the link whole, the _nextFirstWP == 0 arm.
+func (s *Server) splineChainResumeInfoFor(motion *creatureMotion, id *uint32, now time.Time) splineChainResumeInfo {
+	if s == nil || motion == nil {
+		return splineChainResumeInfo{}
+	}
+	s.motionMu.Lock()
+	run := motion.SplineChain
+	if run == nil || run.Cyclic {
+		s.motionMu.Unlock()
+		return splineChainResumeInfo{}
+	}
+	if id != nil && run.PointID != *id {
+		s.motionMu.Unlock()
+		return splineChainResumeInfo{}
+	}
+	links := run.Links
+	linkIndex := run.LinkIndex
+	pointIndex := run.PointIndex
+	pointID := run.PointID
+	walk := run.Walk
+	inFlight := motion.ScriptMoveType == movementGeneratorSplineChain
+	waitArmed := run.WaitArmed
+	waitUntil := run.WaitUntil
+	linkLaunchedAt := run.LinkLaunchedAt
+	linkActualMs := run.LinkActualMs
+	s.motionMu.Unlock()
+	if linkIndex < 0 || linkIndex > 255 || pointIndex < 0 || pointIndex > 255 {
+		return splineChainResumeInfo{}
+	}
+	if !inFlight && linkIndex == 0 && pointIndex == 0 {
+		return splineChainResumeInfo{PointID: pointID, Chain: links, IsWalkMode: walk, SplineIndex: 0, PointIndex: 0, TimeToNext: 0}
+	}
+	if !inFlight {
+		if linkIndex < len(links) {
+			return splineChainResumeInfo{PointID: pointID, Chain: links, IsWalkMode: walk, SplineIndex: uint8(linkIndex), PointIndex: 0, TimeToNext: 1}
+		}
+		return splineChainResumeInfo{}
+	}
+	if linkIndex >= len(links) {
+		return splineChainResumeInfo{}
+	}
+	pointIdx := 0
+	if pointIndex > 0 {
+		pointIdx = pointIndex - 1
+	}
+	return splineChainResumeInfo{
+		PointID:     pointID,
+		Chain:       links,
+		IsWalkMode:  walk,
+		SplineIndex: uint8(linkIndex),
+		PointIndex:  uint8(pointIdx),
+		TimeToNext:  splineChainResumeRemainingMs(links, linkIndex, waitArmed, waitUntil, linkLaunchedAt, linkActualMs, now),
+	}
+}
+
+// resumeSplineChain is MotionMaster::ResumeSplineChain
+// (MotionMaster.cpp:909-917): reinstall the motion's stored resume
+// record as a live chain run and send its first leg, clearing the
+// record (the C++ scripts Clear() after resuming). An empty record
+// logs nothing and returns false, the C++ error-and-return. The resume
+// ctor twin: SplineIndex past the chain finalizes at once with no send
+// and no inform (Initialize warns and returns, Update finalizes
+// un-informed), so the install is refused; a PointIndex past the
+// link's end clamps to its last point (Initialize :128-132). A zero
+// PointIndex restarts the link whole (the non-resume Initialize arm);
+// a nonzero one resumes mid-link, its remaining wait counted down
+// from the resume (WaitFixed) instead of from the link's launch.
+func (s *Server) resumeSplineChain(ctx context.Context, motion *creatureMotion, now time.Time) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	info := motion.SplineChainResume
+	if info == nil || info.empty() {
+		s.motionMu.Unlock()
+		return false
+	}
+	motion.SplineChainResume = nil
+	if int(info.SplineIndex) >= len(info.Chain) {
+		s.motionMu.Unlock()
+		return false
+	}
+	link := info.Chain[info.SplineIndex]
+	if len(link.Points) == 0 {
+		s.motionMu.Unlock()
+		return false
+	}
+	pointIndex := int(info.PointIndex)
+	if pointIndex >= len(link.Points) {
+		pointIndex = len(link.Points) - 1
+	}
+	run := &splineChainRun{
+		Links:          info.Chain,
+		LinkIndex:      int(info.SplineIndex),
+		PointIndex:     pointIndex,
+		PointID:        info.PointID,
+		Walk:           info.IsWalkMode,
+		AnimTier:       animTierNone,
+		LinkLaunchedAt: now,
+	}
+	if pointIndex > 0 && int(info.SplineIndex) < len(info.Chain)-1 {
+		waitMs := info.TimeToNext
+		if waitMs < 1 {
+			waitMs = 1
+		}
+		run.WaitUntil = now.Add(time.Duration(waitMs) * time.Millisecond)
+		run.WaitArmed = true
+		run.WaitFixed = true
+		motion.WaitUntil = run.WaitUntil
+	}
+	motion.SplineChain = run
+	s.motionMu.Unlock()
+	return s.sendSplineChainLink(ctx, motion, now)
+}
+
 // splineChainWaitMs scales a link's msUntilNext by the ratio of the
 // actually-launched duration to the DB expected duration (the C++
 // actual-duration comparison in the census note): the wait runs from
@@ -263,11 +454,15 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	// once the link's last point is sent and its actual duration
 	// is known; until then advanceSplineChain must not re-send
 	// the in-flight link. The arm is re-asserted at landing with
-	// the identical value (LinkActualMs is final by then).
-	run.WaitArmed = false
-	if run.PointIndex == len(link.Points)-1 && run.LinkIndex < len(run.Links)-1 {
-		run.WaitUntil = run.LinkLaunchedAt.Add(time.Duration(splineChainWaitMs(link, run.LinkActualMs)) * time.Millisecond)
-		run.WaitArmed = true
+	// the identical value (LinkActualMs is final by then). A resumed
+	// run's WaitFixed wait counts down from the resume instead, so
+	// the launch-derived arming must not overwrite it.
+	if !run.WaitFixed {
+		run.WaitArmed = false
+		if run.PointIndex == len(link.Points)-1 && run.LinkIndex < len(run.Links)-1 {
+			run.WaitUntil = run.LinkLaunchedAt.Add(time.Duration(splineChainWaitMs(link, run.LinkActualMs)) * time.Millisecond)
+			run.WaitArmed = true
+		}
 	}
 	pointID, walk := run.PointID, run.Walk
 	flying, animTier := run.Flying, run.AnimTier
@@ -482,8 +677,15 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorSplineChain), pointID)
 		return
 	}
-	run.WaitUntil = run.LinkLaunchedAt.Add(time.Duration(splineChainWaitMs(link, run.LinkActualMs)) * time.Millisecond)
-	run.WaitArmed = true
+	// A resumed run's WaitFixed wait counts down from the resume,
+	// so the link-end re-arm must not overwrite it with the
+	// launch-derived value; the deadline survives the landing and
+	// advanceSplineChain fires on it (even mid-spline, the Update
+	// arm). motion.WaitUntil mirrors whichever deadline stands.
+	if !run.WaitFixed {
+		run.WaitUntil = run.LinkLaunchedAt.Add(time.Duration(splineChainWaitMs(link, run.LinkActualMs)) * time.Millisecond)
+		run.WaitArmed = true
+	}
 	run.LinkIndex++
 	run.PointIndex = 0
 	motion.ScriptMoveType = 0
@@ -513,6 +715,10 @@ func (s *Server) advanceSplineChain(ctx context.Context, motion *creatureMotion,
 		s.motionMu.Unlock()
 		return
 	}
+	// A resumed run's wait counts down from the resume; once it fires
+	// the next link is a fresh launch, so clear WaitFixed here and let
+	// the new link arm its own wait normally.
+	run.WaitFixed = false
 	s.motionMu.Unlock()
 	s.sendSplineChainLink(ctx, motion, now)
 }

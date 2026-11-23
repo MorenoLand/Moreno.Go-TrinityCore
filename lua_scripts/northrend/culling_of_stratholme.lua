@@ -493,11 +493,11 @@ RegisterCreatureGossipEvent(ENTRY_CHROMIE_MIDDLE, 2, chromieMiddleGossipSelect)
 -- 4.764749) and schedule the next idle {9,15}s. DoAction(0) — the
 -- 12s motion interrupt Jena calls at MARTHA1/LEAVE — is delivered
 -- directly as marthaInterrupt (same direct-call pattern as the relay):
--- the running chain is superseded in place (MoveTo to the current
--- position — Go's MoveClear does NOT cancel a chain run) and the
--- pending idle timer frozen; after 12s the chain re-launches from its
--- first link (C++ resumes mid-link via SplineChainResumeInfo; Go has
--- no resume primitive) and the idle timer re-rolls {9,15}s (C++
+-- the running chain is captured (GetSplineChainResumeInfo) then
+-- superseded in place (MoveTo to the current position — Go's MoveClear
+-- does NOT cancel a chain run) and the pending idle timer frozen; after
+-- 12s the chain resumes mid-link from the captured record
+-- (ResumeSplineChain) and the idle timer re-rolls {9,15}s (C++
 -- preserves its remaining time). Jena: InitializeAI walks
 -- CHAIN_JENA_INITIAL (isMoving guard); arrivals drive the fluff
 -- chain (IDLE1: Started -> JENA_START {1,3}s else IDLE2 {200,700}ms;
@@ -828,17 +828,17 @@ local function marthaResume(creature, guid)
     if saved == nil then
         return
     end
-    -- C++ resumes the chain MID-link (SplineChainResumeInfo link/point
-    -- + remaining wait); Go has no resume primitive, so the interrupted
-    -- chain restarts from its first link with the same point id — the
-    -- arrival re-schedules the next idle event exactly as C++.
+    -- C++ resumes the chain MID-link from the captured record
+    -- (SplineChainResumeInfo link/point + remaining wait); the resume
+    -- re-walks the last point reached and keeps the captured wait, so
+    -- the arrival re-schedules the next idle event exactly as C++. A
+    -- second interrupt cleared the record (capture with no active
+    -- chain), so ResumeSplineChain is a no-op then — the C++ outcome;
+    -- the flag only re-arms when a run actually resumed.
     if saved.chain ~= nil then
-        marthaChain[guid] = saved.chain
-        local chainID = CHAIN_MARTHA_IDLE1
-        if saved.chain == MOVEID_EVENT2 then
-            chainID = CHAIN_MARTHA_IDLE2
+        if creature:ResumeSplineChain() then
+            marthaChain[guid] = saved.chain
         end
-        creature:MoveAlongSplineChain(saved.chain, chainID, true)
     end
     -- C++ freezes the EventMap for the 12s, preserving the idle
     -- timer's remaining time; Lua re-rolls the full {9,15}s range —
@@ -854,13 +854,19 @@ end
 -- (and freezes the EventMap meanwhile). Delivered directly by Jena's
 -- MARTHA1/LEAVE legs (same direct-call pattern as the crate_helper
 -- relay). A second interrupt during the first only re-arms the 12s
--- timer: C++ re-saves ResumeInfo, but with no active generator the
--- saved info is unchanged, so the first interrupt's chain/idle are
--- kept here too.
+-- timer — and re-captures: with no active generator the static
+-- GetResumeInfo CLEARS the record, so the first interrupt's chain is
+-- lost exactly like C++ (the resume below then no-ops and the next
+-- idle event restarts the loop). The save gate below keeps the first
+-- interrupt's idleKey on a second interrupt — C++ DoAction never
+-- touches the EventMap, so the frozen idle event survives too. The
+-- capture runs BEFORE the supersede below, while the chain is still
+-- active — C++ captures before Clear() too.
 local function marthaInterrupt(creature)
     local guid = creature:GetGUIDLow()
     local chain = marthaChain[guid]
     local idleKey = marthaIdleKey[guid]
+    creature:GetSplineChainResumeInfo()
     if chain ~= nil then
         -- MotionMaster::Clear() twin: a fresh non-chain Move* launch
         -- supersedes the running chain (launchCreatureScriptSplineSpeed

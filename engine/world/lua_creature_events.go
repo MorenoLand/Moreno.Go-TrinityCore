@@ -6433,6 +6433,43 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{s.moveAlongSplineChain(ctx, motion, pointID, uint16(chainID), walk, entryOverride)}, nil
 	}
+	// GetSplineChainResumeInfo is SplineChainMovementGenerator::GetResumeInfo
+	// (static, SplineChainMovementGenerator.cpp:224-238): capture the
+	// creature's active spline-chain run as the AI-side resume record
+	// (npc_arthas.cpp:1540, culling_of_stratholme.cpp:618) and store it
+	// on the motion. Returns true when a record was captured; false (and
+	// the stored record cleared) when no chain is active, the run is a
+	// circle path, or the optional id does not match — the C++ Clear()
+	// arm. The record is AI-side state, so a later Clear or fresh launch
+	// never wipes it; only a re-capture or a resume does.
+	methods["GetSplineChainResumeInfo"] = func(_ context.Context, args []any) ([]any, error) {
+		var id *uint32
+		if len(args) >= 1 {
+			v, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			id = &v
+		}
+		info := s.splineChainResumeInfoFor(motion, id, time.Now())
+		s.motionMu.Lock()
+		if info.empty() {
+			motion.SplineChainResume = nil
+		} else {
+			motion.SplineChainResume = &info
+		}
+		s.motionMu.Unlock()
+		return []any{!info.empty()}, nil
+	}
+	// ResumeSplineChain is MotionMaster::ResumeSplineChain
+	// (MotionMaster.cpp:909-917): reinstall the stored resume record as
+	// a live chain run starting mid-link (npc_arthas.cpp:1565,
+	// culling_of_stratholme.cpp:658) and clear it, the C++ scripts'
+	// ResumeInfo.Clear(). Returns false when nothing is stored (the
+	// empty-info error-and-return) or the record finalizes at once.
+	methods["ResumeSplineChain"] = func(ctx context.Context, _ []any) ([]any, error) {
+		return []any{s.resumeSplineChain(ctx, motion, time.Now())}, nil
+	}
 	// MoveRandom is UnitMethods::MoveRandom (UnitMethods.h:2178-2198) =
 	// MotionMaster::MoveRandom(radius): a RandomMovementGenerator whose
 	// reference is the creature's current position

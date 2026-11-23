@@ -1135,7 +1135,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 		return
 	}
 
-	// PetAI::UpdateAI tail (PetAI.cpp:199-201) refreshes RUN/WALK/FLIGHT
+	// PetAI::UpdateAI tail (PetAI.cpp:226-228) refreshes RUN/WALK/FLIGHT
 	// every tick ("to prevent dropping too far behind and despawning").
 	// WALK is a no-op in C++ (Unit::UpdateSpeed returns early, Unit.cpp:
 	// 8679) and FLIGHT is read live in Go (creatureFlightSpeedRate), so

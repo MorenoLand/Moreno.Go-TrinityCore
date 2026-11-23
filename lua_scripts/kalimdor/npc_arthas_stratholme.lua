@@ -20,8 +20,10 @@
 --   all point-id cases), the 122 RPEvents-enum handlers (C++-exact timers,
 --   Talk lines, facings incl. the @todo literals, emotes, casts, summons),
 --   EngageInfinites, MoveInfiniteOnSpawn (entryOverride 27742),
---   JustEngagedWith (_progressRP=false + SetHomePosition),
---   JustReachedHome (devotion aura + _progressRP=true + _afterCombat flush),
+--   JustEngagedWith (_progressRP=false + SetHomePosition +
+--   GetSplineChainResumeInfo capture),
+--   JustReachedHome (devotion aura + _progressRP=true + ResumeSplineChain +
+--   _afterCombat flush),
 --   JustAppeared (devotion aura + AdvanceToState), gossip hello/select
 --   (AdvanceDungeon flags, progress-gated exactly like C++).
 -- - rp_dummy forwarding: ev28 on Uther (26528) + Jaina (26497) only,
@@ -45,8 +47,7 @@
 -- 1s later (the Go despawn takes effect before the next OnUpdate tick;
 -- without the clear, setProgress would DoAction a despawned creature and
 -- never respawn him).
--- Stay-outs (documented, not ported): SplineChainResumeInfo resume-on-home
--- (no ResumeSplineChain bridge); CanAIAttack 30yd chase cap (no
+-- Stay-outs (documented, not ported): CanAIAttack 30yd chase cap (no
 -- chase-range bridge); spell_stratholme_crusader_strike SpellScript kill
 -- leg (standing SpellScript block — the Crusader Strike CASTS are ported:
 -- KILL1 triggered, KILL2/ARTHAS_KILL plain; KILL1's
@@ -1417,10 +1418,15 @@ local function startCombatPump(creature, guid)
 end
 
 -- C++ JustEngagedWith (npc_arthas.cpp:1537-1552): _progressRP = false +
--- SetHomePosition(current position); the SplineChainResumeInfo capture
--- stays out (no ResumeSplineChain bridge). Then the combat pump starts.
+-- SetHomePosition(current position) + SplineChainResumeInfo capture,
+-- all inside the _progressRP guard — a re-engage before reaching home
+-- must NOT re-capture (no active chain, so the capture would clear the
+-- first record). Then the combat pump starts.
 local function onEnterCombat(event, creature, target)
     local st = rpFor(creature)
+    if st.progressRP then
+        creature:GetSplineChainResumeInfo()
+    end
     st.progressRP = false
     st.inCombat = true
     creature:SetHomePosition(creature:GetX(), creature:GetY(),
@@ -1440,8 +1446,8 @@ local function onReset(event, creature)
 end
 
 -- C++ JustReachedHome (npc_arthas.cpp:1566-1584): devotion aura if
--- missing, _progressRP = true, resume spline chain (stay-out), then flush
--- _afterCombat via DoAction.
+-- missing, _progressRP = true, resume the captured spline chain (no-op
+-- when nothing was captured), then flush _afterCombat via DoAction.
 local function onReachHome(event, creature)
     local st = rpFor(creature)
     if not creature:HasAura(SPELL_DEVOTION_AURA) then
@@ -1449,6 +1455,7 @@ local function onReachHome(event, creature)
     end
     st.progressRP = true
     st.inCombat = false
+    creature:ResumeSplineChain()
     if st.afterCombat ~= ACTION_NONE then
         local action = st.afterCombat
         st.afterCombat = ACTION_NONE

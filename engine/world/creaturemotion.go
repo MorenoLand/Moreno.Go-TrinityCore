@@ -361,6 +361,15 @@ type creatureMotion struct {
 	// when the MotionMaster takes a new one), so a superseded chain
 	// never informs; nil when no chain is running.
 	SplineChain *splineChainRun
+	// SplineChainResume is the stored SplineChainResumeInfo
+	// (spline_chain.go): the AI-side capture GetSplineChainResumeInfo
+	// writes (npc_arthas.cpp, culling_of_stratholme.cpp) and
+	// ResumeSplineChain consumes, cleared on resume. It is NOT
+	// motion-master state: MotionMaster::Clear() removes the
+	// generator but leaves the AI's info alone, so a fresh launch,
+	// evade, or death never wipes it — only a re-capture (which
+	// clears when no chain is active) or a resume does.
+	SplineChainResume *splineChainResumeInfo
 	// ScriptChaseTargetGUID/Dist/Angle are the MotionMaster::MoveChase
 	// (MotionMaster.cpp:594-602) ACTIVE-slot ChaseMovementGenerator:
 	// ChaseRange(dist) stop distance and ChaseAngle(angle, pi/4
