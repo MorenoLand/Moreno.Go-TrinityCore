@@ -3,16 +3,21 @@
 // DetourNavMeshQuery.cpp (with the types from Include/
 // DetourNavMeshQuery.h).
 //
-// Go API notes: C++ out-parameters become multiple return values. Sliced
-// pathfinding (initSlicedFindPath/updateSlicedFindPath/
-// finalizeSlicedFindPath) is not ported in this strip; everything else in
-// DetourNavMeshQuery.h is here.
+// Go API notes: C++ out-parameters become multiple return values.
+// Sliced pathfinding (initSlicedFindPath/updateSlicedFindPath/
+// finalizeSlicedFindPath/finalizeSlicedFindPathPartial) is ported at the
+// end of this file; everything in DetourNavMeshQuery.h is here.
 package detour
 
 import "math"
 
 // H_SCALE is the search heuristic scale (DetourNavMeshQuery.cpp).
 const hScale = 0.999
+
+// DT_RAY_CAST_LIMIT_PROPORTIONS is the any-angle raycast limit factor
+// (DetourNavMesh.h): the raycast distance limit is the agent radius
+// times this value, squared.
+const dtRayCastLimitProportions = 50.0
 
 // Raycast options (dtRaycastOptions, DetourNavMesh.h).
 const (
@@ -99,6 +104,20 @@ type NavMeshQuery struct {
 	tinyNodePool *NodePool
 	nodePool     *NodePool
 	openList     *NodeQueue
+	query        queryData
+}
+
+// queryData mirrors dtQueryData (DetourNavMeshQuery.h): the state of an
+// in-progress sliced path query.
+type queryData struct {
+	status           Status
+	lastBestNode     *Node
+	lastBestNodeCost float32
+	startRef, endRef PolyRef
+	startPos, endPos Vec3
+	filter           *QueryFilter
+	options          uint32
+	raycastLimitSqr  float32
 }
 
 // NewNavMeshQuery mirrors dtAllocNavMeshQuery.
@@ -2317,4 +2336,357 @@ func (q *NavMeshQuery) IsInClosedList(ref PolyRef) bool {
 		}
 	}
 	return false
+}
+
+// InitSlicedFindPath mirrors dtNavMeshQuery::initSlicedFindPath
+// (DetourNavMeshQuery.cpp): initializes a sliced path query. Call
+// UpdateSlicedFindPath until it stops returning DT_IN_PROGRESS, then
+// FinalizeSlicedFindPath (or FinalizeSlicedFindPathPartial) to get the
+// path. The filter pointer is stored and used for the duration of the
+// query, as in C++.
+//
+// Calling any non-slice method before finalizing may corrupt the query
+// state, as in C++.
+func (q *NavMeshQuery) InitSlicedFindPath(startRef, endRef PolyRef, startPos, endPos Vec3, filter *QueryFilter, options uint32) Status {
+	q.query = queryData{
+		status:          DT_FAILURE,
+		startRef:        startRef,
+		endRef:          endRef,
+		startPos:        startPos,
+		endPos:          endPos,
+		filter:          filter,
+		options:         options,
+		raycastLimitSqr: math.MaxFloat32,
+	}
+
+	if !q.nav.IsValidPolyRef(startRef) || !q.nav.IsValidPolyRef(endRef) ||
+		!vIsFinite(&startPos) || !vIsFinite(&endPos) || filter == nil {
+		return DT_FAILURE | DT_INVALID_PARAM
+	}
+
+	if options&DT_FINDPATH_ANY_ANGLE != 0 {
+		tile := q.nav.GetTileByRef(TileRef(startRef))
+		agentRadius := tile.Header.WalkableRadius
+		limit := agentRadius * dtRayCastLimitProportions
+		q.query.raycastLimitSqr = limit * limit
+	}
+
+	if startRef == endRef {
+		q.query.status = DT_SUCCESS
+		return DT_SUCCESS
+	}
+
+	q.nodePool.Clear()
+	q.openList.Clear()
+
+	startNode := q.nodePool.GetNode(startRef, 0)
+	startNode.Pos = startPos
+	startNode.Pidx = 0
+	startNode.Cost = 0
+	startNode.Total = vDist(&startPos, &endPos) * hScale
+	startNode.ID = startRef
+	startNode.Flags = DT_NODE_OPEN
+	q.openList.Push(startNode)
+
+	q.query.status = DT_IN_PROGRESS
+	q.query.lastBestNode = startNode
+	q.query.lastBestNodeCost = startNode.Total
+
+	return q.query.status
+}
+
+// UpdateSlicedFindPath mirrors dtNavMeshQuery::updateSlicedFindPath
+// (DetourNavMeshQuery.cpp): advances an in-progress sliced path query
+// by at most maxIter iterations. The second return value is doneIters,
+// the number of iterations actually performed. When the query is not in
+// progress the stored status is returned with 0 iterations, as in C++
+// (doneIters is left untouched there).
+func (q *NavMeshQuery) UpdateSlicedFindPath(maxIter int) (Status, int) {
+	if !StatusInProgress(q.query.status) {
+		return q.query.status, 0
+	}
+
+	if !q.nav.IsValidPolyRef(q.query.startRef) || !q.nav.IsValidPolyRef(q.query.endRef) {
+		q.query.status = DT_FAILURE
+		return DT_FAILURE, 0
+	}
+
+	rayHit := &RaycastHit{MaxPath: 0}
+
+	iter := 0
+	for iter < maxIter && !q.openList.Empty() {
+		iter++
+
+		bestNode := q.openList.Pop()
+		bestNode.Flags &^= DT_NODE_OPEN
+		bestNode.Flags |= DT_NODE_CLOSED
+
+		if bestNode.ID == q.query.endRef {
+			q.query.lastBestNode = bestNode
+			details := q.query.status & DT_STATUS_DETAIL_MASK
+			q.query.status = DT_SUCCESS | details
+			return q.query.status, iter
+		}
+
+		bestRef := bestNode.ID
+		bestTile, bestPoly, st := q.nav.GetTileAndPolyByRef(bestRef)
+		if StatusFailed(st) {
+			q.query.status = DT_FAILURE
+			return DT_FAILURE, iter
+		}
+
+		var parentRef, grandpaRef PolyRef
+		var parentTile *MeshTile
+		var parentPoly *Poly
+		var parentNode *Node
+		if bestNode.Pidx != 0 {
+			parentNode = q.nodePool.GetNodeAtIdx(bestNode.Pidx)
+			parentRef = parentNode.ID
+			if parentNode.Pidx != 0 {
+				grandpaRef = q.nodePool.GetNodeAtIdx(parentNode.Pidx).ID
+			}
+		}
+		if parentRef != 0 {
+			var pst Status
+			parentTile, parentPoly, pst = q.nav.GetTileAndPolyByRef(parentRef)
+			if StatusFailed(pst) || (grandpaRef != 0 && !q.nav.IsValidPolyRef(grandpaRef)) {
+				q.query.status = DT_FAILURE
+				return DT_FAILURE, iter
+			}
+		}
+
+		tryLOS := false
+		if q.query.options&DT_FINDPATH_ANY_ANGLE != 0 {
+			if parentRef != 0 && vDistSqr(&parentNode.Pos, &bestNode.Pos) < q.query.raycastLimitSqr {
+				tryLOS = true
+			}
+		}
+
+		for i := bestPoly.FirstLink; i != DT_NULL_LINK; i = bestTile.Links[i].Next {
+			neighbourRef := bestTile.Links[i].Ref
+
+			if neighbourRef == 0 || neighbourRef == parentRef {
+				continue
+			}
+
+			neighbourTile, neighbourPoly := q.nav.GetTileAndPolyByRefUnsafe(neighbourRef)
+
+			if !q.query.filter.PassFilter(neighbourRef, neighbourTile, neighbourPoly) {
+				continue
+			}
+
+			neighbourNode := q.nodePool.GetNode(neighbourRef, 0)
+			if neighbourNode == nil {
+				q.query.status |= DT_OUT_OF_NODES
+				continue
+			}
+
+			if neighbourNode.Pidx != 0 && neighbourNode.Pidx == bestNode.Pidx {
+				continue
+			}
+
+			if neighbourNode.Flags == 0 {
+				if mid, mst := q.getEdgeMidPoint(bestRef, bestPoly, bestTile, neighbourRef, neighbourPoly, neighbourTile); !StatusFailed(mst) {
+					neighbourNode.Pos = mid
+				}
+			}
+
+			var cost, heuristic float32
+
+			foundShortCut := false
+			rayHit.PathCost = 0
+			rayHit.T = 0
+			if tryLOS {
+				q.Raycast(parentRef, parentNode.Pos, neighbourNode.Pos, q.query.filter, DT_RAYCAST_USE_COSTS, rayHit, grandpaRef)
+				foundShortCut = rayHit.T >= 1.0
+			}
+
+			if foundShortCut {
+				cost = parentNode.Cost + rayHit.PathCost
+			} else {
+				curCost := q.query.filter.GetCost(bestNode.Pos, neighbourNode.Pos,
+					parentRef, parentTile, parentPoly,
+					bestRef, bestTile, bestPoly,
+					neighbourRef, neighbourTile, neighbourPoly)
+				cost = bestNode.Cost + curCost
+			}
+
+			if neighbourRef == q.query.endRef {
+				endCost := q.query.filter.GetCost(neighbourNode.Pos, q.query.endPos,
+					bestRef, bestTile, bestPoly,
+					neighbourRef, neighbourTile, neighbourPoly,
+					0, nil, nil)
+				cost = cost + endCost
+				heuristic = 0
+			} else {
+				heuristic = vDist(&neighbourNode.Pos, &q.query.endPos) * hScale
+			}
+
+			total := cost + heuristic
+
+			if (neighbourNode.Flags&DT_NODE_OPEN) != 0 && total >= neighbourNode.Total {
+				continue
+			}
+			if (neighbourNode.Flags&DT_NODE_CLOSED) != 0 && total >= neighbourNode.Total {
+				continue
+			}
+
+			if foundShortCut {
+				neighbourNode.Pidx = bestNode.Pidx
+			} else {
+				neighbourNode.Pidx = q.nodePool.GetNodeIdx(bestNode)
+			}
+			neighbourNode.ID = neighbourRef
+			neighbourNode.Flags &^= DT_NODE_CLOSED | DT_NODE_PARENT_DETACHED
+			neighbourNode.Cost = cost
+			neighbourNode.Total = total
+			if foundShortCut {
+				neighbourNode.Flags |= DT_NODE_PARENT_DETACHED
+			}
+
+			if (neighbourNode.Flags & DT_NODE_OPEN) != 0 {
+				q.openList.Modify(neighbourNode)
+			} else {
+				neighbourNode.Flags |= DT_NODE_OPEN
+				q.openList.Push(neighbourNode)
+			}
+
+			if heuristic < q.query.lastBestNodeCost {
+				q.query.lastBestNodeCost = heuristic
+				q.query.lastBestNode = neighbourNode
+			}
+		}
+	}
+
+	if q.openList.Empty() {
+		details := q.query.status & DT_STATUS_DETAIL_MASK
+		q.query.status = DT_SUCCESS | details
+	}
+
+	return q.query.status, iter
+}
+
+// storeReversedSlicedPath reverses the node chain starting at startNode
+// (mutating pidx/flags exactly as the C++ finalize functions do) and
+// stores the resulting polygon path, expanding raycast shortcuts for
+// detached parents. It mirrors the shared tail of
+// dtNavMeshQuery::finalizeSlicedFindPath and
+// dtNavMeshQuery::finalizeSlicedFindPathPartial (DetourNavMeshQuery.cpp).
+// Raycast detail status is folded into the query status; the path is
+// capped at maxPath entries.
+func (q *NavMeshQuery) storeReversedSlicedPath(startNode *Node, maxPath int) []PolyRef {
+	var prev *Node
+	node := startNode
+	var prevRay uint8
+	for node != nil {
+		next := q.nodePool.GetNodeAtIdx(node.Pidx)
+		node.Pidx = q.nodePool.GetNodeIdx(prev)
+		prev = node
+		nextRay := node.Flags & DT_NODE_PARENT_DETACHED
+		node.Flags = (node.Flags &^ DT_NODE_PARENT_DETACHED) | prevRay
+		prevRay = nextRay
+		node = next
+	}
+
+	path := make([]PolyRef, 0, maxPath)
+	node = prev
+	for node != nil {
+		next := q.nodePool.GetNodeAtIdx(node.Pidx)
+		var st Status
+		if (node.Flags&DT_NODE_PARENT_DETACHED) != 0 && next != nil {
+			hit := &RaycastHit{MaxPath: maxPath - len(path)}
+			st = q.Raycast(node.ID, node.Pos, next.Pos, q.query.filter, 0, hit, 0)
+			path = append(path, hit.Path...)
+			if len(path) > 0 && path[len(path)-1] == next.ID {
+				path = path[:len(path)-1]
+			}
+		} else {
+			path = append(path, node.ID)
+			if len(path) >= maxPath {
+				st = DT_BUFFER_TOO_SMALL
+			}
+		}
+
+		if st&DT_STATUS_DETAIL_MASK != 0 {
+			q.query.status |= st & DT_STATUS_DETAIL_MASK
+			break
+		}
+		node = next
+	}
+	return path
+}
+
+// FinalizeSlicedFindPath mirrors dtNavMeshQuery::finalizeSlicedFindPath
+// (DetourNavMeshQuery.cpp): returns the results of a sliced path query.
+// The query state is reset, as in C++.
+func (q *NavMeshQuery) FinalizeSlicedFindPath(maxPath int) ([]PolyRef, Status) {
+	if maxPath <= 0 {
+		return nil, DT_FAILURE | DT_INVALID_PARAM
+	}
+
+	if StatusFailed(q.query.status) {
+		q.query = queryData{}
+		return nil, DT_FAILURE
+	}
+
+	var path []PolyRef
+
+	if q.query.startRef == q.query.endRef {
+		path = []PolyRef{q.query.startRef}
+	} else {
+		if q.query.lastBestNode.ID != q.query.endRef {
+			q.query.status |= DT_PARTIAL_RESULT
+		}
+		path = q.storeReversedSlicedPath(q.query.lastBestNode, maxPath)
+	}
+
+	details := q.query.status & DT_STATUS_DETAIL_MASK
+
+	q.query = queryData{}
+
+	return path, DT_SUCCESS | details
+}
+
+// FinalizeSlicedFindPathPartial mirrors
+// dtNavMeshQuery::finalizeSlicedFindPathPartial (DetourNavMeshQuery.cpp):
+// finalizes an incomplete sliced path query, returning the path to the
+// furthest polygon on the existing path that was visited during the
+// search. The query state is reset, as in C++.
+func (q *NavMeshQuery) FinalizeSlicedFindPathPartial(existing []PolyRef, maxPath int) ([]PolyRef, Status) {
+	if len(existing) <= 0 || maxPath <= 0 {
+		return nil, DT_FAILURE | DT_INVALID_PARAM
+	}
+
+	if StatusFailed(q.query.status) {
+		q.query = queryData{}
+		return nil, DT_FAILURE
+	}
+
+	var path []PolyRef
+
+	if q.query.startRef == q.query.endRef {
+		path = []PolyRef{q.query.startRef}
+	} else {
+		var node *Node
+		for i := len(existing) - 1; i >= 0; i-- {
+			nodes := q.nodePool.FindNodes(existing[i], 1)
+			if len(nodes) > 0 {
+				node = nodes[0]
+				break
+			}
+		}
+
+		if node == nil {
+			q.query.status |= DT_PARTIAL_RESULT
+			node = q.query.lastBestNode
+		}
+
+		path = q.storeReversedSlicedPath(node, maxPath)
+	}
+
+	details := q.query.status & DT_STATUS_DETAIL_MASK
+
+	q.query = queryData{}
+
+	return path, DT_SUCCESS | details
 }
