@@ -8593,6 +8593,7 @@ func (s *Server) creatureEffectDistract(ctx context.Context, m *creatureMotion, 
 		}
 		motion.Orientation = angle
 		motion.DistractedUntil = time.Now().Add(time.Duration(duration) * time.Millisecond)
+		motion.DistractedFromAssist = false
 		motion.Moving = false
 		mapID, instanceID, mguid, mx, my, mz := motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z
 		phase := motion.PhaseMask

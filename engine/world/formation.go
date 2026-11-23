@@ -5,6 +5,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -307,7 +308,7 @@ func (s *Server) formationLeaderStartedMoving(ctx context.Context, motion *creat
 // member never runs its own legs; combat still takes precedence (the C++
 // chase generator is pushed over the formation generator, and
 // LeaderStartedMoving skips engaged members).
-func (s *Server) stepFormationMember(motion *creatureMotion, now time.Time) bool {
+func (s *Server) stepFormationMember(ctx context.Context, motion *creatureMotion, now time.Time) bool {
 	leader := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.FormationLeadGUID)
 	if leader == nil || leader.Health == 0 {
 		// C++ finalizes the generator when the leader is gone; Go falls back
@@ -317,12 +318,19 @@ func (s *Server) stepFormationMember(motion *creatureMotion, now time.Time) bool
 	}
 	leaderMoving := leader.Moving && now.Before(leader.MoveEnds)
 	// DoUpdate: the leader's spline finalized on the predicted spline — stop
-	// the member and align facing with the leader (MovementInform has no Go
-	// consumer; the Lua OnReachWP event is waypoint-generator specific).
+	// the member and align facing with the leader (FormationMovementGenerator
+	// .cpp:134: MovementInform(owner) on the member-spline-finalized arm —
+	// AI()->MovementInform(FORMATION_MOTION_TYPE, 0), Eluna
+	// CREATURE_EVENT_ON_MOVEMENT_INFORM (28)). The DoFinalize arm (:215)
+	// is dead code in C++ too (DoInitialize never sets INFORM_ENABLED),
+	// so only this Update arm informs. FormationPredicted clears here,
+	// so the inform fires once per predicted move.
 	if !leaderMoving && motion.FormationPredicted && !motion.FormationLeaderMoveEnds.IsZero() && leader.MoveEnds == motion.FormationLeaderMoveEnds {
 		motion.Moving = false
 		motion.Orientation = leader.Orientation
 		motion.FormationPredicted = false
+		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorFormation), 0)
+		s.smartMovementInform(ctx, motion, movementGeneratorFormation, 0)
 		return true
 	}
 	// DoUpdate: the leader launched a new spline — relaunch the member. The

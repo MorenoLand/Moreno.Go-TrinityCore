@@ -863,13 +863,35 @@ type creatureMotion struct {
 	// Unit::SetInFront's CANNOT_TURN gate (Unit.cpp:13663-13667) has
 	// no Go model in chase.
 	ChaseArrived bool
-	WaitUntil    time.Time
-	Refreshed    time.Time
+	// ChaseInformed latches the once-per-spline chase MovementInform
+	// (ChaseMovementGenerator.cpp:128-151): the range-check arm fires
+	// once (INFORM_ENABLED clears) and the spline-finalize arm fires
+	// on every chase-spline finalize, but the finalize arm itself
+	// clears INFORM_ENABLED, so a finalize inform suppresses the
+	// range-check inform for the same spline. The latch resets on
+	// every chase re-path launch, alongside ChaseArrived, so a fresh
+	// pursuit informs on its next arrival; a standing in-range
+	// engage informs on the first swing-gate tick instead.
+	ChaseInformed bool
+	// ChaseMutual records the mutual-chase state of the last chase
+	// re-path evaluation (ChaseMovementGenerator.cpp:153-156,
+	// _mutualChase): a flip forces a re-path evaluation even when
+	// the victim has not moved.
+	ChaseMutual bool
+	WaitUntil   time.Time
+	Refreshed   time.Time
 	// DistractedUntil is the DistractMovementGenerator hold
 	// (Spell::EffectDistract, SpellEffects.cpp:2547): the creature turned to
 	// face the distraction and pauses wandering until this time. Zero when
 	// not distracted.
 	DistractedUntil time.Time
+	// DistractedFromAssist marks a DistractedUntil hold started by the
+	// assistance seek (AssistanceMovementGenerator, IdleMovementGenerator
+	// .cpp:227-237) rather than the alert turn (DistractMovementGenerator,
+	// :213-222): the assistance finalize flips the react state to
+	// aggressive and does not re-face home, while the alert finalize
+	// re-faces home and leaves the react state alone.
+	DistractedFromAssist bool
 	// CorpseDelayOverride / CorpseDelayOverrideSet are the SmartScript
 	// SET_CORPSE_DELAY (116) twin: Creature::SetCorpseDelay
 	// (Creature.h:93) writes m_corpseDelay, read at death
@@ -5715,6 +5737,13 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	motion.ScriptMoveFalling = false
 	motion.ScriptMoveType = moveType
 	motion.ScriptMovePointID = pointID
+	// HomeMovementGenerator<Creature>::DoInitialize
+	// (HomeMovementGenerator.cpp:89-90): a scripted MoveHome re-arms
+	// the assistance search, like the evade-home arm in
+	// triggerCreatureEvade.
+	if moveType == movementGeneratorHome {
+		motion.AlreadySearchedAssistance = false
+	}
 	motion.ScriptMoveDestX = destX
 	motion.ScriptMoveDestY = destY
 	motion.ScriptMoveDestZ = destZ
@@ -6602,6 +6631,7 @@ func (s *Server) finishCreatureSeekAssistance(ctx context.Context, motion *creat
 	}
 	if alive {
 		motion.DistractedUntil = at.Add(time.Duration(delayMs) * time.Millisecond)
+		motion.DistractedFromAssist = true
 	}
 	s.motionMu.Unlock()
 	s.callCreatureAssistance(ctx, motion)
@@ -6952,6 +6982,13 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			}
 		}
 		if !followOwner {
+			// HomeMovementGenerator<Creature>::DoInitialize
+			// (HomeMovementGenerator.cpp:89-90): the home generator
+			// re-arms the assistance search — SetNoSearchAssistance
+			// (false) — so a creature that fled for assistance and
+			// then evaded searches again on its next engage, instead
+			// of waiting until it dies (the only other clear site).
+			motion.AlreadySearchedAssistance = false
 			if homeDist > 0.5 {
 				speed := creatureSplineVelocityExplicit(motion, false)
 				if speed < 0.001 {
@@ -7519,6 +7556,7 @@ func (s *Server) triggerCreatureAlert(ctx context.Context, motion *creatureMotio
 	}
 	motion.Orientation = angle
 	motion.DistractedUntil = now.Add(5 * time.Second)
+	motion.DistractedFromAssist = false
 	motion.Moving = false
 	s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, motion.GUID, 0)
 	// DistractMovementGenerator::Initialize launches an in-place MoveTo+SetFacing
@@ -9124,14 +9162,49 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// stamp) finalizes like WaypointMovementGenerator::OnArrived
 		// — CREATURE_EVENT_ON_REACH_WP (6) via waypointNodeArrival.
 		// The stamp is consumed on every landing so a later spline
-		// cannot re-fire it. Chase (CHASE_MOTION_TYPE) has no
-		// finalize arm here: Go's chase re-paths instead of
-		// finalizing, and no in-tree consumer needs the chase inform.
+		// cannot re-fire it. Chase (CHASE_MOTION_TYPE) and follow
+		// (FOLLOW_MOTION_TYPE) finalize arms ride here too: the
+		// chase spline-finalize inform and the follow
+		// out-of-range finalize inform (see the cases above).
 		scriptSpline := motion.ScriptMoveType != 0
 		chainSpline := motion.ScriptMoveType == movementGeneratorSplineChain
 		switch motion.ScriptMoveType {
 		case movementGeneratorSplineChain:
 			s.landSplineChainLink(ctx, motion, now)
+		case movementGeneratorChase:
+			// ChaseMovementGenerator::Update (ChaseMovementGenerator.cpp:142-151):
+			// the spline-finalized arm informs on every chase-spline
+			// finalize, even when the target moved out of range
+			// (no PositionOkay gate, unlike the range-check arm) —
+			// AI()->MovementInform(CHASE_MOTION_TYPE, target GUID
+			// counter), Eluna CREATURE_EVENT_ON_MOVEMENT_INFORM (28).
+			// The ChaseInformed latch is the INFORM_ENABLED twin the
+			// finalize arm itself clears (:143): a finalize inform
+			// suppresses the swing-gate range-check inform for the
+			// same spline, and a re-path launch resets it. A zero
+			// target means the victim left the world — C++ pops the
+			// generator with no inform on a lost target
+			// (HasLostTarget, :28-31), so nothing fires.
+			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ && motion.TargetGUID != 0 && !motion.ChaseInformed {
+				motion.ChaseInformed = true
+				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorChase), uint32(motion.TargetGUID))
+				s.smartMovementInform(ctx, motion, movementGeneratorChase, uint32(motion.TargetGUID))
+			}
+		case movementGeneratorFollow:
+			// FollowMovementGenerator::Update (FollowMovementGenerator.cpp:109-112):
+			// the spline-finalized arm informs even when the spline
+			// lands out of range (no PositionOkay gate, unlike the
+			// range-check arm) — AI()->MovementInform(FOLLOW_MOTION_TYPE,
+			// target GUID counter), Eluna CREATURE_EVENT_ON_MOVEMENT_INFORM
+			// (28). The ScriptFollowInformed latch is the shared
+			// INFORM_ENABLED twin: whichever arm fires first consumes
+			// the single inform per follow assignment, so the in-range
+			// arm in stepScriptFollow never double-fires.
+			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ && !motion.ScriptFollowInformed {
+				motion.ScriptFollowInformed = true
+				motion.FollowLastTargetKnown = false
+				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorFollow), uint32(motion.ScriptFollowTargetGUID))
+			}
 		case movementGeneratorPoint, movementGeneratorEffect:
 			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ {
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, motion.ScriptMoveType, motion.ScriptMovePointID)
@@ -12198,7 +12271,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// (_lastTargetPosition, ChaseMovementGenerator.cpp:157-159):
 					// relaunch the spline when the victim left the launch
 					// point so a kiting victim can't outrun a stale spline.
-					targetMoved := motion.ChaseTX != target.X || motion.ChaseTY != target.Y
+					// ChaseMovementGenerator.cpp:30-39 (IsMutualChase) +
+					// :153-156: a mutual-chase flip forces the same
+					// re-path evaluation even when the victim has not
+					// moved — the victim's own current generator is a
+					// chase targeting the owner. The Go proxy is a
+					// victim creature holding a script chase slot on
+					// the owner, or in combat against it; a player
+					// victim never runs a chase generator
+					// (victimMotion nil), so it never counts as mutual.
+					// The flip is stored at evaluation, as C++ stores
+					// _mutualChase when the check runs (:155-156),
+					// whether or not the launch below succeeds.
+					mutualChase := victimMotion != nil && (victimMotion.ScriptChaseTargetGUID == motion.GUID || (victimMotion.InCombat && victimMotion.TargetGUID == motion.GUID))
+					targetMoved := motion.ChaseTX != target.X || motion.ChaseTY != target.Y || mutualChase != motion.ChaseMutual
+					motion.ChaseMutual = mutualChase
 					// Unit::PauseMovement (Unit.cpp:10514) on the ACTIVE slot:
 					// the chase generator is paused, so no re-path launches
 					// while the hold runs. The swing below still fires —
@@ -12256,7 +12343,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						}
 						destX, destY := target.X, target.Y
 						if dist > shorten {
-							if scriptChase {
+							// ChaseMovementGenerator.cpp:120: on a mutual
+							// chase the fixed angle is suppressed (angle
+							// = nullopt) — the pair closes on the
+							// victim's center like the no-angle arm
+							// below instead of holding the scripted
+							// near point. The scripted range (shorten)
+							// still applies; only the angle drops.
+							if scriptChase && !mutualChase {
 								tOrient := float32(0)
 								if target.Sess != nil && target.Sess.player != nil {
 									tOrient = target.Sess.player.Orientation
@@ -12341,6 +12435,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 									setCreatureCannotReachTarget(motion, false, now)
 									motion.ChaseTX, motion.ChaseTY = target.X, target.Y
 									motion.ChaseArrived = false
+									motion.ChaseInformed = false
 								}
 							}
 						}
@@ -12439,6 +12534,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				faceAngle += 2 * math.Pi
 			}
 			motion.Orientation = faceAngle
+			// ChaseMovementGenerator.cpp:128-136: the range-check
+			// arm informs once per chase (INFORM_ENABLED clears)
+			// when the creature is in range on the check timer —
+			// AI()->MovementInform(CHASE_MOTION_TYPE, target GUID
+			// counter), Eluna CREATURE_EVENT_ON_MOVEMENT_INFORM (28).
+			// The swing gate is Go's in-range arrival: a standing
+			// in-range engage reaches it with no spline, and a
+			// spline arrival reaches it on the first in-range tick
+			// after the landing gate. The ChaseInformed latch is the
+			// INFORM_ENABLED twin shared with the landing-gate
+			// finalize arm: a finalize inform for the same spline
+			// already consumed it, so this arm never double-fires.
+			if target != nil && !motion.ChaseInformed {
+				motion.ChaseInformed = true
+				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorChase), uint32(target.GUID))
+				s.smartMovementInform(ctx, motion, movementGeneratorChase, uint32(target.GUID))
+			}
 		}
 		// Unit::ApplyAttackTimePercentMod (Unit.cpp:10847-10864): the
 		// creature's swing interval is UNIT_FIELD_BASEATTACKTIME scaled by
@@ -13032,6 +13144,31 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if now.Before(motion.DistractedUntil) {
 		return
 	}
+	// IdleMovementGenerator.cpp:213-222 (DistractMovementGenerator::DoFinalize)
+	// + :227-237 (AssistanceDistract::DoFinalize): on expiry the distract
+	// generator re-faces the creature to its home orientation, while the
+	// assistance-distract generator flips the react state to aggressive
+	// instead (Creature::CanAssistTo, Creature.cpp:2454-2457, assists only
+	// when REACT_AGGRESSIVE) and never re-faces. The expiry edge fires
+	// once: the timer clears here, so later ticks see a zero hold. A
+	// creature that engaged mid-hold reaches this arm only after combat
+	// ends, so the finalize runs late there — the same standing delta as
+	// the hold gate itself.
+	if !motion.DistractedUntil.IsZero() {
+		fromAssist := motion.DistractedFromAssist
+		motion.DistractedUntil = time.Time{}
+		motion.DistractedFromAssist = false
+		if fromAssist {
+			motion.ReactState = creatureReactAggressive
+			motion.ReactStateKnown = true
+		} else {
+			motion.Orientation = motion.HomeO
+			// The in-place turn rides the same monster-move packet
+			// shape as the alert turn above (DistractMovementGenerator
+			// ::Initialize launches a MoveTo+SetFacing spline).
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.X, motion.Y, motion.Z, 1000, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
+		}
+	}
 	if motion.Moving {
 		if now.Before(motion.MoveEnds) {
 			return
@@ -13126,7 +13263,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// the atomic-spline model cannot express (documented delta; the 1200ms
 	// interval re-check picks it up on the next tick).
 	if motion.FormationActive && !motion.InCombat {
-		if s.stepFormationMember(motion, now) {
+		if s.stepFormationMember(ctx, motion, now) {
 			return
 		}
 	}
@@ -13135,6 +13272,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	var wait time.Duration
 	var facing float32
 	var hasFacing bool
+	// waypointNodeID/waypointPathID carry the launching node's DB point
+	// id and path id out of the MoveType==2 branch (where `point` is
+	// scoped) to the shared launch legs below, so the WaypointStarted
+	// fire lands on every launch site with the same pair C++ passes
+	// (WaypointMovementGenerator.cpp:289,327: node id, path id).
+	var waypointNodeID, waypointPathID uint32
 	// Unit::PauseMovement (Unit.cpp:10514) on the DEFAULT slot pauses
 	// the idle wander/waypoint generator: no new leg launches while the
 	// hold runs. The gate sits after the Moving/arrival block above, so
@@ -13179,6 +13322,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		point := motion.Points[motion.NextIdx]
 		destX, destY, destZ = point.X, point.Y, point.Z
+		waypointNodeID, waypointPathID = point.Point, motion.PathID
 		// WaypointMovementGenerator.cpp:355-366: RUN calls SetWalk(false)
 		// (clears the persistent flag), WALK calls SetWalk(true), and
 		// LAND/TAKEOFF set no walk leg, so they inherit the persistent
@@ -13214,6 +13358,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// the home-position refresh runs only while a spline is actually in motion
 			// (WaypointMovementGenerator::DoUpdate), so it is skipped and the next tick
 			// retries the following node.
+			// WaypointStarted still fired: StartMove calls AI->WaypointStarted
+			// (WaypointMovementGenerator.cpp:289,327) for the node it starts,
+			// even when the launch itself validates out.
+			s.smartWaypointStarted(ctx, motion, point.Point, motion.PathID)
 			return
 		}
 		// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:169-175):
@@ -13316,6 +13464,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.X, motion.Y, motion.Z = destX, destY, destZ
 			motion.HomeX, motion.HomeY, motion.HomeZ = destX, destY, destZ
 			motion.Moving = false
+			// The degenerate leg still starts the node (StartMove
+			// fires WaypointStarted ahead of the immediate arrival),
+			// so the start event precedes the arrival here as in C++.
+			s.smartWaypointStarted(ctx, motion, waypointNodeID, waypointPathID)
 			s.waypointNodeArrival(ctx, motion, now)
 		}
 		return
@@ -13338,6 +13490,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if s.launchCreaturePolySpline(motion, points, walk, 0, facing, hasFacing, speed, now) {
 					motion.MoveHeading = heading
 					motion.WaitUntil = motion.MoveEnds.Add(wait)
+					// WaypointMovementGenerator::StartMove
+					// (WaypointMovementGenerator.cpp:289,327): the node
+					// launch fires AI->WaypointStarted(node id, path id)
+					// ahead of the leg.
+					s.smartWaypointStarted(ctx, motion, waypointNodeID, waypointPathID)
 					s.formationLeaderStartedMoving(ctx, motion, now)
 					return
 				}
@@ -13357,6 +13514,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	motion.ScriptMoveFromKnown = false
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
+	// WaypointMovementGenerator::StartMove
+	// (WaypointMovementGenerator.cpp:289,327): the direct-leg launch
+	// fires AI->WaypointStarted(node id, path id) like the poly leg.
+	s.smartWaypointStarted(ctx, motion, waypointNodeID, waypointPathID)
 	// Creature::SignalFormationMovement (Creature.cpp:362-369) via
 	// CreatureGroup::LeaderStartedMoving (CreatureGroups.cpp:280-295): a
 	// leader launching an idle-path leg pulls FLAG_IDLE_IN_FORMATION members

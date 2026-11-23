@@ -5307,6 +5307,23 @@ func (s *Server) smartWaypointReached(ctx context.Context, motion *creatureMotio
 	}
 }
 
+// smartWaypointStarted is SmartAI::WaypointStarted (SmartAI.cpp:354-357),
+// fired from WaypointMovementGenerator::StartMove
+// (WaypointMovementGenerator.cpp:267-330): SMART_EVENT_WAYPOINT_START
+// fires with (node id, path id) whenever a node launches — the first
+// node and every post-arrival launch. The escort machine has no
+// start-side latch (unlike the reached arm above), so this is a plain
+// event fire.
+func (s *Server) smartWaypointStarted(ctx context.Context, motion *creatureMotion, nodeID, pathID uint32) {
+	if motion == nil {
+		return
+	}
+	if st := s.smartStateFor(ctx, motion); st == nil {
+		return
+	}
+	s.smartProcessEvents(ctx, motion, smartEventWaypointStart, 0, nodeID, pathID)
+}
+
 // smartMovementInform is SmartAI::MovementInform (SmartAI.cpp:396-410):
 // a POINT + SMART_ESCORT_LAST_OOC_POINT (0xFFFFFF) arrival clears the
 // evade state and, while escorting, latches _OOCReached; every arrival

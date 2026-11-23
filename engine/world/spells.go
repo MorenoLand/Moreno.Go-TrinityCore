@@ -60482,6 +60482,7 @@ func (s *session) handleEffectDistract(ctx context.Context, spell wotlk.Spell, e
 		}
 		motion.Orientation = angle
 		motion.DistractedUntil = time.Now().Add(time.Duration(duration) * time.Millisecond)
+		motion.DistractedFromAssist = false
 		motion.Moving = false
 		s.server.motionMu.Unlock()
 		// DistractMovementGenerator::Initialize launches an in-place

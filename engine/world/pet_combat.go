@@ -5839,7 +5839,29 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 			if hasDest {
 				channelObj = motion.GUID
 			}
-			stampCreatureChannel(motion, spell.ID, channelObj, hasDest, dx, dy, dz, time.Now().Add(time.Duration(dur)*time.Millisecond))
+			channelUntil := time.Now().Add(time.Duration(dur) * time.Millisecond)
+			stampCreatureChannel(motion, spell.ID, channelObj, hasDest, dx, dy, dz, channelUntil)
+			// Spell::handle_immediate channel arms (Spell.cpp:3569-3596),
+			// the pet twin of the castCreatureSpellInternal stamp
+			// (boss_ai.go): a channeled cast holds UNIT_STATE_CASTING
+			// (Unit.cpp:3107, CURRENT_CHANNELED_SPELL arm, unconditional)
+			// for the channel duration on top of the cast time — the
+			// cast-time stamp above covers only the cast time, and
+			// most pet channels are instant-cast, so without this
+			// extension CastingUntil expires at GO and every
+			// CastingUntil-only reader (UNIT_STATE_CASTING query,
+			// victim-side casting gates, chase casting pause)
+			// misreads a channeling pet as not casting. The stamp
+			// lands here, at the post-GO channel stamp, so the cast
+			// time already elapsed under the deferral; channelUntil
+			// is the DBC duration from fire time, the deferredFire
+			// arm of the twin. The instant-cast channel takes no
+			// cast-time stamp, so CastingMoveAllowed refreshes here
+			// too, or the bool would go stale from a prior cast.
+			if channelUntil.After(motion.CastingUntil) {
+				motion.CastingUntil = channelUntil
+			}
+			motion.CastingMoveAllowed = spellIsMoveAllowedChannel(spell)
 		}
 	}
 	// SpellScript OnObjectAreaTargetSelect (Spell.cpp:1227) for a pet
