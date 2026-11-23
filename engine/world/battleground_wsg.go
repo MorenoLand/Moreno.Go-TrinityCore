@@ -244,6 +244,109 @@ func (s *Server) deleteWSGState(mapID uint32) {
 	}
 }
 
+// captureWSGFlag runs BattlegroundWS::EventPlayerCapturedFlag
+// (BattlegroundWS.cpp:290-366) for the capturing team: team 0 is an Alliance
+// carrier of the Warsong flag, team 1 a Horde carrier of the Silverwing
+// flag. Callers verify the carrier/own-flag-home conditions and hold wsg.mu;
+// the base-flag GO-click arm and the 3646/3647 area-trigger arm share it.
+func (s *Server) captureWSGFlag(sess *session, wsg *wsgBattlegroundState, team uint32) {
+	carriedSpell := WSGSpellWarsongFlag
+	capturedFlagState := &wsg.HordeFlagState
+	capturedCarrierGUID := &wsg.HordeCarrierGUID
+	score := &wsg.AllianceScore
+	rewardFaction := WSGFactionSilverwingSentinels
+	capturesWorldState := WSWorldStateAllianceCaptures
+	respawnTeam := uint32(1)
+	captureMessage := " captured the Warsong flag!"
+	if team == 1 {
+		carriedSpell = WSGSpellSilverwingFlag
+		capturedFlagState = &wsg.AllianceFlagState
+		capturedCarrierGUID = &wsg.AllianceCarrierGUID
+		score = &wsg.HordeScore
+		rewardFaction = WSGFactionWarsongOutriders
+		capturesWorldState = WSWorldStateHordeCaptures
+		respawnTeam = 0
+		captureMessage = " captured the Alliance flag!"
+	}
+	sess.removeAura(carriedSpell)
+	// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:303-306):
+	// the stalemate debuff leaves with the capturing keeper.
+	sess.removeAura(WSGSpellFocusedAssault)
+	sess.removeAura(WSGSpellBrutalAssault)
+	*capturedCarrierGUID = 0
+	*capturedFlagState = WSGFlagStateWaitRespawn
+	*score++
+	// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:352):
+	// SetLastFlagCapture(player->GetTeam()) — the tiebreak source for the
+	// 27-minute timeout end.
+	wsg.LastFlagCaptureTeam = team
+
+	if rewardMap, ok := bgEnteredSlotMap(sess); ok {
+		s.rewardBGEndReputation(rewardMap, team, rewardFaction, WSGReputationCapture)
+		s.rewardBGEndHonor(rewardMap, team, 2)
+	}
+
+	s.broadcastWorldState(sess.player.Map, capturesWorldState, *score)
+	// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_CAPTURES arm
+	// (BattlegroundWS.cpp:779-787): the capture credits
+	// ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE with
+	// WS_OBJECTIVE_CAPTURE_FLAG (C++ calls UpdateTeamScore first, then
+	// UpdatePlayerScore — this credit follows the captures worldstate
+	// broadcast, mirroring that order).
+	s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveCaptureFlag)
+	s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.FlagCaptures++ })
+	// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:346):
+	// UpdateFlagState(player->GetTeam(), 1) — capturer's team index.
+	s.wsgUpdateFlagState(sess.player.Map, team, WSGFlagStateOnBase)
+	s.startWSGFlagRespawnTimer(wsg, sess.player.Map, respawnTeam)
+	s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+captureMessage)
+	if *score >= wsg.MaxScore {
+		// EventPlayerCapturedFlag's winner arm (BattlegroundWS.cpp:361-365):
+		// clear the flag worldstates before EndBattleground.
+		s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 0)
+		s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 0)
+		s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
+		s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
+		s.endWSGVictory(wsg, sess.player.Map, team)
+	}
+}
+
+// handleWSGFlagCaptureTrigger runs BattlegroundWS::HandleAreaTrigger
+// (BattlegroundWS.cpp:618-660) for the flag-room triggers: 3646 is the
+// Alliance flag room, 3647 the Horde flag room. A carrier entering their
+// own flag room while their own flag is home captures — the walk-in path
+// the base-flag GO-click arm never covered. The caller holds no lock;
+// this takes wsg.mu like handleWSGFlagUse.
+func (s *Server) handleWSGFlagCaptureTrigger(sess *session, triggerID uint32) {
+	if s == nil || sess == nil || sess.player == nil {
+		return
+	}
+	wsg := s.getOrCreateWSGState(sess.player.Map)
+	if wsg == nil {
+		return
+	}
+	wsg.mu.Lock()
+	defer wsg.mu.Unlock()
+	// Same STATUS_IN_PROGRESS gate as the GO-click arm (handleWSGFlagUse):
+	// a pre-start or post-match trigger does nothing.
+	if !wsg.Started || wsg.Winner >= 0 {
+		return
+	}
+	// BattlegroundWS::HandleAreaTrigger (BattlegroundWS.cpp:620-622):
+	// dead players do not capture (the EY twin states the gate explicitly
+	// at BattlegroundEY.cpp:395; WSG's UpdateFlagState arms assume a live
+	// carrier).
+	if sess.isDeadOrGhost() {
+		return
+	}
+	team := teamForRace(sess.player.Race)
+	if triggerID == 3646 && team == 0 && wsg.HordeCarrierGUID == sess.playerGUID && wsg.AllianceFlagState == WSGFlagStateOnBase {
+		s.captureWSGFlag(sess, wsg, 0)
+	} else if triggerID == 3647 && team == 1 && wsg.AllianceCarrierGUID == sess.playerGUID && wsg.HordeFlagState == WSGFlagStateOnBase {
+		s.captureWSGFlag(sess, wsg, 1)
+	}
+}
+
 func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
 	if s == nil || sess == nil || sess.player == nil {
 		return true
@@ -269,6 +372,10 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 
 	team := teamForRace(sess.player.Race) // 0 = Alliance, 1 = Horde
 
+	// BattlegroundWS::EventPlayerClickedOnFlag (BattlegroundWS.cpp:465-585)
+	// has pickup/return only — no capture arm: clicking your own base flag
+	// while carrying the enemy flag does nothing in C++. Captures run
+	// through HandleAreaTrigger 3646/3647 (handleWSGFlagCaptureTrigger).
 	switch entry {
 	case WSGAllianceFlagBaseEntry:
 		// Enemy Horde clicks Alliance base flag -> Pickup
@@ -290,51 +397,6 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				// UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, 1) on pickup.
 				s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 1)
 				s.broadcastBattlegroundMessage(sess.player.Map, "The Alliance flag was picked up by "+sess.player.Name+"!")
-			}
-		} else if team == 0 {
-			// Alliance player touches own base flag while carrying Horde flag -> Capture!
-			if wsg.HordeCarrierGUID == sess.playerGUID && wsg.AllianceFlagState == WSGFlagStateOnBase {
-				sess.removeAura(WSGSpellWarsongFlag)
-				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:303-306):
-				// the stalemate debuff leaves with the capturing keeper.
-				sess.removeAura(WSGSpellFocusedAssault)
-				sess.removeAura(WSGSpellBrutalAssault)
-				wsg.HordeCarrierGUID = 0
-				wsg.HordeFlagState = WSGFlagStateWaitRespawn
-				wsg.AllianceScore++
-				// BattlegroundWS::EventPlayerCapturedFlag
-				// (BattlegroundWS.cpp:352): SetLastFlagCapture(player->GetTeam())
-				// — the tiebreak source for the 27-minute timeout end.
-				wsg.LastFlagCaptureTeam = 0
-
-				if rewardMap, ok := bgEnteredSlotMap(sess); ok {
-					s.rewardBGEndReputation(rewardMap, 0, WSGFactionSilverwingSentinels, WSGReputationCapture)
-					s.rewardBGEndHonor(rewardMap, 0, 2)
-				}
-
-				s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceCaptures, wsg.AllianceScore)
-				// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_CAPTURES arm
-				// (BattlegroundWS.cpp:779-787): the capture credits
-				// ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE with
-				// WS_OBJECTIVE_CAPTURE_FLAG (C++ calls UpdateTeamScore first,
-				// then UpdatePlayerScore — this credit follows the captures
-				// worldstate broadcast, mirroring that order).
-				s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveCaptureFlag)
-				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.FlagCaptures++ })
-				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:346):
-				// UpdateFlagState(player->GetTeam(), 1) — capturer's team index.
-				s.wsgUpdateFlagState(sess.player.Map, 0, WSGFlagStateOnBase)
-				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 1)
-				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Warsong flag!")
-				if wsg.AllianceScore >= wsg.MaxScore {
-					// EventPlayerCapturedFlag's winner arm (BattlegroundWS.cpp:361-365):
-					// clear the flag worldstates before EndBattleground.
-					s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 0)
-					s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 0)
-					s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
-					s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
-					s.endWSGVictory(wsg, sess.player.Map, 0)
-				}
 			}
 		}
 
@@ -358,47 +420,6 @@ func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint6
 				// (BG_WS_FLAG_UNK_HORDE, 1) on pickup (BattlegroundWS.cpp:494).
 				s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 1)
 				s.broadcastBattlegroundMessage(sess.player.Map, "The Warsong flag was picked up by "+sess.player.Name+"!")
-			}
-		} else if team == 1 {
-			// Horde player touches own base flag while carrying Alliance flag -> Capture!
-			if wsg.AllianceCarrierGUID == sess.playerGUID && wsg.HordeFlagState == WSGFlagStateOnBase {
-				sess.removeAura(WSGSpellSilverwingFlag)
-				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:320-323):
-				// the stalemate debuff leaves with the capturing keeper.
-				sess.removeAura(WSGSpellFocusedAssault)
-				sess.removeAura(WSGSpellBrutalAssault)
-				wsg.AllianceCarrierGUID = 0
-				wsg.AllianceFlagState = WSGFlagStateWaitRespawn
-				wsg.HordeScore++
-				// BattlegroundWS::EventPlayerCapturedFlag
-				// (BattlegroundWS.cpp:352): SetLastFlagCapture(player->GetTeam()).
-				wsg.LastFlagCaptureTeam = 1
-
-				if rewardMap, ok := bgEnteredSlotMap(sess); ok {
-					s.rewardBGEndReputation(rewardMap, 1, WSGFactionWarsongOutriders, WSGReputationCapture)
-					s.rewardBGEndHonor(rewardMap, 1, 2)
-				}
-
-				s.broadcastWorldState(sess.player.Map, WSWorldStateHordeCaptures, wsg.HordeScore)
-				// BattlegroundWS::UpdatePlayerScore SCORE_FLAG_CAPTURES arm
-				// (BattlegroundWS.cpp:779-787): WS_OBJECTIVE_CAPTURE_FLAG
-				// objective credit, after the team-score worldstate like the
-				// C++ UpdateTeamScore -> UpdatePlayerScore order.
-				s.creditBGObjectiveCapture(sess.playerGUID, WSGObjectiveCaptureFlag)
-				s.addBGObjectiveScore(sess, func(score *bgPlayerScore) { score.FlagCaptures++ })
-				// BattlegroundWS::EventPlayerCapturedFlag (BattlegroundWS.cpp:346):
-				// UpdateFlagState(player->GetTeam(), 1) — capturer's team index.
-				s.wsgUpdateFlagState(sess.player.Map, 1, WSGFlagStateOnBase)
-				s.startWSGFlagRespawnTimer(wsg, sess.player.Map, 0)
-				s.broadcastBattlegroundMessage(sess.player.Map, sess.player.Name+" captured the Alliance flag!")
-				if wsg.HordeScore >= wsg.MaxScore {
-					// EventPlayerCapturedFlag's winner arm (BattlegroundWS.cpp:361-365).
-					s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkAlliance, 0)
-					s.broadcastWorldState(sess.player.Map, WSWorldStateFlagUnkHorde, 0)
-					s.broadcastWorldState(sess.player.Map, WSWorldStateAllianceFlagState, WSGFlagStateOnBase)
-					s.broadcastWorldState(sess.player.Map, WSWorldStateHordeFlagState, WSGFlagStateOnBase)
-					s.endWSGVictory(wsg, sess.player.Map, 1)
-				}
 			}
 		}
 

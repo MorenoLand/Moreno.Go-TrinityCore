@@ -1590,8 +1590,10 @@ func (s *session) canInteractWithCreature(ctx context.Context, creature *scripti
 	// worse creature (GetReactionTo <= REP_UNFRIENDLY) rejects the interaction;
 	// creatureToPlayerRank ports the creature->player GetReactionTo tail
 	// (Object.cpp:2795-2842) including the at-war neutral clamp.
+	var motion *creatureMotion
 	if guid, ok := objectUint64Field(creature, "GUID"); ok {
-		if motion := s.findCreatureMotion(guid); motion != nil {
+		if m := s.findCreatureMotion(guid); m != nil {
+			motion = m
 			if motion.Charmed {
 				return false
 			}
@@ -1611,7 +1613,37 @@ func (s *session) canInteractWithCreature(ctx context.Context, creature *scripti
 	if mapOK && mapID != s.player.Map {
 		return false
 	}
-	if xOK && yOK && zOK && distance3D(s.player.X, s.player.Y, s.player.Z, x, y, z) > 5.0 {
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2356): the distance arm
+	// runs through WorldObject::IsWithinDistInMap (Object.cpp:1238-1243),
+	// which requires InSamePhase — (GetPhaseMask() & obj->GetPhaseMask())
+	// != 0 (Object.h:324-325). The motion record carries the live phase
+	// (0 = unset, read as PHASEMASK_NORMAL); a creature outside the motion
+	// system falls back to its DB c.phaseMask row, and a missing row stays
+	// phase 1 rather than refusing the interaction.
+	creaturePhase := uint32(1)
+	if motion != nil {
+		creaturePhase = motion.PhaseMask
+		if creaturePhase == 0 {
+			creaturePhase = 1
+		}
+	} else if guid, ok := objectUint64Field(creature, "GUID"); ok && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var dbPhase int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT COALESCE(phaseMask, 1) FROM creature WHERE guid = ?`, uint32(guid&0x00FFFFFF)).Scan(&dbPhase); err == nil && dbPhase > 0 {
+			creaturePhase = uint32(dbPhase)
+		}
+	}
+	if creaturePhase&s.currentPlayerPhaseMask() == 0 {
+		return false
+	}
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2356): the distance is
+	// the creature's combat reach + 4.0, not a flat 5.0 (npc_interaction.go
+	// carries the same arm for the DB-backed path); a creature outside the
+	// motion system keeps the flat gate.
+	interactDist := 5.0
+	if motion != nil {
+		interactDist = float64(motion.combatReachOrDefault()) + 4.0
+	}
+	if xOK && yOK && zOK && distance3D(s.player.X, s.player.Y, s.player.Z, x, y, z) > interactDist {
 		return false
 	}
 	// Player::GetNPCIfCanInteractWith (Player.cpp:2335-2337): a dead creature

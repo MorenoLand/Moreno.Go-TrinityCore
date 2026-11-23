@@ -104,10 +104,10 @@ func (s *session) canInteractWithNPC(ctx context.Context, guid, requiredFlags ui
 	}
 	low := uint32(guid & 0x00FFFFFF)
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
-	var mapID, npcFlags, typeFlags int64
+	var mapID, npcFlags, typeFlags, phaseMask int64
 	var x, y, z float32
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z, t.npcflag, COALESCE(t.type_flags, 0)
-		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?`, low, entry).Scan(&mapID, &x, &y, &z, &npcFlags, &typeFlags)
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z, t.npcflag, COALESCE(t.type_flags, 0), COALESCE(c.phaseMask, 1)
+		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?`, low, entry).Scan(&mapID, &x, &y, &z, &npcFlags, &typeFlags, &phaseMask)
 	if err != nil {
 		if missingTable(err) || isMissingColumn(err) {
 			return true
@@ -115,6 +115,24 @@ func (s *session) canInteractWithNPC(ctx context.Context, guid, requiredFlags ui
 		return false
 	}
 	if uint32(mapID) != s.player.Map {
+		return false
+	}
+	// Player::GetNPCIfCanInteractWith (Player.cpp:2356): the distance arm
+	// runs through WorldObject::IsWithinDistInMap (Object.cpp:1238-1243),
+	// which requires InSamePhase — (GetPhaseMask() & obj->GetPhaseMask())
+	// != 0 (Object.h:324-325). The motion record carries the live phase
+	// (0 = unset, read as PHASEMASK_NORMAL); otherwise the DB row above.
+	creaturePhase := uint32(phaseMask)
+	if creaturePhase == 0 {
+		creaturePhase = 1
+	}
+	if motion != nil {
+		creaturePhase = motion.PhaseMask
+		if creaturePhase == 0 {
+			creaturePhase = 1
+		}
+	}
+	if creaturePhase&s.currentPlayerPhaseMask() == 0 {
 		return false
 	}
 	// Player::GetNPCIfCanInteractWith (Player.cpp:2314-2357): a dead

@@ -178,6 +178,26 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 	if s.player.Map == ICMapID && (triggerID == ICAreaTriggerBackDoorHorde || triggerID == ICAreaTriggerBackDoorAlliance) {
 		s.server.handleICBackDoorTrigger(s, triggerID)
 	}
+	// 4f. Eye of the Storm / Warsong Gulch flag-capture triggers
+	// Reference: BattlegroundEY::HandleAreaTrigger (BattlegroundEY.cpp:391-434)
+	// and BattlegroundWS::HandleAreaTrigger (BattlegroundWS.cpp:618-660) —
+	// the walk-in capture path: a flag carrier entering a controlled point
+	// (EotS) or their own flag room (WSG) captures, where the GO-click arms
+	// never fired. Like the arms above, this does not return: execution
+	// continues to the teleport arm below.
+	if s.player.Map == EOTSMapID {
+		switch triggerID {
+		case 4476, 4514, 4516, 4518:
+			s.server.handleEOTSFlagCaptureTrigger(s, triggerID)
+		}
+	}
+	if s.player.Map == WSGMapID {
+		switch triggerID {
+		case 3646, 3647:
+			s.server.handleWSGFlagCaptureTrigger(s, triggerID)
+		}
+	}
+
 	// Like the arena arm above (MiscHandler.cpp:697-700), the BG arm does not
 	// return: execution continues to the teleport arm below.
 

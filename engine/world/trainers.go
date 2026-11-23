@@ -152,148 +152,10 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 		}
 	}
 
-	// 2. Fallback to legacy npc_trainer if no trainer row found
-	if !foundTrainer {
-		type rawFb struct {
-			spellID       uint32
-			moneyCost     uint32
-			reqSkill      uint32
-			reqSkillValue uint32
-			reqLevel      uint8
-		}
-		var rawFbList []rawFb
-
-		fbRows, fbErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT SpellID, COALESCE(MoneyCost, 0), COALESCE(ReqSkill, 0), COALESCE(ReqSkillValue, 0), COALESCE(ReqLevel, 0)
-			FROM npc_trainer WHERE ID = ?
-			ORDER BY ReqLevel, SpellID LIMIT 128`, creatureEntry)
-		if fbErr == nil {
-			for fbRows.Next() {
-				var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel int64
-				if err := fbRows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel); err == nil {
-					rawFbList = append(rawFbList, rawFb{
-						spellID:       uint32(spellID),
-						moneyCost:     uint32(moneyCost),
-						reqSkill:      uint32(reqSkill),
-						reqSkillValue: uint32(reqSkillValue),
-						reqLevel:      uint8(reqLevel),
-					})
-				}
-			}
-			_ = fbRows.Close()
-		}
-
-		for _, raw := range rawFbList {
-			if !s.isSpellFitByClassAndRace(raw.spellID) {
-				continue
-			}
-			serviceState := s.getTrainerSpellState(ctx, raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, nil)
-			var primaryProf uint32
-			if s.trainerSpellPrimaryProfessionFirstRank(raw.spellID) {
-				primaryProf = 1
-			}
-			spells = append(spells, trainerSpellRecord{
-				SpellID:       raw.spellID,
-				ServiceState:  serviceState,
-				Cost:          uint32(float32(raw.moneyCost) * discount),
-				TalentCost:    0,
-				PrimaryProf:   primaryProf,
-				ReqLevel:      raw.reqLevel,
-				ReqSkill:      raw.reqSkill,
-				ReqSkillValue: raw.reqSkillValue,
-			})
-		}
-	}
-
-	// 3. Fallback to class trainer ONLY if no trainer row was found at all for this creature (for tests/custom spawns)
-	if !foundTrainer && len(spells) == 0 && s.player != nil && s.player.Class > 0 {
-		type rawCt struct {
-			spellID       uint32
-			moneyCost     uint32
-			reqSkill      uint32
-			reqSkillValue uint32
-			reqLevel      uint8
-			reqAb1        uint32
-			reqAb2        uint32
-			reqAb3        uint32
-			tType         uint32
-			greet         string
-		}
-		var rawCtList []rawCt
-
-		ctRows, ctErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT ts.SpellId, COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqLevel, 0),
-			COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0),
-			COALESCE(t.Type, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
-			FROM trainer_spell AS ts
-			JOIN trainer AS t ON t.Id = ts.TrainerId
-			WHERE t.Type = 0 AND t.Requirement = ?
-			LIMIT 128`, s.player.Class)
-		if ctErr == nil {
-			for ctRows.Next() {
-				var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3, tType int64
-				var greet sql.NullString
-				if err := ctRows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel, &reqAb1, &reqAb2, &reqAb3, &tType, &greet); err == nil {
-					gStr := ""
-					if greet.Valid {
-						gStr = greet.String
-					}
-					rawCtList = append(rawCtList, rawCt{
-						spellID:       uint32(spellID),
-						moneyCost:     uint32(moneyCost),
-						reqSkill:      uint32(reqSkill),
-						reqSkillValue: uint32(reqSkillValue),
-						reqLevel:      uint8(reqLevel),
-						reqAb1:        uint32(reqAb1),
-						reqAb2:        uint32(reqAb2),
-						reqAb3:        uint32(reqAb3),
-						tType:         uint32(tType),
-						greet:         gStr,
-					})
-				}
-			}
-			_ = ctRows.Close()
-		}
-
-		for _, raw := range rawCtList {
-			if !s.isSpellFitByClassAndRace(raw.spellID) {
-				continue
-			}
-			// Reference: ObjectMgr::LoadTrainers drops dangling rows at
-			// load (Globals/ObjectMgr.cpp:9211-9243).
-			if !s.trainerSpellRowValid(raw.spellID, raw.reqSkill, []uint32{raw.reqAb1, raw.reqAb2, raw.reqAb3}) {
-				continue
-			}
-			if raw.greet != "" {
-				greeting = raw.greet
-			}
-			trainerType = raw.tType
-			reqAbs := []uint32{raw.reqAb1, raw.reqAb2, raw.reqAb3}
-			serviceState := s.getTrainerSpellState(ctx, raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, reqAbs)
-			var primaryProf uint32
-			if s.trainerSpellPrimaryProfessionFirstRank(raw.spellID) {
-				primaryProf = 1
-			}
-			spells = append(spells, trainerSpellRecord{
-				SpellID:       raw.spellID,
-				ServiceState:  serviceState,
-				Cost:          uint32(float32(raw.moneyCost) * discount),
-				TalentCost:    0,
-				PrimaryProf:   primaryProf,
-				ReqLevel:      raw.reqLevel,
-				ReqSkill:      raw.reqSkill,
-				ReqSkillValue: raw.reqSkillValue,
-				ReqSpell:      raw.reqAb1,
-				ReqSpellChain: raw.reqAb2,
-				ReqSpell3:     raw.reqAb3,
-			})
-		}
-	}
-
 	// NPCHandler.cpp:103-122 (SendTrainerList): a GetTrainer(entry) miss
-	// logs and returns with no packet. The legacy npc_trainer and
-	// class-trainer fallbacks above cover custom/test spawns deliberately;
-	// when they produce nothing either, stay silent instead of answering
-	// an empty list.
-	if !foundTrainer && len(spells) == 0 {
+	// logs and returns with no packet — no legacy npc_trainer or
+	// class-trainer fallback invents spells for a trainer-row-less NPC.
+	if !foundTrainer {
 		return true
 	}
 	packet := protocol.NewBuffer(8 + 4 + 4 + len(spells)*38 + len(greeting) + 1)
@@ -390,37 +252,10 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		}
 	}
 
-	// Fallback for legacy npc_trainer or tests where creature has no trainer row
-	if !foundSpell && !foundTrainer {
-		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(MoneyCost, 0), COALESCE(ReqLevel, 0),
-			COALESCE(ReqSkill, 0), COALESCE(ReqSkillValue, 0), 0, 0, 0
-			FROM npc_trainer WHERE ID = ? AND SpellID = ? LIMIT 1`,
-			creatureEntry, spellID).Scan(&moneyCost, &reqLevel, &reqSkill, &reqSkillValue, &reqAb1, &reqAb2, &reqAb3)
-		if err == nil {
-			foundSpell = true
-		}
-	}
-
-	// Test fallback: if trainer row was NOT found at all, check class fallback
-	if !foundSpell && !foundTrainer && s.player != nil && s.player.Class > 0 {
-		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0),
-			COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0),
-			COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0)
-			FROM trainer_spell AS ts
-			JOIN trainer AS t ON t.Id = ts.TrainerId
-			WHERE t.Type = 0 AND t.Requirement = ? AND ts.SpellId = ? LIMIT 1`,
-			s.player.Class, spellID).Scan(&moneyCost, &reqLevel, &reqSkill, &reqSkillValue, &reqAb1, &reqAb2, &reqAb3)
-		if err == nil {
-			foundSpell = true
-			spellFromTrainerSpell = true
-		}
-	}
-
 	// Reference: ObjectMgr::LoadTrainers drops dangling trainer_spell rows at
 	// load (Globals/ObjectMgr.cpp:9211-9243), so TeachSpell's GetSpell null
 	// arm fails them as Unavailable. The Go tree loads rows per request, so
-	// the validation runs here instead; the npc_trainer legacy fallback has
-	// no C++ owner and is left unvalidated.
+	// the validation runs here instead.
 	if foundSpell && spellFromTrainerSpell &&
 		!s.trainerSpellRowValid(spellID, uint32(reqSkill), []uint32{uint32(reqAb1), uint32(reqAb2), uint32(reqAb3)}) {
 		foundSpell = false

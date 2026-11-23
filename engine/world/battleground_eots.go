@@ -490,16 +490,11 @@ func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, gui
 		return true
 	}
 
-	// If player is carrying the Netherstorm flag AND this tower is controlled by player's team -> FLAG CAPTURE!
-	if eots.FlagState == EOTSFlagStateCarried && eots.FlagCarrierGUID == sess.playerGUID {
-		isControlledByTeam := (team == 0 && tower.State == EOTSTowerStateControlledAlliance) ||
-			(team == 1 && tower.State == EOTSTowerStateControlledHorde)
-
-		if isControlledByTeam {
-			s.captureEOTSFlag(eots, sess, team)
-			return true
-		}
-	}
+	// BattlegroundEY::EventPlayerClickedOnFlag (BattlegroundEY.cpp:642-670)
+	// is flag pickup only — no capture arm: clicking a controlled tower's
+	// banner while carrying the flag does nothing in C++. Captures run
+	// through HandleAreaTrigger 4476/4514/4516/4518
+	// (handleEOTSFlagCaptureTrigger).
 
 	// Otherwise, capturing or contesting the tower:
 	if team == 0 { // Alliance claims/assaults tower
@@ -583,6 +578,61 @@ func (s *Server) captureEOTSFlag(eots *eotsBattlegroundState, sess *session, tea
 		}
 		s.broadcastBattlegroundMessage(eots.MapID, "The Netherstorm Flag has reset!")
 	})
+}
+
+// eotsTowerForCaptureTrigger maps a flag-capture area trigger to its tower
+// (BattlegroundEY.h:107-110): 4476 Blood Elf, 4514 Fel Reaver, 4516 Mage
+// Tower, 4518 Draenei Ruins.
+func eotsTowerForCaptureTrigger(triggerID uint32) (uint32, bool) {
+	switch triggerID {
+	case 4476:
+		return EOTSTowerBloodElf, true
+	case 4514:
+		return EOTSTowerFelReaver, true
+	case 4516:
+		return EOTSTowerMage, true
+	case 4518:
+		return EOTSTowerDraenei, true
+	}
+	return 0, false
+}
+
+// handleEOTSFlagCaptureTrigger runs BattlegroundEY::HandleAreaTrigger
+// (BattlegroundEY.cpp:391-434) for the four point triggers: a living flag
+// carrier entering a point their team controls captures — the walk-in path
+// the tower-banner GO-click arm never covered. The caller holds no lock;
+// this takes eots.mu like handleEOTSGameObjectUse.
+func (s *Server) handleEOTSFlagCaptureTrigger(sess *session, triggerID uint32) {
+	if s == nil || sess == nil || sess.player == nil {
+		return
+	}
+	towerID, ok := eotsTowerForCaptureTrigger(triggerID)
+	if !ok {
+		return
+	}
+	eots := s.getOrCreateEOTSState(sess.player.Map)
+	if eots == nil {
+		return
+	}
+	eots.mu.Lock()
+	defer eots.mu.Unlock()
+	if eots.Winner >= 0 {
+		return
+	}
+	// BattlegroundEY::HandleAreaTrigger (BattlegroundEY.cpp:395): dead
+	// players cannot trigger flag captures.
+	if sess.isDeadOrGhost() {
+		return
+	}
+	team := teamForRace(sess.player.Race)
+	tower := &eots.Towers[towerID]
+	if eots.FlagState == EOTSFlagStateCarried && eots.FlagCarrierGUID == sess.playerGUID {
+		isControlledByTeam := (team == 0 && tower.State == EOTSTowerStateControlledAlliance) ||
+			(team == 1 && tower.State == EOTSTowerStateControlledHorde)
+		if isControlledByTeam {
+			s.captureEOTSFlag(eots, sess, team)
+		}
+	}
 }
 
 // handleEOTSPlayerDeath drops the flag if the dying player is carrying it.
