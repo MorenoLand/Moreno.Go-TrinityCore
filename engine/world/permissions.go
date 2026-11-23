@@ -161,6 +161,10 @@ const permissionMayCheckOwnEmail uint32 = 50
 
 const permissionTwoSideInteractionChat uint32 = 25
 
+// permissionTwoSideCharacterCreation mirrors
+// rbac::RBAC_PERM_TWO_SIDE_CHARACTER_CREATION (RBAC.h:77).
+const permissionTwoSideCharacterCreation uint32 = 24
+
 // permissionTwoSideInteractionChannel mirrors rbac::RBAC_PERM_TWO_SIDE_INTERACTION_CHANNEL (RBAC.h:79).
 const permissionTwoSideInteractionChannel uint32 = 26
 
@@ -183,6 +187,10 @@ const permissionSkipCheckCharacterCreationRacemask uint32 = 16
 // permissionSkipCheckCharacterCreationTeammask mirrors
 // rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_TEAMMASK (RBAC.h:67).
 const permissionSkipCheckCharacterCreationTeammask uint32 = 14
+
+// permissionUseStartGMLevel mirrors rbac::RBAC_PERM_USE_START_GM_LEVEL
+// (RBAC.h:94).
+const permissionUseStartGMLevel uint32 = 41
 
 // permissionSkipCheckCharacterCreationClassmask mirrors
 // rbac::RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_CLASSMASK (RBAC.h:68).

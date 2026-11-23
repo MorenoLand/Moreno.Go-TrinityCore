@@ -22,3 +22,18 @@ local function onKillCreature(event, player, creature)
 end
 
 RegisterPlayerEvent(7, onKillCreature)
+
+-- Boss_Announcer::OnUpdateZone (cs_worldboss_kill_announce.cpp:32-46):
+-- entering area 420 sets run speed 2.0 (Unit::SetSpeed, MOVE_RUN).
+-- Only the SendServerMessage lines are commented out in C++; the
+-- SetSpeed arm is live. The zone hook fires as Eluna player event 27
+-- from updateZoneAndArea (terrain.go) whenever the zone or area changes,
+-- and SetSpeed is the player UnitMethods::SetSpeed bridge
+-- (lua_player.go) — absolute speed, rate 2.0 / base run 7.0.
+local function onUpdateZone(event, player, newZone, newArea)
+    if newArea == 420 then
+        player:SetSpeed(1, 2.0)
+    end
+end
+
+RegisterPlayerEvent(27, onUpdateZone)

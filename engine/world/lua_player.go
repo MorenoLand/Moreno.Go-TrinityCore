@@ -5843,6 +5843,30 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.movementSpeeds()[mt] / playerBaseMoveSpeed[mt]}, nil
 	}
+	// SetSpeed is UnitMethods::SetSpeed (UnitMethods.h:1406-1418) for
+	// players: Unit::SetSpeed (Unit.cpp:8816-8819) sets the absolute speed
+	// for a move type, i.e. SetSpeedRate(type, speed / base). Go's
+	// setGMSpeedRate (movement_speed.go) is the SetSpeedRate twin — it
+	// stores the rate and sends the forced-speed-change packets — so the
+	// bridge divides by playerBaseMoveSpeed first. A type >= MAX_MOVE_TYPE
+	// (9) errors, mirroring the GetSpeed gate. Backs the
+	// Boss_Announcer OnUpdateZone arm (area 420 run speed,
+	// cs_worldboss_kill_announce.cpp:32-46).
+	methods["SetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
+		mt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if mt >= 9 {
+			return nil, fmt.Errorf("SetSpeed requires a valid UnitMoveType, got %d", mt)
+		}
+		speed, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.setGMSpeedRate(int(mt), speed/playerBaseMoveSpeed[mt])
+		return nil, nil
+	}
 	// GetMovementType is UnitMethods::GetMovementType
 	// (UnitMethods.h:1430-1444) for players: client-driven movement
 	// aside, the observable generators are the in-flight script spline

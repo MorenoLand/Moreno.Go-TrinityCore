@@ -1405,8 +1405,11 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		// Broadcasts via World::SendServerMessage(SERVER_MSG_STRING, msg, 0)
 		// (World.cpp:3074), bridged by broadcastServerMessageAll; the killer
 		// link mirrors ChatHandler::playerLink (Chat.h:119). The companion
-		// OnUpdateZone arm (area 420 run-speed set) is commented-out/dev-debug
-		// code in C++ and is deliberately not bridged.
+		// OnUpdateZone arm (area 420 run-speed set,
+		// cs_worldboss_kill_announce.cpp:32-46) is bridged in Lua
+		// (lua_scripts/world/worldboss_kill_announce.lua, event 27) via
+		// the player SetSpeed bridge — only the SendServerMessage lines
+		// are commented out in C++, the SetSpeed is live.
 		if killer == nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 			var bossName string
 			var typeFlags uint32

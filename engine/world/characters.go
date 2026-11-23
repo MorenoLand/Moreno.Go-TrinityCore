@@ -350,7 +350,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	// three-consecutive arm (ObjectMgr.cpp:8620-8623) is a real gate the
 	// old bool check never enforced. Runs after the creation-mask gates,
 	// == C++ order.
-	if res := checkPlayerName(name); res != 0 {
+	if res := s.checkPlayerName(name); res != 0 {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), res)
 	}
 	// ObjectMgr::IsReservedName (ObjectMgr.cpp:8515-8524): lowercased exact
@@ -440,7 +440,12 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if realmCharacterCount >= int64(s.server.Config.CharactersPerRealm) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateServerLimit)
 	}
-	if s.server.Config.GameType == 1 || s.server.Config.GameType == 8 || s.server.Config.GameType == 16 {
+	// CharacterHandler.cpp:467-476: allowTwoSideAccounts is
+	// !IsPvPRealm() || HasPermission(RBAC_PERM_TWO_SIDE_CHARACTER_CREATION,
+	// 24) — a GM holding the exemption is not refused the opposite team
+	// on a PvP realm. The GameType 1/8/16 test is IsPvPRealm
+	// (World.cpp:3527); the exemption is the cached session flag.
+	if (s.server.Config.GameType == 1 || s.server.Config.GameType == 8 || s.server.Config.GameType == 16) && !s.twoSideCharacterCreation {
 		var accRace uint8
 		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT race FROM characters WHERE account = ? LIMIT 1", s.accountID).Scan(&accRace)
 		if err == nil {
@@ -473,6 +478,24 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		// Drop so the client can retry; the session stays open.
 		return true
 	}
+	// ObjectMgr::LoadPlayerInfo (ObjectMgr.cpp:3830-3890) drops spawn rows
+	// with an out-of-range race/class, no DBC row, invalid map coords or a
+	// home map that is instanceable at startup; Go has no load-time
+	// equivalent, so the per-create row is validated here instead. The
+	// race/class legs are subsumed by the DBC lookup-fail arms above (an
+	// out-of-range race/class has no ChrRaces/ChrClasses row and already
+	// answers FAILED), leaving the map/coords/instanceable legs:
+	// IsValidMapCoord is the validMovementPosition twin
+	// (GridDefines.h:216-234) and MapEntry.Instanceable is the
+	// sMapStore->LookupEntry(mapId)->Instanceable() arm.
+	if s.server.Data != nil {
+		if mapEntry, ok, _ := s.server.Data.Map(spawn.Map); !ok || mapEntry.Instanceable() {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateError)
+		}
+	}
+	if !validMovementPosition(spawn.X, spawn.Y, spawn.Z, spawn.Orientation) {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateError)
+	}
 	guid, err := s.server.allocateCharacterGUID(ctx)
 	if err != nil {
 		// No C++ equivalent: GUID generation is in-memory there. Drop so the
@@ -503,6 +526,18 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 			startLevel = uint8(s.server.Config.StartDeathKnightPlayerLevel)
 		} else {
 			startLevel = 55
+		}
+	}
+	// Player::Create (Player.cpp:577-583): an account holding
+	// RBAC_PERM_USE_START_GM_LEVEL (41) starts at max(start,
+	// GM.StartLevel) instead of the plain start level; the config load
+	// already clamped GM.StartLevel to 1..MaxPlayerLevel (World.cpp:1012-1022).
+	if s.useStartGMLevel {
+		if gmLevel := s.server.Config.GMStartLevel; gmLevel > uint32(startLevel) {
+			if maxLevel := s.server.Config.MaxPlayerLevel; maxLevel > 0 && gmLevel > maxLevel {
+				gmLevel = maxLevel
+			}
+			startLevel = uint8(gmLevel)
 		}
 	}
 	startMoney := s.server.Config.StartPlayerMoney
@@ -2665,22 +2700,42 @@ func sendCharacterResult(s *session, opcode uint16, result uint8) bool {
 // checkPlayerName mirrors ObjectMgr::CheckPlayerName
 // (Globals/ObjectMgr.cpp) in check order: too long, too short, mixed
 // languages, three consecutive — the codes C++ forwards verbatim to
-// SendCharCustomize (CharacterHandler.cpp:1433-1437). The isValidString
-// language-class check has no bridge; Go rejects non-letter runes, which
-// C++ also rejects (its extended-latin/cyrillic/east-asian arms all fail on
-// non-letters with numericOrSpace=false), so the code mapping is exact on
-// the rejected set. Returns 0 on success.
-func checkPlayerName(name string) uint8 {
+// SendCharCustomize (CharacterHandler.cpp:1433-1437). The length floor is
+// CONFIG_MIN_PLAYER_NAME (World.cpp:804-811, default 2, clamped 1..12);
+// the language-class arm is isValidString (ObjectMgr.cpp:8563-8593):
+// strict 0 accepts any script's letters (extended latin, cyrillic, east
+// asian), which is Go's unicode.IsLetter check; strict bit 0x1 restricts
+// to basic Latin. The strict 0x2 realm-language arm has no bridge — Go
+// has no RealmZone key — so it falls through to the strict-0 arm.
+// Returns 0 on success.
+func (s *session) checkPlayerName(name string) uint8 {
 	runes := []rune(name)
 	if len(runes) > 12 { // MAX_PLAYER_NAME (ObjectMgr.h:904)
 		return charNameTooLong
 	}
-	if len(runes) < 2 { // CONFIG_MIN_PLAYER_NAME default 2 (World.cpp:804)
+	minName := uint32(2)
+	strictMask := uint32(0)
+	if s != nil && s.server != nil {
+		minName = s.server.Config.MinPlayerName
+		strictMask = s.server.Config.StrictPlayerNames
+	}
+	if minName == 0 || minName > 12 {
+		minName = 2
+	}
+	if uint32(len(runes)) < minName {
 		return charNameTooShort
 	}
-	for _, r := range runes {
-		if !unicode.IsLetter(r) {
-			return charNameMixedLanguages
+	if strictMask&0x1 != 0 {
+		for _, r := range runes {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+				return charNameMixedLanguages
+			}
+		}
+	} else {
+		for _, r := range runes {
+			if !unicode.IsLetter(r) {
+				return charNameMixedLanguages
+			}
 		}
 	}
 	lower := []rune(strings.ToLower(name)) // C++ wstrToLower before the check
@@ -2977,11 +3032,21 @@ func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, cl
 
 	occupiedSlots := make(map[uint8]bool)
 	equippedSlots := make([]uint32, equipSlotEnd)
+	equippedGUIDs := make(map[uint8]uint64)
+	equippedInvTypes := make(map[uint8]int64)
 	firstBackpackSlot := uint8(23)
+	// backpackPlaced records items the first pass could not equip, in
+	// grant order, for the Player.cpp:656-681 second pass below.
+	type backpackPlacement struct {
+		entry   uint32
+		guid    uint64
+		invType int64
+	}
+	var backpackPlaced []backpackPlacement
 
 	for _, itemEntry := range itemIDs {
-		var invType, buyCount, itemClass, itemSubclass int64
-		err := wdb.QueryRowContext(ctx, "SELECT InventoryType, BuyCount, class, subclass FROM item_template WHERE entry = ?", itemEntry).Scan(&invType, &buyCount, &itemClass, &itemSubclass)
+		var invType, buyCount, itemClass, itemSubclass, spellCategory, stackable int64
+		err := wdb.QueryRowContext(ctx, "SELECT InventoryType, BuyCount, class, subclass, spellcategory_1, stackable FROM item_template WHERE entry = ?", itemEntry).Scan(&invType, &buyCount, &itemClass, &itemSubclass, &spellCategory, &stackable)
 		if err != nil {
 			continue
 		}
@@ -3026,6 +3091,37 @@ func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, cl
 		if buyCount > 1 {
 			count = buyCount
 		}
+		if outfitSet[itemEntry] && itemClass == 0 && itemSubclass == 0 {
+			// Player::Create (Player.cpp:635-650): the outfit loop grants
+			// food/drink at special counts instead of BuyCount — food 4
+			// (10 for death knights), drink 2 — capped by the item's max
+			// stack size. The category is the first spell's
+			// SPELL_CATEGORY_FOOD (11) / SPELL_CATEGORY_DRINK (59)
+			// (SharedDefines.h:374-375); GetMaxStackSize
+			// (ItemTemplate.h:686-689) is Stackable except 2147483647/<=0,
+			// which mean unlimited.
+			foodDrink := int64(0)
+			switch spellCategory {
+			case 11: // SPELL_CATEGORY_FOOD
+				if class == 6 { // Death Knight
+					foodDrink = 10
+				} else {
+					foodDrink = 4
+				}
+			case 59: // SPELL_CATEGORY_DRINK
+				foodDrink = 2
+			}
+			if foodDrink > 0 {
+				count = foodDrink
+				maxStack := stackable
+				if maxStack == 2147483647 || maxStack <= 0 {
+					maxStack = 0x7FFFFFFF - 1
+				}
+				if maxStack < count {
+					count = maxStack
+				}
+			}
+		}
 		if amount, ok := customAmounts[itemEntry]; ok {
 			// Player.cpp:635-655 grants the outfit loop and the custom-item
 			// loop as separate StoreNewItemInBestSlots calls, so an item in
@@ -3051,6 +3147,58 @@ func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, cl
 
 		insInvQuery := "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)"
 		_, _ = cdb.ExecContext(ctx, insInvQuery, guid, targetBag, targetSlot, nextItemGUID)
+		if targetSlot < equipSlotEnd {
+			equippedGUIDs[targetSlot] = nextItemGUID
+			equippedInvTypes[targetSlot] = invType
+		} else {
+			backpackPlaced = append(backpackPlaced, backpackPlacement{entry: itemEntry, guid: nextItemGUID, invType: invType})
+		}
+	}
+
+	// Player::Create second pass (Player.cpp:656-681): bags and main-hand
+	// weapon must be equipped at this moment — re-try every item that lost
+	// the first equip race (an offhand weapon/shield that took the mainhand
+	// slot before the mainhand weapon was placed, or ammo that never had a
+	// slot). An item whose slot freed up equips there; a one-hand mainhand
+	// candidate whose slot is held by an offhand-capable weapon shunts the
+	// occupant to the offhand slot first (a two-hand candidate never shunts
+	// — it needs the offhand empty); ammo (INVTYPE_AMMO, 24) becomes the
+	// character's ammo via SetAmmo (Player::SetAmmo, Player.cpp:12109).
+	// The re-store leg (CanStoreItem to a better bag slot) is vacuous in
+	// Go — the first pass already placed the item in the first free
+	// backpack slot.
+	movePlaced := func(placed backpackPlacement, slot uint8) {
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE item = ?", slot, placed.guid)
+		occupiedSlots[slot] = true
+		equippedSlots[slot] = placed.entry
+		equippedGUIDs[slot] = placed.guid
+		equippedInvTypes[slot] = placed.invType
+	}
+	for _, placed := range backpackPlaced {
+		slot := inventoryTypeToSlot(uint8(placed.invType))
+		switch {
+		case slot < equipSlotEnd && !occupiedSlots[slot]:
+			movePlaced(placed, slot)
+		case slot == equipSlotFinger1 && !occupiedSlots[equipSlotFinger2]:
+			movePlaced(placed, equipSlotFinger2)
+		case slot == equipSlotTrinket1 && !occupiedSlots[equipSlotTrinket2]:
+			movePlaced(placed, equipSlotTrinket2)
+		case slot == equipSlotMainhand && !occupiedSlots[equipSlotOffhand] && (placed.invType == 13 || placed.invType == 22 || placed.invType == 23):
+			movePlaced(placed, equipSlotOffhand)
+		case slot == equipSlotMainhand && !occupiedSlots[equipSlotOffhand] && (placed.invType == 13 || placed.invType == 21):
+			if occGUID, ok := equippedGUIDs[equipSlotMainhand]; ok {
+				if occInv := equippedInvTypes[equipSlotMainhand]; occInv == 13 || occInv == 22 || occInv == 23 {
+					_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE item = ?", equipSlotOffhand, occGUID)
+					occupiedSlots[equipSlotOffhand] = true
+					equippedSlots[equipSlotOffhand] = equippedSlots[equipSlotMainhand]
+					equippedGUIDs[equipSlotOffhand] = occGUID
+					equippedInvTypes[equipSlotOffhand] = occInv
+					movePlaced(placed, equipSlotMainhand)
+				}
+			}
+		case placed.invType == 24: // INVTYPE_AMMO
+			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET ammoId = ? WHERE guid = ?", placed.entry, guid)
+		}
 	}
 
 	// Update equipmentCache in characters table
@@ -3243,7 +3391,7 @@ func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
 	// ObjectMgr::CheckPlayerName (CharacterHandler.cpp:1124-1128): the
 	// specific failure code is forwarded verbatim to SendCharRename — not
 	// collapsed to CHAR_NAME_FAILURE (88).
-	if res := checkPlayerName(newName); res != 0 {
+	if res := s.checkPlayerName(newName); res != 0 {
 		sendRename(res, false, "")
 		return true
 	}
@@ -3373,7 +3521,7 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 	// normalizePlayerName gate above already converted invalid-UTF-8 to
 	// CHAR_NAME_NO_NAME, matching C++ (ObjectMgr.cpp: normalizePlayerName
 	// fails -> NO_NAME before CheckPlayerName runs).
-	if code := checkPlayerName(name); code != 0 {
+	if code := s.checkPlayerName(name); code != 0 {
 		sendCustomize(code, false)
 		return true
 	}
@@ -3528,7 +3676,7 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 	// specific ResponseCode rides back (TOO_LONG, TOO_SHORT,
 	// MIXED_LANGUAGES, THREE_CONSECUTIVE) — the same checkPlayerName the
 	// rename/customize handlers use.
-	if code := checkPlayerName(newName); code != 0 {
+	if code := s.checkPlayerName(newName); code != 0 {
 		return sendRaceChange(code)
 	}
 	// IsReservedName arm (CharacterHandler.cpp:1722-1726): gated on
@@ -3724,7 +3872,7 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 		// specific ResponseCode rides back (TOO_LONG, TOO_SHORT,
 		// MIXED_LANGUAGES, THREE_CONSECUTIVE) — the same checkPlayerName the
 		// rename/customize handlers use.
-		if code := checkPlayerName(newName); code != 0 {
+		if code := s.checkPlayerName(newName); code != 0 {
 			return sendFactionChange(code)
 		}
 		// IsReservedName arm (CharacterHandler.cpp:1722-1726): gated on

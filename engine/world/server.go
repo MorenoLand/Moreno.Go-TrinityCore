@@ -538,6 +538,14 @@ type session struct {
 	skipCharCreateRacemask    bool
 	skipCharCreateClassmask   bool
 	skipCharCreateDeathKnight bool
+	// twoSideCharacterCreation caches rbac::RBAC_PERM_TWO_SIDE_CHARACTER_CREATION
+	// (RBAC.h:77) at auth time; HandleCharCreateOpcode's PvP-team arm
+	// (CharacterHandler.cpp:467-476) is skipped for holders.
+	twoSideCharacterCreation bool
+	// useStartGMLevel caches rbac::RBAC_PERM_USE_START_GM_LEVEL (RBAC.h:94)
+	// at auth time; Player::Create starts holders at max(start,
+	// GM.StartLevel) (Player.cpp:577-583).
+	useStartGMLevel bool
 	// ignoreIdleTimeout caches rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION (RBAC.h:60)
 	// at auth time so the idle-connection sweeper needs no per-tick DB lookup,
 	// mirroring WorldSession::Update's HasPermission check (WorldSession.cpp:290).
@@ -10592,6 +10600,14 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if s.skipCharCreateDeathKnight, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionSkipCheckCharacterCreationDeathKnight); err != nil {
 		s.skipCharCreateDeathKnight = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionSkipCheckCharacterCreationDeathKnight, "error", err)
+	}
+	if s.twoSideCharacterCreation, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionTwoSideCharacterCreation); err != nil {
+		s.twoSideCharacterCreation = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideCharacterCreation, "error", err)
+	}
+	if s.useStartGMLevel, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionUseStartGMLevel); err != nil {
+		s.useStartGMLevel = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionUseStartGMLevel, "error", err)
 	}
 	for _, perm := range []struct {
 		id  uint32
