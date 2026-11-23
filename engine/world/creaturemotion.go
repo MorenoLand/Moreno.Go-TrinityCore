@@ -309,9 +309,13 @@ type creatureMotion struct {
 	// means the leg inherits GetSpeed. C++ re-applies _speed on every
 	// UnitSpeedChanged relaunch (PointMovementGenerator.cpp:120-121), so
 	// a leg carrying one must not take the refresh rescale (see
-	// refreshCreatureRunSpeedMotion). Stamped by the shared launchers
-	// alongside ScriptMoveType, cleared by every bypass launch and on
-	// landing.
+	// refreshCreatureRunSpeedMotion). A Home leg banks its launch speed
+	// here too, for the opposite C++ reason: Home has no
+	// UnitSpeedChanged override (base no-op, MovementGenerator.h:64)
+	// and never re-launches (HomeMovementGenerator.cpp:115-122), so its
+	// spline keeps the launch velocity through a speed change. Stamped
+	// by the shared launchers alongside ScriptMoveType, cleared by
+	// every bypass launch and on landing.
 	ScriptMoveExplicitSpeed float32
 	// PendingScriptMove is the Point/Home script launch deferred by the
 	// NOT_MOVE/casting gate in launchCreatureScriptSplineSpeed
@@ -5479,6 +5483,18 @@ func (s *Server) launchCreatureFleeLeg(motion *creatureMotion, targetX, targetY 
 	if s == nil || motion == nil {
 		return false
 	}
+	// MotionMaster::MoveFleeing (MotionMaster.cpp:618-633) Adds a
+	// FleeingMovementGenerator, and Add replaces the active generator —
+	// a live spline-chain run is finalized with it, whether or not this
+	// leg's path succeeds. Nil the chain here, at the flee-leg entry
+	// every caller funnels through (startCreatureFlee, the critter
+	// flee, the mid-flight re-path), so a stale chain cannot fire a
+	// link mid-flee-flight from the step tick's advanceSplineChain arm
+	// — the launchCreatureScriptSplineSpeed non-chain clear twin
+	// (:6139-6140).
+	s.motionMu.Lock()
+	motion.SplineChain = nil
+	s.motionMu.Unlock()
 	// NOT_MOVE aura leg (Unit.h:256 root|stun) — auraMu, never taken
 	// under motionMu.
 	if s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) {
@@ -6131,10 +6147,18 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	// The banked _speed rides the capped launch speed: when the caller
 	// passed an explicit velocity it is the launch speed, so the capped
 	// explicit value is the effective velocity C++ re-applies on
-	// relaunch (PointMovementGenerator.cpp:120-121).
+	// relaunch (PointMovementGenerator.cpp:120-121). A Home leg banks
+	// its launch speed the same way: Home has no UnitSpeedChanged
+	// override (base no-op, MovementGenerator.h:64) and its DoUpdate
+	// never re-launches (HomeMovementGenerator.cpp:115-122), so the
+	// spline keeps the launch velocity and must not take the refresh
+	// rescale.
 	explicit := float32(0)
 	if explicitSpeed > 0 {
 		explicit = capSplineVelocity(explicitSpeed, motion.RunSpeed)
+	}
+	if moveType == movementGeneratorHome {
+		explicit = speed
 	}
 	if moveType != movementGeneratorSplineChain {
 		motion.SplineChain = nil
@@ -6318,7 +6342,10 @@ func (s *Server) tryLaunchCreatureHomePath(motion *creatureMotion, speed float32
 	if !ok || path.PathType()&pathfindNopath != 0 || len(points) < 2 {
 		return false
 	}
-	return s.launchCreaturePolySpline(motion, points, false, 0, motion.HomeO, true, speed, now, 0)
+	// The launch speed rides as the banked explicit speed (the script
+	// Home leg twin above): Home never re-launches, so the spline keeps
+	// this velocity and must not take the refresh rescale.
+	return s.launchCreaturePolySpline(motion, points, false, 0, motion.HomeO, true, speed, now, speed)
 }
 
 // launchCreaturePolySpline launches a CalculatePath poly path
@@ -7617,7 +7644,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 					motion.Evading = true
 					motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 					motion.MoveVelocity = speed
-					motion.ScriptMoveExplicitSpeed = 0
+					motion.ScriptMoveExplicitSpeed = speed
 					motion.WaitUntil = motion.MoveEnds
 				}
 			} else {
@@ -8144,6 +8171,13 @@ func (s *Server) triggerCreatureAlert(ctx context.Context, motion *creatureMotio
 	motion.DistractedFromAssist = false
 	motion.Moving = false
 	s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, motion.GUID, 0)
+	// DistractMovementGenerator::Initialize (IdleMovementGenerator
+	// .cpp:168-169): distracted creatures stand up if not standing —
+	// the stand runs ahead of the spline launch in C++, so it runs
+	// ahead of the turn packet here (standCreatureMotionUp is the
+	// Unit::SetStandState twin: template-bytes1 fallback, NOT_SEATED
+	// aura strip, bytes1 values-update broadcast).
+	s.standCreatureMotionUp(motion)
 	// DistractMovementGenerator::Initialize launches an in-place MoveTo+SetFacing
 	// spline; Go reuses the facing arm of the monster move packet for the
 	// client-side turn, matching the Distract effect bridge.
@@ -9970,7 +10004,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.Evading = true
 			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 			motion.MoveVelocity = speed
-			motion.ScriptMoveExplicitSpeed = 0
+			motion.ScriptMoveExplicitSpeed = speed
 			motion.WaitUntil = motion.MoveEnds
 			return
 		}
@@ -13850,6 +13884,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// (no Go fleeing generator); confuse has the hop model plus the in-combat
 	// chase suppression in the combat section above.
 	if motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
+		// FollowMovementGenerator::Update (FollowMovementGenerator
+		// .cpp:84-91): the same NOT_MOVE / casting-prevented arm resets
+		// _lastTargetPosition, so the first post-block tick re-evaluates
+		// the re-path instead of trusting the pre-block stamp — without
+		// it a follower whose last follow path failed (NOPATH / sub-0.001
+		// speed, stamp kept, no spline in flight) never retries while
+		// the target stands still. The StopMoving half stays unbridgeable
+		// (atomic-spline model, above); the reset is the portable half.
+		if motion.ScriptFollowTargetGUID != 0 {
+			motion.FollowLastTargetKnown = false
+		}
 		return
 	}
 	// ConfusedMovementGenerator::DoUpdate

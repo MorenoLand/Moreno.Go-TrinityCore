@@ -8599,6 +8599,11 @@ func (s *Server) creatureEffectDistract(ctx context.Context, m *creatureMotion, 
 		phase := motion.PhaseMask
 		transportGUID := motion.TransportGUID
 		s.motionMu.Unlock()
+		// DistractMovementGenerator::Initialize (IdleMovementGenerator
+		// .cpp:168-169): distracted creatures stand up if not standing —
+		// the stand runs ahead of the spline launch in C++, so it runs
+		// ahead of the turn packet here (the triggerCreatureAlert twin).
+		s.standCreatureMotionUp(motion)
 		s.broadcastMonsterMoveInInstance(mapID, instanceID, mguid, mx, my, mz, mx, my, mz, 1000, false, angle, true, phase, transportGUID)
 	}
 }
