@@ -1521,6 +1521,46 @@ func (s *Server) petSelectNextTarget(motion *creatureMotion, ownerGUID uint64) u
 	return 0
 }
 
+// petChaseDistance is Creature::GetPetChaseDistance (Creature.cpp:2981-2997):
+// the max GetMaxRange over the pet's auto-cast spells whose recovery time is
+// zero and whose range entry is neither Self (1) nor Combat Range (2). A
+// melee pet has no such spell and reads 0.
+func (s *Server) petChaseDistance(motion *creatureMotion) float32 {
+	if s == nil || s.Data == nil || motion == nil || len(motion.AutocastSpells) == 0 {
+		return 0
+	}
+	var chase float32
+	for _, spellID := range motion.AutocastSpells {
+		if spellID == 0 {
+			continue
+		}
+		spell, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		// SpellInfo::GetRecoveryTime (SpellInfo.cpp:3149-3152) is the max
+		// of RecoveryTime and CategoryRecoveryTime.
+		recoveryTime := spell.RecoveryTime
+		if spell.CategoryRecoveryTime > recoveryTime {
+			recoveryTime = spell.CategoryRecoveryTime
+		}
+		if recoveryTime != 0 {
+			continue
+		}
+		rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
+		if err != nil || !ok || rangeEntry.ID == 1 || rangeEntry.ID == 2 {
+			continue
+		}
+		// SpellInfo::GetMaxRange() with no caster and no spell: the
+		// hostile [0] max, with no SPELLMOD_RANGE term
+		// (SpellInfo.cpp:3061-3075).
+		if maxRange := float32(spellDBCMaxRange(false, rangeEntry)); maxRange > chase {
+			chase = maxRange
+		}
+	}
+	return chase
+}
+
 // petCombatPursuitAndAttack handles pathing towards and attacking the pet's target.
 func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creatureMotion, owner *playerPos, now time.Time) {
 	// Look up target
@@ -1717,36 +1757,76 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			motion.Moving = false
 			return
 		}
-		// Run towards target. ChaseMovementGenerator with no _range
-		// (ChaseMovementGenerator.cpp:119-122, 180-211): the path is
-		// shortened to maxTarget = CONTACT_DISTANCE (0.5,
-		// ObjectDefines.h:23) + hitboxSum along the path, and the spline
-		// duration derives from that shortened length (MoveSpline.cpp
-		// minimal 1 ms) — no 200 ms floor exists in C++.
-		dx := targetX - motion.X
-		dy := targetY - motion.Y
-		angle := float32(math.Atan2(float64(dy), float64(dx)))
-		stopDist := float32(0.5) + motion.CombatReach + victimReach
-		destX := targetX - stopDist*float32(math.Cos(float64(angle)))
-		destY := targetY - stopDist*float32(math.Sin(float64(angle)))
-		destZ := targetZ
-		speed := motion.RunSpeed
-		if speed < 0.001 {
-			// ChaseMovementGenerator launches with no explicit velocity
-			// (ChaseMovementGenerator.cpp:230-234), so the owner's speed feeds
-			// MoveSplineInitArgs::Validate (MoveSpline.cpp:210) — below 0.001
-			// no spline launches and no SMSG_MONSTER_MOVE is sent. A zero-speed
-			// pet stands still instead of sprinting at base run speed.
+		// PetAI::DoAttack (PetAI.cpp:408-433) chases with ChaseRange(0,
+		// chaseDistance) + ChaseAngle(angle, tolerance), where
+		// chaseDistance is Creature::GetPetChaseDistance
+		// (Creature.cpp:2981-2997): the max range of the pet's
+		// zero-recovery autocast spells. ChaseRange(0, D)
+		// (MovementDefines.cpp:25-26) has MaxRange D + CONTACT_DISTANCE
+		// and MaxTolerance max(D - CONTACT_DISTANCE, min(CONTACT_DISTANCE,
+		// D/2)), so a ranged pet re-paths only outside D + 0.5 +
+		// hitboxSum and stops at MaxTolerance + hitboxSum; its angle is
+		// 0 with tolerance 2*PI, so the bearing never gates the stop.
+		// A melee pet reads chaseDistance 0 and keeps the old leg
+		// (maxTarget CONTACT_DISTANCE + hitboxSum); its ChaseAngle(PI,
+		// PI/4) only gates PositionOkay
+		// (ChaseMovementGenerator.cpp:52), which the pet pursuit has no
+		// twin of, and the near point it steers to is the target center
+		// ((maxTarget - hitboxSum) = 0, :186-189), so there is no
+		// behind-target destination to port.
+		chaseDistance := s.petChaseDistance(motion)
+		chaseStop := float32(0.5) + motion.CombatReach + victimReach
+		chaseResume := meleeRange
+		if chaseDistance > 0 {
+			minTolerance := float32(0.5)
+			if chaseDistance/2 < minTolerance {
+				minTolerance = chaseDistance / 2
+			}
+			maxTolerance := chaseDistance - float32(0.5)
+			if minTolerance > maxTolerance {
+				maxTolerance = minTolerance
+			}
+			chaseStop = maxTolerance + motion.CombatReach + victimReach
+			chaseResume = chaseDistance + float32(0.5) + motion.CombatReach + victimReach
+		}
+		if dist <= chaseResume {
+			// Inside the chase band: stand and let the autocast below
+			// fire from range. The melee swing lives in the
+			// dist <= meleeRange branch, so a ranged pet holding at
+			// spell range never swings.
 			motion.Moving = false
 		} else {
-			motion.Orientation = angle
-			duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)), speed)
-			motion.X = destX
-			motion.Y = destY
-			motion.Z = destZ
-			motion.Moving = true
-			motion.ScriptMoveFromKnown = false
-			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
+			// Run towards target. ChaseMovementGenerator with no _range
+			// (ChaseMovementGenerator.cpp:119-122, 180-211): the path is
+			// shortened to maxTarget = CONTACT_DISTANCE (0.5,
+			// ObjectDefines.h:23) + hitboxSum along the path, and the spline
+			// duration derives from that shortened length (MoveSpline.cpp
+			// minimal 1 ms) — no 200 ms floor exists in C++.
+			dx := targetX - motion.X
+			dy := targetY - motion.Y
+			angle := float32(math.Atan2(float64(dy), float64(dx)))
+			stopDist := chaseStop
+			destX := targetX - stopDist*float32(math.Cos(float64(angle)))
+			destY := targetY - stopDist*float32(math.Sin(float64(angle)))
+			destZ := targetZ
+			speed := motion.RunSpeed
+			if speed < 0.001 {
+				// ChaseMovementGenerator launches with no explicit velocity
+				// (ChaseMovementGenerator.cpp:230-234), so the owner's speed feeds
+				// MoveSplineInitArgs::Validate (MoveSpline.cpp:210) — below 0.001
+				// no spline launches and no SMSG_MONSTER_MOVE is sent. A zero-speed
+				// pet stands still instead of sprinting at base run speed.
+				motion.Moving = false
+			} else {
+				motion.Orientation = angle
+				duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)), speed)
+				motion.X = destX
+				motion.Y = destY
+				motion.Z = destZ
+				motion.Moving = true
+				motion.ScriptMoveFromKnown = false
+				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false, motion.PhaseMask, motion.TransportGUID)
+			}
 		}
 	} else {
 		motion.Moving = false
