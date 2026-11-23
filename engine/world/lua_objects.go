@@ -503,8 +503,10 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
 			s.server.motionMu.Lock()
 			motion.Confused = true
+			motion.ConfusedX, motion.ConfusedY, motion.ConfusedZ = motion.X, motion.Y, motion.Z
+			motion.ConfusedOriginKnown = true
 			s.server.motionMu.Unlock()
-			s.server.launchCreatureConfusedSpline(motion)
+			s.server.launchCreatureConfusedSpline(motion, time.Now())
 		}
 		return nil, nil
 	}

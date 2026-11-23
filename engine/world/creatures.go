@@ -931,6 +931,81 @@ func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, dest
 	return packet.Bytes()
 }
 
+// appendPackXYZ is ByteBuffer::appendPackXYZ (ByteBuffer.h:463-470):
+// the PackedXYZ wire form of a midpoint offset, 0.25yd units, x/y
+// 11 bits and z 10 bits of a uint32. The (int) truncation toward
+// zero and the bit masks match C++ on two's-complement targets, so
+// negative offsets encode identically.
+func appendPackXYZ(packet *protocol.Buffer, x, y, z float32) {
+	packed := uint32(int32(x/0.25)&0x7FF) | uint32(int32(y/0.25)&0x7FF)<<11 | uint32(int32(z/0.25)&0x3FF)<<22
+	packet.WriteU32(packed)
+}
+
+// buildMonsterMoveMulti is the multi-point twin of buildMonsterMove:
+// MovementPacketBuilder.cpp WriteLinearPath (MovementPacketBuilder
+// .cpp:95-115) for a MoveSplineInit::MovebyPath poly path. points
+// are the path controls with points[0] the start (PathGenerator::
+// GetPath, path[0] corrected to the launch position by
+// MoveSplineInit::Launch): the spline holds the controls plus a
+// duplicate last point (SplineBase::InitLinear, Spline.cpp), so the
+// wire count is len(points)-2, the destination is the last control,
+// and the middle points (controls[2..len-2]) ride as PackedXYZ
+// offsets from the midpoint of the first and last controls — the
+// first control after the start is never written, exactly as C++
+// writes it. A path under 3 points falls back to the single-point
+// writer, preserving its count-1 form.
+func buildMonsterMoveMulti(rawGUID uint64, startX, startY, startZ float32, points []pathVec, duration uint32, facing float32, hasFacing bool, transportGUID uint64, flying bool, animTier int) []byte {
+	if len(points) < 3 {
+		dest := pathVec{startX, startY, startZ}
+		if len(points) > 0 {
+			dest = points[len(points)-1]
+		}
+		return buildMonsterMove(rawGUID, startX, startY, startZ, dest.X, dest.Y, dest.Z, duration, facing, hasFacing, transportGUID, flying, animTier)
+	}
+	packet := protocol.NewBuffer(64 + 4*len(points))
+	packet.WritePackedGUID(rawGUID)
+	if transportGUID != 0 {
+		packet.WritePackedGUID(transportGUID)
+		packet.WriteI8(-1)
+	}
+	packet.WriteU8(0) // MOVEMENTFLAG2_UNK7
+	packet.WriteF32(startX)
+	packet.WriteF32(startY)
+	packet.WriteF32(startZ)
+	packet.WriteU32(uint32(time.Now().UnixMilli())) // SplineID
+	if hasFacing {
+		packet.WriteU8(4) // MonsterMoveFacingAngle
+		packet.WriteF32(facing)
+	} else {
+		packet.WriteU8(0) // MonsterMoveNormal
+	}
+	splineFlags := uint32(0)
+	if flying {
+		splineFlags |= splineFlagFlying
+	}
+	if animTier >= 0 {
+		splineFlags |= splineFlagAnimation
+	}
+	packet.WriteU32(splineFlags)
+	if animTier >= 0 {
+		packet.WriteU8(uint8(animTier))
+		packet.WriteU32(0) // effect_start_time
+	}
+	packet.WriteU32(duration) // Duration in ms
+	last := len(points) - 1
+	packet.WriteU32(uint32(last - 1)) // Points count (WriteLinearPath last_idx)
+	packet.WriteF32(points[last].X)
+	packet.WriteF32(points[last].Y)
+	packet.WriteF32(points[last].Z)
+	middleX := (points[1].X + points[last].X) / 2
+	middleY := (points[1].Y + points[last].Y) / 2
+	middleZ := (points[1].Z + points[last].Z) / 2
+	for i := 2; i <= last-1; i++ {
+		appendPackXYZ(packet, middleX-points[i].X, middleY-points[i].Y, middleZ-points[i].Z)
+	}
+	return packet.Bytes()
+}
+
 // buildMonsterMoveFalling is the MoveFall wire twin of buildMonsterMove
 // (MovementPacketBuilder.cpp WriteCommonMonsterMovePart): the flags word
 // carries Falling (0x00000200, MoveSplineFlag.h:35 — outside
@@ -1080,6 +1155,27 @@ func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUI
 // to before.
 func (s *Server) broadcastMonsterMoveFlagsInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool, phase uint32, transportGUID uint64, flying bool, animTier int) {
 	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, facing, hasFacing, transportGUID, flying, animTier)
+	s.broadcastMonsterMovePacketInInstance(mapID, instanceID, rawGUID, startX, startY, destX, destY, destZ, walk, phase, transportGUID, packet)
+}
+
+// broadcastMonsterMoveMultiInInstance is the multi-point twin of
+// broadcastMonsterMoveFlagsInInstance: the SMSG_MONSTER_MOVE for a
+// CalculatePath poly path (Movement::MoveSplineInit::MovebyPath,
+// MovementPacketBuilder.cpp WriteLinearPath), carrying every path
+// point instead of a single destination so the client follows the
+// routed path instead of a straight line. A 2-point path falls back
+// to the single-point writer (buildMonsterMoveMulti).
+func (s *Server) broadcastMonsterMoveMultiInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ float32, points []pathVec, duration uint32, walk bool, facing float32, hasFacing bool, phase uint32, transportGUID uint64, flying bool, animTier int) {
+	packet := buildMonsterMoveMulti(rawGUID, startX, startY, startZ, points, duration, facing, hasFacing, transportGUID, flying, animTier)
+	end := points[len(points)-1]
+	s.broadcastMonsterMovePacketInInstance(mapID, instanceID, rawGUID, startX, startY, end.X, end.Y, end.Z, walk, phase, transportGUID, packet)
+}
+
+// broadcastMonsterMovePacketInInstance is the shared fan-out of the
+// monster-move broadcasts: the walk/run mode packet plus the move
+// packet to the in-instance, in-range, phase-visible set, then the
+// creature-target farsight re-stream at the spline destination.
+func (s *Server) broadcastMonsterMovePacketInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, destX, destY, destZ float32, walk bool, phase uint32, transportGUID uint64, packet []byte) {
 	moveOpcode := protocol.OpcodeSMSG_MONSTER_MOVE
 	if transportGUID != 0 {
 		moveOpcode = protocol.OpcodeSMSG_MONSTER_MOVE_TRANSPORT

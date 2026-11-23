@@ -71,15 +71,19 @@ type luaUnitSnapshot struct {
 	resistances [7]uint32
 	alive       bool
 	evading     bool
-	inFlight    bool
-	isGM        bool
-	mounted     bool
-	targetGUID  uint64
-	ownerGUID   uint64
-	charmerGUID uint64
-	inCombat    bool
-	x, y, z     float32
-	phase       uint32
+	// cannotReachTarget is Creature::CanNotReachTarget (Creature.h:468):
+	// the chase-leg flag; with evading it forms IsEvadingAttacks
+	// (Creature.h:145).
+	cannotReachTarget bool
+	inFlight          bool
+	isGM              bool
+	mounted           bool
+	targetGUID        uint64
+	ownerGUID         uint64
+	charmerGUID       uint64
+	inCombat          bool
+	x, y, z           float32
+	phase             uint32
 }
 
 func (ref luaUnitRef) snapshot() luaUnitSnapshot {
@@ -113,6 +117,7 @@ func (ref luaUnitRef) snapshot() luaUnitSnapshot {
 	snap.resistances = motion.Resistances
 	snap.alive = motion.Health > 0
 	snap.evading = motion.Evading
+	snap.cannotReachTarget = motion.CannotReachTarget
 	snap.targetGUID = motion.TargetGUID
 	snap.ownerGUID = motion.OwnerGUID
 	snap.charmerGUID = motion.CharmerGUID
@@ -121,6 +126,13 @@ func (ref luaUnitRef) snapshot() luaUnitSnapshot {
 	snap.phase = motion.PhaseMask
 	ref.srv.motionMu.Unlock()
 	return snap
+}
+
+// isEvadingAttacks is Creature::IsEvadingAttacks (Creature.h:145):
+// IsInEvadeMode() || CanNotReachTarget(). Players never carry the
+// reach half, so only creature snapshots set it.
+func (snap luaUnitSnapshot) isEvadingAttacks() bool {
+	return snap.evading || snap.cannotReachTarget
 }
 
 func (ref luaUnitRef) attackerSession() *session {
@@ -166,10 +178,10 @@ func luaUnitAttack(ctx context.Context, attacker luaUnitRef, victimGUID uint64, 
 	if victim.isPlayer && victimSnap.isGM {
 		return false
 	}
-	// Creature::IsEvadingAttacks is IsInEvadeMode() || CanNotReachTarget();
-	// Go models only the evade half (motion.Evading), the reach half has
-	// no model.
-	if !victim.isPlayer && victimSnap.evading {
+	// Creature::IsEvadingAttacks is IsInEvadeMode() || CanNotReachTarget()
+	// (Creature.h:145): a victim the attacker cannot reach is as
+	// unattackable as an evading one.
+	if !victim.isPlayer && victimSnap.isEvadingAttacks() {
 		return false
 	}
 	// SPELL_AURA_MOD_UNATTACKABLE (93) is stripped from the attacker.
@@ -327,7 +339,7 @@ func luaUnitDealDamage(ctx context.Context, attacker luaUnitRef, victimGUID uint
 		// DealDamageMods (Unit.cpp:686): a dead, in-flight, or
 		// evading-attacks victim takes nothing; the full amount folds
 		// into absorb.
-		if !victimSnap.alive || victimSnap.inFlight || victimSnap.evading {
+		if !victimSnap.alive || victimSnap.inFlight || victimSnap.isEvadingAttacks() {
 			absorb += dmg
 			dmg = 0
 		}
@@ -348,7 +360,7 @@ func luaUnitDealDamage(ctx context.Context, attacker luaUnitRef, victimGUID uint
 		// DealSpellDamage (Unit.cpp:1136) early-returns on a dead,
 		// in-flight, or evading-attacks victim; the log below still
 		// fires first with the zeroed damage, matching C++ order.
-		if !victimSnap.alive || victimSnap.inFlight || victimSnap.evading {
+		if !victimSnap.alive || victimSnap.inFlight || victimSnap.isEvadingAttacks() {
 			dmg = 0
 		}
 		sendSpellLog = true

@@ -6501,8 +6501,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	methods["MoveConfused"] = func(_ context.Context, args []any) ([]any, error) {
 		s.motionMu.Lock()
 		motion.Confused = true
+		motion.ConfusedX, motion.ConfusedY, motion.ConfusedZ = motion.X, motion.Y, motion.Z
+		motion.ConfusedOriginKnown = true
 		s.motionMu.Unlock()
-		s.launchCreatureConfusedSpline(motion)
+		s.launchCreatureConfusedSpline(motion, time.Now())
 		return nil, nil
 	}
 	// SetConfused is UnitMethods::SetConfused (UnitMethods.h:1946-1958)
