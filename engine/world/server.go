@@ -415,6 +415,12 @@ type Server struct {
 	terrainTiles           map[uint64][]terrainSpawn
 	terrainTileKnown       map[uint64]bool
 	terrainModels          map[string]*terrainModel
+	// mmapMu/mmaps mirror MMapFactory's g_MMapManager singleton
+	// (MMapFactory.cpp: g_MMapManager): the lazily-created MMapManager
+	// (see mmapManager in mmap.go), guarding the same way terrainMu
+	// guards the terrain maps.
+	mmapMu sync.Mutex
+	mmaps  *MMapManager
 	// vmapDisableMu/vmapDisableFlags cache the DISABLE_TYPE_VMAP rows
 	// (disables sourceType 6) per map, lazily loaded by
 	// Server.vmapDisabledFor (terrain.go); .reload disables drops the cache

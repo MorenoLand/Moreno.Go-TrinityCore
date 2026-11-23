@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/mmaps-generator/detour"
 )
 
 // mmaps command port: mmaps_commandscript (cs_mmaps.cpp), the "mmap" root
@@ -19,39 +21,29 @@ import (
 // line. Trinity checks permission only on the invoker leaf node, so each
 // arm gates exactly its own C++ permission (RBAC.h:405-409).
 //
-// Of the 5 arms, 3 are native or partially native and 2 are
-// documented-blocked:
+// Of the 5 arms, 3 are native and 2 are documented-blocked:
 //
-//   - `loc` is partially native: the grid tile location math (cs_mmaps.cpp:
-//     133-134) needs only the player position, which is modeled. The navmesh
-//     tile location (dtNavMeshQuery::findNearestPoly) has no Go bridge, so
-//     the arm ends with the C++-exact "NavMesh not loaded for current map."
-//     report, which is the true state of the Go tree (no navmesh is ever
-//     loaded).
-//   - `stats` is partially native: "mmap stats:", the "global mmap
-//     pathfinding is %sabled" line (DisableMgr::IsPathfindingEnabled =
-//     CONFIG_ENABLE_MMAPS && no DISABLE_TYPE_MMAP disables row; for MMAP
-//     disables the entry's mere presence disables pathfinding,
-//     DisableMgr.cpp:403-404), and the " %u maps loaded with %u tiles
-//     overall" line (the Go MMapManager loads nothing, so both counts are
-//     exactly 0) are real. The per-tile dtNavMesh stats have no Go bridge,
-//     so the arm ends with the C++-exact "NavMesh not loaded for current
-//     map." report.
-//   - `path` has no Go bridge: PathGenerator/dtNavMesh are unbuilt. The C++
-//     handler gates on the navmesh (cs_mmaps.cpp:97-101) before printing
-//     "mmap path:" (:103), so with no navmesh loaded the output is exactly
-//     the missing report.
-//   - `loadedtiles` has no Go bridge: dtNavMesh is unbuilt. The C++ handler
-//     (cs_mmaps.cpp:207) reports the navmesh as missing before printing
-//     anything, so the Go arm emits exactly that line.
-//   - `testarea` is partially native: the creature range search runs over
-//     the live motion map (same map + instance, alive only, the
-//     AnyUnitInObjectRangeCheck terms — phase-mask overlap, 40yd 3D plus
-//     both combat reaches, strict < on squared distance,
-//     GridNotifiers.h:1050-1055), but PathGenerator/dtNavMesh are unbuilt,
-//     so no path is actually computed: the paths count mirrors C++'s
-//     unconditional per-creature attempt count (cs_mmaps.cpp:282-287) over
-//     the measured sweep time.
+//   - `loadedtiles` is native: the manager's navmesh/query gate and the
+//     per-slot tile scan (cs_mmaps.cpp:189-212) run over Server.mmaps.
+//   - `loc` is native: the grid tile location math (cs_mmaps.cpp:133-134)
+//     plus the navmesh tile location (Calc from the mesh params orig,
+//     findNearestPoly, getTileAndPolyByRef, cs_mmaps.cpp:140-187) run over
+//     Server.mmaps and the Detour query port.
+//   - `stats` is native: the header, pathfinding, manager-counts, and
+//     per-tile dtNavMesh aggregate lines (cs_mmaps.cpp:214-260) run over
+//     Server.mmaps; a map with no mesh loaded still reports exactly
+//     "NavMesh not loaded for current map." like C++.
+//   - `path` has no Go bridge: PathGenerator lands in a sibling unit. The
+//     C++ handler gates on the navmesh (cs_mmaps.cpp:97-101) before
+//     printing "mmap path:" (:103), so with no navmesh loaded the output
+//     is exactly the missing report.
+//   - `testarea` has no Go bridge: PathGenerator lands in a sibling unit.
+//     The creature range search runs over the live motion map (same map +
+//     instance, alive only, the AnyUnitInObjectRangeCheck terms —
+//     phase-mask overlap, 40yd 3D plus both combat reaches, strict < on
+//     squared distance, GridNotifiers.h:1050-1055), but no path is actually
+//     computed: the paths count mirrors C++'s unconditional per-creature
+//     attempt count (cs_mmaps.cpp:282-287) over the measured sweep time.
 //
 // Console-vs-chat branches are moot (Go commands are always sessioned).
 //
@@ -109,21 +101,36 @@ func (s *session) handleCmdMMap(ctx context.Context, args []string) bool {
 }
 
 // handleMmapLoadedTilesCommand mirrors HandleMmapLoadedTilesCommand
-// (cs_mmaps.cpp:189-212, RBAC 537). Documented-blocked: dtNavMesh has no Go
-// bridge.
+// (cs_mmaps.cpp:189-212, RBAC 537): the navmesh/query gate, then one
+// "[%02i, %02i]" line per loaded tile slot (getMaxTiles slots, skipping
+// empty ones), over Server.mmaps.
 func (s *session) handleMmapLoadedTilesCommand(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandMMapLoadedTiles) {
 		return false
 	}
-	// The C++ handler (cs_mmaps.cpp:196) reports the navmesh as missing
-	// before printing anything, so the Go arm emits exactly that line.
-	s.sendSysMessage("NavMesh not loaded for current map.")
+	// The C++ handler (cs_mmaps.cpp:196-201) reports the navmesh as
+	// missing when either the mesh or the per-instance query is absent.
+	mgr := s.server.mmapManager()
+	navmesh := mgr.GetNavMesh(s.player.Map)
+	navmeshquery := mgr.GetNavMeshQuery(s.player.Map, s.player.InstanceID)
+	if navmesh == nil || navmeshquery == nil {
+		s.sendSysMessage("NavMesh not loaded for current map.")
+		return true
+	}
+	s.sendSysMessage("mmap loadedtiles:")
+	for i := 0; i < navmesh.GetMaxTiles(); i++ {
+		tile := navmesh.GetTile(i)
+		if tile == nil || tile.Header == nil {
+			continue
+		}
+		s.sendSysMessage(fmt.Sprintf("[%02d, %02d]", tile.Header.X, tile.Header.Y))
+	}
 	return true
 }
 
 // handleMmapLocCommand mirrors HandleMmapLocCommand (cs_mmaps.cpp:126-187,
 // RBAC 538): the grid tile location is native math; the navmesh tile
-// location has no Go bridge.
+// location runs over Server.mmaps and the Detour query port.
 func (s *session) handleMmapLocCommand(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandMMapLoc) {
 		return false
@@ -136,15 +143,48 @@ func (s *session) handleMmapLocCommand(ctx context.Context) bool {
 	gy := int32(32 - s.player.Y/goSizeOfGrids)
 	s.sendSysMessage(fmt.Sprintf("%03d%02d%02d.mmtile", s.player.Map, gx, gy))
 	s.sendSysMessage(fmt.Sprintf("tileloc [%d, %d]", gy, gx))
-	// The navmesh tile location (findNearestPoly :162 / getTileAndPolyByRef,
-	// cs_mmaps.cpp:140-187) has no Go bridge; report the navmesh as missing
-	// exactly like the C++ handler does (cs_mmaps.cpp:144).
-	s.sendSysMessage("NavMesh not loaded for current map.")
+	// The navmesh tile location (cs_mmaps.cpp:140-187) runs over
+	// Server.mmaps and the Detour query port.
+	mgr := s.server.mmapManager()
+	navmesh := mgr.GetNavMesh(s.player.Map)
+	navmeshquery := mgr.GetNavMeshQuery(s.player.Map, s.player.InstanceID)
+	if navmesh == nil || navmeshquery == nil {
+		// Exactly like the C++ handler (cs_mmaps.cpp:144).
+		s.sendSysMessage("NavMesh not loaded for current map.")
+		return true
+	}
+	// float const* min = navmesh->getParams()->orig (cs_mmaps.cpp:149);
+	// tilex/tiley divide the Detour-space coords (y - min[0], x - min[2])
+	// by SIZE_OF_GRIDS (:156-157).
+	min := navmesh.GetParams().Orig
+	tilex := int32((s.player.Y - min[0]) / goSizeOfGrids)
+	tiley := int32((s.player.X - min[2]) / goSizeOfGrids)
+	s.sendSysMessage(fmt.Sprintf("Calc   [%02d, %02d]", tilex, tiley))
+	// float location[3] = {y, z, x} (cs_mmaps.cpp:153): Detour axes are
+	// (WoW y, WoW z, WoW x). Extents {3, 5, 3} (:154); the default
+	// dtQueryFilter (:160) is NewQueryFilter.
+	location := detour.Vec3{s.player.Y, s.player.Z, s.player.X}
+	extents := detour.Vec3{3.0, 5.0, 3.0}
+	polyRef, _, st := navmeshquery.FindNearestPoly(location, extents, detour.NewQueryFilter())
+	if detour.StatusFailed(st) {
+		s.sendSysMessage("Dt     [??,??] (invalid poly, probably no tile loaded)")
+		return true
+	}
+	if polyRef == 0 { // INVALID_POLYREF (cs_mmaps.cpp:167-168)
+		s.sendSysMessage("Dt     [??, ??] (invalid poly, probably no tile loaded)")
+		return true
+	}
+	tile, _, st := navmesh.GetTileAndPolyByRef(polyRef)
+	if detour.StatusSucceed(st) && tile != nil {
+		s.sendSysMessage(fmt.Sprintf("Dt     [%02d,%02d]", tile.Header.X, tile.Header.Y))
+		return true
+	}
+	s.sendSysMessage("Dt     [??,??] (no tile loaded)")
 	return true
 }
 
 // handleMmapPathCommand mirrors HandleMmapPathCommand (cs_mmaps.cpp:65-124,
-// RBAC 539). Documented-blocked: PathGenerator/dtNavMesh have no Go bridge.
+// RBAC 539). Documented-blocked: PathGenerator lands in a sibling unit.
 func (s *session) handleMmapPathCommand(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandMMapPath) {
 		return false
@@ -163,8 +203,8 @@ func (s *session) handleMmapPathCommand(ctx context.Context) bool {
 // on the entry's mere presence (DisableMgr.cpp:404-405), so flags are ignored.
 // This stats display is the only Go enforcement of MMAP disables: the C++
 // pathfinding gate (PathGenerator.cpp:41) and tile-load gate (Map.cpp:169)
-// have no Go counterpart — Go runs no navmesh pathfinder
-// (creaturemotion.go:3920) and loads no mmap tiles.
+// have no Go counterpart yet — Go runs no navmesh pathfinder
+// (creaturemotion.go:3920) and no Map/Grid driver calls MMapManager.LoadMap.
 func (s *session) mmapPathfindingEnabled(ctx context.Context, mapID uint32) bool {
 	if s.server == nil || !s.server.Config.EnableMmaps {
 		return false
@@ -180,7 +220,7 @@ func (s *session) mmapPathfindingEnabled(ctx context.Context, mapID uint32) bool
 
 // handleMmapStatsCommand mirrors HandleMmapStatsCommand (cs_mmaps.cpp:
 // 214-260, RBAC 540): the header, pathfinding, and manager-counts lines
-// are native; the per-tile navmesh stats have no Go bridge.
+// are native, and the per-tile navmesh aggregates run over Server.mmaps.
 func (s *session) handleMmapStatsCommand(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandMMapStats) {
 		return false
@@ -192,14 +232,37 @@ func (s *session) handleMmapStatsCommand(ctx context.Context) bool {
 	}
 	s.sendSysMessage(fmt.Sprintf("  global mmap pathfinding is %sabled", enabled))
 	// MMapManager::getLoadedMapsCount/getLoadedTilesCount
-	// (cs_mmaps.cpp:221) have no Go bridge, but the Go manager loads
-	// nothing, so both counts are exactly 0 == the C++ output on an
-	// empty manager.
-	s.sendSysMessage(" 0 maps loaded with 0 tiles overall")
-	// The per-tile dtNavMesh stats (cs_mmaps.cpp:233-258) have no Go
-	// bridge; report the navmesh as missing exactly like the C++ handler
-	// does (cs_mmaps.cpp:226).
-	s.sendSysMessage("NavMesh not loaded for current map.")
+	// (cs_mmaps.cpp:221), over Server.mmaps.
+	mgr := s.server.mmapManager()
+	s.sendSysMessage(fmt.Sprintf(" %d maps loaded with %d tiles overall", mgr.LoadedMapsCount(), mgr.LoadedTilesCount()))
+	// The per-tile dtNavMesh stats (cs_mmaps.cpp:233-258); report the
+	// navmesh as missing exactly like the C++ handler does (:226) when
+	// the map has no mesh loaded.
+	navmesh := mgr.GetNavMesh(s.player.Map)
+	if navmesh == nil {
+		s.sendSysMessage("NavMesh not loaded for current map.")
+		return true
+	}
+	var tileCount, nodeCount, polyCount, vertCount, triCount, triVertCount, dataSize uint32
+	for i := 0; i < navmesh.GetMaxTiles(); i++ {
+		tile := navmesh.GetTile(i)
+		if tile == nil || tile.Header == nil {
+			continue
+		}
+		tileCount++
+		nodeCount += uint32(tile.Header.BVNodeCount)
+		polyCount += uint32(tile.Header.PolyCount)
+		vertCount += uint32(tile.Header.VertCount)
+		triCount += uint32(tile.Header.DetailTriCount)
+		triVertCount += uint32(tile.Header.DetailVertCount)
+		dataSize += uint32(tile.DataSize)
+	}
+	s.sendSysMessage("Navmesh stats:")
+	s.sendSysMessage(fmt.Sprintf(" %d tiles loaded", tileCount))
+	s.sendSysMessage(fmt.Sprintf(" %d BVTree nodes", nodeCount))
+	s.sendSysMessage(fmt.Sprintf(" %d polygons (%d vertices)", polyCount, vertCount))
+	s.sendSysMessage(fmt.Sprintf(" %d triangles (%d vertices)", triCount, triVertCount))
+	s.sendSysMessage(fmt.Sprintf(" %.2f MB of data (not including pointers)", float64(dataSize)/1048576))
 	return true
 }
 

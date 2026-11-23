@@ -83,22 +83,25 @@ func (h MmapTileHeader) Marshal() []byte {
 
 // NavMeshParams mirrors dtNavMeshParams (DetourNavMesh.h): 28 bytes, the
 // entire contents of a %03u.mmap file as written by MapBuilder::buildNavMesh.
+// Field order matches the C++ struct: orig[3], tileWidth, tileHeight,
+// maxTiles, maxPolys.
 type NavMeshParams struct {
+	Orig       [3]float32
 	TileWidth  float32
 	TileHeight float32
-	Orig       [3]float32
 	MaxTiles   uint32
 	MaxPolys   uint32
 }
 
-// Marshal returns the 28-byte little-endian params.
+// Marshal returns the 28-byte little-endian params, in C++ struct order
+// (orig[3], tileWidth, tileHeight, maxTiles, maxPolys).
 func (p NavMeshParams) Marshal() []byte {
 	buf := make([]byte, 28)
-	binary.LittleEndian.PutUint32(buf[0:4], math.Float32bits(p.TileWidth))
-	binary.LittleEndian.PutUint32(buf[4:8], math.Float32bits(p.TileHeight))
-	binary.LittleEndian.PutUint32(buf[8:12], math.Float32bits(p.Orig[0]))
-	binary.LittleEndian.PutUint32(buf[12:16], math.Float32bits(p.Orig[1]))
-	binary.LittleEndian.PutUint32(buf[16:20], math.Float32bits(p.Orig[2]))
+	binary.LittleEndian.PutUint32(buf[0:4], math.Float32bits(p.Orig[0]))
+	binary.LittleEndian.PutUint32(buf[4:8], math.Float32bits(p.Orig[1]))
+	binary.LittleEndian.PutUint32(buf[8:12], math.Float32bits(p.Orig[2]))
+	binary.LittleEndian.PutUint32(buf[12:16], math.Float32bits(p.TileWidth))
+	binary.LittleEndian.PutUint32(buf[16:20], math.Float32bits(p.TileHeight))
 	binary.LittleEndian.PutUint32(buf[20:24], p.MaxTiles)
 	binary.LittleEndian.PutUint32(buf[24:28], p.MaxPolys)
 	return buf
