@@ -1436,24 +1436,51 @@ func (s *Server) creatureSwimSpeedRate(key creatureAuraKey, motion *creatureMoti
 }
 
 // creatureFlightSpeedRate mirrors the MOVE_FLIGHT arm of Unit::UpdateSpeed
-// (Unit.cpp:8700-8726, 8744-8810) for AI-driven creatures: mounted takes
-// strongest MOD_INCREASE_MOUNTED_FLIGHT_SPEED (207) as the main mod with
-// the product MOD_MOUNTED_FLIGHT_SPEED_ALWAYS (209, same-effect-group
-// gated); unmounted sums MOD_INCREASE_FLIGHT_SPEED (208) +
-// MOD_INCREASE_VEHICLE_FLIGHT_SPEED (206); both add strongest
-// MOD_FLIGHT_SPEED_NOT_STACK (211) / 100 to the non-stack bonus; the rate
-// is max(non-stack, stack) with the main mod folded in, times the template
-// speed_run (BaseRunRate), then the shared tail — the 191 normalization
-// cap against baseMoveSpeed[MOVE_FLIGHT] (creatureBaseFlightSpeed 7.0)
-// unless the template is SNARE/DAZE immune, strongest MOD_DECREASE_SPEED
-// (33), the MOD_MINIMUM_SPEED (305) floor. A script-set rate replaces the
-// aura fold outright, as in creatureRunSpeedRate. The result is a rate;
-// multiply by creatureBaseFlightSpeed for yd/s, as GetSpeed(6) does.
-// Residuals: the TYPEID_UNIT controlled-by-player vehicle-flight arm
-// (206-with-vehicle + GetCharmer owner max, 210 stack) has no creature-side
-// charmer fold, and the minion follow borrow is not applied — the owner
-// flight rate is not banked anywhere (no FlightSpeed field; GetSpeed(6)
-// is the only consumer), so there is no banked owner rate to borrow.
+// (Unit.cpp:8700-8726, 8744-8810) for AI-driven creatures: a
+// player-controlled creature takes the strongest
+// MOD_INCREASE_VEHICLE_FLIGHT_SPEED (206) of itself and its charmer with
+// the MOD_VEHICLE_SPEED_ALWAYS (210) stack; mounted takes strongest
+// MOD_INCREASE_MOUNTED_FLIGHT_SPEED (207) as the main mod with the
+// product MOD_MOUNTED_FLIGHT_SPEED_ALWAYS (209, same-effect-group gated);
+// other unmounted creatures sum
+// MOD_INCREASE_FLIGHT_SPEED (208) + MOD_INCREASE_VEHICLE_FLIGHT_SPEED
+// (206); both add strongest MOD_FLIGHT_SPEED_NOT_STACK (211) / 100 to the
+// non-stack bonus; the rate is max(non-stack, stack) with the main mod
+// folded in, times the template speed_run (BaseRunRate), then the shared
+// tail — the 191 normalization cap against baseMoveSpeed[MOVE_FLIGHT]
+// (creatureBaseFlightSpeed 7.0) unless the template is SNARE/DAZE immune,
+// strongest MOD_DECREASE_SPEED (33), the MOD_MINIMUM_SPEED (305) floor. A
+// script-set rate replaces the aura fold outright, as in
+// creatureRunSpeedRate. The result is a rate; multiply by
+// creatureBaseFlightSpeed for yd/s, as GetSpeed(6) does.
+// Residual: the minion follow borrow is not applied — the owner flight
+// rate is not banked anywhere (no FlightSpeed field; GetSpeed(6) is the
+// only consumer), so there is no banked owner rate to borrow.
+// creatureCharmerVehicleFlightMod is the GetCharmer() half of the
+// player-controlled vehicle-flight arm (Unit.cpp:8719-8722): the charmer's
+// strongest MOD_INCREASE_VEHICLE_FLIGHT_SPEED (206) mod. The charmer is a
+// player session (maxPositiveAuraModifier, the GetMaxPositiveAuraModifier
+// twin) or a creature motion (same creature-side fold); no charmer, or a
+// charmer with no 206 aura, contributes 0.
+func (s *Server) creatureCharmerVehicleFlightMod(motion *creatureMotion) int32 {
+	if s == nil || motion == nil || motion.CharmerGUID == 0 {
+		return 0
+	}
+	if sess := s.findSessionByGUID(motion.CharmerGUID); sess != nil {
+		return sess.maxPositiveAuraModifier(spellAuraIncreaseVehicleFlight)
+	}
+	if charmer := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.CharmerGUID); charmer != nil {
+		var mod int32
+		for _, a := range s.creatureAuraAmountsByType(creatureAuraKeyForMotion(charmer), spellAuraIncreaseVehicleFlight) {
+			if a > mod {
+				mod = a
+			}
+		}
+		return mod
+	}
+	return 0
+}
+
 func (s *Server) creatureFlightSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
 	if motion != nil && motion.ScriptFlightRateKnown {
 		return motion.ScriptFlightRate
@@ -1464,7 +1491,22 @@ func (s *Server) creatureFlightSpeedRate(key creatureAuraKey, motion *creatureMo
 	}
 	var mainMod int32
 	var stack float32 = 1.0
-	if s.creatureIsMounted(key, motion) {
+	if motion != nil && motion.ControlledByPlayer {
+		// Unit::UpdateSpeed MOVE_FLIGHT (Unit.cpp:8711-8727): a
+		// player-controlled creature uses the strongest
+		// MOD_INCREASE_VEHICLE_FLIGHT_SPEED (206) of itself and its
+		// charmer, with the MOD_VEHICLE_SPEED_ALWAYS (210) stack —
+		// no 208 sum, no 209 stack.
+		for _, a := range s.creatureAuraAmountsByType(key, spellAuraIncreaseVehicleFlight) {
+			if a > mainMod {
+				mainMod = a
+			}
+		}
+		if ownerMod := s.creatureCharmerVehicleFlightMod(motion); ownerMod > mainMod {
+			mainMod = ownerMod
+		}
+		stack = s.creatureSpeedAlwaysMultiplierFor(key, spellAuraVehicleSpeedAlways)
+	} else if s.creatureIsMounted(key, motion) {
 		for _, a := range s.creatureAuraAmountsByType(key, spellAuraMountedFlightSpeed) {
 			if a > mainMod {
 				mainMod = a

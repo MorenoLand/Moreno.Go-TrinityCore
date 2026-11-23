@@ -593,6 +593,69 @@ func (s *Store) CollisionHeight(mountDisplayID, nativeDisplayID uint32, mounted 
 	return height, true, nil
 }
 
+// IsDisplayMountDisallowed mirrors the display-id arms of
+// Unit::IsInDisallowedMountForm (Unit.cpp:9186-9200): a non-native display
+// whose model lacks CREATURE_MODEL_DATA_FLAGS_CAN_MOUNT (0x80,
+// DBCStructure.h:511) and whose display race lacks CHRRACES_FLAGS_CAN_MOUNT
+// (0x04, DBCStructure.h:412) is disallowed, as is a display with no
+// CreatureDisplayInfo row or no CreatureDisplayInfoExtra row. A missing
+// model or race row is not disallowed — C++ skips the flag test when
+// either pointer is null. The DBC field indices follow DBCStructure.h:
+// CreatureDisplayInfo ModelID 1 / ExtendedDisplayInfoID 3,
+// CreatureDisplayInfoExtra DisplayRaceID 1, CreatureModelData Flags 1.
+// An error means a DBC file could not be loaded at all; the caller stays
+// permissive then (terrain.go convention) — a missing file is a deployment
+// gap, not a missing row.
+func (s *Store) IsDisplayMountDisallowed(displayID uint32) (bool, error) {
+	displays, err := s.File("CreatureDisplayInfo")
+	if err != nil {
+		return false, err
+	}
+	display, found := displays.Find(displayID)
+	if !found {
+		return true, nil
+	}
+	modelID, err := display.Uint32(1)
+	if err != nil {
+		return false, err
+	}
+	extraID, err := display.Uint32(3)
+	if err != nil {
+		return false, err
+	}
+	extras, err := s.File("CreatureDisplayInfoExtra")
+	if err != nil {
+		return false, err
+	}
+	extra, found := extras.Find(extraID)
+	if !found {
+		return true, nil
+	}
+	raceID, err := extra.Uint32(1)
+	if err != nil {
+		return false, err
+	}
+	models, err := s.File("CreatureModelData")
+	if err != nil {
+		return false, err
+	}
+	modelCanMount := true
+	if model, found := models.Find(modelID); found {
+		flags, err := model.Uint32(1)
+		if err != nil {
+			return false, err
+		}
+		modelCanMount = flags&0x80 != 0
+	}
+	raceCanMount := true
+	if race, found, err := s.Race(raceID); err != nil {
+		return false, err
+	} else if found {
+		raceCanMount = race.Flags&0x04 != 0
+	}
+	return !modelCanMount && !raceCanMount, nil
+}
+
 func (s *Store) WMOArea(root, adt, group int32) (uint32, bool, error) {
 	s.wmoAreaOnce.Do(func() {
 		s.wmoAreas = make(map[wmoAreaKey]uint32)

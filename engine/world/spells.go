@@ -7398,31 +7398,57 @@ func (s *session) checkCharmCast(spell wotlk.Spell, target protocol.SpellTargetD
 //     the Go protocol (0x16E), so it is written here ahead of the caller's
 //     CAST_FAILED. A live shapeshift form whose SpellShapeshiftForm.dbc flags
 //     lack 0x1 rejects (Unit.cpp:9170-9185); a missing form row rejects too.
-//     The transform-spell carve-out has no bridge (Go tracks no
-//     transform-spell state), and the native/display-ID arms are vacuous on
-//     the client path (Go never changes the player display ID for an aura).
+//     The transform-spell carve-out and the native/display-ID arms ride
+//     isInDisallowedMountForm below (Unit.cpp:9168-9201).
 //
 // Returns the SPELL_FAILED_* result code, 0 on success. Neither failure
 // code carries extra WriteCastResultInfo params, so castFailedExtParams
 // needs no case (verified Spell.cpp:3974-4160).
 // isInDisallowedMountForm is Unit::IsInDisallowedMountForm
-// (Unit.cpp:9170-9185): a live shapeshift form whose
-// SpellShapeshiftForm.dbc flags lack 0x1 rejects, as does a missing form
-// row. DELTAS vs C++: the transform-spell carve-out has no bridge (Go
-// tracks no transform-spell state), and the native/display-ID arms are
-// vacuous on the client path (Go never changes the player display ID
-// for an aura). Shared by checkMountedCast and the
-// player:IsInDisallowedMountForm bridge (flight-form CheckCast port).
+// (Unit.cpp:9168-9201): a live transform spell castable while mounted
+// exempts the form outright (the transform aura's spell carries
+// SPELL_ATTR0_CASTABLE_WHILE_MOUNTED, the GetTransformSpell() twin); a
+// live shapeshift form whose SpellShapeshiftForm.dbc flags lack 0x1
+// rejects, as does a missing form row; then a non-native display rejects
+// when its model and display race both lack CAN_MOUNT, or when the
+// display/extra DBC row is missing (Store.IsDisplayMountDisallowed).
+// playerLuaDisplayID / playerLuaNativeDisplayID are the GetDisplayId() /
+// GetNativeDisplayId() twins (lua_values.go). A DBC file that cannot be
+// loaded at all stays permissive (terrain.go convention). Shared by
+// checkMountedCast and the player:IsInDisallowedMountForm bridge
+// (flight-form CheckCast port).
 func (s *session) isInDisallowedMountForm() bool {
 	if s == nil || s.player == nil || s.server == nil {
 		return false
 	}
-	form := s.player.ShapeshiftForm
-	if form == 0 {
+	if s.server.Data != nil {
+		for _, aura := range s.loadedAuras() {
+			if aura == nil || aura.Stopped || aura.AuraType != spellAuraTransform {
+				continue
+			}
+			if sp, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found && sp.Attributes&spellAttr0CastableWhileMounted != 0 {
+				return false
+			}
+		}
+	}
+	if form := s.player.ShapeshiftForm; form != 0 {
+		shape, found, err := s.server.Data.ShapeshiftForm(uint32(form))
+		if err != nil || !found || shape.Flags&0x1 == 0 {
+			return true
+		}
+	}
+	displayID := playerLuaDisplayID(s, s.player)
+	if displayID == playerLuaNativeDisplayID(s, s.player) {
 		return false
 	}
-	shape, found, err := s.server.Data.ShapeshiftForm(uint32(form))
-	return err != nil || !found || shape.Flags&0x1 == 0
+	if s.server.Data == nil {
+		return false
+	}
+	disallowed, err := s.server.Data.IsDisplayMountDisallowed(displayID)
+	if err != nil {
+		return false
+	}
+	return disallowed
 }
 
 func (s *session) checkMountedCast(ctx context.Context, spell wotlk.Spell) uint8 {
@@ -39550,9 +39576,18 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			// Unit::Dismount's RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_MOUNTED)
 			// runs after the SMSG_DISMOUNT broadcast, matching this placement.
 			s.removeAurasWithInterruptFlags(auraInterruptFlagNotMounted)
-			// ResummonPetTemporaryUnSummonedIfAny: the arena pet-unstun leg has no
-			// bridge; the charm-unstun leg has no charm model.
-			s.resummonTemporaryPet(context.Background())
+			// Unit::Dismount's pet/charm legs (Unit.cpp:8403-8414): a
+			// live pet unstuns when the Mount stun flag is set without
+			// a stun state (unstunPetOnDismount); otherwise the
+			// temp-unsummoned pet returns (resummonTemporaryPet is a
+			// no-op while a pet is live, pets.go:1858). A charmed NPC
+			// unstuns on the same guard (unstunCharmedUnit, taxi.go).
+			if s.player.PetGUID != 0 {
+				s.unstunPetOnDismount()
+			} else {
+				s.resummonTemporaryPet(context.Background())
+			}
+			s.unstunCharmedUnit()
 		}
 		for _, a := range s.loadedAuras() {
 			if a != nil && !a.Stopped && a.AuraType == spellAuraMounted {
@@ -40406,8 +40441,7 @@ func (s *session) restoreMountDisplayFromMountedAura(ctx context.Context) {
 // (installPlayerVehicleAccessories). Documented deltas:
 // display selection mirrors ObjectMgr::ChooseDisplayId + the 50%
 // GetCreatureModelRandomGender other-gender swap via
-// mountTemplateDisplayAndVehicle; the charmed-NPC stun has
-// no bridge; the festive Holiday Mount 62061 check reads the TARGET's live
+// mountTemplateDisplayAndVehicle; the festive Holiday Mount 62061 check reads the TARGET's live
 // aura set (target->HasAura(62061)), not the applied aura's own spell id —
 // the old self-id check was outcome-wrong for mount-while-62061-up, and
 // the 62061 dummy swap/restore arms live in applyFestiveMountDisplay /
@@ -40473,9 +40507,15 @@ func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
 			}
 		}
 	}
-	// Unit::Mount unsummons the active pet (temporary-unsummon bookkeeping so
-	// it returns on dismount); the arena pet-stun leg has no bridge.
-	s.temporarilyUnsummonPet(ctx)
+	// Unit::Mount's pet leg (Unit.cpp:8339-8347): in an arena the pet is
+	// stunned, not temp-unsummoned (stunPetForMount); anywhere else the
+	// active pet temp-unsummons and returns on dismount. The charmed-NPC
+	// leg (Unit.cpp:8351-8353) stuns every creature the player charmed
+	// (stunCharmedUnit, taxi.go).
+	if !s.stunPetForMount() {
+		s.temporarilyUnsummonPet(ctx)
+	}
+	s.stunCharmedUnit()
 	// Unit::Mount's tail RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_MOUNT)
 	// runs after the display/flag update and collision-height packet.
 	s.removeAurasWithInterruptFlags(auraInterruptFlagMount)

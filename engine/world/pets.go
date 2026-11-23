@@ -1772,6 +1772,83 @@ func (s *session) temporarilyUnsummonPet(ctx context.Context) {
 	s.unsummonPet(ctx, petSaveAsCurrent)
 }
 
+// inArenaBattleground reports whether the player is inside an arena —
+// the GetBattleground()->isArena() twin of Unit::Mount (Unit.cpp:8343).
+// Any Active arena queue entry counts, not just InProgress: C++ stuns
+// the pet whenever the player has an arena battleground, including the
+// preparation window (inProgressArena's STATUS_IN_PROGRESS gate is the
+// narrower trade/combat twin, trade.go:718).
+func (s *session) inArenaBattleground() bool {
+	if s == nil {
+		return false
+	}
+	for i := range s.bgQueues {
+		if e := &s.bgQueues[i]; e.Active && e.IsArena {
+			return true
+		}
+	}
+	return false
+}
+
+// stunPetForMount runs Unit::Mount's arena leg (Unit.cpp:8343-8345): in
+// an arena the pet is not temp-unsummoned — it gains UNIT_FLAG_STUNNED
+// instead, disabling its interface. Returns true when the pet was
+// stunned, in which case the caller must not temp-unsummon it. The flag
+// mutates under motionMu and the values update broadcasts after the
+// unlock (stunCharmedUnit, taxi.go, is the same pattern); UnitFlagsKnown
+// is latched so the spawn sweep (creaturemotion.go:6918) cannot wipe the
+// flag back to the template value.
+func (s *session) stunPetForMount() bool {
+	if s == nil || s.player == nil || s.server == nil || s.player.PetGUID == 0 || !s.inArenaBattleground() {
+		return false
+	}
+	var flags uint32
+	var mapID, instanceID uint32
+	var guid uint64
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+	if motion == nil {
+		s.server.motionMu.Unlock()
+		return false
+	}
+	motion.UnitFlags |= unitFlagStunned
+	motion.UnitFlagsKnown = true
+	flags, mapID, instanceID, guid = motion.UnitFlags, motion.Map, motion.InstanceID, motion.GUID
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldFlags: flags})
+	return true
+}
+
+// unstunPetOnDismount runs Unit::Dismount's arena leg (Unit.cpp:8407-8409):
+// the Mount stun flag clears only when the pet carries it without a stun
+// unit state — a script stun (motion.ScriptStunned) or a live MOD_STUN
+// aura keeps the flag, so a genuinely stunned pet is never unstunned by
+// the dismount. Returns true when the flag was cleared.
+func (s *session) unstunPetOnDismount() bool {
+	if s == nil || s.player == nil || s.server == nil || s.player.PetGUID == 0 {
+		return false
+	}
+	key := creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: s.player.PetGUID}
+	if s.server.creatureHasStunAura(key) {
+		return false
+	}
+	var flags uint32
+	var mapID, instanceID uint32
+	var guid uint64
+	cleared := false
+	s.server.motionMu.Lock()
+	if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID); motion != nil && motion.UnitFlags&unitFlagStunned != 0 && !motion.ScriptStunned {
+		motion.UnitFlags &^= unitFlagStunned
+		flags, mapID, instanceID, guid = motion.UnitFlags, motion.Map, motion.InstanceID, motion.GUID
+		cleared = true
+	}
+	s.server.motionMu.Unlock()
+	if cleared {
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldFlags: flags})
+	}
+	return cleared
+}
+
 func (s *session) petSpellHasTemporaryDuration(spellID uint32) bool {
 	if s == nil || s.server == nil || s.server.Data == nil || spellID == 0 {
 		return false
