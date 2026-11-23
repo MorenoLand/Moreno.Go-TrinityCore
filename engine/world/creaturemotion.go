@@ -303,6 +303,13 @@ type creatureMotion struct {
 	ScriptMoveDestX   float32
 	ScriptMoveDestY   float32
 	ScriptMoveDestZ   float32
+	// ScriptMoveFinalOrient is PointMovementGenerator::_finalOrient
+	// (PointMovementGenerator.cpp:33, :71-72): the landing-facing
+	// applied at spline end (MoveSpline.cpp:46-50 final angle), never
+	// at launch. No in-tree caller feeds it yet (Lua MoveTo and
+	// SmartAI MovePoint carry no orientation arg) — the plumbing only.
+	ScriptMoveFinalOrient      float32
+	ScriptMoveFinalOrientKnown bool
 	// ScriptMoveExplicitSpeed is the banked PointMovementGenerator::_speed
 	// (PointMovementGenerator.h:53): the explicit per-leg velocity of a
 	// MoveCharge or spline-chain link, capped like the launch speed; 0
@@ -338,16 +345,18 @@ type creatureMotion struct {
 	// generator finalize). Effect, Random, and SplineChain launches
 	// never record: GenericMovementGenerator::Initialize launches
 	// unconditionally, and Random's own gate lives in its wander leg.
-	PendingScriptMove              bool
-	PendingScriptMoveType          uint32
-	PendingScriptMovePointID       uint32
-	PendingScriptMoveDestX         float32
-	PendingScriptMoveDestY         float32
-	PendingScriptMoveDestZ         float32
-	PendingScriptMoveWalk          bool
-	PendingScriptMoveSpeed         float32
-	PendingScriptMoveExplicitSpeed float32
-	PendingScriptMoveAllowDead     bool
+	PendingScriptMove                 bool
+	PendingScriptMoveType             uint32
+	PendingScriptMovePointID          uint32
+	PendingScriptMoveDestX            float32
+	PendingScriptMoveDestY            float32
+	PendingScriptMoveDestZ            float32
+	PendingScriptMoveWalk             bool
+	PendingScriptMoveSpeed            float32
+	PendingScriptMoveExplicitSpeed    float32
+	PendingScriptMoveAllowDead        bool
+	PendingScriptMoveFinalOrient      float32
+	PendingScriptMoveFinalOrientKnown bool
 	// ScriptFollowInformed latches the once-per-follow MovementInform
 	// (FOLLOW_MOTION_TYPE): FollowMovementGenerator clears its
 	// INFORM_ENABLED flag after the first in-range inform
@@ -5692,7 +5701,7 @@ func (s *Server) launchCreatureFleeLeg(motion *creatureMotion, targetX, targetY 
 		return false
 	}
 	s.motionMu.Lock()
-	if motion.Health == 0 || motion.ScriptRooted || motion.ScriptStunned || now.Before(motion.CastingUntil) {
+	if motion.Health == 0 || motion.ScriptRooted || motion.ScriptStunned || creatureMovementPreventedByCasting(motion, now) {
 		motion.FleeNextAt = now
 		s.motionMu.Unlock()
 		return false
@@ -5773,7 +5782,7 @@ func (s *Server) repathCreatureFleeIfDue(motion *creatureMotion, now time.Time) 
 	// refused launch keeps the flag (and the frozen timer), so the guard
 	// returns without consuming it (the repathCreatureSpeedPendingIfDue
 	// sibling-guard twin, :5720).
-	if notMoveAura || motion.ScriptRooted || motion.ScriptStunned || now.Before(motion.CastingUntil) {
+	if notMoveAura || motion.ScriptRooted || motion.ScriptStunned || creatureMovementPreventedByCasting(motion, now) {
 		s.motionMu.Unlock()
 		return
 	}
@@ -5921,7 +5930,7 @@ func (s *Server) repathCreatureSpeedPendingIfDue(ctx context.Context, motion *cr
 	// The section-3 launch gate's NOT_MOVE/casting predicate
 	// (RandomMovementGenerator.cpp:204-210, ConfusedMovementGenerator.cpp:74-80):
 	// a rooted, stunned, or casting-prevented owner launches no fresh leg.
-	if motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
+	if motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || creatureMovementPreventedByCasting(motion, now) {
 		return
 	}
 	// ConfusedMovementGenerator::DoUpdate (ConfusedMovementGenerator.cpp:86-87):
@@ -6207,6 +6216,8 @@ func clearPendingScriptMove(motion *creatureMotion) {
 	motion.PendingScriptMoveSpeed = 0
 	motion.PendingScriptMoveExplicitSpeed = 0
 	motion.PendingScriptMoveAllowDead = false
+	motion.PendingScriptMoveFinalOrient = 0
+	motion.PendingScriptMoveFinalOrientKnown = false
 }
 
 // launchCreatureScriptSpline is the shared atomic-spline launch for
@@ -6243,9 +6254,9 @@ func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY
 	// launches keep the inherit form (Point generators never SetWalk).
 	genPath := moveType == movementGeneratorPoint || moveType == movementGeneratorHome
 	if moveType == movementGeneratorHome {
-		return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocityExplicit(motion, walk), false, animTierNone, genPath, 0)
+		return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocityExplicit(motion, walk), false, animTierNone, genPath, 0, 0, false)
 	}
-	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTierNone, genPath, 0)
+	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTierNone, genPath, 0, 0, false)
 }
 
 // launchCreatureScriptSplineAnim is the animation-tier arm of
@@ -6254,7 +6265,7 @@ func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY
 // (MotionMaster.cpp:674-696, UnitDefines.h:81-88); the tier rides the
 // wire as the Animation spline flag + tier byte (buildMonsterMove).
 func (s *Server) launchCreatureScriptSplineAnim(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, animTier int) bool {
-	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTier, false, 0)
+	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk), false, animTier, false, 0, 0, false)
 }
 
 // launchCreatureScriptSplineSpeed is the speed-taking core of
@@ -6271,7 +6282,7 @@ func (s *Server) launchCreatureScriptSplineAnim(motion *creatureMotion, destX, d
 // the interpolated spline position
 // (MoveSplineInit::Launch, MoveSplineInit.cpp:60-68), not the snapped
 // destination.
-func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32, flying bool, animTier int, genPath bool, explicitSpeed float32) bool {
+func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32, flying bool, animTier int, genPath bool, explicitSpeed float32, finalOrient float32, hasFinalOrient bool) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -6317,6 +6328,8 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 			motion.PendingScriptMoveSpeed = speed
 			motion.PendingScriptMoveExplicitSpeed = explicitSpeed
 			motion.PendingScriptMoveAllowDead = allowDead
+			motion.PendingScriptMoveFinalOrient = finalOrient
+			motion.PendingScriptMoveFinalOrientKnown = hasFinalOrient
 			s.motionMu.Unlock()
 			return false
 		}
@@ -6387,11 +6400,12 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	// path-length limit: neither generator sets one. The poly launch
 	// stamps ScriptMovePointID 0, so the id is re-stamped after — the
 	// landing gate fires MovementInform (POINT_MOTION_TYPE, id) only
-	// for the stamped id. Point's _finalOrient (:71-72) has no Go
-	// source: no caller passes a final orientation (Lua MoveTo and
-	// SmartAI MovePoint carry none), so the facing arm stays
-	// unmodeled; the DoUpdate re-launch's facing drop is moot (Go
-	// never re-launches a script spline).
+	// for the stamped id. Point's _finalOrient (:71-72) rides the
+	// ScriptMoveFinalOrient stamp (applied at landing, never at
+	// launch); no caller passes a final orientation yet (Lua MoveTo
+	// and SmartAI MovePoint carry none), so the arm is unexercised.
+	// The DoUpdate re-launch's facing drop is moot (Go never
+	// re-launches a script spline).
 	if genPath {
 		// CalculatePath takes no motionMu (lock-free source snapshot)
 		// and launchCreaturePolySpline takes it for its stamp, so the
@@ -6407,6 +6421,10 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 			if s.launchCreaturePolySpline(motion, points, walk, moveType, facing, hasFacing, speed, now, explicit) {
 				s.motionMu.Lock()
 				motion.ScriptMovePointID = pointID
+				if moveType == movementGeneratorPoint {
+					motion.ScriptMoveFinalOrient = finalOrient
+					motion.ScriptMoveFinalOrientKnown = hasFinalOrient
+				}
 				s.motionMu.Unlock()
 				return true
 			}
@@ -6424,6 +6442,13 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	motion.ScriptMoveFalling = false
 	motion.ScriptMoveType = moveType
 	motion.ScriptMovePointID = pointID
+	// PointMovementGenerator::_finalOrient (PointMovementGenerator.cpp:71-72):
+	// stamped at launch, applied at landing — never as the launch facing
+	// (launchCreaturePolySpline's hasFacing sets Orientation at launch).
+	if moveType == movementGeneratorPoint {
+		motion.ScriptMoveFinalOrient = finalOrient
+		motion.ScriptMoveFinalOrientKnown = hasFinalOrient
+	}
 	// HomeMovementGenerator<Creature>::DoInitialize
 	// (HomeMovementGenerator.cpp:89-90): a scripted MoveHome re-arms
 	// the assistance search, like the evade-home arm in
@@ -6473,6 +6498,8 @@ func (s *Server) retryPendingScriptMove(ctx context.Context, motion *creatureMot
 	speed := motion.PendingScriptMoveSpeed
 	explicitSpeed := motion.PendingScriptMoveExplicitSpeed
 	allowDead := motion.PendingScriptMoveAllowDead
+	finalOrient := motion.PendingScriptMoveFinalOrient
+	hasFinalOrient := motion.PendingScriptMoveFinalOrientKnown
 	clearPendingScriptMove(motion)
 	s.motionMu.Unlock()
 	if moveType == movementGeneratorHome {
@@ -6501,10 +6528,57 @@ func (s *Server) retryPendingScriptMove(ctx context.Context, motion *creatureMot
 		motion.PendingScriptMoveSpeed = speed
 		motion.PendingScriptMoveExplicitSpeed = explicitSpeed
 		motion.PendingScriptMoveAllowDead = allowDead
+		motion.PendingScriptMoveFinalOrient = finalOrient
+		motion.PendingScriptMoveFinalOrientKnown = hasFinalOrient
 		s.motionMu.Unlock()
 		return
 	}
-	s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, speed, false, animTierNone, true, explicitSpeed)
+	s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, speed, false, animTierNone, true, explicitSpeed, finalOrient, hasFinalOrient)
+}
+
+// launchCreatureMoveCloserAndStop is MotionMaster::MoveCloserAndStop
+// (MotionMaster.cpp:654-671): distanceToTravel is the 2D exact distance
+// to the target minus the requested stop distance. Above zero the owner
+// walks toward the target on the absolute bearing via the MovePoint twin
+// (arrival fires MovementInform(POINT_MOTION_TYPE, id)); at or below zero
+// the owner is already close enough and turns in place — the C++
+// GenericMovementGenerator with SetFacing(target) finalizes immediately,
+// so the EFFECT inform fires at once with the in-place turn packet
+// (SetFacingToObject pattern). Backs Gluth EVENT_SEARCH_ZOMBIE_SINGLE
+// (boss_gluth.cpp:219) and Akama EVENT_AKAMA_MOVE_TO_ILLIDAN
+// (boss_illidan.cpp:1341); neither Lua call site is wired yet.
+func (s *Server) launchCreatureMoveCloserAndStop(ctx context.Context, motion *creatureMotion, pointID uint32, targetX, targetY, targetZ float32, distance float32) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	now := time.Now()
+	s.motionMu.Lock()
+	fromX, fromY, _ := creatureSplinePosition(motion, now)
+	s.motionMu.Unlock()
+	dx, dy := targetX-fromX, targetY-fromY
+	dist := float32(math.Hypot(float64(dx), float64(dy)))
+	if dist-distance > 0 {
+		angle := float32(math.Atan2(float64(dy), float64(dx)))
+		step := dist - distance
+		return s.launchCreatureScriptSpline(motion, fromX+step*float32(math.Cos(float64(angle))), fromY+step*float32(math.Sin(float64(angle))), targetZ, false, movementGeneratorPoint, pointID, true)
+	}
+	angle := float32(math.Atan2(float64(dy), float64(dx)))
+	if angle < 0 {
+		angle += 2 * math.Pi
+	}
+	s.motionMu.Lock()
+	motion.Orientation = angle
+	guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
+	phase := motion.PhaseMask
+	transportGUID := motion.TransportGUID
+	x, y, z := motion.X, motion.Y, motion.Z
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, angle, true, phase, transportGUID)
+	// The zero-distance generic generator finalizes at once, so the
+	// EFFECT MovementInform fires now (the landing gate never sees it).
+	s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorEffect), pointID)
+	s.smartMovementInform(ctx, motion, movementGeneratorEffect, pointID)
+	return true
 }
 
 // tryLaunchCreatureHomePath runs the HomeMovementGenerator::SetTargetLocation
@@ -7024,8 +7098,14 @@ func (s *Server) launchCreatureFallSpline(motion *creatureMotion, destX, destY, 
 	if s == nil || motion == nil {
 		return false
 	}
+	// MotionMaster::MoveFall (MotionMaster.cpp:934-936): rooted or stunned
+	// units don't launch a fall (also setting falling+root flag causes
+	// client freezes). The aura leg covers aura-applied root/stun, which
+	// the Lua MoveFall gate (script flags only) misses; computed before
+	// motionMu (auraMu ordering, cf. launchCreatureScriptSplineSpeed).
+	notMoveAura := s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion))
 	s.motionMu.Lock()
-	if motion.Health == 0 {
+	if motion.Health == 0 || motion.ScriptRooted || motion.ScriptStunned || notMoveAura {
 		s.motionMu.Unlock()
 		return false
 	}
@@ -10059,6 +10139,29 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	s.retryPendingScriptMove(ctx, motion, now)
 	if motion.Moving {
 		if now.Before(motion.MoveEnds) {
+			// Unit::SetRooted / Unit::SetStunned -> StopMoving
+			// (Unit.cpp:11597, 11661): a root or stun applied mid-fall
+			// stops the creature mid-air at the fall-interpolated
+			// position — it does NOT continue to the ground — and the
+			// EFFECT MovementInform fires early at the stop point
+			// (MotionMaster::Update sees the finalized spline;
+			// GenericMovementGenerator has no NOT_MOVE check of its
+			// own, GenericMovementGenerator.cpp:60-70).
+			if motion.ScriptMoveFalling && (motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion))) {
+				x, y, z := creatureSplinePosition(motion, now)
+				motion.X, motion.Y, motion.Z = x, y, z
+				motion.Moving = false
+				motion.MoveEnds = time.Time{}
+				id, typ := motion.ScriptMovePointID, motion.ScriptMoveType
+				motion.ScriptMoveFalling = false
+				motion.ScriptMoveType, motion.ScriptMovePointID = 0, 0
+				motion.ScriptMoveExplicitSpeed = 0
+				motion.ScriptMoveDestX, motion.ScriptMoveDestY, motion.ScriptMoveDestZ = 0, 0, 0
+				s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, x, y, z, motion.PhaseMask, motion.TransportGUID)
+				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, typ, id)
+				s.smartMovementInform(ctx, motion, typ, id)
+				return
+			}
 			// SplineChainMovementGenerator::Update
 			// (SplineChainMovementGenerator.cpp:149-171): the
 			// _msToNext expiry sends the next link even mid-spline
@@ -10167,6 +10270,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 		case movementGeneratorPoint, movementGeneratorEffect:
 			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ {
+				// PointMovementGenerator::_finalOrient
+				// (PointMovementGenerator.cpp:71-72): the landing-facing,
+				// applied at spline end. POINT-only — the Generic
+				// (Effect) generator carries no facing.
+				if motion.ScriptMoveType == movementGeneratorPoint && motion.ScriptMoveFinalOrientKnown {
+					motion.Orientation = motion.ScriptMoveFinalOrient
+				}
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, motion.ScriptMoveType, motion.ScriptMovePointID)
 				s.smartMovementInform(ctx, motion, motion.ScriptMoveType, motion.ScriptMovePointID)
 			}
@@ -10191,6 +10301,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.ScriptMoveType = 0
 			motion.ScriptMoveExplicitSpeed = 0
 			motion.ScriptMovePointID = 0
+			motion.ScriptMoveFinalOrient = 0
+			motion.ScriptMoveFinalOrientKnown = false
 			motion.ScriptMoveDestX = 0
 			motion.ScriptMoveDestY = 0
 			motion.ScriptMoveDestZ = 0
@@ -13384,6 +13496,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							}
 						}
 						destX, destY := target.X, target.Y
+						// ChaseMovementGenerator.cpp:180-189: moveToward =
+						// !IsInDist(maxRange); moveToward && !angle paths
+						// to the center and shortens to maxTarget, else
+						// the near point at (moveToward ? maxTarget :
+						// minTarget) - hitboxSum on the scripted angle
+						// (or the current bearing). GetNearPoint2D adds
+						// hitboxSum back (Object.cpp:3243-3265), so the
+						// too-close / wrong-angle ring is minTarget from
+						// the target center.
+						_, minTarget, _, _ := chaseRangeBounds(scriptChase, motion.ScriptChaseDist, cReach+victimReach, contactDist)
+						nearPoint := false
 						if dist > shorten {
 							// ChaseMovementGenerator.cpp:120: on a mutual
 							// chase the fixed angle is suppressed (angle
@@ -13406,6 +13529,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								destX = target.X + (motion.X-target.X)/dist*shorten
 								destY = target.Y + (motion.Y-target.Y)/dist*shorten
 							}
+						} else {
+							// Too close or wrong angle inside the stop
+							// ring: back out to the minTarget ring on
+							// the scripted angle (suppressed on mutual
+							// chase, :120) or the current bearing.
+							nearPoint = true
+							ringAngle := float32(math.Atan2(float64(motion.Y-target.Y), float64(motion.X-target.X)))
+							if scriptChase && !mutualChase {
+								tOrient := float32(0)
+								if target.Sess != nil && target.Sess.player != nil {
+									tOrient = target.Sess.player.Orientation
+								} else if victimMotion != nil {
+									tOrient = victimMotion.Orientation
+								}
+								ringAngle = normalizeScriptAngle(tOrient + motion.ScriptChaseAngle)
+							}
+							destX = target.X + minTarget*float32(math.Cos(float64(ringAngle)))
+							destY = target.Y + minTarget*float32(math.Sin(float64(ringAngle)))
 						}
 						// init.SetFacing(target) (ChaseMovementGenerator.cpp:217):
 						// face the victim for the whole spline.
@@ -13439,7 +13580,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							// applies UpdateAllowedPositionZ to every point.
 							path := NewPathGenerator(s, newCreaturePathSource(s, motion))
 							pathDestX, pathDestY := target.X, target.Y
-							if scriptChase {
+							if scriptChase || nearPoint {
 								pathDestX, pathDestY = destX, destY
 							}
 							ok := path.CalculatePath(pathDestX, pathDestY, target.Z, motion.CanFly || motion.Flying)
@@ -13460,7 +13601,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 									motion.MoveEnds = time.Time{}
 								}
 							} else {
-								if !scriptChase {
+								// ChaseMovementGenerator.cpp:189: the near-point
+								// arm sets shortenPath=false — the ring point
+								// is already the destination, never shortened.
+								if !scriptChase && !nearPoint {
 									path.ShortenPathUntilDist(pathVec{target.X, target.Y, target.Z}, shorten)
 									points = path.PathPoints()
 								}
@@ -13677,6 +13821,43 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		if now.Before(motion.MoveEnds) {
 			return
+		}
+		// Fear-end-during-evade resume (Unit::SetFeared(false) ->
+		// MoveTargetedHome, Unit.cpp:11725-11733; MotionMaster::Pop
+		// resumes the deactivated home generator,
+		// MotionMaster.cpp:1082-1086): a flee leg — or a knockback —
+		// that ended while evading leaves the creature away from home;
+		// the home spline never launched (Go snaps to the destination
+		// at launch, so an evading creature far from home can only be
+		// a fear that ended mid-evade). Re-walk home from the feared
+		// position instead of snapping: the snap below would teleport
+		// home and fire JustReachedHome early. Mirrors the critter
+		// expiry arm above and triggerCreatureEvade's tail; Evading
+		// stays set until the re-launched home spline lands.
+		if homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y))); homeDist > 0.5 {
+			speed := creatureSplineVelocityExplicit(motion, false)
+			if speed >= 0.001 && !s.scriptMoveBlockedByState(motion, now) {
+				if s.tryLaunchCreatureHomePath(motion, speed, now) {
+					motion.Evading = true
+					motion.WaitUntil = motion.MoveEnds
+					return
+				}
+				duration := splineDurationMs(float64(distance3D(motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ)), speed)
+				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, motion.HomeO, true, motion.PhaseMask, motion.TransportGUID)
+				motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+				motion.Moving = true
+				motion.ScriptMoveFromKnown = false
+				motion.Evading = true
+				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+				motion.MoveVelocity = speed
+				motion.ScriptMoveExplicitSpeed = speed
+				motion.WaitUntil = motion.MoveEnds
+				return
+			}
+			// Blocked or too slow: fall through to the immediate
+			// finalize below (HomeMovementGenerator finalizes an
+			// INTERRUPTED home generator on its next update,
+			// HomeMovementGenerator.cpp:139-151).
 		}
 		motion.Evading = false
 		motion.Moving = false
@@ -14295,6 +14476,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// before the waypoint index advances, so a blocked leader retries the
 	// same node on the next tick. Random/idle legs carry no such gate.
 	if motion.MoveType == 2 && !s.canFormationLeaderStartMoving(ctx, motion) {
+		// WaypointMovementGenerator::StartMove (:273-276) twin: the
+		// formation-leader leg of the same blocked-launch condition also
+		// re-arms _nextMoveTime by 1s.
+		motion.WaitUntil = now.Add(time.Second)
 		return
 	}
 	// WaypointMovementGenerator::DoUpdate (WaypointMovementGenerator.cpp:141)
@@ -14306,7 +14491,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// path while stunned. UNIT_STATE_LOST_CONTROL's fear leg stays unmodeled
 	// (no Go fleeing generator); confuse has the hop model plus the in-combat
 	// chase suppression in the combat section above.
-	if motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
+	if motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || creatureMovementPreventedByCasting(motion, now) {
+		// WaypointMovementGenerator::StartMove (WaypointMovementGenerator.cpp:273-276):
+		// a blocked launch re-arms _nextMoveTime by 1s, so the retry waits a
+		// second instead of firing on the next tick; the WaitUntil gate above
+		// delays both the next launch attempt and the INTERRUPTED relaunch.
+		// Scoped to MoveType == 2 — Random/Confused/Follow share this gate
+		// and C++ gives them no 1s timer.
+		if motion.MoveType == 2 {
+			motion.WaitUntil = now.Add(time.Second)
+		}
 		// FollowMovementGenerator::Update (FollowMovementGenerator
 		// .cpp:84-91): the same NOT_MOVE / casting-prevented arm resets
 		// _lastTargetPosition, so the first post-block tick re-evaluates

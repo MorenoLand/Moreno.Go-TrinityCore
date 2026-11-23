@@ -1219,6 +1219,35 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			motion.ScriptMoveFromKnown = false
 			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 		}
+		// PetAI::UpdateAI victimless branch (PetAI.cpp:94-111): a pet at
+		// stay (or aggressive) re-runs SelectNextTarget every tick — its
+		// own attacker first, then the owner's attacker, then the owner's
+		// victim. A defensive stay pet re-engages this way when the owner
+		// gains a new attacker after the pet's victim died; an aggressive
+		// stay pet also auto-selects the nearest hostile (the :349-354
+		// tail, via findNearbyPetHostile, which section 1's early return
+		// otherwise leaves unreachable for stay pets).
+		if motion.PetAtStay && motion.TargetGUID == 0 && !motion.InCombat && motion.PetReact != PetReactPassive {
+			if next := s.petSelectNextTarget(motion, owner.GUID); next != 0 {
+				// AttackStart -> CanAttack stay leg (PetAI.cpp:518-519):
+				// a stay pet engages only within melee range; DoAttack
+				// chase=false keeps it at stay (MoveIdle), so Moving
+				// stays false — the pursuit arm below holds an
+				// out-of-range stay pet in place with the victim kept.
+				motion.TargetGUID = next
+				motion.InCombat = true
+				s.firePetEnterCombat(ctx, motion, next)
+				s.petCombatPursuitAndAttack(ctx, motion, owner, now)
+			} else if motion.PetReact == PetReactAggressive && !motion.PetReturning {
+				if hostileGUID := s.findNearbyPetHostile(motion, players); hostileGUID != 0 {
+					motion.TargetGUID = hostileGUID
+					motion.InCombat = true
+					motion.Moving = true
+					s.firePetEnterCombat(ctx, motion, hostileGUID)
+					s.petCombatPursuitAndAttack(ctx, motion, owner, now)
+				}
+			}
+		}
 		return
 	}
 

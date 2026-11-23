@@ -460,6 +460,42 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, nil
 	}
+	// MoveCloserAndStop is the session-creature twin of the handler
+	// binding (MotionMaster::MoveCloserAndStop, MotionMaster.cpp:654-671);
+	// a motion that no longer resolves is a no-op.
+	methods["MoveCloserAndStop"] = func(ctx context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 2 {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target")
+		}
+		target, ok := args[1].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target")
+		}
+		tx, ok := objectFloat32Field(target, "X")
+		if !ok {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target with a position")
+		}
+		ty, ok := objectFloat32Field(target, "Y")
+		if !ok {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target with a position")
+		}
+		tz, ok := objectFloat32Field(target, "Z")
+		if !ok {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target with a position")
+		}
+		distance, err := luaGenericFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.launchCreatureMoveCloserAndStop(ctx, motion, id, tx, ty, tz, distance)
+		}
+		return nil, nil
+	}
 	// MoveRandom is UnitMethods::MoveRandom (UnitMethods.h:2178-2198),
 	// the session-creature twin of the handler binding.
 	methods["MoveRandom"] = func(_ context.Context, args []any) ([]any, error) {

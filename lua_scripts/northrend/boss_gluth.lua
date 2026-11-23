@@ -70,8 +70,9 @@
 -- 2026-11-05 (tick 238). (The old "Is25ManRaid difficulty gate"
 -- wording EVENT_SEARCH_ZOMBIE_SINGLE — summons
 -- list iteration + cross-AI SetData(TOBE_EATEN) + REACT_PASSIVE +
--- AttackStop + MoveCloserAndStop — no summon / cross-AI / react-state
--- / motion bridges; EVENT_KILL_ZOMBIE_SINGLE — DoCast(ZOMBIE_CHOW_
+-- AttackStop + MoveCloserAndStop — MoveCloserAndStop bridge live
+-- (2026-11-23 strip 25); still blocked on summon-list / cross-AI /
+-- react-state bridges; EVENT_KILL_ZOMBIE_SINGLE — DoCast(ZOMBIE_CHOW_
 -- SEARCH_SINGLE 28239) + react-state / speed restore legs — no
 -- bridges; EVENT_SEARCH_ZOMBIE_MULTI — the per-zombie DoCastAOE(
 -- ZOMBIE_CHOW_SEARCH_MULTI 28404) fires only when the summons-list

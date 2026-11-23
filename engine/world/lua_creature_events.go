@@ -6228,6 +6228,45 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint, id, true)
 		return nil, nil
 	}
+	// MoveCloserAndStop is MotionMaster::MoveCloserAndStop
+	// (MotionMaster.cpp:654-671) — no Eluna UnitMethods precedent; a
+	// Go-side extension following the MoveTo dual-registration
+	// pattern. Args (id, targetObject, distance): walks toward the
+	// target to the stop distance, or turns in place when already
+	// close enough. Backs Gluth EVENT_SEARCH_ZOMBIE_SINGLE
+	// (boss_gluth.cpp:219) and Akama EVENT_AKAMA_MOVE_TO_ILLIDAN
+	// (boss_illidan.cpp:1341); neither call site is wired yet.
+	methods["MoveCloserAndStop"] = func(ctx context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 2 {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target")
+		}
+		target, ok := args[1].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target")
+		}
+		tx, ok := objectFloat32Field(target, "X")
+		if !ok {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target with a position")
+		}
+		ty, ok := objectFloat32Field(target, "Y")
+		if !ok {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target with a position")
+		}
+		tz, ok := objectFloat32Field(target, "Z")
+		if !ok {
+			return nil, fmt.Errorf("MoveCloserAndStop requires a WorldObject target with a position")
+		}
+		distance, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		s.launchCreatureMoveCloserAndStop(ctx, motion, id, tx, ty, tz, distance)
+		return nil, nil
+	}
 	// MoveLand is MotionMaster::MoveLand (MotionMaster.cpp:674-684) =
 	// a GenericMovementGenerator (EFFECT_MOTION_TYPE 16) with the
 	// ground animation tier: the landing twin of MoveTo, so the
@@ -6392,7 +6431,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		// MotionMaster::MoveCharge defaults generatePath=false
 		// (MotionMaster.h:173), so the charge stays straight-line by
 		// C++ design even though it shares the Point generator type.
-		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed, false, animTierNone, false, explicitSpeed)
+		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed, false, animTierNone, false, explicitSpeed, 0, false)
 		return nil, nil
 	}
 	// MoveAlongSplineChain is MotionMaster::MoveAlongSplineChain
