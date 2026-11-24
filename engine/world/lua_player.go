@@ -3907,8 +3907,10 @@ func (s *session) luaPlayer() *scripting.Object {
 	// ExitVehicle is Unit::ExitVehicle (UnitMethods.h) = Unit::_ExitVehicle
 	// (Unit.cpp:13193): the session exitVehicle leg (vehicle.go) — seat
 	// removal, control release, and the OnRemovePassenger vehicle event
-	// for creature bases. A player who rides nothing no-ops there, like
-	// C++.
+	// for creature bases — plus the _ExitVehicle tail (Unit.cpp:13251-13266):
+	// the temporarily-unsummoned pet resummon and the minion-base 1ms
+	// despawn ride exitVehicleTail there. A player who rides nothing
+	// no-ops there, like C++.
 	methods["ExitVehicle"] = func(ctx context.Context, _ []any) ([]any, error) {
 		s.exitVehicle(ctx)
 		return nil, nil

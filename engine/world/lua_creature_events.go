@@ -589,6 +589,31 @@ func (s *Server) despawnBossSummons(ctx context.Context, motion *creatureMotion)
 	}
 }
 
+// vehiclePassengerExitPosOverrides is the Go model of the
+// sScriptMgr->ModifyVehiclePassengerExitPos hook (Unit::_ExitVehicle,
+// Unit.cpp:13226; ScriptMgr::ModifyVehiclePassengerExitPos,
+// ScriptMgr.cpp:2407-2410, virtual defaults ScriptMgr.h:442 and :459):
+// passenger entry -> absolute exit position. The sole C++ implementer,
+// npc_orabus_the_helmsman_ship_exit_pos
+// (zone_borean_tundra.cpp:1808-1845, registered :1899), Relocates the
+// Orabus helmsman (32576) and his four Kvaldir crewmen (32577-32580) to
+// fixed deck positions, gated on TYPEID_UNIT (:1815) — the creature
+// ExitVehicle method below is the creature-only arm, so the gate holds
+// structurally and the player arm (lua_player.go) needs no change. A
+// Go-side table, not a Lua event: fireCreatureLuaEvent returns only a
+// veto bool and no Eluna vehicle-exit event id exists, so no Lua
+// dispatch can carry the hook's position rewrite back into Go.
+// Consulted in the no-explicit-position branch only, between the base
+// position and the seat addon, matching the C++ order (hook :13226,
+// addon :13229-13234).
+var vehiclePassengerExitPosOverrides = map[uint32][4]float32{
+	32576: {2807.858, 7038.571, 7.075813, 4.73481},
+	32577: {2801.168, 7046.468, 5.362013, 4.73481},
+	32578: {2803.729, 7046.516, 5.362013, 4.73481},
+	32579: {2801.48, 7051.379, 5.362913, 4.73481},
+	32580: {2803.319, 7051.411, 5.362913, 4.73481},
+}
+
 func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	if s == nil || motion == nil {
 		return nil
@@ -4305,7 +4330,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// arguments it unseats at the vehicle BASE position with the
 	// passenger's orientation, then the seat addon's Offset/Dest
 	// transform (Unit.cpp:13229-13234). The sScriptMgr->
-	// ModifyVehiclePassengerExitPos hook has no Go model. The kit
+	// ModifyVehiclePassengerExitPos hook (Unit.cpp:13226) rides
+	// vehiclePassengerExitPosOverrides, consulted in the
+	// no-explicit-position branch below before the addon. The kit
 	// removal rides luaVehicleRemovePassenger (ev6 on a creature
 	// base, the Vehicle::RemovePassenger twin); the position write
 	// rides the Teleport broadcast above, so nearby clients see the
@@ -4357,13 +4384,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 		}
 		mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
+		passengerEntry := m.Entry
 		phase := m.PhaseMask
 		s.motionMu.Unlock()
 		if len(args) == 0 {
 			// Unit::_ExitVehicle (Unit.cpp:13215-13234): the no-explicit-
 			// position exit is the vehicle BASE position with the
-			// passenger's orientation, then the seat addon's Offset/Dest
-			// transform. The addon is captured BEFORE the removal below
+			// passenger's orientation, then the
+			// ModifyVehiclePassengerExitPos override
+			// (vehiclePassengerExitPosOverrides), then the seat addon's
+			// Offset/Dest transform. The addon is captured BEFORE the removal below
 			// (Unit.cpp:13193): after it the seat is empty and the lookup
 			// finds nothing. A base that does not resolve on the
 			// passenger's map/instance keeps the passenger's own position,
@@ -4375,6 +4405,12 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				x, y, z = bx, by, bz
 			} else if baseSess := s.findSessionByGUID(baseGUID); baseSess != nil && baseSess.player != nil {
 				x, y, z = baseSess.player.X, baseSess.player.Y, baseSess.player.Z
+			}
+			// ModifyVehiclePassengerExitPos override (Unit.cpp:13226),
+			// before the seat addon (:13229-13234): a hit replaces the
+			// position outright (C++ pos.Relocate).
+			if exit, ok := vehiclePassengerExitPosOverrides[passengerEntry]; ok {
+				x, y, z, o = exit[0], exit[1], exit[2], exit[3]
 			}
 			x, y, z, o = applyVehicleSeatExitAddon(x, y, z, o, s.vehicleSeatAddonForPassenger(baseGUID, guid))
 		}

@@ -2076,6 +2076,68 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 	s.sendPlayerUpdate()
 }
 
+// exitVehicleTail ports the Unit::_ExitVehicle tail (Unit.cpp:13251-13266),
+// shared by the player session exit (exitVehicle below) and the creature
+// ExitVehicle arm (lua_creature_events.go): after the MoveTo spline the
+// tail runs for BOTH passenger kinds — only the resummon is player-gated
+// (Unit.cpp:13251-13252, already ported as resummonTemporaryPet), so the
+// minion and accessory legs below take the passenger GUID, not a session.
+func (s *Server) exitVehicleTail(ctx context.Context, mapID, instanceID uint32, baseGUID, passengerGUID uint64) {
+	if s == nil || baseGUID == 0 || passengerGUID == 0 {
+		return
+	}
+	base := s.findCreatureMotion(mapID, instanceID, baseGUID)
+	// Unit::_ExitVehicle (Unit.cpp:13254-13256): a minion vehicle base
+	// owned by the exiting unit despawns 1ms after the exit. IsMinion is
+	// the UNIT_MASK_MINION bit (creaturemotion.go); OwnerGUID is the
+	// Minion::GetOwner twin — summonTempCreature stamps the summoner GUID
+	// (lua_creature_events.go) — and the TYPEID_UNIT gate rides the
+	// creature-motion lookup: a player base resolves to no motion and
+	// skips the leg, as in C++. DespawnOrUnsummon(1ms)
+	// (Creature.cpp:2271-2276) runs UnSummon on a TempSummon and
+	// ForcedDespawn otherwise; both end at despawnCreatureMotion
+	// (lua_creature_events.go), so the 1ms delay rides time.AfterFunc
+	// like creature:Despawn(ms).
+	if base != nil && base.IsMinion && base.OwnerGUID == passengerGUID {
+		bmap, binst, bguid := base.Map, base.InstanceID, base.GUID
+		time.AfterFunc(time.Millisecond, func() {
+			s.despawnCreatureMotion(context.Background(), bmap, binst, bguid)
+		})
+	}
+	// Unit::_ExitVehicle (Unit.cpp:13258-13266): an accessory passenger
+	// dies with a just-died base, else unsummons after 2000ms. The
+	// UNIT_MASK_ACCESSORY bit is the passenger motion's
+	// VehicleAccessoryMinion (Vehicle.cpp:404 — InstallAccessory sets it
+	// for minion accessories only), so a player passenger never carries
+	// it and this leg is a no-op on the player path by construction.
+	passenger := s.findCreatureMotion(mapID, instanceID, passengerGUID)
+	if passenger == nil || !passenger.VehicleAccessoryMinion {
+		return
+	}
+	// C++ reads the base's getDeathState() == JUST_DIED, but Go never
+	// stores JUST_DIED — applyCreatureDeathState promotes it to CORPSE
+	// at once (creaturemotion.go) — so the observable twin of a just-died
+	// base is a dead base: Health 0 or a non-ALIVE DeathState.
+	// A player base has no motion; its Health read is the same dead test.
+	baseDead := false
+	if base != nil {
+		baseDead = base.Health == 0 || base.DeathState != creatureDeathAlive
+	} else if baseSess := s.findSessionByGUID(baseGUID); baseSess != nil && baseSess.player != nil {
+		baseDead = baseSess.player.Health == 0
+	}
+	if baseDead {
+		// Unit.cpp:13261-13262: setDeathState(JUST_DIED) — the
+		// applyCreatureDeathState twin, which runs the Creature
+		// JUST_DIED arm and promotes to CORPSE.
+		s.applyCreatureDeathState(ctx, passenger, creatureDeathJustDied)
+	} else {
+		// Unit.cpp:13265: ToTempSummon()->UnSummon(2000) — the
+		// unsummonEjectedVehicleAccessory twin (2s delayed expiry),
+		// shared with the evade-reinstall and respawn eject paths.
+		s.unsummonEjectedVehicleAccessory(passenger, true)
+	}
+}
+
 // exitVehicle removes the session's player from their current vehicle.
 // Reference: Unit::_ExitVehicle (Unit.cpp:8365) & Vehicle::RemovePassenger (Vehicle.cpp:498-543).
 func (s *session) exitVehicle(ctx context.Context) {
@@ -2232,11 +2294,18 @@ func (s *session) exitVehicle(ctx context.Context) {
 		}
 	}
 
-	// Unit::_ExitVehicle (Unit.cpp:13202-13204): the fall baseline resets to
-	// the exit position, and a temporarily-unsummoned pet is resummoned.
+	// Unit::_ExitVehicle (Unit.cpp:13207, 13251-13252): the fall baseline
+	// resets to the exit position, and a temporarily-unsummoned pet is
+	// resummoned.
 	s.lastFallZ = s.player.Z
 	s.lastFallTime = 0
 	s.resummonTemporaryPet(ctx)
+	// Unit::_ExitVehicle tail (Unit.cpp:13254-13266): a minion vehicle
+	// base owned by the exiting player despawns 1ms after the exit; the
+	// accessory legs cannot fire for a player passenger (a player never
+	// carries UNIT_MASK_ACCESSORY) and ride the same helper for the
+	// creature ExitVehicle arm.
+	s.server.exitVehicleTail(ctx, s.player.Map, s.player.InstanceID, oldVehGUID, s.playerGUID)
 
 	// Unit::_ExitVehicle (Unit.cpp:13215-13234): the exit position is the
 	// vehicle base position with the passenger's orientation, then the

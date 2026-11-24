@@ -833,6 +833,41 @@ func (s *session) debugBroadcastPlayerMovement(target *session, opcode protocol.
 	target.server.broadcastToVisibleSetFromSession(target, uint16(opcode), packet.Bytes())
 }
 
+// debugBroadcastCreatureMovement sends one MSG_MOVE_* update for the
+// target creature with the given flag word, the SendMessageToSet leg of
+// Unit::SendMovementFlagUpdate (Unit.cpp:10535-10539): the packet is the
+// BuildHeartBeatMsg shape (Object.cpp:1801-1806) — packed GUID plus the
+// BuildMovementPacket body (Unit.cpp:13274-13313) via writeMovementInfo —
+// fanned out to the creature's visible set through
+// broadcastToVisibleSetForCreature (visibility range + phase, the
+// SendMessageToSet twin, Object.cpp:1808-1812). The position is read at
+// fire time so a hover-height Z fold ahead of the packet lands in it,
+// the way C++ folds the hover height inside SetHover before the
+// heartbeat. Time is game time ms (Unit.cpp:13278), the
+// gameTimeMilliseconds twin every other creature movement packet uses.
+func (s *session) debugBroadcastCreatureMovement(motion *creatureMotion, opcode protocol.Opcode, flags, extra uint32) {
+	if s == nil || s.server == nil || motion == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	x, y, z, orientation := motion.X, motion.Y, motion.Z, motion.Orientation
+	s.server.motionMu.Unlock()
+	info := movementInfo{
+		GUID:        guid,
+		Flags:       flags,
+		Flags2:      uint16(extra),
+		Time:        s.server.gameTimeMilliseconds(),
+		X:           x,
+		Y:           y,
+		Z:           z,
+		Orientation: orientation,
+	}
+	packet := protocol.NewBuffer(112)
+	writeMovementInfo(packet, info)
+	s.server.broadcastToVisibleSetForCreature(uint16(opcode), packet.Bytes(), mapID, instanceID, guid)
+}
+
 // debugSetCreatureMoveflags applies the moveflags set leg to a creature:
 // the handled setters run with the Lua-bridge broadcast legs
 // (SetWalk/SetSwim/SetCanFly/SetHover/SetWaterWalk/SetDisableGravity plus
@@ -845,12 +880,13 @@ func (s *session) debugBroadcastPlayerMovement(target *session, opcode protocol.
 // Gravity/hover flips fold the animation tier via
 // creatureFoldAnimationTier (Creature.cpp:3030-3037 /:3110-3117;
 // cs_debug.cpp:1271/:1276 call the setters). The heartbeat leg
-// (SendMovementFlagUpdate) has no creature carrier in Go — handled
-// changes already went out on the spline packets, unhandled and extra
-// bits are stored but not broadcast.
+// (SendMovementFlagUpdate) goes out via debugBroadcastCreatureMovement
+// when extra flags were passed or any unhandled bit changed
+// (cs_debug.cpp:1298-1299).
 func (s *session) debugSetCreatureMoveflags(motion *creatureMotion, moveFlags uint32, moveFlagsExtra *uint32) {
 	s.server.motionMu.Lock()
 	current, _ := debugCreatureMovementFlags(motion)
+	unhandled := ((moveFlags ^ current) &^ debugMoveFlagsWithHandlers) != 0
 	newFlags := moveFlags
 	if newFlags&(debugMoveFlagDisableGravity|debugMoveFlagCanFly) != 0 {
 		newFlags &^= debugMoveFlagFalling
@@ -926,6 +962,17 @@ func (s *session) debugSetCreatureMoveflags(motion *creatureMotion, moveFlags ui
 	}
 	if stopSpline {
 		s.server.stopCreatureMotionInInstance(mapID, instanceID, guid, x, y, z)
+	}
+	if moveFlagsExtra != nil || unhandled {
+		// The final word is read after the stop above: the stop
+		// clears Moving synchronously (creaturemotion.go:16336), so
+		// the cleared SPLINE_ENABLED bit lands in the heartbeat the
+		// way C++ StopMoving precedes SendMovementFlagUpdate
+		// (cs_debug.cpp:1287-1299). Same word the display leg prints.
+		s.server.motionMu.Lock()
+		flags, extra := debugCreatureMovementFlags(motion)
+		s.server.motionMu.Unlock()
+		s.debugBroadcastCreatureMovement(motion, protocol.OpcodeMSG_MOVE_HEARTBEAT, flags, extra)
 	}
 }
 
