@@ -1993,6 +1993,12 @@ func (s *Server) setCreaturePhaseMaskVisited(motion *creatureMotion, mask uint32
 	}
 	s.creaturePhaseOverride[key] = mask
 	s.auraMu.Unlock()
+	// Unit::SetPhaseMask (Unit.cpp:12474-12485) runs inside the creature
+	// twin before the vehicle passenger leg: controlled units and summon
+	// slots take the mask, then single-target auras from casters out of
+	// the new phase drop.
+	s.propagateUnitPhaseMask(guid, mapID, instanceID, mask, visited)
+	s.removeNotOwnSingleTargetAuras(guid, mapID, instanceID, mask)
 	kit := s.getVehicleKit(mapID, instanceID, guid)
 	if kit == nil {
 		return
@@ -2007,11 +2013,187 @@ func (s *Server) setCreaturePhaseMaskVisited(motion *creatureMotion, mask uint32
 	kit.mu.RUnlock()
 	for _, passengerGUID := range guids {
 		if sess := s.findSessionByGUID(passengerGUID); sess != nil && sess.player != nil {
-			miscSetPhaseMask(sess, mask)
+			s.miscSetPhaseMaskVisited(sess, mask, visited)
 			continue
 		}
 		if passenger := s.findCreatureMotion(mapID, instanceID, passengerGUID); passenger != nil {
 			s.setCreaturePhaseMaskVisited(passenger, mask, visited)
+		}
+	}
+}
+
+// propagateUnitPhaseMask mirrors the IsInWorld controlled/summon legs of
+// Unit::SetPhaseMask (Unit.cpp:12474-12485): every unit this unit controls
+// takes the same mask through its own SetPhaseMask (update=true, whose
+// visibility tail Go has no twin for). m_Controlled is the minion set
+// (Unit::SetMinion, Unit.cpp:6052) plus the charmed set
+// (Unit::SetCharmerGUID, Unit.cpp:6240); Go reads both off the motion map
+// (OwnerGUID / CharmerGUID), plus the pet slot
+// (m_SummonSlot[SUMMON_SLOT_PET]) and the totem slots
+// (SUMMON_SLOT_TOTEM_FIRE..AIR, SharedDefines.h:3326-3330) off the session
+// or the motion. The visited set is shared with the caller: the pet sits
+// in both the controlled set and the summon slot, and C++'s same-mask
+// early return makes the second call a no-op there. Blocked legs: a
+// charmed player (sessions carry no CharmerGUID), the MINIPET/QUEST
+// summon slots (no Go model), and the npcbot UpdatePhaseForBots leg (no
+// npcbot).
+func (s *Server) propagateUnitPhaseMask(unitGUID uint64, mapID, instanceID uint32, mask uint32, visited map[uint64]struct{}) {
+	if s == nil || unitGUID == 0 || visited == nil {
+		return
+	}
+	var guids []uint64
+	if sess := s.findSessionByGUID(unitGUID); sess != nil && sess.player != nil {
+		if sess.player.PetGUID != 0 {
+			guids = append(guids, sess.player.PetGUID)
+		}
+		for _, totemGUID := range sess.player.TotemSlots {
+			if totemGUID != 0 {
+				guids = append(guids, totemGUID)
+			}
+		}
+	} else if motion := s.findCreatureMotion(mapID, instanceID, unitGUID); motion != nil {
+		s.motionMu.Lock()
+		petGUID := motion.PetGUID
+		s.motionMu.Unlock()
+		if petGUID != 0 {
+			guids = append(guids, petGUID)
+		}
+	}
+	s.motionMu.Lock()
+	for _, other := range s.motionMapLocked(mapID, instanceID) {
+		if other != nil && (other.OwnerGUID == unitGUID || other.CharmerGUID == unitGUID) {
+			guids = append(guids, other.GUID)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, guid := range guids {
+		if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+			s.miscSetPhaseMaskVisited(sess, mask, visited)
+			continue
+		}
+		if motion := s.findCreatureMotion(mapID, instanceID, guid); motion != nil {
+			s.setCreaturePhaseMaskVisited(motion, mask, visited)
+		}
+	}
+}
+
+// unitPhaseOverlaps is the InSamePhase(uint32) twin (Object.h:324:
+// (GetPhaseMask() & phasemask) != 0) for a unit resolved by GUID on one
+// map/instance. A caster that resolves nowhere — logged out, despawned,
+// or on another map — reads as not in phase, matching C++
+// Aura::GetCaster() returning null there.
+func (s *Server) unitPhaseOverlaps(guid uint64, phase, mapID, instanceID uint32) bool {
+	if s == nil || guid == 0 || phase == 0 {
+		return false
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+		return sess.currentPlayerPhaseMask()&phase != 0
+	}
+	if motion := s.findCreatureMotion(mapID, instanceID, guid); motion != nil {
+		return s.creatureEffectivePhaseMask(motion)&phase != 0
+	}
+	return false
+}
+
+// removeNotOwnSingleTargetAuras mirrors Unit::RemoveNotOwnSingleTargetAuras
+// (Unit.cpp:4099-4137) for a unit that just changed phase. Loop one drops
+// the unit's own single-target auras cast by someone else when the new
+// phase is 0 or the caster is out of it; loop two drops single-target
+// auras this unit cast on others whose owner is out of the new phase.
+// Player records come from the session's activeAuras (CasterGUID +
+// SingleTarget on the record); creature records from activeCreatureAuras
+// under auraMu. The presence-only creatureAuras map carries neither a
+// caster nor a single-target flag, so auras recorded only there are left
+// alone — they cannot be proven foreign. Every map is snapshotted under
+// its lock and the phase test and removal run after the unlock, so no
+// lock order inverts against the motionMu -> auraMu readers.
+func (s *Server) removeNotOwnSingleTargetAuras(unitGUID uint64, mapID, instanceID uint32, newPhase uint32) {
+	if s == nil || unitGUID == 0 {
+		return
+	}
+	type ownedAura struct {
+		spellID    uint32
+		casterGUID uint64
+	}
+	if sess := s.findSessionByGUID(unitGUID); sess != nil && sess.player != nil {
+		sess.castMu.Lock()
+		var owned []ownedAura
+		for spellID, aura := range sess.activeAuras {
+			if aura != nil && !aura.Stopped && aura.SingleTarget && aura.CasterGUID != unitGUID {
+				owned = append(owned, ownedAura{spellID, aura.CasterGUID})
+			}
+		}
+		sess.castMu.Unlock()
+		for _, aura := range owned {
+			if newPhase == 0 || !s.unitPhaseOverlaps(aura.casterGUID, newPhase, mapID, instanceID) {
+				sess.removeAura(aura.spellID)
+			}
+		}
+	} else if motion := s.findCreatureMotion(mapID, instanceID, unitGUID); motion != nil {
+		key := creatureAuraKeyForMotion(motion)
+		s.auraMu.Lock()
+		var owned []ownedAura
+		for spellID, aura := range s.activeCreatureAuras[key] {
+			if aura != nil && !aura.Stopped && aura.SingleTarget && aura.CasterGUID != unitGUID {
+				owned = append(owned, ownedAura{spellID, aura.CasterGUID})
+			}
+		}
+		s.auraMu.Unlock()
+		for _, aura := range owned {
+			if newPhase == 0 || !s.unitPhaseOverlaps(aura.casterGUID, newPhase, mapID, instanceID) {
+				s.removeCreatureAura(key, aura.spellID)
+			}
+		}
+	}
+	s.sessionsMu.RLock()
+	var players []*session
+	for sess := range s.sessions {
+		if sess != nil && sess.player != nil && sess.playerGUID != unitGUID {
+			players = append(players, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range players {
+		sess.castMu.Lock()
+		var drop []uint32
+		for spellID, aura := range sess.activeAuras {
+			if aura != nil && !aura.Stopped && aura.SingleTarget && aura.CasterGUID == unitGUID {
+				drop = append(drop, spellID)
+			}
+		}
+		phase := sess.currentPlayerPhaseMask()
+		sess.castMu.Unlock()
+		if phase&newPhase != 0 {
+			continue
+		}
+		for _, spellID := range drop {
+			sess.removeAura(spellID)
+		}
+	}
+	s.auraMu.Lock()
+	type creatureDrop struct {
+		key     creatureAuraKey
+		spellID uint32
+	}
+	var creatureDrops []creatureDrop
+	for key, auras := range s.activeCreatureAuras {
+		if key.GUID == unitGUID {
+			continue
+		}
+		for spellID, aura := range auras {
+			if aura != nil && !aura.Stopped && aura.SingleTarget && aura.CasterGUID == unitGUID {
+				creatureDrops = append(creatureDrops, creatureDrop{key, spellID})
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for _, d := range creatureDrops {
+		phase := uint32(0)
+		if motion := s.findCreatureMotion(d.key.Map, d.key.InstanceID, d.key.GUID); motion != nil {
+			phase = s.creatureEffectivePhaseMask(motion)
+		}
+		if phase&newPhase == 0 {
+			s.removeCreatureAura(d.key, d.spellID)
 		}
 	}
 }
@@ -2726,8 +2908,12 @@ func (s *session) sendVehiclePetSpells(vehicleGUID uint64, spells []uint32) {
 	// last two of the 10 slots are always zero. Spells past index 7 never
 	// reach the client in C++. An empty/invalid slot still carries the i+8
 	// type byte (the u16(0)/u8(0)/u8(i+8) miss arm), not a bare zero; the
-	// condition-fail arm shares that shape but the condition manager has no
-	// Go bridge.
+	// condition-fail arm shares that shape; the vehicle-spell condition
+	// gate (ConditionMgr.cpp:1039-1055) is NOT ported yet — TDB 26091
+	// carries 5 SourceTypeOrReferenceId 21 rows (Oculus drake spells
+	// 49592/50253/50344 gated on Urom DONE via CONDITION_INSTANCE_INFO,
+	// ICC abomination 71516 gated on item 49888 equipped), so the gate
+	// is a real gap, not vacuous.
 	for i := 0; i < 10; i++ {
 		if i < 8 && i < len(spells) && spells[i] > 0 {
 			buf.WriteU32(spells[i] | (uint32(i+8) << 24))
@@ -3474,6 +3660,17 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 				return
 			}
 		}
+	}
+
+	// Unit::_EnterVehicle (Unit.cpp:13095-13096): same vehicle, same seat
+	// — the board is a no-op return before any JoinEvent is scheduled, so
+	// none of the Execute legs run: no threat transfer (an additive
+	// AddThreat — re-running it would stack the passenger's threat onto
+	// the base again), no OnAddPassenger hook re-fire, no cast interrupt,
+	// no pet unsummon, no cancel packet. AddPassenger below would no-op
+	// into the current seat and the tail would re-run the whole JoinEvent.
+	if sameSeatReentry {
+		return
 	}
 
 	actualSeat := seatID

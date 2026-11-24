@@ -796,13 +796,40 @@ func miscSetPhaseMask(target *session, mask uint32) {
 	if target == nil || target.player == nil || target.currentPlayerPhaseMask() == mask {
 		return
 	}
+	if target.server == nil {
+		target.player.PhaseMaskOverride = mask
+		target.player.PhaseMaskOverrideSet = true
+		return
+	}
+	target.server.miscSetPhaseMaskVisited(target, mask, map[uint64]struct{}{})
+}
+
+// miscSetPhaseMaskVisited is the Player::SetPhaseMask twin
+// (Player.cpp:22809-22814) with a shared visited set: the Unit leg runs
+// first (Unit.cpp:12474-12485 — controlled units, summon slots, the
+// single-target aura strip), then the vehicle-root propagation. A player
+// whose mask already equals the target never reaches either leg, the C++
+// early return. The visited set is shared with the creature twin so a
+// player passenger phasing with a vehicle base cannot re-phase the base's
+// controlled units twice.
+func (s *Server) miscSetPhaseMaskVisited(target *session, mask uint32, visited map[uint64]struct{}) {
+	if s == nil || target == nil || target.player == nil || visited == nil {
+		return
+	}
+	if target.currentPlayerPhaseMask() == mask {
+		return
+	}
+	if _, ok := visited[target.playerGUID]; ok {
+		return
+	}
+	visited[target.playerGUID] = struct{}{}
 	target.player.PhaseMaskOverride = mask
 	target.player.PhaseMaskOverrideSet = true
+	s.propagateUnitPhaseMask(target.playerGUID, target.player.Map, target.player.InstanceID, mask, visited)
+	s.removeNotOwnSingleTargetAuras(target.playerGUID, target.player.Map, target.player.InstanceID, mask)
 	// Player::SetPhaseMask (Player.cpp:22809-22810): the override flip
 	// propagates to the vehicle root the target rides.
-	if target.server != nil {
-		target.server.propagatePlayerPhaseToVehicleRoot(target)
-	}
+	s.propagatePlayerPhaseToVehicleRoot(target)
 }
 
 // spellArgStatus classifies a spell-token parse the way the C++ SpellInfo
