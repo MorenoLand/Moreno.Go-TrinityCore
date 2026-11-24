@@ -76,8 +76,30 @@ func (s *Server) ensureFormationsLoaded(ctx context.Context) {
 			continue
 		}
 		low := uint32(memberGUID)
-		s.formationRows[low] = formationRow{leaderGUID: uint32(leaderGUID), dist: float32(dist), angle: float32(angle), groupAI: uint32(groupAI), point1: uint32(point1), point2: uint32(point2)}
+		// LoadCreatureFormations (CreatureGroups.cpp:122-125): a leader
+		// row carries no dist/angle of its own, and a member angle is
+		// stored in degrees and read in radians.
+		followDist, followAngle := float32(dist), float32(angle)
+		if uint32(leaderGUID) == low {
+			followDist, followAngle = 0, 0
+		} else {
+			followAngle = float32(angle * math.Pi / 180)
+		}
+		s.formationRows[low] = formationRow{leaderGUID: uint32(leaderGUID), dist: followDist, angle: followAngle, groupAI: uint32(groupAI), point1: uint32(point1), point2: uint32(point2)}
 		s.formationLeaders[uint32(leaderGUID)] = append(s.formationLeaders[uint32(leaderGUID)], low)
+	}
+	// LoadCreatureFormations (CreatureGroups.cpp:148-162): a leader with
+	// no row of its own carries no formation — every row naming it drops,
+	// and its roster key goes with it.
+	for low, row := range s.formationRows {
+		if _, ok := s.formationRows[row.leaderGUID]; !ok {
+			delete(s.formationRows, low)
+		}
+	}
+	for leader := range s.formationLeaders {
+		if _, ok := s.formationRows[leader]; !ok {
+			delete(s.formationLeaders, leader)
+		}
 	}
 }
 
@@ -104,7 +126,8 @@ func (s *Server) addFormationRow(memberLow uint32, row formationRow) {
 // form): the DB row is the authority C++'s FormationMgr info map keeps for the
 // process lifetime — RemoveMember never touches it — so a boarded-out member
 // (strip 56) re-adds from the DB on respawn instead of staying formation-less
-// for the rest of the process. Stored verbatim like ensureFormationsLoaded,
+// for the rest of the process. Loaded like ensureFormationsLoaded —
+// degrees to radians, leader rows zeroed, orphan leaders refused —
 // with the same narrow-table fallback when point_1/point_2 are absent.
 func (s *Server) loadFormationRow(ctx context.Context, memberLow uint32) (formationRow, bool) {
 	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
@@ -119,7 +142,24 @@ func (s *Server) loadFormationRow(ctx context.Context, memberLow uint32) (format
 			return formationRow{}, false
 		}
 	}
-	return formationRow{leaderGUID: uint32(leaderGUID), dist: float32(dist), angle: float32(angle), groupAI: uint32(groupAI), point1: uint32(point1), point2: uint32(point2)}, true
+	// Same loader legs as ensureFormationsLoaded (CreatureGroups.cpp:
+	// 122-125, 148-162): degrees to radians, leader rows zeroed, and a
+	// member of a leader with no row of its own loads nothing. The
+	// orphan check reads the DB, not the in-memory map, because
+	// removeFormationMember deletes boarded-out rows the C++ info map
+	// keeps, so a respawned member still re-adds while its leader is
+	// boarded out.
+	followDist, followAngle := float32(dist), float32(angle)
+	if uint32(leaderGUID) == memberLow {
+		followDist, followAngle = 0, 0
+	} else {
+		followAngle = float32(angle * math.Pi / 180)
+	}
+	var leaderSelf int
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM creature_formations WHERE leaderGUID = ? AND memberGUID = ?", leaderGUID, leaderGUID).Scan(&leaderSelf); err != nil || leaderSelf == 0 {
+		return formationRow{}, false
+	}
+	return formationRow{leaderGUID: uint32(leaderGUID), dist: followDist, angle: followAngle, groupAI: uint32(groupAI), point1: uint32(point1), point2: uint32(point2)}, true
 }
 
 // searchFormation mirrors Creature::SearchFormation (Creature.cpp:340-351),

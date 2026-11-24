@@ -144,16 +144,17 @@ func (s *session) handleNPCAddTable(ctx context.Context, args []string) bool {
 	}
 }
 
-// handleNPCAddFormation mirrors HandleNpcAddFormationCommand (cs_npc.cpp):
-// the selected creature becomes a formation member under leaderGUID. Two
-// C++ quirks are replicated for 1:1 behavior: the binds put followAngle
-// into the `dist` column and followDist into `angle`
-// (WorldDatabase.cpp WORLD_INS_CREATURE_FORMATION column order vs the
-// setFloat(2, followAngle)/setFloat(3, followDist) binds), and the angle is
-// stored in degrees while the consumer reads radians. groupAI is stored 0
-// exactly like C++, so the row stays inert until groupAI gains
-// FLAG_IDLE_IN_FORMATION (0x200) — LeaderStartedMoving skips members
-// without it, in both trees.
+// handleNPCAddFormation mirrors HandleNpcAddFormationCommand (cs_npc.cpp:1232-1269):
+// the selected creature becomes a formation member under leaderGUID. The DB
+// binds put followAngle into the `dist` column and followDist into `angle`
+// (WORLD_INS_CREATURE_FORMATION column order vs the setFloat(2,
+// followAngle)/setFloat(3, followDist) binds), but the live row stores what
+// AddFormationMember stores (CreatureGroups.cpp:179-184): FollowDist is
+// followDist and FollowAngle is followAngle in degrees, verbatim — the
+// loader's degrees-to-radians conversion applies only to rows read back
+// from the DB. groupAI is stored 0 exactly like C++, so the row stays
+// inert until groupAI gains FLAG_IDLE_IN_FORMATION (0x200) —
+// LeaderStartedMoving skips members without it, in both trees.
 func (s *session) handleNPCAddFormation(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandNPCAddFormation) {
 		return false
@@ -198,7 +199,7 @@ func (s *session) handleNPCAddFormation(ctx context.Context, args []string) bool
 		return true
 	}
 	server.ensureFormationsLoaded(ctx)
-	server.addFormationRow(memberLow, formationRow{leaderGUID: uint32(leaderGUID), dist: float32(followAngle), angle: float32(followDist)})
+	server.addFormationRow(memberLow, formationRow{leaderGUID: uint32(leaderGUID), dist: float32(followDist), angle: float32(followAngle)})
 	s.sendSysMessage(fmt.Sprintf("Creature %d added to formation with leader %d", memberLow, uint32(leaderGUID)))
 	return true
 }
