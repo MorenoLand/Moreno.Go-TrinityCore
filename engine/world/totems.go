@@ -2366,6 +2366,33 @@ func (srv *Server) isTotemGUID(guid uint64) bool {
 	return false
 }
 
+// isGroundingTotemGUID mirrors Unit::IsMagnet (Unit.cpp:6340-6346): a unit
+// created by spell 8177 (Grounding Totem). Go carries no CreatedBySpell
+// field on motions, so the live player-totem registry is the read: a
+// non-stopped air-slot totem with SpellID 8177 and this GUID.
+// Creature-cast totems (creatureTotemGUIDs) carry no spell id, and no
+// creature casts 8177, so they never read as magnets.
+func (srv *Server) isGroundingTotemGUID(guid uint64) bool {
+	if srv == nil || guid == 0 {
+		return false
+	}
+	srv.totemMu.RLock()
+	defer srv.totemMu.RUnlock()
+	for _, slots := range srv.activeTotems {
+		t := slots[TotemSlotAir]
+		if t == nil {
+			continue
+		}
+		t.mu.Lock()
+		live := !t.Stopped && t.SpellID == 8177 && t.TotemGUID == guid
+		t.mu.Unlock()
+		if live {
+			return true
+		}
+	}
+	return false
+}
+
 // registerCreatureTotemGUID records a creature-cast TOTEM-arm summon (or
 // a player-cast no-slot totem, summonSessionNoSlotTotem) so the
 // isTotemGUID gates cover it; unregistered on timed expiry

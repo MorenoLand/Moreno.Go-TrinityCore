@@ -1301,8 +1301,8 @@ func (s *Server) creatureSpellTargetHasPreventResurrectionAura(m *creatureMotion
 // SPELL_FAILED_TARGET_IS_PLAYER / SPELL_FAILED_BAD_TARGETS arms map to a
 // silent fail on this path). The Curse-of-Doom arm (SPELLFAMILY_WARLOCK +
 // category 1179) rejects player targets outright while creatures always
-// pass. The magnet (Grounding Totem) redirect has no Go model, so the check
-// always applies — documented gap, like the session twin.
+// pass. The magnet (Grounding Totem) skips the check (SpellInfo.cpp:1880,
+// Unit::IsMagnet via isGroundingTotemGUID).
 func (s *Server) creatureSpellTargetTypePasses(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
 	if s == nil || m == nil || targetGUID == 0 {
 		return true
@@ -1310,6 +1310,9 @@ func (s *Server) creatureSpellTargetTypePasses(ctx context.Context, m *creatureM
 	mask, isPlayer := s.creatureTargetCreatureTypeMask(ctx, m, targetGUID)
 	if spell.SpellFamilyName == spellFamilyWarlock && spell.Category == 1179 {
 		return !isPlayer
+	}
+	if !isPlayer && s.isGroundingTotemGUID(targetGUID) {
+		return true
 	}
 	return spell.TargetCreatureType == 0 || mask == 0 || mask&spell.TargetCreatureType != 0
 }

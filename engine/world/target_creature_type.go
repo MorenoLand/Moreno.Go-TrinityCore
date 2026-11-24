@@ -24,6 +24,11 @@ func (s *session) checkTargetCreatureType(ctx context.Context, spell wotlk.Spell
 		}
 		return 0
 	}
+	// Magnet (SpellInfo.cpp:1880-1882): a Grounding Totem target skips the
+	// creature-type check entirely (Unit::IsMagnet, Unit.cpp:6340-6346).
+	if !isPlayer && s.server != nil && s.server.isGroundingTotemGUID(targetGUID) {
+		return 0
+	}
 	if spell.TargetCreatureType == 0 || mask == 0 || mask&spell.TargetCreatureType != 0 {
 		return 0
 	}
@@ -37,9 +42,9 @@ func (s *session) checkTargetCreatureType(ctx context.Context, spell wotlk.Spell
 // mask = (type >= 1) ? 1 << (type-1) : 0. A zero mask means the type could not
 // be resolved; like C++'s !creatureType short-circuit, an unknown type does
 // not fail the check.
-// Gaps (not stubs): the magnet redirect (Grounding Totem, SpellInfo.cpp:1880)
-// has no Go infra — the mask check always applies. NPC-bot shapeshift targets
-// (Unit.cpp:9135) do not exist in Go.
+// Gaps (not stubs): NPC-bot shapeshift targets (Unit.cpp:9135) do not exist
+// in Go. The magnet (Grounding Totem, SpellInfo.cpp:1880) is skipped by the
+// caller (checkTargetCreatureType, via isGroundingTotemGUID), not here.
 func (s *session) targetCreatureTypeMask(ctx context.Context, targetGUID uint64) (uint32, bool) {
 	if s.player != nil && targetGUID == s.playerGUID {
 		return s.playerCreatureTypeMask(s.player), true

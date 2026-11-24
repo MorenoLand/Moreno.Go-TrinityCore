@@ -2798,9 +2798,7 @@ func (s *session) stopPvPCombatForSanctuary(ctx context.Context) {
 	_ = s.sendAttackStop(victim, false)
 	markPlayerOutOfCombat(ctx, s)
 	// Player::UpdateArea (Player.cpp:7182): entering sanctuary combat-stops
-	// WITH pets — the entering player's pet drops its victim too. The
-	// opponent's pets attacking this player are the RemoveAllAttackers leg
-	// (Unit.cpp:5814), which has no Go bridge and stays out.
+	// WITH pets — the entering player's pet drops its victim too.
 	s.stopOwnPetAttacks()
 	s.sendPlayerUpdate()
 	if opponent.attackTarget == s.playerGUID {
@@ -2810,6 +2808,15 @@ func (s *session) stopPvPCombatForSanctuary(ctx context.Context) {
 			markPlayerOutOfCombat(ctx, opponent)
 			opponent.sendPlayerUpdate()
 		}
+	}
+	// Unit::CombatStopWithPets (Unit.cpp:5814, 5831-5833): the opponent's
+	// pets attacking this player are the RemoveAllAttackers leg, and
+	// charmed/minion motions combat-stop too. Runs after the opponent leg
+	// above, so its attackTarget==self read (which clears the opponent's
+	// InCombat flag) is not pre-empted by the attacker sweep.
+	if s.server != nil {
+		s.server.removeCreatureAttackers(s.player.Map, s.player.InstanceID, s.playerGUID)
+		s.server.stopControlledCreatureAttacks(s.player.Map, s.player.InstanceID, s.playerGUID)
 	}
 }
 
@@ -4471,13 +4478,11 @@ func (s *session) stopControlledPetCombat() {
 
 // combatStopWithPets mirrors Unit::CombatStopWithPets (Unit.cpp:5828-5845) for
 // a player session: the owner's CombatStop (Unit.cpp:5809-5826, the own attack
-// stop + out-of-combat flag) plus the same stop for the controlled pet
-// (m_Controlled; Go models the one summoned pet via PetGUID, the duel twin's
-// scope — charmed units have no possess model). The npcbot leg is
-// fork-specific and has no Go model. RemoveAllAttackers (attackers stop
-// attacking this unit, Unit.cpp:5814) has no Go bridge and stays out, same as
-// the SetSanctuary twin documents. includingCast interrupts non-melee casts
-// and autorepeat, matching CombatStop(true); false leaves casts alone.
+// stop + out-of-combat flag) plus the same stop for every controlled unit
+// (m_Controlled: the PetGUID pet, charmed creatures and other minions via
+// the OwnerGUID/CharmerGUID graph). The npcbot leg is fork-specific and has
+// no Go model. includingCast interrupts non-melee casts and autorepeat,
+// matching CombatStop(true); false leaves casts alone.
 func (s *session) combatStopWithPets(ctx context.Context, includingCast bool) {
 	if s == nil || s.player == nil {
 		return
@@ -4493,8 +4498,23 @@ func (s *session) combatStopWithPets(ctx context.Context, includingCast bool) {
 		s.attackTarget = 0
 		_ = s.sendAttackStop(victim, false)
 	}
+	// Unit::CombatStop (Unit.cpp:5814): RemoveAllAttackers — every attacker
+	// of this unit stops attacking it.
+	if s.server != nil {
+		s.server.removeCreatureAttackers(s.player.Map, s.player.InstanceID, s.playerGUID)
+	}
 	markPlayerOutOfCombat(ctx, s)
 	s.stopOwnPetAttacks()
+	if s.server != nil {
+		// Unit::CombatStopWithPets (Unit.cpp:5831-5833): each controlled
+		// unit combat-stops the same way — charmed/minion motions drop
+		// their victims, and the pet's own attackers stop too (its
+		// CombatStop runs RemoveAllAttackers on itself).
+		s.server.stopControlledCreatureAttacks(s.player.Map, s.player.InstanceID, s.playerGUID)
+		if s.player.PetGUID != 0 {
+			s.server.removeCreatureAttackers(s.player.Map, s.player.InstanceID, s.player.PetGUID)
+		}
+	}
 }
 
 // DuelCompleteType mirrors TrinityCore's DuelCompleteType enum.
@@ -4822,18 +4842,30 @@ func duelDefeatOnDamage(victim *session, attackerPlayerGUID uint64, damage, heal
 
 // controllingPlayerGUID mirrors Unit::GetControllingPlayer (Unit.cpp:5996) for
 // duel/ownership gates: a player GUID resolves to itself, a pet or charmed
-// creature's GUID to its player owner, anything else to 0.
+// creature's GUID to its player owner, anything else to 0. The C++ walk
+// recurses through GetCharmerOrOwnerGUID, so the chain is followed here too
+// (CharmerGUID first, then OwnerGUID — a charmed creature's OwnerGUID is its
+// charmer, a pet's is its owner, a vehicle base's CharmerGUID is its rider);
+// the visited set guards against a cyclic owner/charmer record.
 func (s *session) controllingPlayerGUID(guid uint64) uint64 {
 	if s == nil || s.server == nil {
 		return 0
 	}
-	if ps := s.server.findSessionByGUID(guid); ps != nil {
-		return guid
-	}
-	if m := s.findCreatureMotion(guid); m != nil && m.OwnerGUID != 0 {
-		if os := s.server.findSessionByGUID(m.OwnerGUID); os != nil {
-			return m.OwnerGUID
+	visited := map[uint64]bool{}
+	for guid != 0 && !visited[guid] {
+		visited[guid] = true
+		if ps := s.server.findSessionByGUID(guid); ps != nil {
+			return guid
 		}
+		m := s.findCreatureMotion(guid)
+		if m == nil {
+			return 0
+		}
+		if m.CharmerGUID != 0 {
+			guid = m.CharmerGUID
+			continue
+		}
+		guid = m.OwnerGUID
 	}
 	return 0
 }

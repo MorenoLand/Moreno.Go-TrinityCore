@@ -1007,9 +1007,10 @@ func (s *session) handleCmdUnBindSight(ctx context.Context, args []string) bool 
 }
 
 // handleCmdCombatStop mirrors HandleCombatStopCommand (cs_misc.cpp:2263-2290,
-// RBAC 494): stop the target's current attack. The C++ victim-side attacker
-// clearing and spell interruption have no Go bridge (documented gap); the
-// attack-target clear and SMSG_ATTACK_STOP broadcast are wired.
+// RBAC 494): stop the target's current attack. C++ calls target->CombatStop()
+// (Unit.cpp:5809-5826, includingCast=false/mutualPvP=true defaults), so no
+// cast is interrupted; the attack-target clear, SMSG_ATTACK_STOP broadcast,
+// in-combat clear and the RemoveAllAttackers leg are all wired.
 func (s *session) handleCmdCombatStop(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCombatStop) {
 		return false
@@ -1036,7 +1037,11 @@ func (s *session) handleCmdCombatStop(ctx context.Context, args []string) bool {
 	target.attackTarget = 0
 	_ = target.sendAttackStop(victim, false)
 	// Unit::CombatStop (Unit.cpp:5809-5826) ends PvE/PvP combat, not just
-	// the attack swing: clear the in-combat flag as well.
+	// the attack swing: clear the in-combat flag as well, and stop every
+	// attacker of the target (RemoveAllAttackers, Unit.cpp:5814).
+	if s.server != nil && target.player != nil {
+		s.server.removeCreatureAttackers(target.player.Map, target.player.InstanceID, guid)
+	}
 	markPlayerOutOfCombat(ctx, target)
 	return true
 }
