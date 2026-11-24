@@ -672,6 +672,52 @@ func (s *Server) getVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) *Ve
 	return nil
 }
 
+// setPlayerVehicleNPCFlag mirrors the player half of the Vehicle NPC-flag
+// lifecycle (Vehicle.cpp:52-55 ctor, :508-509 RemovePassenger, :825-832
+// VehicleJoinEvent::Execute, Unit.cpp:12070-12071 RemoveVehicleKit): a
+// player base carries UNIT_NPC_FLAG_PLAYER_VEHICLE exactly while a usable
+// (CanEnterOrExit) seat is free. A nil kit means the kit is gone, so the
+// flag clears. The bit lives on playerState.NPCFlags and rides the create
+// block (buildPlayerUpdateForRecipient) and the values update pushed here
+// to self and observers on change — UNIT_NPC_FLAGS is DYNAMIC
+// (UpdateFields.h), so C++ sends it to every viewer (Object.cpp:481-498
+// _fieldNotifyFlags leg). Call with neither playerStateMu nor vehicleMu held.
+func (s *session) setPlayerVehicleNPCFlag(kit *VehicleKit) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	usable := false
+	if kit != nil {
+		kit.mu.RLock()
+		usable = kit.UsableSeatNum > 0
+		kit.mu.RUnlock()
+	}
+	s.playerStateMu.Lock()
+	changed := false
+	if usable {
+		if s.player.NPCFlags&unitNPCFlagPlayerVehicle == 0 {
+			s.player.NPCFlags |= unitNPCFlagPlayerVehicle
+			changed = true
+		}
+	} else {
+		if s.player.NPCFlags&unitNPCFlagPlayerVehicle != 0 {
+			s.player.NPCFlags &^= unitNPCFlagPlayerVehicle
+			changed = true
+		}
+	}
+	flags := s.player.NPCFlags
+	s.playerStateMu.Unlock()
+	if !changed {
+		return
+	}
+	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{unitFieldNPCFlags: flags})
+	if err != nil {
+		return
+	}
+	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldNPCFlags: flags})
+}
+
 // syncVehicleBaseNPCFlag mirrors the Vehicle NPC-flag lifecycle for a
 // creature base (Vehicle.cpp:52-55 ctor, :508-509 RemovePassenger,
 // :825-832 VehicleJoinEvent::Execute): the base carries
@@ -681,9 +727,10 @@ func (s *Server) getVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) *Ve
 // latches NPCFlagsKnown (the Lua SetFlag precedent) so the spawn rebuild
 // keeps the live value instead of re-affirming the template, and the
 // change broadcasts like any SetFlag. A player base carries
-// UNIT_NPC_FLAG_PLAYER_VEHICLE the same way in C++, but Go has no player
-// UNIT_NPC_FLAGS field, so that half stays out; a missing base motion is
-// a no-op. Callers run it after a board/unseat that may move
+// UNIT_NPC_FLAG_PLAYER_VEHICLE the same way in C++; that half rides the
+// session (playerState.NPCFlags via setPlayerVehicleNPCFlag) since players
+// have no creature motion. A missing base motion and no session is a
+// no-op. Callers run it after a board/unseat that may move
 // UsableSeatNum across zero; it is idempotent, so no caller needs to
 // pre-check the transition. Call with neither motionMu nor vehicleMu
 // held: the kit lookup resolves a base whose kit is keyed on another
@@ -701,6 +748,12 @@ func (s *Server) syncVehicleBaseNPCFlag(mapID, instanceID uint32, baseGUID uint6
 			break
 		}
 		if kit == nil {
+			// No kit: a player base drops the flag (Unit::RemoveVehicleKit,
+			// Unit.cpp:12070-12071); a creature base has no motion to clear
+			// through here.
+			if sess := s.findSessionByGUID(baseGUID); sess != nil {
+				sess.setPlayerVehicleNPCFlag(nil)
+			}
 			return
 		}
 	}
@@ -709,6 +762,11 @@ func (s *Server) syncVehicleBaseNPCFlag(mapID, instanceID uint32, baseGUID uint6
 	kit.mu.RUnlock()
 	base := s.findCreatureMotion(kitMapID, kitInstanceID, baseGUID)
 	if base == nil {
+		// Player base: the creature motion lookup misses, so the
+		// UNIT_NPC_FLAG_PLAYER_VEHICLE half rides the session instead.
+		if sess := s.findSessionByGUID(baseGUID); sess != nil {
+			sess.setPlayerVehicleNPCFlag(kit)
+		}
 		return
 	}
 	s.motionMu.Lock()
@@ -989,7 +1047,8 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 	// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): installing the
 	// accessories may take the last usable seat — the base's
 	// spell-click flag follows the final count, not the template.
-	// A player base no-ops in the helper (no creature motion).
+	// A player base syncs its UNIT_NPC_FLAG_PLAYER_VEHICLE half through
+	// its session in the helper.
 	s.syncVehicleBaseNPCFlag(origin.Map, origin.InstanceID, baseGUID)
 }
 
@@ -1017,6 +1076,14 @@ func (s *Server) removeVehicleKitWithBase(mapID, instanceID uint32, vehicleGUID 
 	s.vehicleMu.Unlock()
 	if kit != nil {
 		s.exitCreatureVehiclePassengers(mapID, instanceID, kit, false, base)
+	}
+	// Unit::RemoveVehicleKit (Unit.cpp:12070-12071) clears
+	// UNIT_NPC_FLAG_SPELLCLICK | UNIT_NPC_FLAG_PLAYER_VEHICLE: the player
+	// half clears through the session here (the creature half rides the
+	// motion, which the despawn callers already dropped; a live creature
+	// base keeps its flag until its own sync runs).
+	if sess := s.findSessionByGUID(vehicleGUID); sess != nil {
+		sess.setPlayerVehicleNPCFlag(nil)
 	}
 }
 
@@ -1453,7 +1520,8 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 	// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): installing the
 	// accessories may take the last usable seat — the base's
 	// spell-click flag follows the final count, not the template.
-	// A player base no-ops in the helper (no creature motion).
+	// A player base syncs its UNIT_NPC_FLAG_PLAYER_VEHICLE half through
+	// its session in the helper.
 	s.syncVehicleBaseNPCFlag(origin.Map, origin.InstanceID, baseGUID)
 }
 
@@ -1682,7 +1750,8 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 	// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): installing the
 	// accessories may take the last usable seat — the base's
 	// spell-click flag follows the final count, not the template.
-	// A player base no-ops in the helper (no creature motion).
+	// A player base syncs its UNIT_NPC_FLAG_PLAYER_VEHICLE half through
+	// its session in the helper.
 	s.syncVehicleBaseNPCFlag(origin.Map, origin.InstanceID, baseGUID)
 }
 

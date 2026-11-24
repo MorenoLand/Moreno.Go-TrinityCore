@@ -363,6 +363,7 @@ type playerState struct {
 	DuelTeam                   uint32
 	FarsightGUID               uint64 // PLAYER_FARSIGHT viewpoint GUID (EffectAddFarsight); runtime-only like C++
 	UnitFlags                  uint32
+	NPCFlags                   uint32 // live UNIT_NPC_FLAGS: player vehicle base UNIT_NPC_FLAG_PLAYER_VEHICLE while a usable seat is free (Vehicle.cpp:52-55, :508-509, :825-832; Unit.cpp:12070-12071). Runtime-only like UnitFlags.
 	UnitFlags2                 uint32 // UNIT_FIELD_FLAGS_2: disarm offhand/ranged bits (UnitDefines.h:168-170)
 	HomebindMap                uint32
 	HomebindZone               uint32
@@ -747,6 +748,11 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 				if kit := s.server.createVehicleKit(state.Map, state.InstanceID, state.GUID, uint32(effect.MiscValue), 0, true); kit != nil {
 					s.sendPlayerVehicleData(uint32(effect.MiscValue))
 					s.sendCancelExpectedRideVehicleAura()
+					// Vehicle ctor flag arm (Vehicle.cpp:52-55): the
+					// login restore runs before worldReady, so the
+					// sync's session lookup would miss — set the bit
+					// directly here and the create block carries it.
+					s.setPlayerVehicleNPCFlag(kit)
 				}
 			}
 		}
@@ -796,6 +802,11 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 				s.sendPlayerVehicleData(vehicleID)
 				s.sendCancelExpectedRideVehicleAura()
 				s.server.installPlayerVehicleAccessories(ctx, s, kit)
+				// Vehicle ctor flag arm (Vehicle.cpp:52-55), after the
+				// accessory install: the install tail's sync would miss
+				// the session before worldReady, so set the bit directly
+				// here and the create block carries it.
+				s.setPlayerVehicleNPCFlag(kit)
 			}
 			break
 		}
@@ -4018,6 +4029,10 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 		unitFlags |= unitFlagMount
 	}
 	values[unitFieldFlags] = unitFlags
+	// UNIT_NPC_FLAGS rides the create block from the live player state
+	// (playerState.NPCFlags): a player vehicle base shows
+	// UNIT_NPC_FLAG_PLAYER_VEHICLE while a usable seat is free.
+	values[unitFieldNPCFlags] = state.NPCFlags
 	values[unitFieldAttackTime] = 2000
 	values[unitFieldAttackTimeOffhand] = 2000
 	values[unitFieldBoundingRadius] = math.Float32bits(0.306349)
@@ -4420,7 +4435,11 @@ func playerFieldPublic(index int) bool {
 		return true
 	case index >= 74 && index <= 76:
 		return true
-	case index == 80 || index == 81 || index == 83:
+	case index == 80 || index == 81 || index == 82 || index == 83:
+		// 82 is UNIT_NPC_FLAGS: DYNAMIC, not PUBLIC, in UpdateFields.h —
+		// but C++ sends DYNAMIC fields to every viewer in every values
+		// update (Object.cpp:481-498 _fieldNotifyFlags leg), so it is
+		// public here, matching the creature broadcast.
 		return true
 	case index == 120 || index == 122:
 		return true

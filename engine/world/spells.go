@@ -43794,6 +43794,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 					if kit := s.server.createVehicleKit(targetSess.player.Map, targetSess.player.InstanceID, targetGUID, uint32(vehicleID), 0, true); kit != nil {
 						targetSess.sendPlayerVehicleData(uint32(vehicleID))
 						targetSess.sendCancelExpectedRideVehicleAura()
+						// Vehicle ctor flag arm (Vehicle.cpp:52-55).
+						targetSess.setPlayerVehicleNPCFlag(kit)
 					}
 				}
 			}
