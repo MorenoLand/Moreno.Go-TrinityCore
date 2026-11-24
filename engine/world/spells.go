@@ -32,6 +32,7 @@ const (
 	spellAttr5StartPeriodicAtApply  uint32 = 0x00000200 // SPELL_ATTR5_START_PERIODIC_AT_APPLY (SharedDefines.h:606) — ATTR5 is Go's AttributesEx5
 	spellAttr5SingleTarget          uint32 = 0x00000020 // SPELL_ATTR5_SINGLE_TARGET_SPELL (SharedDefines.h:602)
 	spellAttr5SkipCheckcastLosCheck uint32 = 0x04000000 // SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK (SharedDefines.h:623) — ATTR5 is Go's AttributesEx5
+	spellAttr5RemoveOnArenaEnter    uint32 = 0x00000004 // SPELL_ATTR5_REMOVE_ON_ARENA_ENTER (SharedDefines.h:599) — ATTR5 is Go's AttributesEx5
 	spellAttr5HasteAffectDuration   uint32 = 0x00002000 // SPELL_ATTR5_HASTE_AFFECT_DURATION (SharedDefines.h:610) — ATTR5 is Go's AttributesEx5
 
 	// spellCustomAttrRollingPeriodic mirrors SPELL_ATTR0_CU_ROLLING_PERIODIC
@@ -81,6 +82,7 @@ const (
 	spellAttr4IgnoreResistances            uint32 = 0x00000001 // SPELL_ATTR4_IGNORE_RESISTANCES (SharedDefines.h:560) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4FixedDamage                  uint32 = 0x00000100 // SPELL_ATTR4_FIXED_DAMAGE (SharedDefines.h:568) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4NotUsableInArena             uint32 = 0x00010000 // SPELL_ATTR4_NOT_USABLE_IN_ARENA (SharedDefines.h:576) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
+	spellAttr4Unk21                        uint32 = 0x00200000 // SPELL_ATTR4_UNK21 (SharedDefines.h:581) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr4UsableInArena                uint32 = 0x00020000 // SPELL_ATTR4_USABLE_IN_ARENA (SharedDefines.h:577) — ATTR4 is Go's AttributesEx4 (Spell.dbc field 8 = AttributesExD)
 	spellAttr3Battleground                 uint32 = 0x00000800 // SPELL_ATTR3_BATTLEGROUND (SharedDefines.h:534) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr3IgnoreResurrectionTimer      uint32 = 0x00000010 // SPELL_ATTR3_IGNORE_RESURRECTION_TIMER (SharedDefines.h:527) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
@@ -38103,6 +38105,63 @@ func (s *Server) clearCreatureAuras(key creatureAuraKey) {
 	}
 }
 
+// clearCreatureAurasExceptTypes mirrors Unit::RemoveAllAurasExceptType
+// (Unit.cpp:4397-4418) for creature targets: every applied aura whose spell
+// carries neither excepted aura type comes off through the remove funnel
+// with AURA_REMOVE_BY_DEFAULT; auras carrying either type stay. A spell
+// unresolvable from DBC data is kept: its types cannot be checked, so
+// stripping it could remove an exempt aura (the
+// removeShortDurationPositiveAuras precedent). Presence-only Lua-AddAura
+// entries prune by the same predicate; the funnel itself drops the removed
+// spells from the presence map. The owned-aura half has no Go model for
+// creatures — the dying/leave-world sweeps own it.
+func (s *Server) clearCreatureAurasExceptTypes(key creatureAuraKey, type1, type2 uint32) {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return
+	}
+	hasExceptType := func(spellID uint32) bool {
+		if s.Data == nil {
+			return false
+		}
+		spell, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			return true
+		}
+		return spellHasAura(spell, type1) || spellHasAura(spell, type2)
+	}
+	var ids []uint32
+	s.auraMu.Lock()
+	if s.activeCreatureAuras != nil {
+		for _, aura := range s.activeCreatureAuras[key] {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			if !hasExceptType(aura.SpellID) {
+				ids = append(ids, aura.SpellID)
+			}
+		}
+	}
+	if s.creatureAuras != nil {
+		if present, ok := s.creatureAuras[key]; ok {
+			for id := range present {
+				if _, active := s.activeCreatureAuras[key][id]; active {
+					continue
+				}
+				if !hasExceptType(id) {
+					delete(present, id)
+				}
+			}
+			if len(present) == 0 {
+				delete(s.creatureAuras, key)
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for _, id := range ids {
+		s.removeCreatureAuraWithMode(key, id, auraRemoveByDefault)
+	}
+}
+
 // clearCreatureAurasOnDeath mirrors Unit::RemoveAllAurasOnDeath (Unit.cpp)
 // for creature targets: death-persistent auras
 // (SPELL_ATTR3_DEATH_PERSISTENT) and passive auras (SPELL_ATTR0_PASSIVE,
@@ -38207,23 +38266,39 @@ func (s *session) clearActiveAuras() {
 // with AURA_REMOVE_BY_DEFAULT, so the remove legs run and the aura/slot
 // records clear. clearActiveAuras only stops timers and empties
 // activeAuras, leaving hasAura() true and the stat/mount legs applied —
-// the .unaura all gap. Logout/death callers keep clearActiveAuras; only
-// the .unaura all command uses this.
+// the .unaura all gap. The C++ loop repeats until both maps are empty (a
+// remove leg may re-apply an aura) with a 50-iteration bound, and strips
+// the m_ownedAuras half too — auras this unit owns on other targets go
+// through the leave-world sweep each pass. Logout/death callers keep
+// clearActiveAuras; only the .unaura all command uses this.
 func (s *session) removeAllPlayerAuras() {
 	if s == nil {
 		return
 	}
-	s.castMu.Lock()
-	var ids []uint32
-	for id := range s.activeAuras {
-		ids = append(ids, id)
-	}
-	s.castMu.Unlock()
-	// The lock is released: removeAuraWithMode takes castMu itself, and a
-	// remove leg may strip a later-listed aura first — the funnel no-ops
-	// on absent auras (clearDeathAuras precedent).
-	for _, id := range ids {
-		s.removeAura(id)
+	for pass := 0; pass < 50; pass++ {
+		s.castMu.Lock()
+		var ids []uint32
+		for id := range s.activeAuras {
+			ids = append(ids, id)
+		}
+		s.castMu.Unlock()
+		// The lock is released: removeAuraWithMode takes castMu itself, and a
+		// remove leg may strip a later-listed aura first — the funnel no-ops
+		// on absent auras (clearDeathAuras precedent).
+		for _, id := range ids {
+			s.removeAura(id)
+		}
+		if s.server != nil {
+			s.server.sweepOwnedAurasOnLeaveWorld(s.playerGUID)
+		}
+		// Re-check after the owned sweep: a remove leg may have re-applied
+		// an aura on this unit, which the next pass then catches.
+		s.castMu.Lock()
+		empty := len(s.activeAuras) == 0
+		s.castMu.Unlock()
+		if empty {
+			break
+		}
 	}
 }
 

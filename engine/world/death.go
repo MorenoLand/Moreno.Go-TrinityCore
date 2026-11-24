@@ -249,50 +249,63 @@ func (s *Server) sweepOwnedAurasOnLeaveWorld(casterGUID uint64) {
 	if s == nil || casterGUID == 0 {
 		return
 	}
-	s.sessionsMu.RLock()
-	var sessions []*session
-	for sess := range s.sessions {
-		sessions = append(sessions, sess)
-	}
-	s.sessionsMu.RUnlock()
-	for _, sess := range sessions {
-		if sess == nil || sess.player == nil {
-			continue
+	// Unit::RemoveAreaAurasDueToLeaveWorld restarts from m_ownedAuras.begin()
+	// after each removal (Unit.cpp:4264-4266): a remove leg may apply a new
+	// area aura, which the restart then catches. Mirror it with a bounded
+	// repeat-until-clean sweep (the 50-pass bound of RemoveAllAuras,
+	// Unit.cpp:4296).
+	for pass := 0; pass < 50; pass++ {
+		stripped := false
+		s.sessionsMu.RLock()
+		var sessions []*session
+		for sess := range s.sessions {
+			sessions = append(sessions, sess)
 		}
-		sess.castMu.Lock()
-		var strip []uint32
-		if sess.activeAuras != nil {
-			for id, aura := range sess.activeAuras {
-				if aura == nil || aura.CasterGUID != casterGUID {
-					continue
+		s.sessionsMu.RUnlock()
+		for _, sess := range sessions {
+			if sess == nil || sess.player == nil {
+				continue
+			}
+			sess.castMu.Lock()
+			var strip []uint32
+			if sess.activeAuras != nil {
+				for id, aura := range sess.activeAuras {
+					if aura == nil || aura.CasterGUID != casterGUID {
+						continue
+					}
+					strip = append(strip, id)
+					stripped = true
 				}
-				strip = append(strip, id)
+			}
+			sess.castMu.Unlock()
+			for _, id := range strip {
+				sess.removeAuraWithMode(id, auraRemoveByDefault)
 			}
 		}
-		sess.castMu.Unlock()
-		for _, id := range strip {
-			sess.removeAuraWithMode(id, auraRemoveByDefault)
+		type ownedStrip struct {
+			key creatureAuraKey
+			id  uint32
 		}
-	}
-	type ownedStrip struct {
-		key creatureAuraKey
-		id  uint32
-	}
-	s.auraMu.Lock()
-	var cstrip []ownedStrip
-	if s.activeCreatureAuras != nil {
-		for key, auras := range s.activeCreatureAuras {
-			for id, aura := range auras {
-				if aura == nil || aura.CasterGUID != casterGUID {
-					continue
+		s.auraMu.Lock()
+		var cstrip []ownedStrip
+		if s.activeCreatureAuras != nil {
+			for key, auras := range s.activeCreatureAuras {
+				for id, aura := range auras {
+					if aura == nil || aura.CasterGUID != casterGUID {
+						continue
+					}
+					cstrip = append(cstrip, ownedStrip{key: key, id: id})
+					stripped = true
 				}
-				cstrip = append(cstrip, ownedStrip{key: key, id: id})
 			}
 		}
-	}
-	s.auraMu.Unlock()
-	for _, cs := range cstrip {
-		s.removeCreatureAuraWithMode(cs.key, cs.id, auraRemoveByDefault)
+		s.auraMu.Unlock()
+		for _, cs := range cstrip {
+			s.removeCreatureAuraWithMode(cs.key, cs.id, auraRemoveByDefault)
+		}
+		if !stripped {
+			break
+		}
 	}
 }
 

@@ -354,17 +354,22 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		if bgMap := s.activeBattlegroundMap(); s.bgData.InstanceID != 0 && bgMap != 0 && bgMap != mapID {
 			s.handleLeaveBattlefield(context.Background(), nil, false, true)
 		}
-		// Player.cpp:1819-1822: RemoveArenaSpellCooldowns(true) — teleporting
-		// off an arena map resets spell cooldowns (the < 10 min recovery
-		// filter, Player.cpp:3942-3955), except for game masters. The
-		// RemoveArenaAuras twin stays a standing no-bridge: its aura
-		// positivity / spell-attribute filter (Unit.cpp:4329-4343) has no Go
-		// model. A sim roster member stands off the arena map (no-bridge
-		// port), so the map leg alone misses them: the roster leg is the
-		// admitted-player analog of mEntry, destination-guarded so a
-		// teleport onto the match map itself does not reset.
+		// Player.cpp:1819-1822: RemoveArenaSpellCooldowns(true) and
+		// RemoveArenaAuras — teleporting off an arena map resets spell
+		// cooldowns (the < 10 min recovery filter, Player.cpp:3942-3955)
+		// and strips non-exempt auras (Unit.cpp:4329-4342), except for game
+		// masters. The pet leg (Player.cpp:1823) strips the pet's auras
+		// before the temporary unsummon below clears them outright. A sim
+		// roster member stands off the arena map (no-bridge port), so the
+		// map leg alone misses them: the roster leg is the admitted-player
+		// analog of mEntry, destination-guarded so a teleport onto the
+		// match map itself does not reset.
 		if (IsArenaMap(s.player.Map) || (leavingArena != nil && leavingArena.MapID != mapID)) && !sessionIsGameMaster(s) {
 			s.removeArenaSpellCooldowns()
+			s.removeArenaAuras()
+			if s.server != nil && s.player.PetGUID != 0 {
+				s.server.removeCreatureArenaAuras(creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: s.player.PetGUID})
+			}
 		}
 	}
 	if !sameMap && s.player.PetGUID != 0 {

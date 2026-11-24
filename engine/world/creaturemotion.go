@@ -5705,12 +5705,12 @@ func (s *Server) charmerResolvesInInstance(mapID, instanceID uint32, guid uint64
 // Reference: TrinityCore Creature::EnterEvadeMode (Creature.cpp).
 //
 // CreatureAI::_EnterEvadeMode (CreatureAI.cpp:294-316) leg audit, in C++ relative
-// order: RemoveAurasOnEvade (Unit.cpp:4343) is bridged via clearCreatureAuras with
-// two deltas — C++ keeps SPELL_AURA_CONTROL_VEHICLE/CLONE_CASTER auras (Go has no
-// aura-type model for either, so the clear is unconditional) and skips the removal
-// entirely for charmed/player-owned creatures (vacuous here — OwnerGUID != 0
-// motions return through updatePetMotion ahead of the combat tick, so they never
-// reach this function). CombatStop(true) is bridged (threat own-table and
+// order: RemoveAurasOnEvade (Unit.cpp:4343) is bridged via
+// clearCreatureAurasExceptTypes, which keeps SPELL_AURA_CONTROL_VEHICLE /
+// CLONE_CASTER auras (Unit.cpp:4348-4350) and strips the rest; the
+// charmed/player-owned skip stays vacuous here — OwnerGUID != 0 motions
+// return through updatePetMotion ahead of the combat tick, so they never
+// reach this function. CombatStop(true) is bridged (threat own-table and
 // victim halves, c3701e6/dc4885d; attack stop). LoadCreaturesAddon's auras leg is
 // bridged at evade start (reapplyCreatureAddonAuras, CreatureAI.cpp:308); Go models
 // only creature_addon/creature_template_addon's path_id (loadCreaturePathID) plus the
@@ -8264,7 +8264,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	motion.PlayerDamageReq = motion.MaxHealth / 2
 	motion.DynamicFlags &^= unitDynFlagTapped
 	if s != nil {
-		s.clearCreatureAuras(creatureAuraKeyForMotion(motion))
+		s.clearCreatureAurasExceptTypes(creatureAuraKeyForMotion(motion), spellAuraControlVehicle, spellAuraCloneCaster)
 		// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:308): LoadCreaturesAddon
 		// re-applies the addon auras right after the evade clear above
 		// (RemoveAurasOnEvade, CombatStop, then the addon leg, in C++ order).

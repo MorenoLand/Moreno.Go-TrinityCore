@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -930,6 +931,106 @@ func (s *session) removeShortDurationPositiveAuras() {
 	}
 	for _, id := range ids {
 		s.removeAura(id)
+	}
+}
+
+// arenaAuraRemoved is the RemoveAppliedAuras predicate of
+// Unit::RemoveArenaAuras (Unit.cpp:4329-4342): auras carrying
+// SPELL_ATTR4_UNK21 (stances, shadowform, pally/hunter auras) stay, passive
+// auras stay, and negative death-persistent auras stay; everything else
+// goes, and SPELL_ATTR5_REMOVE_ON_ARENA_ENTER auras always go regardless
+// of the other properties.
+func arenaAuraRemoved(spell wotlk.Spell) bool {
+	if spell.AttributesEx5&spellAttr5RemoveOnArenaEnter != 0 {
+		return true
+	}
+	if spell.AttributesEx4&spellAttr4Unk21 != 0 {
+		return false
+	}
+	if spell.Attributes&spellAttributePassive != 0 {
+		return false
+	}
+	if !spellIsPositive(spell) && spell.AttributesEx3&spellAttr3DeathPersistent != 0 {
+		return false
+	}
+	return true
+}
+
+// removeArenaAuras mirrors Unit::RemoveArenaAuras (Unit.cpp:4329-4342) for
+// the player: on arena entry every applied aura goes except the ones the
+// predicate above keeps. A spell unresolvable from DBC data is left alone:
+// its exemptions cannot be checked (the removeShortDurationPositiveAuras
+// precedent). Runs through the standard remove funnel with
+// AURA_REMOVE_BY_DEFAULT, like RemoveAppliedAuras.
+func (s *session) removeArenaAuras() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	var ids []uint32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if arenaAuraRemoved(spell) {
+			ids = append(ids, aura.SpellID)
+		}
+	}
+	for _, id := range ids {
+		s.removeAura(id)
+	}
+}
+
+// removeCreatureArenaAuras is the creature-target twin of removeArenaAuras
+// (Unit.cpp:4329-4342) for the pet leg of Player.cpp:1821-1823: a pet
+// entering an arena loses the same auras its owner does. Presence-only
+// Lua-AddAura entries prune by the same predicate, with positivity read
+// from the spell row (the presence map carries none).
+func (s *Server) removeCreatureArenaAuras(key creatureAuraKey) {
+	if s == nil || key.GUID == 0 || s.Data == nil {
+		return
+	}
+	var ids []uint32
+	s.auraMu.Lock()
+	if s.activeCreatureAuras != nil {
+		for _, aura := range s.activeCreatureAuras[key] {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			spell, found, err := s.Data.Spell(aura.SpellID)
+			if err != nil || !found {
+				continue
+			}
+			if arenaAuraRemoved(spell) {
+				ids = append(ids, aura.SpellID)
+			}
+		}
+	}
+	if s.creatureAuras != nil {
+		if present, ok := s.creatureAuras[key]; ok {
+			for id := range present {
+				if _, active := s.activeCreatureAuras[key][id]; active {
+					continue
+				}
+				spell, found, err := s.Data.Spell(id)
+				if err != nil || !found {
+					continue
+				}
+				if arenaAuraRemoved(spell) {
+					delete(present, id)
+				}
+			}
+			if len(present) == 0 {
+				delete(s.creatureAuras, key)
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for _, id := range ids {
+		s.removeCreatureAura(key, id)
 	}
 }
 
