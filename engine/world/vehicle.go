@@ -640,6 +640,69 @@ func (s *Server) getVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) *Ve
 	return nil
 }
 
+// syncVehicleBaseNPCFlag mirrors the Vehicle NPC-flag lifecycle for a
+// creature base (Vehicle.cpp:52-55 ctor, :508-509 RemovePassenger,
+// :825-832 VehicleJoinEvent::Execute): the base carries
+// UNIT_NPC_FLAG_SPELLCLICK exactly while a usable (CanEnterOrExit) seat
+// is free — the client shows the spell-click cursor only then. Boarding
+// the last usable seat clears it; freeing one sets it again. The write
+// latches NPCFlagsKnown (the Lua SetFlag precedent) so the spawn rebuild
+// keeps the live value instead of re-affirming the template, and the
+// change broadcasts like any SetFlag. A player base carries
+// UNIT_NPC_FLAG_PLAYER_VEHICLE the same way in C++, but Go has no player
+// UNIT_NPC_FLAGS field, so that half stays out; a missing base motion is
+// a no-op. Callers run it after a board/unseat that may move
+// UsableSeatNum across zero; it is idempotent, so no caller needs to
+// pre-check the transition. Call with neither motionMu nor vehicleMu
+// held: the kit lookup resolves a base whose kit is keyed on another
+// map (a teleported base) through the findVehicleKits fallback.
+func (s *Server) syncVehicleBaseNPCFlag(mapID, instanceID uint32, baseGUID uint64) {
+	if s == nil || baseGUID == 0 {
+		return
+	}
+	kit := s.getVehicleKit(mapID, instanceID, baseGUID)
+	kitMapID, kitInstanceID := mapID, instanceID
+	if kit == nil {
+		for _, loc := range s.findVehicleKits(baseGUID) {
+			kit = loc.kit
+			kitMapID, kitInstanceID = loc.key.MapID, loc.key.InstanceID
+			break
+		}
+		if kit == nil {
+			return
+		}
+	}
+	kit.mu.RLock()
+	usable := kit.UsableSeatNum > 0
+	kit.mu.RUnlock()
+	base := s.findCreatureMotion(kitMapID, kitInstanceID, baseGUID)
+	if base == nil {
+		return
+	}
+	s.motionMu.Lock()
+	changed := false
+	if usable {
+		if base.NPCFlags&unitNPCFlagSpellclick == 0 {
+			base.NPCFlags |= unitNPCFlagSpellclick
+			changed = true
+		}
+	} else {
+		if base.NPCFlags&unitNPCFlagSpellclick != 0 {
+			base.NPCFlags &^= unitNPCFlagSpellclick
+			changed = true
+		}
+	}
+	var flags uint32
+	if changed {
+		base.NPCFlagsKnown = true
+		flags = base.NPCFlags
+	}
+	s.motionMu.Unlock()
+	if changed {
+		s.broadcastCreatureValuesUpdateInInstance(kitMapID, kitInstanceID, baseGUID, map[int]uint32{unitFieldNPCFlags: flags})
+	}
+}
+
 // applyVehicleImmunities mirrors Vehicle::ApplyAllImmunities
 // (Vehicle.cpp:160-223): the immunity + root arms of Vehicle::Reset.
 // Every vehicle base is immune to the knockback effects; a mechanical
@@ -1386,12 +1449,11 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		// ejected mid-air falls to the ground on a SetFall spline
 		// instead of hanging at the exit position in the air. The fall
 		// launches before the 2s unsummon below (:13265), as in C++.
-		// The launch lifts the dead refusal: a passenger killed by the
-		// session melee/auto-shot path is still seated here (that path
-		// never unseats — no clearCreatureDeathState leg), and C++
-		// _ExitVehicle falls a corpse (MotionMaster.cpp:919-955 has
-		// no dead gate). Without a fall the move to the exit position
-		// rides the teleport broadcast, as in the Lua ExitVehicle arm.
+		// The launch lifts the dead refusal: C++ _ExitVehicle falls a
+		// corpse (MotionMaster.cpp:919-955 has no dead gate), and the
+		// shared helper runs the JUST_DIED leg on a dead passenger.
+		// Without a fall the move to the exit position rides the
+		// teleport broadcast, as in the Lua ExitVehicle arm.
 		if !s.fallAfterVehicleExitAllowDead(motion.Map, motion.InstanceID, motion.GUID, occupantMotion, true) {
 			_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: exitX, Y: exitY, Z: exitZ, Orientation: exitO})
 			s.broadcastCreatureTeleportMovement(motion.Map, motion.InstanceID, guid, exitX, exitY, exitZ, nearby, phase)
@@ -1452,10 +1514,16 @@ func (s *Server) installPlayerVehicleAccessories(ctx context.Context, sess *sess
 // passenger cannot fly (Unit.cpp:13238-13249). The SmartAI
 // passenger-boarded (false) event rides the hook, and a player base
 // stays silent per the C++ TYPEID_UNIT gate. The _ExitVehicle TAIL
-// (Unit.cpp:13251-13266: minion-base DespawnOrUnsummon(1ms), accessory
-// UnSummon(2000)) is NOT run here — the accessory leg would re-apply
-// the death state to a passenger already dying when its base is dead,
-// so it stays a flagged follow-up. Returns false when the creature was
+// (Unit.cpp:13251-13266) runs in its live-base accessory half only:
+// a minion accessory unsummons (UnSummon(2000)) when the base is alive.
+// The dead-base half (setDeathState(JUST_DIED) on the passenger) is
+// NOT run here — the passenger is already dying, and Go's
+// applyCreatureDeathState would re-fire the JustDied hooks, where
+// C++'s re-entrant setDeathState is a no-op in effect on an
+// already-JUST_DIED unit. The minion-base half (DespawnOrUnsummon(1ms)
+// on a base owned by the exiting passenger) stays out: a dying
+// passenger owning its own minion vehicle base has no in-tree
+// precedent. Returns false when the creature was
 // not seated in the named base's kit — the seat may already be gone
 // when a death sweep re-enters through applyCreatureDeathState, and
 // the fire must not double. A base that teleported away keys its kit
@@ -1469,8 +1537,16 @@ func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceI
 	var exitMotion *creatureMotion
 	var exitX, exitY, exitZ, exitO float32
 	var exitMapID, exitInstanceID, exitPhase uint32
+	// tailBase is the first base motion the sweep resolves, for the
+	// _ExitVehicle tail's live-base test below; a base that never
+	// resolves (despawned, kit already dropped) leaves the tail to the
+	// kit-drop sweep, which already ran it.
+	var tailBase *creatureMotion
 	for _, loc := range s.findVehicleKits(baseGUID) {
 		baseMotion := s.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, baseGUID)
+		if tailBase == nil {
+			tailBase = baseMotion
+		}
 		passengerMotion := s.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, passengerGUID)
 		// Unit::_ExitVehicle (Unit.cpp:13193): the seat addon is read
 		// BEFORE RemovePassenger — after removal the seat is empty
@@ -1530,6 +1606,34 @@ func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceI
 				s.broadcastCreatureTeleportMovement(exitMapID, exitInstanceID, passengerGUID, exitX, exitY, exitZ, nearby, exitPhase)
 			}
 		}
+		if exitMotion != nil && exitMotion.VehicleAccessoryMinion {
+			// Unit::_ExitVehicle tail (Unit.cpp:13258-13266): a minion
+			// accessory unsummons (UnSummon(2000)) when the base is
+			// alive — the 2s delayed expiry, shared with the
+			// evade-reinstall and respawn eject paths. The dead-base
+			// branch is skipped per the header: the passenger is
+			// already dying. Base liveness mirrors exitVehicleTail's
+			// dead test (Health 0 or a non-ALIVE DeathState; a player
+			// base via its session); an unresolvable base skips the
+			// tail — its kit-drop already ran it through
+			// exitCreatureVehiclePassengers.
+			baseDead := false
+			baseKnown := false
+			if tailBase != nil {
+				baseDead = tailBase.Health == 0 || tailBase.DeathState != creatureDeathAlive
+				baseKnown = true
+			} else if baseSess := s.findSessionByGUID(baseGUID); baseSess != nil && baseSess.player != nil {
+				baseDead = baseSess.player.Health == 0
+				baseKnown = true
+			}
+			if baseKnown && !baseDead {
+				s.unsummonEjectedVehicleAccessory(exitMotion, true)
+			}
+		}
+		// Vehicle NPC-flag lifecycle (Vehicle.cpp:508-509, :825-832):
+		// freeing a usable seat restores the base's spell-click flag;
+		// the helper resolves a base whose kit is keyed on another map.
+		s.syncVehicleBaseNPCFlag(mapID, instanceID, baseGUID)
 	}
 	return removed
 }
@@ -1575,13 +1679,11 @@ func (s *Server) exitDeadPlayerBasePassengers(ctx context.Context, mapID, instan
 // the dying-passenger leg (Unit::setDeathState, Unit.cpp:8915-8916)
 // passes true because the JUST_DIED _ExitVehicle fall launches
 // (MotionMaster::MoveFall has no dead gate, MotionMaster.cpp:919-955),
-// and the eject/kit-drop callers pass true too — a corpse CAN still be
-// seated there: the session melee/auto-shot kill path (executeMeleeSwing,
-// combat.go) and GM .die never unseat (no clearCreatureDeathState leg,
-// unlike the spell/pet/creature kill funnels), so the dead passenger
-// keeps its seat until the base dies or the kit drops, and C++
-// _ExitVehicle falls it then. Root/stun/not-move-aura and drop <0.1
-// still refuse, as in C++.
+// and the eject/kit-drop callers pass true too — C++ _ExitVehicle falls
+// a seated corpse, and the lift is harmless when none is seated: the
+// kill funnels unseat a dying passenger at death time (session via
+// kill.go onCreatureKilled, the rest via clearCreatureDeathState).
+// Root/stun/not-move-aura and drop <0.1 still refuse, as in C++.
 func (s *Server) fallAfterVehicleExitAllowDead(mapID, instanceID uint32, baseGUID uint64, motion *creatureMotion, allowDead bool) bool {
 	if s == nil || motion == nil {
 		return false
@@ -1770,11 +1872,10 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 				// spline launches before the 2s unsummon, as in C++,
 				// so the accessory falls for its remaining lifetime.
 				// The launch lifts the dead refusal (see the
-				// fallAfterVehicleExitAllowDead twin): a corpse can still
-				// be seated on a kit-drop — the session kill path never
-				// unseats it — and C++ _ExitVehicle falls it.
-				// Without a fall the move to the exit position rides
-				// the teleport broadcast, as in the Lua ExitVehicle arm.
+				// fallAfterVehicleExitAllowDead twin): C++ _ExitVehicle
+				// falls a seated corpse. Without a fall the move to the
+				// exit position rides the teleport broadcast, as in the
+				// Lua ExitVehicle arm.
 				if !s.fallAfterVehicleExitAllowDead(mapID, instanceID, kit.VehicleGUID, motion, true) {
 					_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: exitX, Y: exitY, Z: exitZ, Orientation: exitO})
 					s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, exitX, exitY, exitZ, nearby, phase)
@@ -1792,16 +1893,19 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 		// ejected mid-air falls to the ground on a SetFall spline
 		// instead of hanging at the exit position in the air. The
 		// launch lifts the dead refusal (see the
-		// fallAfterVehicleExitAllowDead twin): a corpse can still be
-		// seated on a kit-drop — the session kill path never unseats
-		// it — and C++ _ExitVehicle falls it. Without a fall the move
-		// to the exit position rides the teleport broadcast, as in the
-		// Lua ExitVehicle arm.
+		// fallAfterVehicleExitAllowDead twin): C++ _ExitVehicle falls
+		// a seated corpse. Without a fall the move to the exit
+		// position rides the teleport broadcast, as in the Lua
+		// ExitVehicle arm.
 		if !s.fallAfterVehicleExitAllowDead(mapID, instanceID, kit.VehicleGUID, motion, true) {
 			_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: exitX, Y: exitY, Z: exitZ, Orientation: exitO})
 			s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, exitX, exitY, exitZ, nearby, phase)
 		}
 	}
+	// Vehicle NPC-flag lifecycle (Vehicle.cpp:508-509, :825-832): the
+	// sweep freed every usable seat, so the base's spell-click flag is
+	// restored; a departing base resolves to no motion and no-ops.
+	s.syncVehicleBaseNPCFlag(mapID, instanceID, kit.VehicleGUID)
 }
 
 // syncCreatureVehiclePassengers moves a creature base's passengers with it.

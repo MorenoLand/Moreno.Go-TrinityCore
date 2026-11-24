@@ -7265,9 +7265,9 @@ func (s *Server) launchCreatureFallSpline(motion *creatureMotion, destX, destY, 
 // arm then leaves it alone (Unit.cpp:8927-8940, skipped when
 // isOnVehicle). allowDead=true lifts only the Go-side Health==0
 // refusal; every other gate (root/stun/not-move aura, drop <0.1) still
-// applies. The eject/kit-drop callers pass allowDead=true too: a corpse
-// can still be seated there (the session kill path never unseats it),
-// and C++ _ExitVehicle falls it (Unit.cpp:13238-13249).
+// applies. The eject/kit-drop callers pass allowDead=true too: the
+// JUST_DIED _ExitVehicle fall itself launches on a dead passenger, and
+// C++ _ExitVehicle falls a seated corpse (Unit.cpp:13238-13249).
 func (s *Server) launchCreatureFallSplineAllowDead(motion *creatureMotion, destX, destY, destZ float32, id uint32, allowDead bool) bool {
 	if s == nil || motion == nil {
 		return false

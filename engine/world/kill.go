@@ -1052,6 +1052,21 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
 			s.server.interruptCreatureCastsOnRemove(motion)
 		}
+		// Unit::setDeathState (Unit.cpp:8915-8916): ExitVehicle — a
+		// dying passenger leaves its base's kit (Vehicle::RemovePassenger,
+		// Vehicle.cpp:498-543), with the exit-position relocate and fall
+		// in removeCreatureVehicleSeat. The session kill funnel (melee,
+		// auto-shot, GM .die) never ran this leg — its setDeathState twin
+		// inlined the visual/combo/interrupt/instance arms but not the
+		// unseat — so a passenger killed by a session blow kept its seat
+		// until the base died or the kit dropped. The spell/pet/creature
+		// funnels unseat through clearCreatureDeathState, and the seat
+		// free is idempotent, so no kill runs it twice. Runs after the
+		// interrupt leg, as in C++ (:8909-8911 interrupt, :8915-8916
+		// ExitVehicle), ahead of the JustDied hooks below.
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil && motion.VehicleGUID != 0 {
+			s.server.removeCreatureVehicleSeat(ctx, target.Map, target.InstanceID, target.GUID, motion.VehicleGUID)
+		}
 		// Unit::setDeathState (Unit.cpp:8956): the JUST_DIED arm calls
 		// zoneScript->OnUnitDeath — the instance fire, ahead of the
 		// JustDied hooks below. This is the owner arm of the single
