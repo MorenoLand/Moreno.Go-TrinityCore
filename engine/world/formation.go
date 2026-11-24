@@ -200,7 +200,7 @@ func (s *Server) formationIsFormed(leaderLow uint32) bool {
 
 // formationReset mirrors CreatureGroup::FormationReset
 // (CreatureGroups.cpp:262-278), reached from Creature::Motion_Initialize
-// (Creature.cpp:1088-1098, dismiss=false) and from
+// (Creature.cpp:1089-1098, dismiss=false) and from
 // Creature::setDeathState JUST_DIED (Creature.cpp:2104-2107,
 // dismiss=true). Every live non-leader roster member either waits idle
 // for the leader's order (MoveIdle) or resumes its default movement
@@ -259,7 +259,7 @@ func (s *Server) formationReset(ctx context.Context, mapID, instanceID uint32, l
 }
 
 // formationMotionInitialize mirrors Creature::Motion_Initialize
-// (Creature.cpp:1088-1098), reached from AIM_Create (:1066) on spawn
+// (Creature.cpp:1089-1098), reached from AIM_Create (:1066) on spawn
 // and from setDeathState JUST_RESPAWNED (:2150) on respawn: a formation
 // leader's init idles its live members and forms the group, while a
 // non-leader member of an already-formed group waits idle for the

@@ -421,6 +421,23 @@ func (v *VehicleKit) SwitchSeat(passengerGUID uint64, newSeatID int8) (assignedS
 	return newSeatID, destSeat.SeatInfo, true
 }
 
+// passengerWasUnselectable returns the pre-boarding UNIT_FLAG_NOT_SELECTABLE
+// state AddPassenger recorded for the passenger (Vehicle.cpp:822),
+// which Vehicle::RemovePassenger (Vehicle.cpp:512-514) consults when
+// deciding whether the flag clears on exit. SwitchSeat carries the
+// passenger record — IsUnselectable included — to the new seat, so the
+// stored value survives a switch.
+func (v *VehicleKit) passengerWasUnselectable(passengerGUID uint64) bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, s := range v.Seats {
+		if s.Passenger.GUID == passengerGUID {
+			return s.Passenger.IsUnselectable
+		}
+	}
+	return false
+}
+
 // IsVehicleInUse returns true if any passenger is currently boarded.
 // Reference: Vehicle::IsVehicleInUse (Vehicle.cpp:590-597).
 func (v *VehicleKit) IsVehicleInUse() bool {
@@ -928,6 +945,10 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 		summoned.VehicleAccessoryMinion = acc.IsMinion
 		summoned.Moving = false
 		s.motionMu.Unlock()
+		// VehicleJoinEvent::Execute (Vehicle.cpp:855-856): a seat
+		// carrying VEHICLE_SEAT_FLAG_PASSENGER_NOT_SELECTABLE sets
+		// UNIT_FLAG_NOT_SELECTABLE on the passenger.
+		s.setCreatureVehicleNotSelectable(summoned, seatInfo)
 		kit.mu.Lock()
 		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
 		kit.mu.Unlock()
@@ -1382,6 +1403,10 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 		summoned.VehicleAccessoryMinion = acc.IsMinion
 		summoned.Moving = false
 		s.motionMu.Unlock()
+		// VehicleJoinEvent::Execute (Vehicle.cpp:855-856): a seat
+		// carrying VEHICLE_SEAT_FLAG_PASSENGER_NOT_SELECTABLE sets
+		// UNIT_FLAG_NOT_SELECTABLE on the passenger.
+		s.setCreatureVehicleNotSelectable(summoned, seatInfo)
 		kit.mu.Lock()
 		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
 		kit.mu.Unlock()
@@ -1516,7 +1541,17 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 			// clears the seat regardless, so drop the bookkeeping
 			// entry — and fire OnRemovePassenger here, since the
 			// exit leg fires it only when it removes the seat itself.
-			if seatID, _, _, ok := kit.RemovePassenger(guid); ok {
+			if seatID, seatInfo, wasUnselectable, ok := kit.RemovePassenger(guid); ok {
+				// Vehicle::RemovePassenger (Vehicle.cpp:512-514,
+				// :517-518, :533): the stale-seat exit never ran the
+				// session arm, so the flag restore, charm drop, and
+				// parachute run here, ahead of the hooks.
+				sess.applyVehicleSeatNotSelectable(seatInfo, nil, wasUnselectable)
+				if seatInfo != nil && seatInfo.CanControl() && !kit.IsPlayer {
+					sess.sendClientControl(kit.VehicleGUID, false)
+					sess.sendVehiclePetSpells(0, nil)
+				}
+				sess.castVehicleExitParachute(ctx, kit.VehicleGUID)
 				if base := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID); base != nil {
 					// Vehicle::RemovePassenger (Vehicle.cpp:536-539):
 					// the AI PassengerBoarded(false) call precedes
@@ -1540,7 +1575,12 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		if occupantMotion != nil {
 			exitX, exitY, exitZ, exitO = s.creatureVehicleExitPosition(motion.GUID, occupantMotion, motion)
 		}
-		seatID, _, _, seatOK := kit.RemovePassenger(guid)
+		seatID, seatInfo, wasUnselectable, seatOK := kit.RemovePassenger(guid)
+		// Vehicle::RemovePassenger (Vehicle.cpp:512-514, :533): the
+		// NOT_SELECTABLE flag restores and a flying passenger is
+		// handed the parachute spell, ahead of the hooks below.
+		s.clearCreatureVehicleNotSelectable(occupantMotion, seatInfo, wasUnselectable)
+		s.castCreatureVehicleExitParachute(ctx, motion.GUID, occupantMotion)
 		if seatOK {
 			s.smartPassengerBoarded(ctx, motion, guid, seatID, false)
 		}
@@ -1607,6 +1647,10 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		summoned.VehicleAccessoryMinion = acc.IsMinion
 		summoned.Moving = false
 		s.motionMu.Unlock()
+		// VehicleJoinEvent::Execute (Vehicle.cpp:855-856): a seat
+		// carrying VEHICLE_SEAT_FLAG_PASSENGER_NOT_SELECTABLE sets
+		// UNIT_FLAG_NOT_SELECTABLE on the passenger.
+		s.setCreatureVehicleNotSelectable(summoned, seatInfo)
 		_, _, seatAddon := kit.GetSeatForPassenger(summoned.GUID)
 		// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the board
 		// stamps the passenger's transport with the seat offsets.
@@ -1679,6 +1723,80 @@ func (s *Server) installPlayerVehicleAccessories(ctx context.Context, sess *sess
 // the fire must not double. A base that teleported away keys its kit
 // under another map, so every kit for the base GUID is swept, not just
 // the passenger's own map.
+// removeDepartingCreatureVehicleSeat unseats a creature passenger that
+// is itself leaving the world (despawnCreatureMotion, pruneCreatureMotion).
+// Unit::RemoveFromWorld (Unit.cpp:9798) runs ExitVehicle() before the
+// object leaves the world, so Vehicle::RemovePassenger fires its hooks
+// there: the AI PassengerBoarded(false) call and OnRemovePassenger
+// (Vehicle.cpp:536-539), gated only on a creature base — neither is
+// gated on the passenger's or the base's IsInWorld. The despawn/prune
+// paths only dropped the departing unit's OWN kit (its base side),
+// leaving the passenger's seat occupied on its live base with no hook
+// fires — the base-side twin (removeVehicleKitWithBase, departingBase)
+// already covers the reverse. The departing motion stands in for the
+// passenger object, as the departing base does for the kit-drop. No
+// movement tail runs here: the _ExitVehicle relocate/fall legs are
+// unobservable once the destroy packet goes out, and broadcasting them
+// for a deleted object would be noise. The parachute leg
+// (Vehicle.cpp:533) is likewise skipped — its cast targets a unit
+// mid-RemoveFromWorld.
+func (s *Server) removeDepartingCreatureVehicleSeat(ctx context.Context, mapID, instanceID uint32, passenger *creatureMotion) {
+	if s == nil || passenger == nil || passenger.VehicleGUID == 0 {
+		return
+	}
+	baseGUID := passenger.VehicleGUID
+	for _, loc := range s.findVehicleKits(baseGUID) {
+		baseMotion := s.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, baseGUID)
+		seatID, _, _, ok := loc.kit.RemovePassenger(passenger.GUID)
+		if !ok {
+			continue
+		}
+		if baseMotion != nil {
+			// Vehicle::RemovePassenger (Vehicle.cpp:536-539): the
+			// AI PassengerBoarded(false) call precedes the
+			// OnRemovePassenger script hook.
+			s.smartPassengerBoarded(ctx, baseMotion, passenger.GUID, seatID, false)
+			s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(baseMotion), s.luaMotionCreature(passenger))
+		}
+	}
+}
+
+// setCreatureVehicleNotSelectable mirrors the VehicleJoinEvent::Execute
+// NOT_SELECTABLE leg (Vehicle.cpp:855-856) for a creature passenger: a
+// seat carrying VEHICLE_SEAT_FLAG_PASSENGER_NOT_SELECTABLE sets
+// UNIT_FLAG_NOT_SELECTABLE on the passenger. The player board
+// (enterVehicle) already sets it; the creature boards (Lua AddPassenger,
+// the accessory installs, the 236 aura-apply leg via
+// luaVehicleAddPassenger) never did, so a seated creature stayed
+// selectable. The flag rides the values-update broadcast, as other
+// creature UnitFlags changes do.
+func (s *Server) setCreatureVehicleNotSelectable(motion *creatureMotion, seatInfo *wotlk.VehicleSeatEntry) {
+	if s == nil || motion == nil || seatInfo == nil || !seatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) {
+		return
+	}
+	s.motionMu.Lock()
+	motion.UnitFlags |= 0x02000000 // UNIT_FLAG_NOT_SELECTABLE
+	flags := motion.UnitFlags
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{unitFieldFlags: flags})
+}
+
+// clearCreatureVehicleNotSelectable mirrors Vehicle::RemovePassenger
+// (Vehicle.cpp:512-514): the flag clears only when the seat carried it
+// and the passenger did not carry it before boarding (the IsUnselectable
+// recorded by AddPassenger). The player exit (exitVehicle) already
+// restores it; the creature exits never did.
+func (s *Server) clearCreatureVehicleNotSelectable(motion *creatureMotion, seatInfo *wotlk.VehicleSeatEntry, wasUnselectable bool) {
+	if s == nil || motion == nil || seatInfo == nil || wasUnselectable || !seatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) {
+		return
+	}
+	s.motionMu.Lock()
+	motion.UnitFlags &^= 0x02000000 // UNIT_FLAG_NOT_SELECTABLE
+	flags := motion.UnitFlags
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{unitFieldFlags: flags})
+}
+
 func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceID uint32, passengerGUID, baseGUID uint64) bool {
 	if s == nil || passengerGUID == 0 || baseGUID == 0 {
 		return false
@@ -1706,11 +1824,18 @@ func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceI
 		if passengerMotion != nil {
 			px, py, pz, po = s.creatureVehicleExitPosition(baseGUID, passengerMotion, baseMotion)
 		}
-		seatID, _, _, ok := loc.kit.RemovePassenger(passengerGUID)
+		seatID, seatInfo, wasUnselectable, ok := loc.kit.RemovePassenger(passengerGUID)
 		if !ok {
 			continue
 		}
 		removed = true
+		// Vehicle::RemovePassenger (Vehicle.cpp:512-514, :533): the
+		// NOT_SELECTABLE flag restores — the seat carried it and the
+		// passenger did not before boarding — and a flying passenger
+		// is handed the parachute spell, both ahead of the remove
+		// hooks below.
+		s.clearCreatureVehicleNotSelectable(passengerMotion, seatInfo, wasUnselectable)
+		s.castCreatureVehicleExitParachute(ctx, baseGUID, passengerMotion)
 		if baseMotion != nil {
 			// Vehicle::RemovePassenger (Vehicle.cpp:536-539): the
 			// AI PassengerBoarded(false) call precedes the
@@ -1979,10 +2104,22 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 				sess.exitVehicle(context.Background())
 				continue
 			}
-			seatID, _, _, ok := kit.RemovePassenger(guid)
+			seatID, seatInfo, wasUnselectable, ok := kit.RemovePassenger(guid)
 			if !ok {
 				continue
 			}
+			// Vehicle::RemovePassenger (Vehicle.cpp:512-514, :517-518,
+			// :533): the kit-drop is the passenger's _ExitVehicle,
+			// but the session tail below no-ops its own RemovePassenger
+			// legs (seat gone, kit deregistered, base motion deleted),
+			// so the flag restore, charm drop, and parachute run here,
+			// ahead of the hooks.
+			sess.applyVehicleSeatNotSelectable(seatInfo, nil, wasUnselectable)
+			if seatInfo != nil && seatInfo.CanControl() && !kit.IsPlayer {
+				sess.sendClientControl(kit.VehicleGUID, false)
+				sess.sendVehiclePetSpells(0, nil)
+			}
+			sess.castVehicleExitParachute(context.Background(), kit.VehicleGUID)
 			if vehicleObj != nil {
 				// Vehicle::RemovePassenger (Vehicle.cpp:536-539):
 				// the AI PassengerBoarded(false) call precedes the
@@ -2013,7 +2150,12 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 		// RemoveFromWorld) does not keep listing the departed
 		// passenger; the resetVehicleKitOnRespawn twin already drops
 		// stale seats the same way.
-		seatID, _, _, seatOK := kit.RemovePassenger(guid)
+		seatID, seatInfo, wasUnselectable, seatOK := kit.RemovePassenger(guid)
+		// Vehicle::RemovePassenger (Vehicle.cpp:512-514, :533): the
+		// NOT_SELECTABLE flag restores and a flying passenger is
+		// handed the parachute spell, ahead of the hooks below.
+		s.clearCreatureVehicleNotSelectable(motion, seatInfo, wasUnselectable)
+		s.castCreatureVehicleExitParachute(context.Background(), kit.VehicleGUID, motion)
 		if vehicleObj != nil && seatOK {
 			// Vehicle::RemovePassenger (Vehicle.cpp:536-539): the
 			// AI PassengerBoarded(false) call precedes the
@@ -3079,9 +3221,6 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 		}
 	}
 
-	s.dropBattlegroundFlagIfCarried()
-	s.player.MountDisplayID = 0
-
 	actualSeat := seatID
 	playerVehicleID := uint32(0)
 	var seatInfo *wotlk.VehicleSeatEntry
@@ -3115,6 +3254,19 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 				// board strips the control-vehicle aura from the base.
 				s.server.removeVehicleControlAuraFromBase(s.player.Map, s.player.InstanceID, vehicleGUID, s.playerGUID)
 				return
+			}
+			if !sameSeatReentry {
+				// VehicleJoinEvent::Execute (Vehicle.cpp:837, :846-848):
+				// the board strips the passenger's mounted aura and
+				// drops a carried battleground flag — but only once
+				// the board succeeds. AddPassenger schedules the
+				// JoinEvent; a failed board aborts it instead (Abort
+				// strips only the control aura), and a same-seat
+				// re-entry never schedules one (Unit.cpp:13095-13096).
+				// Dropping before the board lost the flag — and the
+				// mount display — on a failed board.
+				s.player.MountDisplayID = 0
+				s.dropBattlegroundFlagIfCarried()
 			}
 			actualSeat = assigned
 			seatInfo = si
@@ -3855,6 +4007,32 @@ func (s *session) castVehicleExitParachute(ctx context.Context, baseGUID uint64)
 	s.castSpellDirect(ctx, wotlk.VehicleSpellParachute, s.playerGUID)
 }
 
+// castCreatureVehicleExitParachute is the creature-passenger twin of
+// castVehicleExitParachute: Vehicle::RemovePassenger (Vehicle.cpp:533)
+// hands a flying passenger the parachute spell (VEHICLE_SPELL_PARACHUTE,
+// 45472) as a triggered cast from the vehicle base. The flying check is
+// Unit::IsFlying (Unit.h:1644) — the CanFly/Flying twin the board legs
+// already use. The cast rides the triggered funnel, so it lands as the
+// slow-fall aura once the 45472 row is seeded; the seed DBC carries no
+// 45472 row today, so the funnel fails closed until the seed axis
+// resumes — the same dormancy as the player leg.
+func (s *Server) castCreatureVehicleExitParachute(ctx context.Context, baseGUID uint64, passenger *creatureMotion) {
+	if s == nil || baseGUID == 0 || passenger == nil {
+		return
+	}
+	if !passenger.CanFly && !passenger.Flying {
+		return
+	}
+	if motion := s.findCreatureMotion(passenger.Map, passenger.InstanceID, baseGUID); motion != nil {
+		s.castCreatureSpellTriggered(ctx, motion, wotlk.VehicleSpellParachute, passenger.GUID)
+		return
+	}
+	if baseSess := s.findSessionByGUID(baseGUID); baseSess != nil && baseSess.player != nil {
+		baseSess.castSpellDirect(ctx, wotlk.VehicleSpellParachute, passenger.GUID)
+		return
+	}
+}
+
 // applyControlVehicleSeatChange runs the literal C++ ChangeAmount seat
 // switch (AuraEffect::ChangeAmount, SpellAuraEffects.cpp:662-683) for a
 // SPELL_AURA_CONTROL_VEHICLE re-cast merge: the unapply leg removes the
@@ -3892,6 +4070,10 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 	if !removed {
 		return
 	}
+	// Vehicle::RemovePassenger (Vehicle.cpp:512-514): the unapply
+	// restores the NOT_SELECTABLE flag when the old seat carried it
+	// and the passenger did not before boarding.
+	s.applyVehicleSeatNotSelectable(oldSeatInfo, nil, wasUnselectable)
 	// Vehicle::RemovePassenger (Vehicle.cpp:533): the unapply leg hands
 	// a flying passenger the parachute spell before the remove hooks
 	// below, as in C++.
@@ -3948,6 +4130,9 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 		s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, baseGUID)
 		return
 	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:855-856): the re-board
+	// sets UNIT_FLAG_NOT_SELECTABLE when the new seat carries it.
+	s.applyVehicleSeatNotSelectable(nil, seatInfo, wasUnselectable)
 	s.player.VehicleSeat = assigned
 	// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the re-board is a
 	// new JoinEvent (Unit::ChangeSeat, Unit.cpp:13133-13170), so the
@@ -4011,15 +4196,20 @@ func (s *Server) applyCreatureControlVehicleSeatChange(ctx context.Context, mapI
 	if newSeat >= 0 && newSeat == oldSeat {
 		return
 	}
-	_, _, wasUnselectable, removed := kit.RemovePassenger(casterGUID)
+	_, oldSeatInfo, wasUnselectable, removed := kit.RemovePassenger(casterGUID)
 	if !removed {
 		return
 	}
+	// Vehicle::RemovePassenger (Vehicle.cpp:512-514, :533): the unapply
+	// restores the NOT_SELECTABLE flag and hands a flying passenger
+	// the parachute spell, ahead of the remove hooks.
+	s.clearCreatureVehicleNotSelectable(motion, oldSeatInfo, wasUnselectable)
+	s.castCreatureVehicleExitParachute(ctx, baseGUID, motion)
 	s.fireCreatureVehicleSeatRemove(ctx, mapID, instanceID, kit, baseGUID, casterGUID, oldSeat)
 	if newSeat >= 0 {
 		s.ejectVehicleSeatOccupant(ctx, mapID, instanceID, kit, baseGUID, newSeat, casterGUID)
 	}
-	assigned, _, ok := kit.AddPassenger(casterGUID, newSeat, wasUnselectable)
+	assigned, seatInfo, ok := kit.AddPassenger(casterGUID, newSeat, wasUnselectable)
 	if !ok {
 		s.motionMu.Lock()
 		motion.VehicleGUID = 0
@@ -4032,6 +4222,9 @@ func (s *Server) applyCreatureControlVehicleSeatChange(ctx context.Context, mapI
 		s.syncVehicleBaseNPCFlag(mapID, instanceID, baseGUID)
 		return
 	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:855-856): the re-board
+	// sets UNIT_FLAG_NOT_SELECTABLE when the new seat carries it.
+	s.setCreatureVehicleNotSelectable(motion, seatInfo)
 	s.motionMu.Lock()
 	motion.VehicleSeat = assigned
 	s.motionMu.Unlock()
@@ -4257,6 +4450,11 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
 					s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
+					// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the
+					// ride aura on the new seat (ChangeAmount), so the old
+					// seat's NOT_SELECTABLE flag restores and the new
+					// seat's sets (Vehicle.cpp:512-514, :855-856).
+					s.applyVehicleSeatNotSelectable(oldSeatInfo, seatInfo, kit.passengerWasUnselectable(s.playerGUID))
 					// Vehicle::RemovePassenger (Vehicle.cpp:533): the
 					// ChangeAmount unapply behind the switch hands a
 					// flying passenger the parachute spell.
@@ -4513,6 +4711,11 @@ func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []by
 					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
 					s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
+					// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the
+					// ride aura on the new seat (ChangeAmount), so the old
+					// seat's NOT_SELECTABLE flag restores and the new
+					// seat's sets (Vehicle.cpp:512-514, :855-856).
+					s.applyVehicleSeatNotSelectable(oldSeatInfo, seatInfo, kit.passengerWasUnselectable(s.playerGUID))
 					// Vehicle::RemovePassenger (Vehicle.cpp:533): the
 					// ChangeAmount unapply behind the switch hands a
 					// flying passenger the parachute spell.
@@ -4547,6 +4750,11 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
 					s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
+					// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the
+					// ride aura on the new seat (ChangeAmount), so the old
+					// seat's NOT_SELECTABLE flag restores and the new
+					// seat's sets (Vehicle.cpp:512-514, :855-856).
+					s.applyVehicleSeatNotSelectable(oldSeatInfo, seatInfo, kit.passengerWasUnselectable(s.playerGUID))
 					// Vehicle::RemovePassenger (Vehicle.cpp:533): the
 					// ChangeAmount unapply behind the switch hands a
 					// flying passenger the parachute spell.
@@ -4569,6 +4777,23 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 
 // handleRequestVehicleSwitchSeat processes CMSG_REQUEST_VEHICLE_SWITCH_SEAT (0x479).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:108-123).
+// applyVehicleSeatNotSelectable runs the NOT_SELECTABLE legs of a seat
+// change (Unit::ChangeSeat, Unit.cpp:13133-13170, via ChangeAmount): the
+// unapply's RemovePassenger restores the flag (Vehicle.cpp:512-514) and
+// the re-board's JoinEvent sets it (Vehicle.cpp:855-856). Either half
+// may be nil when only the other leg runs.
+func (s *session) applyVehicleSeatNotSelectable(oldSeatInfo, seatInfo *wotlk.VehicleSeatEntry, wasUnselectable bool) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if oldSeatInfo != nil && oldSeatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) && !wasUnselectable {
+		s.player.UnitFlags &^= 0x02000000 // UNIT_FLAG_NOT_SELECTABLE
+	}
+	if seatInfo != nil && seatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) {
+		s.player.UnitFlags |= 0x02000000 // UNIT_FLAG_NOT_SELECTABLE
+	}
+}
+
 func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
@@ -4618,6 +4843,11 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 				oldSeat := s.player.VehicleSeat
 				s.player.VehicleSeat = assigned
 				s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
+				// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the
+				// ride aura on the new seat (ChangeAmount), so the old
+				// seat's NOT_SELECTABLE flag restores and the new
+				// seat's sets (Vehicle.cpp:512-514, :855-856).
+				s.applyVehicleSeatNotSelectable(oldSeatInfo, seatInfo, kit.passengerWasUnselectable(s.playerGUID))
 				// Vehicle::RemovePassenger (Vehicle.cpp:533): the
 				// ChangeAmount unapply behind the switch hands a
 				// flying passenger the parachute spell.

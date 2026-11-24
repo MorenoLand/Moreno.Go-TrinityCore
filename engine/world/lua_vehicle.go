@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
 
@@ -270,6 +271,10 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	motion.VehicleSeat = assigned
 	motion.Moving = false
 	s.motionMu.Unlock()
+	// VehicleJoinEvent::Execute (Vehicle.cpp:855-856): a seat carrying
+	// VEHICLE_SEAT_FLAG_PASSENGER_NOT_SELECTABLE sets
+	// UNIT_FLAG_NOT_SELECTABLE on the passenger.
+	s.setCreatureVehicleNotSelectable(motion, seatInfo)
 	// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): boarding the
 	// last usable seat clears the base's spell-click flag.
 	s.syncVehicleBaseNPCFlag(effMap, effInstance, ref.baseGUID)
@@ -343,13 +348,20 @@ func (s *Server) luaVehicleRemovePassenger(ctx context.Context, ref *luaVehicleR
 		return
 	}
 	var seatID int8
+	var seatInfo *wotlk.VehicleSeatEntry
+	wasUnselectable := false
 	seatOK := false
 	if kit != nil {
-		seatID, _, _, seatOK = kit.RemovePassenger(passengerGUID)
+		seatID, seatInfo, wasUnselectable, seatOK = kit.RemovePassenger(passengerGUID)
 	}
 	// Vehicle::RemovePassenger (Vehicle.cpp:508-509): freeing a usable
 	// seat restores the base's spell-click flag.
 	s.syncVehicleBaseNPCFlag(effMap, effInstance, ref.baseGUID)
+	// Vehicle::RemovePassenger (Vehicle.cpp:512-514, :533): the
+	// NOT_SELECTABLE flag restores and a flying passenger is handed
+	// the parachute spell, ahead of the hooks below.
+	s.clearCreatureVehicleNotSelectable(motion, seatInfo, wasUnselectable)
+	s.castCreatureVehicleExitParachute(ctx, ref.baseGUID, motion)
 	s.motionMu.Lock()
 	motion.VehicleGUID = 0
 	motion.VehicleSeat = 0

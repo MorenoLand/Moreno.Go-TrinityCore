@@ -550,6 +550,14 @@ func (s *Server) despawnCreatureMotion(ctx context.Context, mapID, instanceID ui
 	// rides along as the departing base, so the ev6 fire in
 	// exitCreatureVehiclePassengers still has a base object.
 	s.removeVehicleKitWithBase(mapID, instanceID, guid, m)
+	// Unit::RemoveFromWorld (Unit.cpp:9798): after the own-kit drop
+	// above, a seated passenger exits its base's kit — the
+	// removeDepartingCreatureVehicleSeat twin — so its seat frees
+	// and the remove hooks fire instead of stranding a ghost seat
+	// on the live base.
+	if m.VehicleGUID != 0 {
+		s.removeDepartingCreatureVehicleSeat(ctx, mapID, instanceID, m)
+	}
 	if maxHealth == 0 {
 		maxHealth = 1
 	}

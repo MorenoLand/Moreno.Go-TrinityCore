@@ -1066,7 +1066,7 @@ type creatureMotion struct {
 	FormationPoint1         uint32    // leader waypoint id that mirrors the slot angle (creature_formations.point_1)
 	FormationPoint2         uint32    // second leader waypoint id that mirrors the slot angle (creature_formations.point_2)
 	FormationActive         bool      // member moves on the leader's spline rhythm; suppresses its own wander/waypoint legs
-	FormationIdle           bool      // member waits for the leader's order (Creature::Motion_Initialize idle arm, Creature.cpp:1094-1097; FormationReset(false) sets it, FormationReset(true) clears it)
+	FormationIdle           bool      // member waits for the leader's order (Creature::Motion_Initialize idle arm, Creature.cpp:1095-1098; FormationReset(false) sets it, FormationReset(true) clears it)
 	FormationPredicted      bool      // _hasPredictedDestination: member launched against a moving leader
 	FormationLeaderMoveEnds time.Time // leader MoveEnds of the spline the member last launched against (movespline GetId analog)
 	FormationNextCheck      time.Time // next FORMATION_MOVEMENT_INTERVAL (1200ms) re-check
@@ -2680,7 +2680,7 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID u
 		// vehicle kit install: a (re)spawned creature with a DB spawn id
 		// re-joins its formation group; temp summons are skipped.
 		s.searchFormation(ctx, motion)
-		// Creature::Motion_Initialize (Creature.cpp:1088-1098) via
+		// Creature::Motion_Initialize (Creature.cpp:1089-1098) via
 		// AIM_Create (:1066): a formation leader's init idles its live
 		// members and forms the group; a member of a formed group
 		// waits idle for the leader's order.
@@ -15093,7 +15093,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 	}
-	// Creature::Motion_Initialize (Creature.cpp:1094-1097) via
+	// Creature::Motion_Initialize (Creature.cpp:1095-1098) via
 	// CreatureGroup::FormationReset(false) (CreatureGroups.cpp:262-278):
 	// a formation member waits idle for its leader's order — its own
 	// wander/waypoint legs stay suppressed until the leader pulls it
@@ -16417,6 +16417,14 @@ func (s *Server) pruneCreatureMotion(ctx context.Context, now time.Time) {
 		// deleted motion rides along as the departing base, so
 		// the ev6 fire still has a base object.
 		s.removeVehicleKitWithBase(motion.Map, motion.InstanceID, motion.GUID, motion)
+		// Unit::RemoveFromWorld (Unit.cpp:9798): after the own-kit
+		// drop above, a seated passenger exits its base's kit —
+		// the removeDepartingCreatureVehicleSeat twin — so its
+		// seat frees and the remove hooks fire instead of
+		// stranding a ghost seat on the live base.
+		if motion.VehicleGUID != 0 {
+			s.removeDepartingCreatureVehicleSeat(ctx, motion.Map, motion.InstanceID, motion)
+		}
 	}
 }
 
