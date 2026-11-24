@@ -1936,6 +1936,16 @@ func (s *Server) canBeginCombatWith(motion *creatureMotion, victimGUID uint64, s
 	if motion.ThreatMgr != nil && motion.ThreatMgr.HasThreatEntry(victimGUID) {
 		return true
 	}
+	// CombatManager::CanBeginCombat (CombatManager.cpp:34-35): the two
+	// units need to be different — a unit can never begin combat with
+	// itself, so a self add takes no threat even when every other leg
+	// passes. The vehicle-base recursion already skips a base that IS
+	// the list owner (see creatureAddThreatWithRedirect); this is the
+	// direct self-add leg, reached e.g. by a redirect or assist share
+	// whose victim resolves to the list owner itself.
+	if motion.GUID == victimGUID {
+		return false
+	}
 	if motion.Health == 0 || motion.Evading || motion.FlagsExtra&creatureFlagExtraNoCombat != 0 {
 		return false
 	}

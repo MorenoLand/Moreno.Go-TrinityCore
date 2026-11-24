@@ -219,11 +219,21 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	if motion.VehicleGUID != 0 && motion.VehicleGUID != ref.baseGUID {
 		s.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s, mapID: effMap, instanceID: effInstance, baseGUID: motion.VehicleGUID}, passengerGUID)
 	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:813-815): a passenger
+	// already on a vehicle exits it first — including a same-base
+	// seat change, where the JoinEvent exits then boards the
+	// requested seat. The unseat clears VehicleGUID, so the eject
+	// below still runs for the new seat. Same-seat re-entry keeps
+	// the seat (Unit.cpp:13095-13096): kit.AddPassenger returns
+	// the current seat, so the board below no-ops into it.
+	if motion.VehicleGUID == ref.baseGUID && seat >= 0 && seat != motion.VehicleSeat {
+		s.luaVehicleRemovePassenger(ctx, ref, passengerGUID)
+	}
 	// Vehicle::AddPassenger (Vehicle.cpp:471-478): boarding a specific
 	// occupied seat ejects its current occupant first, of either kind;
 	// the kit allocator fails on an occupied seat without the eject.
-	// Skipped when already seated on this base: the board no-ops into
-	// the current seat, so there is no seat to take.
+	// Skipped when already seated on this base on the requested seat:
+	// the board no-ops into the current seat, so there is no seat to take.
 	if seat >= 0 && motion.VehicleGUID != ref.baseGUID {
 		s.ejectVehicleSeatOccupant(ctx, effMap, effInstance, kit, ref.baseGUID, seat, passengerGUID)
 	}
@@ -336,8 +346,10 @@ func (s *Server) luaVehicleRemovePassenger(ctx context.Context, ref *luaVehicleR
 	}
 	// Unit::_ExitVehicle (Unit.cpp:13202-13210): the seat freed
 	// above, the board root clears unless a MOD_ROOT aura or the
-	// movement template holds it, and a non-stunned passenger sends
-	// SMSG_SPLINE_MOVE_UNROOT. The eject path shares this body
+	// movement template holds it, and exactly one
+	// SMSG_SPLINE_MOVE_UNROOT goes out — via SetRooted for a
+	// non-stunned passenger, via the _ExitVehicle arm when stunned.
+	// The eject path shares this body
 	// (ejectVehicleSeatOccupant delegates here), so the install
 	// eject loop gets the leg too.
 	s.unrootExitingCreaturePassenger(motion)

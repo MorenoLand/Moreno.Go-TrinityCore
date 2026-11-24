@@ -1718,9 +1718,10 @@ func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceI
 		}
 		// Unit::_ExitVehicle (Unit.cpp:13202-13210): the seat freed
 		// above, the board root clears unless a MOD_ROOT aura or the
-		// movement template holds it, and a non-stunned passenger
-		// sends SMSG_SPLINE_MOVE_UNROOT — ahead of the exit-position
-		// relocate below, as in C++.
+		// movement template holds it, and exactly one
+		// SMSG_SPLINE_MOVE_UNROOT goes out — via SetRooted for a
+		// non-stunned passenger, via the _ExitVehicle arm when
+		// stunned — ahead of the exit-position relocate below, as in C++.
 		s.unrootExitingCreaturePassenger(exitMotion)
 		if exitMotion != nil {
 			// Unit::_ExitVehicle (Unit.cpp:13215-13249): the dying
@@ -1988,9 +1989,10 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 		}
 		// Unit::_ExitVehicle (Unit.cpp:13202-13210): the seat freed
 		// above, the board root clears unless a MOD_ROOT aura or the
-		// movement template holds it, and a non-stunned passenger
-		// sends SMSG_SPLINE_MOVE_UNROOT — ahead of the exit-position
-		// relocate below, as in C++.
+		// movement template holds it, and exactly one
+		// SMSG_SPLINE_MOVE_UNROOT goes out — via SetRooted for a
+		// non-stunned passenger, via the _ExitVehicle arm when
+		// stunned — ahead of the exit-position relocate below, as in C++.
 		s.unrootExitingCreaturePassenger(motion)
 		// The exit position lands here, before the tail below, so the
 		// fall spline launches from it (Unit.cpp:13238-13249) and the

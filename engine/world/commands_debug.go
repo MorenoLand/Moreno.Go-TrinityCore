@@ -2161,20 +2161,33 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 	if passenger.VehicleGUID != 0 && passenger.VehicleGUID != vehicleGUID {
 		s.server.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s.server, mapID: s.player.Map, instanceID: s.player.InstanceID, baseGUID: passenger.VehicleGUID}, passenger.GUID)
 	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:813-815): a passenger
+	// already on a vehicle exits it first — including a same-base
+	// seat change, where the JoinEvent exits then boards the
+	// requested seat. Same-seat re-entry keeps the seat
+	// (Unit.cpp:13095-13096). The unseat clears VehicleGUID, so
+	// the eject below still runs for the new seat.
+	if passenger.VehicleGUID == vehicleGUID && seatID >= 0 && seatID != passenger.VehicleSeat {
+		s.server.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s.server, mapID: s.player.Map, instanceID: s.player.InstanceID, baseGUID: vehicleGUID}, passenger.GUID)
+	}
 	// Vehicle::AddPassenger (Vehicle.cpp:471-478): boarding a specific
 	// occupied seat ejects its current occupant first; skipped when the
-	// passenger is already seated on this base (the board no-ops into
-	// its current seat).
+	// passenger is already seated on this base on the requested seat
+	// (the board no-ops into its current seat).
 	if seatID >= 0 && passenger.VehicleGUID != vehicleGUID {
 		s.server.ejectVehicleSeatOccupant(ctx, s.player.Map, s.player.InstanceID, kit, vehicleGUID, seatID, passenger.GUID)
 	}
-	assigned, _, ok := kit.AddPassenger(passenger.GUID, seatID, passenger.UnitFlags&0x02000000 != 0)
+	assigned, seatInfo, ok := kit.AddPassenger(passenger.GUID, seatID, passenger.UnitFlags&0x02000000 != 0)
 	if ok {
 		s.server.motionMu.Lock()
 		passenger.VehicleGUID = vehicleGUID
 		passenger.VehicleSeat = assigned
 		passenger.Moving = false
 		s.server.motionMu.Unlock()
+		// VehicleJoinEvent::Execute (Vehicle.cpp:836-837): the board
+		// interrupts the passenger's non-melee casts and strips its
+		// mount aura, ahead of the clear-target below.
+		s.server.interruptBoardingCreaturePassenger(passenger)
 		// VehicleJoinEvent::Execute (Vehicle.cpp:895-896): every
 		// creature the passenger threatens gains the vehicle base on
 		// its threat list with the passenger's threat value, ahead
@@ -2182,6 +2195,19 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 		// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board
 		// breaks the passenger's target for everyone in range.
 		s.server.sendPassengerClearTarget(s.player.Map, s.player.InstanceID, passenger.GUID, passenger.X, passenger.Y, passenger.Z, passenger.PhaseMask)
+		// VehicleJoinEvent::Execute (Vehicle.cpp:884, :887-892): the
+		// board roots the passenger and runs the seat-offset spline
+		// with the transport-enter flag, ahead of the threat transfer
+		// below; a base that never resolves still roots (the root has
+		// no position dependency) and skips the spline.
+		_, _, seatAddon := kit.GetSeatForPassenger(passenger.GUID)
+		baseX, baseY, baseZ, baseO, hasBase := float32(0), float32(0), float32(0), float32(0), false
+		if base := s.findCreatureMotion(vehicleGUID); base != nil {
+			baseX, baseY, baseZ, baseO, hasBase = base.X, base.Y, base.Z, base.Orientation, true
+		} else if baseSess := s.server.findSessionByGUID(vehicleGUID); baseSess != nil && baseSess.player != nil {
+			baseX, baseY, baseZ, baseO, hasBase = baseSess.player.X, baseSess.player.Y, baseSess.player.Z, baseSess.player.Orientation, true
+		}
+		s.server.rootAndSplineBoardingCreaturePassenger(passenger, vehicleGUID, seatInfo, seatAddon, baseX, baseY, baseZ, baseO, hasBase)
 		s.server.transferPassengerThreatToVehicleBase(s.player.Map, s.player.InstanceID, passenger.GUID, vehicleGUID)
 		if base := s.findCreatureMotion(vehicleGUID); base != nil {
 			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the AI
