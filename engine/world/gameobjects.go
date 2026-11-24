@@ -2383,12 +2383,50 @@ func (s *Server) gameObjectByOwnerSpell(ownerGUID uint64, spellID uint32) uint64
 	return 0
 }
 
+// clearGameObjectOwnerSlot mirrors the m_ObjectSlot loop of
+// Unit::RemoveGameObject (Unit.cpp:5244-5251): the slot holding the
+// removed GO's GUID is cleared on the owner — the owning player
+// session's ObjectSlots, or the owning creature motion's. It runs
+// only for the ptr-overload delete (the despawn's owner link is
+// still set there); the spellid sweep and RemoveAllGameObjects
+// clear the owner link first, and C++ performs no slot loop on
+// those paths.
+func (s *Server) clearGameObjectOwnerSlot(ownerGUID, guid uint64, mapID, instanceID uint32) {
+	if s == nil || guid == 0 || ownerGUID == 0 {
+		return
+	}
+	if owner := s.findSessionByGUID(ownerGUID); owner != nil && owner.player != nil {
+		for i := range owner.player.ObjectSlots {
+			if owner.player.ObjectSlots[i] == guid {
+				owner.player.ObjectSlots[i] = 0
+				return
+			}
+		}
+		return
+	}
+	if m := s.findCreatureMotion(mapID, instanceID, ownerGUID); m != nil {
+		s.motionMu.Lock()
+		for i := range m.ObjectSlots {
+			if m.ObjectSlots[i] == guid {
+				m.ObjectSlots[i] = 0
+				break
+			}
+		}
+		s.motionMu.Unlock()
+	}
+}
+
 // removeGameObjectsByOwnerSpell mirrors Unit::RemoveGameObject(spellid, del)
 // (Unit.cpp:5263): every owned GO of that spell id has its owner link
-// cleared (Unit.cpp:5273) and is deleted. The channel-cleanup leg below
+// cleared (Unit.cpp:5273) and is deleted. A spell id of 0 matches all
+// owned GOs (Unit.cpp:5271). Unlike the ptr overload it performs no aura
+// strip, no cooldown release and no slot clearing — the owner link is
+// cleared before the despawn, so the despawn's U3 legs stay silent, and
+// the single cooldown release comes from the caller's own aura removal
+// (SpellAuras.cpp:611-613). The channel-cleanup leg below
 // and the Lua RemoveGameObject bridge share this sweep.
 func (s *Server) removeGameObjectsByOwnerSpell(ownerGUID uint64, spellID uint32) {
-	if s == nil || ownerGUID == 0 || spellID == 0 {
+	if s == nil || ownerGUID == 0 {
 		return
 	}
 	type goRef struct {
@@ -2399,8 +2437,47 @@ func (s *Server) removeGameObjectsByOwnerSpell(ownerGUID uint64, spellID uint32)
 	var refs []goRef
 	s.objectsMu.Lock()
 	collect := func(state *dynamicGameObjectState) {
-		if state != nil && state.IsRuntimeSpawn && state.OwnerGUID == ownerGUID && state.SpellID == spellID {
+		if state != nil && state.IsRuntimeSpawn && state.OwnerGUID == ownerGUID && (spellID == 0 || state.SpellID == spellID) {
 			state.OwnerGUID = 0 // C++ clears the owner link before Delete (Unit.cpp:5273)
+			refs = append(refs, goRef{mapID: state.Map, instanceID: state.InstanceID, guid: state.GUID})
+		}
+	}
+	for _, state := range s.dynamicGameObjects {
+		collect(state)
+	}
+	for _, byGUID := range s.instanceGameObjects {
+		for _, state := range byGUID {
+			collect(state)
+		}
+	}
+	s.objectsMu.Unlock()
+	for _, ref := range refs {
+		s.despawnDynamicGameObjectInInstance(ref.mapID, ref.instanceID, ref.guid)
+	}
+}
+
+// removeAllGameObjectsByOwner mirrors Unit::RemoveAllGameObjects
+// (Unit.cpp:5287-5299): while the owner has owned GOs, each has its
+// owner link cleared and is deleted — with no aura strip, no cooldown
+// release, no slot clearing and no SMSG_FISH_ESCAPED (unlike the ptr
+// overload). The owner link is cleared before the despawn, so the
+// despawn's U3 legs stay silent. Callers: Unit::RemoveFromWorld /
+// CleanupBeforeRemoveFromMap (Unit.cpp:9795, 9839) — the logout path
+// and creature removal.
+func (s *Server) removeAllGameObjectsByOwner(ownerGUID uint64) {
+	if s == nil || ownerGUID == 0 {
+		return
+	}
+	type goRef struct {
+		mapID      uint32
+		instanceID uint32
+		guid       uint64
+	}
+	var refs []goRef
+	s.objectsMu.Lock()
+	collect := func(state *dynamicGameObjectState) {
+		if state != nil && state.IsRuntimeSpawn && state.OwnerGUID == ownerGUID {
+			state.OwnerGUID = 0 // C++ clears the owner link before Delete (Unit.cpp:5293)
 			refs = append(refs, goRef{mapID: state.Map, instanceID: state.InstanceID, guid: state.GUID})
 		}
 	}
@@ -2444,6 +2521,7 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	var x, y, z float32
 	var phase uint32
 	var ownerGUID uint64
+	var spellID uint32
 	var fishingHandled bool
 	var goType uint8
 	removed := false
@@ -2453,6 +2531,7 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 		x, y, z = dyn.X, dyn.Y, dyn.Z
 		phase = dyn.PhaseMask
 		ownerGUID = dyn.OwnerGUID
+		spellID = dyn.SpellID
 		fishingHandled = dyn.FishingHandled
 		goType = dyn.Type
 		removed = true
@@ -2465,6 +2544,28 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 		delete(s.dynamicGameObjects, guid)
 	}
 	s.objectsMu.Unlock()
+
+	if removed {
+		// Unit::RemoveGameObject (Unit.cpp:5244-5251): the m_ObjectSlot
+		// holding this GO's GUID is cleared on the owner.
+		s.clearGameObjectOwnerSlot(ownerGUID, guid, mapID, instanceID)
+		// Unit::RemoveGameObject (Unit.cpp:5254-5262): the instance
+		// twin's strip+release legs — a spell-created GO strips the
+		// creating spell's auras from the owner, then releases the
+		// owner's infinity cooldown. Ownerless BG banners route here
+		// with no owner, so the legs stay vacuous for them; an owned
+		// GO deleted via .gobject delete previously skipped them.
+		if spellID != 0 && ownerGUID != 0 && s.Data != nil {
+			if owner := s.findSessionByGUID(ownerGUID); owner != nil && owner.playerGUID == ownerGUID {
+				owner.removeAuraWithMode(spellID, auraRemoveByDefault)
+				if spell, found, err := s.Data.Spell(spellID); err == nil && found && s.spellIsCooldownStartedOnEvent(spell) {
+					owner.sendSpellCooldownEvent(spell)
+				}
+			} else if s.findCreatureMotion(mapID, instanceID, ownerGUID) != nil {
+				s.removeCreatureAuraWithMode(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: ownerGUID}, spellID, auraRemoveByDefault)
+			}
+		}
+	}
 
 	// SMSG_FISH_ESCAPED is the FISHINGNODE bite-timeout arm only
 	// (GameObject.cpp:577-592), like the instance despawn twin below.

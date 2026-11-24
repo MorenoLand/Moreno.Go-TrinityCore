@@ -1646,6 +1646,13 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	} else {
 		state.PVPFlags &^= 0x04
 	}
+	// Player::UpdateArea (Player.cpp:7171): leaving an FFA arena
+	// validates attackers and the own target — attackers that were
+	// only valid under FFA stop (Unit::ValidateAttackersAndOwnTarget,
+	// Unit.cpp:5791).
+	if oldFlags&0x04 != 0 && state.PVPFlags&0x04 == 0 {
+		s.validateAttackersAndOwnTarget(ctx)
+	}
 	// No friendly-area clear of the unit PvP byte here: C++ UpdatePvPState
 	// (Player.cpp:22153) never clears the flag on zone change — a flagged
 	// player keeps it until the 5-minute toggle-off timer fires
@@ -4687,7 +4694,10 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	s.stopSpellLifecycle()
 	// Unit::RemoveFromWorld (Unit.cpp:9795-9796): a leaving unit's
 	// dynamic objects are all removed, not just the current channel's.
+	// The game-object half of those lines runs first in C++
+	// (RemoveAllGameObjects, Unit.cpp:9795, ahead of RemoveAllDynObjects).
 	if s.server != nil {
+		s.server.removeAllGameObjectsByOwner(s.playerGUID)
 		s.server.despawnAllCasterDynObjects(s.playerGUID)
 	}
 	s.stopTimedAchievements()

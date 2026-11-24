@@ -141,6 +141,27 @@ func (s *Server) attackerShieldTarget(attacker damageShieldSide) (level uint8, h
 	return uint8(motion.Level), motion.Health, nil, motion, true
 }
 
+// sendDamageShieldImmune mirrors the damage-shield immune leg
+// (Unit.cpp:1579-1581): the shield holder sends SMSG_SPELLORDAMAGE_IMMUNE
+// for the attacker through SendMessageToSet — the holder's visibility
+// set. A player holder writes its own copy; a creature holder has no
+// session leg.
+func (s *Server) sendDamageShieldImmune(victim, attacker damageShieldSide, spellID uint32) {
+	if s == nil {
+		return
+	}
+	immunePkt := protocol.BuildSpellDamageImmune(victim.guid(), attacker.guid(), spellID)
+	if victim.isPlayer && victim.sess != nil && victim.sess.player != nil {
+		vs := victim.sess
+		_ = vs.write(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, true)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, vs.player.Map, vs.player.InstanceID, vs.player.X, vs.player.Y, vs.player.Z, vs)
+		return
+	}
+	if m := s.findCreatureMotion(victim.key.Map, victim.key.InstanceID, victim.key.GUID); m != nil {
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
+	}
+}
+
 // applyOneDamageShield resolves and deals a single shield strike
 // (Unit.cpp:1564-1600).
 func (s *Server) applyOneDamageShield(ctx context.Context, victim, attacker damageShieldSide, sh damageShieldAura) {
@@ -168,11 +189,13 @@ func (s *Server) applyOneDamageShield(ctx context.Context, victim, attacker dama
 	// creature arm (creatureImmuneToDamageSpell, Unit.cpp:7818-7860).
 	if attacker.isPlayer {
 		if attackerSess.isImmuneToDamage(sh.schoolMask) {
+			s.sendDamageShieldImmune(victim, attacker, sh.spellID)
 			return
 		}
 	} else if s != nil && s.Data != nil {
 		if spell, found, err := s.Data.Spell(sh.spellID); err == nil && found {
 			if creatureImmuneToDamageSpell(s, attacker.key, spell, sh.schoolMask) {
+				s.sendDamageShieldImmune(victim, attacker, sh.spellID)
 				return
 			}
 		}

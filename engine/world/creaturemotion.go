@@ -16631,6 +16631,10 @@ func (s *Server) pruneCreatureMotion(ctx context.Context, now time.Time) {
 		if motion.VehicleGUID != 0 {
 			s.removeDepartingCreatureVehicleSeat(ctx, motion.Map, motion.InstanceID, motion)
 		}
+		// Unit::RemoveFromWorld (Unit.cpp:9795): a pruned creature's
+		// owned game objects are all deleted
+		// (Unit::RemoveAllGameObjects, Unit.cpp:5287).
+		s.removeAllGameObjectsByOwner(motion.GUID)
 	}
 }
 

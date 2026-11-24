@@ -316,10 +316,11 @@ func (s *session) startAttackOn(ctx context.Context, victim uint64) {
 	if s.attackTarget != 0 && s.attackTarget == victim {
 		return
 	}
-	if s.attackTarget != 0 {
-		if err := s.sendAttackStop(s.attackTarget, false); err != nil {
-			return
-		}
+	if s.attackTarget != 0 && s.attackTarget != victim {
+		// Unit::Attack (Unit.cpp:5707-5711) switches target with only
+		// InterruptSpell(CURRENT_MELEE_SPELL) — no SendMeleeAttackStop;
+		// the stop packet belongs to AttackStop, not a switch.
+		s.cancelNextSwingSpell()
 	}
 	s.attackTarget = victim
 	s.lastCombatTime = time.Now()
@@ -1542,7 +1543,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 
 	overkill := uint32(0)
-	if damage >= target.Health && target.Health > 0 {
+	// Unit::SendAttackStateUpdate (Unit.cpp:5448-5449): overkill is the
+	// full damage minus the target's health, clamped at 0 — with no
+	// health>0 guard, so an already-dead target reports the full
+	// damage as overkill.
+	if damage >= target.Health {
 		overkill = damage - target.Health
 	}
 	// Unit::SendAttackStateUpdate (Unit.cpp:5442-5500): the packet carries the
@@ -2420,7 +2425,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	}
 
 	overkill := uint32(0)
-	if damage >= target.Health && target.Health > 0 {
+	// Unit::SendSpellNonMeleeDamageLog (Unit.cpp:5306-5307): overkill is
+	// the damage minus the target's health, clamped at 0 — with no
+	// health>0 guard, so an already-dead target reports the full
+	// damage as overkill.
+	if damage >= target.Health {
 		overkill = damage - target.Health
 	}
 	logPkt := buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed)
@@ -2801,6 +2810,72 @@ func (s *session) stopPvPCombatForSanctuary(ctx context.Context) {
 			markPlayerOutOfCombat(ctx, opponent)
 			opponent.sendPlayerUpdate()
 		}
+	}
+}
+
+// validateAttackersAndOwnTarget mirrors Unit::ValidateAttackersAndOwnTarget
+// (Unit.cpp:5791-5807), called from Player::UpdateArea on FFA-arena exit
+// (Player.cpp:7171): every attacker for whom this player is no longer a
+// valid attack target stops attacking, and the player's own victim is
+// dropped when it is no longer a valid target. Threat is untouched —
+// C++ stops the attack only; the threat lists keep their entries.
+// Creature attackers are re-checked with creatureHostileToPlayer and
+// player attackers with the swing gate (ownerAttackTargetValid, whose
+// both-FFA arm is what the FFA exit closes); only the ones that now
+// fail stop, never every attacker.
+func (s *session) validateAttackersAndOwnTarget(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	srv := s.server
+	mapID, instanceID, guid := s.player.Map, s.player.InstanceID, s.playerGUID
+	var creatureAttackers []uint64
+	srv.motionMu.Lock()
+	for mGUID, m := range srv.motionMapLocked(mapID, instanceID) {
+		if m == nil || m.TargetGUID != guid {
+			continue
+		}
+		creatureAttackers = append(creatureAttackers, mGUID)
+	}
+	srv.motionMu.Unlock()
+	for _, attackerGUID := range creatureAttackers {
+		m := srv.findCreatureMotion(mapID, instanceID, attackerGUID)
+		if m == nil || srv.creatureHostileToPlayer(m, s) {
+			continue
+		}
+		srv.motionMu.Lock()
+		if m.TargetGUID != guid {
+			srv.motionMu.Unlock()
+			continue
+		}
+		m.TargetGUID = 0
+		srv.motionMu.Unlock()
+		stopPkt := buildAttackStop(attackerGUID, guid, false)
+		srv.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, attackerGUID)
+		if fresh := srv.findCreatureMotion(mapID, instanceID, attackerGUID); fresh != nil {
+			srv.clearCreatureVisualTarget(fresh)
+		}
+	}
+	srv.sessionsMu.RLock()
+	var players []*session
+	for sess := range srv.sessions {
+		if sess == nil || sess == s || !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID || sess.attackTarget != guid {
+			continue
+		}
+		players = append(players, sess)
+	}
+	srv.sessionsMu.RUnlock()
+	for _, sess := range players {
+		if sess.attackTarget != guid || sess.ownerAttackTargetValid(ctx, guid) {
+			continue
+		}
+		sess.attackTarget = 0
+		_ = sess.sendAttackStop(guid, false)
+	}
+	if s.attackTarget != 0 && !s.ownerAttackTargetValid(ctx, s.attackTarget) {
+		victim := s.attackTarget
+		s.attackTarget = 0
+		_ = s.sendAttackStop(victim, false)
 	}
 }
 

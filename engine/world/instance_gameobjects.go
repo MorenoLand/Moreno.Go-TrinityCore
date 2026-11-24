@@ -1161,6 +1161,11 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 	if state == nil {
 		return
 	}
+	// Unit::RemoveGameObject (Unit.cpp:5244-5251): the m_ObjectSlot
+	// holding this GO's GUID is cleared on the owner. The sweep paths
+	// (spellid overload, RemoveAllGameObjects) clear the owner link
+	// before the despawn, so this stays silent there, matching C++.
+	s.clearGameObjectOwnerSlot(state.OwnerGUID, guid, mapID, instanceID)
 	// Unit::RemoveGameObject (Unit.cpp:5246-5251): removing a game object
 	// created by a spell first strips the creating spell's auras from the
 	// owner (RemoveAurasDueToSpell, AURA_REMOVE_BY_DEFAULT, any caster),

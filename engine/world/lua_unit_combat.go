@@ -154,7 +154,7 @@ func (ref luaUnitRef) attackerSession() *session {
 // A new victim with meleeAttack=false engages (threat, assistance,
 // emote clear, pet notify) but sends no SMSG_ATTACK_START, matching
 // C++; a target switch sends no SMSG_ATTACK_STOP either (C++ only
-// interrupts the melee spell), unlike startAttackOn's switch-stop arm.
+// interrupts the melee spell), matching startAttackOn.
 func luaUnitAttack(ctx context.Context, attacker luaUnitRef, victimGUID uint64, meleeAttack bool) bool {
 	srv := attacker.srv
 	if srv == nil || attacker.guid == 0 || victimGUID == 0 || victimGUID == attacker.guid {
@@ -199,6 +199,13 @@ func luaUnitAttack(ctx context.Context, attacker luaUnitRef, victimGUID uint64, 
 		sess := attacker.sess
 		if sess == nil || sess.player == nil {
 			return false
+		}
+		// Unit::Attack (Unit.cpp:5707-5708) interrupts the queued melee
+		// spell on a target switch, so a queued Heroic-Strike-style
+		// spell never lands on the new victim (the same-victim arm
+		// above already returned, so any old target here is a switch).
+		if sess.attackTarget != 0 {
+			sess.cancelNextSwingSpell()
 		}
 		sess.attackTarget = victimGUID
 		sess.lastCombatTime = time.Now()
@@ -246,6 +253,11 @@ func luaUnitAttack(ctx context.Context, attacker luaUnitRef, victimGUID uint64, 
 	motion.InCombat = true
 	mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
 	srv.motionMu.Unlock()
+	// Unit::Attack (Unit.cpp:5720) SetTarget writes the visible target
+	// field — a bare ScriptTargetGUID write does not propagate (the
+	// SetTarget bridge broadcasts unitFieldTarget the same way).
+	srv.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, attacker.guid,
+		map[int]uint32{unitFieldTarget: uint32(victimGUID), unitFieldTarget + 1: uint32(victimGUID >> 32)})
 	if wild {
 		if !wasInCombat {
 			srv.broadcastAIReactionInInstance(mapID, instanceID, attacker.guid, 2)
@@ -270,9 +282,12 @@ func luaUnitAttack(ctx context.Context, attacker luaUnitRef, victimGUID uint64, 
 // split/share, tap, rage, threat, kill/health legs, broadcasts).
 //
 // DELTAS: BuildAttackerStateUpdate carries no absorb/resist/blocked
-// fields beyond the block flag, so the school leg's packet shows only
-// the post-mitigation damage (the C++ packet carries absorb/resist);
-// the swing-type byte (1 flat, 0 school) has no builder slot either.
+// fields beyond the block flag, but that is no delta on this path:
+// the Eluna school leg's C++ packet (Unit::SendAttackStateUpdate,
+// Unit.cpp:5501-5521) passes HitInfo with no absorb/resist bits, so
+// C++ writes no absorb/resist arrays either (Unit.cpp:5459-5469) —
+// the post-mitigation damage is what both sides show. The
+// swing-type byte (1 flat, 0 school) has no builder slot either.
 // The spell leg deals 0, matching C++ Trinity: SpellNonMeleeDamage's
 // constructor sets damage(0) and Eluna never assigns the Lua damage
 // into it, so DealSpellDamage(0) changes no health (the log still

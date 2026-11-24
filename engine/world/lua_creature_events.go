@@ -558,6 +558,11 @@ func (s *Server) despawnCreatureMotion(ctx context.Context, mapID, instanceID ui
 	if m.VehicleGUID != 0 {
 		s.removeDepartingCreatureVehicleSeat(ctx, mapID, instanceID, m)
 	}
+	// Unit::RemoveFromWorld (Unit.cpp:9795): a removed creature's
+	// owned game objects are all deleted (Unit::RemoveAllGameObjects,
+	// Unit.cpp:5287) — slot summons included — instead of lingering
+	// orphaned with a stale OwnerGUID.
+	s.removeAllGameObjectsByOwner(guid)
 	if maxHealth == 0 {
 		maxHealth = 1
 	}
@@ -3733,20 +3738,21 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// return on an unchanged type, then the UNIT_FIELD_BYTES_0 power-type
 	// byte, then Creature::UpdateMaxPower (StatSystem.cpp:1030-1041) over
 	// GetCreatePowerValue (Unit.cpp:9679-9701): ENERGY 100, RAGE 1000,
-	// FOCUS/HAPPINESS 0 for a non-pet creature; MANA keeps the banked
+	// FOCUS/HAPPINESS/RUNE 0, RUNIC_POWER 1000 for a non-pet creature; MANA keeps the banked
 	// spawn mana. The current-power legs follow the C++ switch: RAGE
 	// resets to 0, FOCUS fills to max, ENERGY/MANA keep current. The
 	// group/pet update-flag legs are player/pet-only. No bytes-0
 	// broadcast: creature update fields carry no bytes-0 slot
 	// (SetCombatReach precedent). Backs the setdemand hunt (toc rogue
-	// Reset ENERGY + full).
+	// Reset ENERGY + full). The 0-6 domain matches Eluna
+	// (UnitMethods.h:1721-1726) and the session-creature twin.
 	methods["SetPowerType"] = func(_ context.Context, args []any) ([]any, error) {
 		powerType, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		if powerType > 4 {
-			return nil, fmt.Errorf("SetPowerType requires a power type 0-4, got %d", powerType)
+		if powerType >= 7 {
+			return nil, fmt.Errorf("SetPowerType requires a power type 0-6, got %d", powerType)
 		}
 		s.motionMu.Lock()
 		if motion.PowerType == powerType {
@@ -3776,6 +3782,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			motion.MaxPowers[powerType] = 0
 			motion.BaseMaxPowers[powerType] = 0
 			updates[unitFieldMaxPower1+int(powerType)] = 0
+		case 5: // POWER_RUNE
+			motion.MaxPowers[powerType] = 0
+			motion.BaseMaxPowers[powerType] = 0
+			updates[unitFieldMaxPower1+int(powerType)] = 0
+		case 6: // POWER_RUNIC_POWER
+			motion.MaxPowers[powerType] = 1000
+			motion.BaseMaxPowers[powerType] = 1000
+			updates[unitFieldMaxPower1+int(powerType)] = 1000
 		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
@@ -3786,7 +3800,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// GetMaxPower reads the live max for the creature's current power
 	// type, or for the given type when passed one (the SetPower type
-	// convention, 0-4). The generic fallback (object.go) reads the
+	// convention, 0-6). The generic fallback (object.go) reads the
 	// event-time snapshot, so it goes stale after a mid-handler
 	// SetPowerType; this live read lets a port fill a new type to its
 	// max in the same handler (toc rogue SetFullPower). No-arg reads
@@ -3805,8 +3819,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			if err != nil {
 				return nil, err
 			}
-			if powerType > 4 {
-				return nil, fmt.Errorf("GetMaxPower requires a power type 0-4, got %d", powerType)
+			if powerType > 6 {
+				return nil, fmt.Errorf("GetMaxPower requires a power type 0-6, got %d", powerType)
 			}
 		}
 		s.motionMu.Lock()
@@ -3875,12 +3889,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// swings carry no cast state); the victim-side _removeAttacker leg
 	// rides the packet, matching the evade path's broadcast-only
 	// treatment. No-op when no target is set (the !m_attacking early-out). The thekal zealot feign-death arm.
+	// The return reports whether an attack was running, matching C++
+	// and the player/session-creature twins.
 	methods["AttackStop"] = func(ctx context.Context, args []any) ([]any, error) {
 		s.motionMu.Lock()
 		target := motion.TargetGUID
 		if target == 0 {
 			s.motionMu.Unlock()
-			return nil, nil
+			return []any{false}, nil
 		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		motion.TargetGUID = 0
@@ -3889,7 +3905,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		stopPkt := buildAttackStop(guid, target, false)
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		s.clearCreatureVisualTarget(motion)
-		return nil, nil
+		return []any{true}, nil
 	}
 	// CombatStop is Unit::CombatStop (Unit.cpp:5809-5826) for handler
 	// creatures: in C++ order, InterruptNonMeleeSpells(false) when

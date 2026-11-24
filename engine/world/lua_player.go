@@ -4241,6 +4241,10 @@ func (s *session) luaPlayer() *scripting.Object {
 			return []any{false}, nil
 		}
 		s.attackTarget = 0
+		// Unit::AttackStop (Unit.cpp:5778) interrupts CURRENT_MELEE_SPELL —
+		// the queued on-next-swing spell never lands after a stop (the
+		// opcode path already cancels it; see handleAttackStop).
+		s.cancelNextSwingSpell()
 		_ = s.sendAttackStop(victim, false)
 		return []any{true}, nil
 	}

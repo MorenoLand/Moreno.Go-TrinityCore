@@ -198,9 +198,21 @@ func (s *Server) dealSplitDamageToCaster(ctx context.Context, victimGUID uint64,
 			}
 		}
 	}
+	// Unit::DealDamageMods (Unit.cpp:2010, 2056): the split runs through
+	// the caster's absorb shields before the log and the recursive
+	// DealDamage — the log carries the post-absorb damage with the
+	// absorbed amount and the SPLIT hit bit, and the recursive hit
+	// deals the net amount (the shields are consumed here, so the
+	// recursive hit finds none left).
+	var absorbed uint32
+	if casterIsPlayer {
+		absorbed, split = casterSess.applyAbsorptionShields(split, uint8(schoolMask))
+	} else {
+		absorbed, split = s.applyCreatureAbsorptionShields(casterKey, split, uint8(schoolMask))
+	}
 	// Unit.cpp:2006-2012, 2052-2058: the attacker logs the split hit on the
 	// caster before the recursive DealDamage.
-	s.sendSplitDamageLog(attackerGUID, a.casterGUID, a.spellID, split, casterHealth, schoolMask, key.Map, key.InstanceID)
+	s.sendSplitDamageLog(attackerGUID, a.casterGUID, a.spellID, split, absorbed, casterHealth, schoolMask, key.Map, key.InstanceID)
 	// Unit.cpp:2014, 2060: the recursive hit is a full DealDamage with the
 	// original attacker, the aura's spell, and durabilityLoss=false.
 	attackerSess := s.findSessionByGUID(attackerGUID)
@@ -225,21 +237,27 @@ func (s *Server) sendSplitImmuneMiss(victimGUID uint64, victimIsPlayer bool, cas
 }
 
 // sendSplitDamageLog sends the attacker's SMSG_SPELLNONMELEEDAMAGELOG for the
-// redirected split (Unit.cpp:2009, 2055). Unit::SendSpellNonMeleeDamageLog
-// ends in SendMessageToSet on the attacker — the attacker's visibility set —
-// so a player attacker writes its own copy and fans out from its position,
-// and a creature attacker fans out from its motion position with no session
-// leg. The attacker's map/instance comes from the victim's key (the split
-// runs where the original damage landed).
-func (s *Server) sendSplitDamageLog(attackerGUID, casterGUID uint64, spellID, split, casterHealth uint32, schoolMask uint32, mapID, instanceID uint32) {
-	if s == nil || split == 0 {
+// redirected split (Unit.cpp:2009, 2055). The logged damage is the
+// post-absorb amount with the absorbed amount and the SPLIT hit bit
+// (SPELL_HIT_TYPE_SPLIT, 0x08); resist is 0, matching the C++ call.
+// Unit::SendSpellNonMeleeDamageLog ends in SendMessageToSet on the
+// attacker — the attacker's visibility set — so a player attacker writes
+// its own copy and fans out from its position, and a creature attacker
+// fans out from its motion position with no session leg. The attacker's
+// map/instance comes from the victim's key (the split runs where the
+// original damage landed).
+func (s *Server) sendSplitDamageLog(attackerGUID, casterGUID uint64, spellID, split, absorbed, casterHealth uint32, schoolMask uint32, mapID, instanceID uint32) {
+	if s == nil {
 		return
 	}
+	// No split==0 early-out: a fully absorbed split still logs in C++
+	// (Unit.cpp:2009, 2055 fire unconditionally after DealDamageMods),
+	// with damage 0 and the absorbed amount.
 	var overkill uint32
 	if split > casterHealth {
 		overkill = split - casterHealth
 	}
-	logPkt := buildSpellNonMeleeDamageLog(casterGUID, attackerGUID, spellID, split, overkill, uint8(schoolMask))
+	logPkt := buildSpellNonMeleeDamageLog(casterGUID, attackerGUID, spellID, split, overkill, uint8(schoolMask), absorbed, 0, 0x08)
 	var source *session
 	var cx, cy, cz float32
 	if as := s.findSessionByGUID(attackerGUID); as != nil && as.player != nil {
