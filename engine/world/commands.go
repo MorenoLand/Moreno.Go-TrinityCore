@@ -983,6 +983,11 @@ func (s *session) handleCmdGMOn(ctx context.Context) bool {
 		s.persistExtraFlags()
 		s.sendPlayerUpdate()
 		s.refreshNearbyObjects(ctx)
+		// Player::SetPhaseMask (Player.cpp:22809-22810): the GM
+		// phase-anywhere flip propagates to the vehicle root.
+		if s.server != nil {
+			s.server.propagatePlayerPhaseToVehicleRoot(s)
+		}
 	}
 	// LANG_GM_ON (332).
 	s.sendNotification("GM mode is ON.")
@@ -1007,6 +1012,11 @@ func (s *session) handleCmdGMOff(ctx context.Context) bool {
 		s.persistExtraFlags()
 		s.sendPlayerUpdate()
 		s.refreshNearbyObjects(ctx)
+		// Player::SetPhaseMask (Player.cpp:22809-22810): the
+		// phase recompute propagates to the vehicle root.
+		if s.server != nil {
+			s.server.propagatePlayerPhaseToVehicleRoot(s)
+		}
 	}
 	// LANG_GM_OFF (333).
 	s.sendNotification("GM mode is OFF.")
@@ -1152,6 +1162,11 @@ func (s *session) handleCmdGMVisible(ctx context.Context, args []string) bool {
 	s.persistExtraFlags()
 	s.sendPlayerUpdate()
 	s.refreshNearbyObjects(ctx)
+	// Player::SetPhaseMask (Player.cpp:22809-22810): the GM
+	// phase-anywhere flip propagates to the vehicle root.
+	if s.server != nil {
+		s.server.propagatePlayerPhaseToVehicleRoot(s)
+	}
 	// LANG_INVISIBLE_INVISIBLE (577).
 	s.sendNotification("You are now invisible.")
 	return true

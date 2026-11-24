@@ -5284,6 +5284,20 @@ func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool
 	// unit, which has no spell-init model in Go) C++ sends nothing. The old
 	// slot-0 DB row fallback answered for pets that weren't live.
 	if s.controlledPetMotion(s.player.PetGUID) == nil {
+		// PetHandler.cpp:901-905: with no pet, a charmed unit answers
+		// instead — a vehicle-controlling charm gets
+		// VehicleSpellInitialize (Player.cpp:21175-21208). Go has no
+		// possess model, but the vehicle charm is modeled
+		// (kit.CharmerGUID, the CHARM_TYPE_VEHICLE twin): a player
+		// seated in a CAN_CONTROL seat on a creature base re-requests
+		// the vehicle bar, exactly as the board leg sends it
+		// (enterVehicle). A non-control passenger has no charmed unit
+		// in C++ either, so nothing is sent for them.
+		if s.player.VehicleGUID != 0 && s.server != nil {
+			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil && !kit.IsPlayer && kit.CharmerGUID() == s.playerGUID {
+				s.sendVehiclePetSpells(s.player.VehicleGUID, s.server.loadCreatureSpells(ctx, kit.CreatureEntry))
+			}
+		}
 		return true
 	}
 	cdb := s.server.CharactersStore.DB

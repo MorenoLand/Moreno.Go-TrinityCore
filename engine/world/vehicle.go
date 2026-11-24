@@ -1830,6 +1830,59 @@ func (s *Server) removeDepartingCreatureVehicleSeat(ctx context.Context, mapID, 
 	}
 }
 
+// propagatePlayerPhaseToVehicleRoot mirrors the vehicle leg of
+// Player::SetPhaseMask (Player.cpp:22809-22810): a player's phase-mask
+// change propagates to the root of the vehicle chain they ride, so the
+// base stays in the rider's phase. HandlePhase reaches it through
+// player->SetPhaseMask(newPhase, false) (SpellAuraEffects.cpp:1604);
+// the GM and .modify phase paths reach it through SetGameMaster / the
+// override slot (Player.cpp:2456). The walk climbs creature bases via
+// their VehicleGUID (nested vehicles); the write lands in the runtime
+// 261-phase override map — the lever Go's visibility actually reads
+// (creatureEffectivePhaseMask, creaturePhaseOverrideGUIDs) — not
+// motion.PhaseMask, which the creature queries never consult. The entry
+// is deliberately never cleared on unseat: C++ never resets the base's
+// phase either, and the base's own 261 recompute overwrites the key
+// when its own phase next changes. A player base at the root keeps its
+// derived phase — Go has no stored player phase mask to write, and
+// forcing an override would outlive the ride. The climb is capped:
+// the board cycle guards (Unit.cpp:12074-12077) forbid a loop, but a
+// corrupted chain must not hang a packet handler the way C++'s
+// unbounded GetVehicleRoot loop would.
+func (s *Server) propagatePlayerPhaseToVehicleRoot(sess *session) {
+	if s == nil || sess == nil || sess.player == nil || sess.player.VehicleGUID == 0 {
+		return
+	}
+	mask := sess.currentPlayerPhaseMask()
+	guid := sess.player.VehicleGUID
+	for i := 0; guid != 0 && i < 64; i++ {
+		var base *creatureMotion
+		for _, loc := range s.findVehicleKits(guid) {
+			if m := s.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, guid); m != nil {
+				base = m
+				break
+			}
+		}
+		if base == nil {
+			return
+		}
+		s.motionMu.Lock()
+		next := base.VehicleGUID
+		s.motionMu.Unlock()
+		if next == 0 {
+			key := creatureAuraKeyForMotion(base)
+			s.auraMu.Lock()
+			if s.creaturePhaseOverride == nil {
+				s.creaturePhaseOverride = make(map[creatureAuraKey]uint32)
+			}
+			s.creaturePhaseOverride[key] = mask
+			s.auraMu.Unlock()
+			return
+		}
+		guid = next
+	}
+}
+
 // setCreatureVehicleNotSelectable mirrors the VehicleJoinEvent::Execute
 // NOT_SELECTABLE leg (Vehicle.cpp:855-856) for a creature passenger: a
 // seat carrying VEHICLE_SEAT_FLAG_PASSENGER_NOT_SELECTABLE sets

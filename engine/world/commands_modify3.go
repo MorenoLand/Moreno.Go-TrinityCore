@@ -262,6 +262,11 @@ func (s *session) handleModifyPhase(ctx context.Context, args []string) bool {
 	}
 	target.player.PhaseMaskOverride = mask
 	target.player.PhaseMaskOverrideSet = true
+	// Player::SetPhaseMask (Player.cpp:22809-22810): the override flip
+	// propagates to the vehicle root the target rides.
+	if s.server != nil {
+		s.server.propagatePlayerPhaseToVehicleRoot(target)
+	}
 	return true
 }
 

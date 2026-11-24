@@ -798,6 +798,11 @@ func miscSetPhaseMask(target *session, mask uint32) {
 	}
 	target.player.PhaseMaskOverride = mask
 	target.player.PhaseMaskOverrideSet = true
+	// Player::SetPhaseMask (Player.cpp:22809-22810): the override flip
+	// propagates to the vehicle root the target rides.
+	if target.server != nil {
+		target.server.propagatePlayerPhaseToVehicleRoot(target)
+	}
 }
 
 // spellArgStatus classifies a spell-token parse the way the C++ SpellInfo

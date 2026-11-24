@@ -39221,6 +39221,7 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		s.removeAurasWithInterruptFlags(auraInterruptFlagImmuneOrLostSelection)
 		if s.server != nil {
 			s.server.refreshPlayerVisibility()
+			s.server.propagatePlayerPhaseToVehicleRoot(s)
 		}
 	}
 	s.sendAuraUpdateWithStack(slot, spellID, false, positive, durationMs, durationMs, stackCount)
@@ -40241,6 +40242,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 		if sp, found, _ := s.server.Data.Spell(spellID); found && spellHasAura(sp, spellAuraPhase) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_SET_PHASE_SHIFT), buildPhaseShift(s.currentPlayerPhaseMask()), true)
 			s.server.refreshPlayerVisibility()
+			s.server.propagatePlayerPhaseToVehicleRoot(s)
 		}
 	}
 	// Improved Spell Reflection (SpellAuras.cpp:1587-1608): when a warrior
