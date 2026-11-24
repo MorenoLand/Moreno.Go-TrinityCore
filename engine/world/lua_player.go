@@ -2162,7 +2162,11 @@ func (s *session) luaPlayer() *scripting.Object {
 			victimSess.applyResilienceToMeleeCritChance(true, resilCR, &resilBaseBP)
 			critReductionBP = int32(500) + critBonusBP + flatBP - resilBaseBP
 		}
-		bp := meleeCritChanceAgainstBP(s.player.Level, victimLevel, isPlayerVictim, critBonusBP, flatBP, weaponBP, critReductionBP, 0)
+		var victimDefenseSkill uint32
+		if isPlayerVictim && victimSess != nil {
+			victimDefenseSkill = victimSess.defenseSkillValue(true)
+		}
+		bp := meleeCritChanceAgainstBP(s.player.Level, victimLevel, isPlayerVictim, critBonusBP, flatBP, weaponBP, critReductionBP, 0, victimDefenseSkill)
 		return []any{float64(bp) / 100}, nil
 	}
 	// cooldownUpdate mirrors Eluna CHECKVAL<bool>(L, 3, true): an omitted

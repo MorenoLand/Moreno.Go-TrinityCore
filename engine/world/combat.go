@@ -1141,6 +1141,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	victimParryBP := int32(-1)
 	victimBlockBP := int32(-1)
 	var vicSess *session
+	var victimDefenseSkill, victimMissFromDefenseBP int32
 	if isPlayerVictim && s.server != nil {
 		vicSess = s.server.findSessionByGUID(target.GUID)
 		if vicSess != nil && vicSess.player != nil {
@@ -1163,6 +1164,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			victimDodgeBP = int32(math.Round(float64(vicSess.player.DodgePercentage) * 100))
 			victimParryBP = int32(math.Round(float64(vicSess.player.ParryPercentage) * 100))
 			victimBlockBP = int32(math.Round(float64(vicSess.player.BlockPercentage) * 100))
+			// Unit::GetDefenseSkillValue (Unit.cpp:2638): PvP reads the
+			// victim's MAX defense skill; the miss term reads
+			// GetMissPercentageFromDefense (StatSystem.cpp:729).
+			victimDefenseSkill = int32(vicSess.defenseSkillValue(true))
+			victimMissFromDefenseBP = vicSess.missPercentageFromDefenseBP()
 		}
 	}
 
@@ -1285,7 +1291,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		// has nonzero crit chance. player.StandState is the Go analog of
 		// UNIT_FIELD_BYTES_1 stand state (0 = stand).
 		victimSitting := isPlayerVictim && vicSess != nil && vicSess.player != nil && vicSess.player.StandState != 0
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, true, victimSitting, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, true, victimSitting, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0, victimDefenseSkill, victimMissFromDefenseBP)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -2135,6 +2141,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// victimSpellWeaponCritBP is the post-resilience
 	// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197) total.
 	var victimFlatCritTakenBP, victimSpellWeaponCritBP int32
+	var victimDefenseSkill, victimMissFromDefenseBP int32
 	// The attacker's ranged crit bonus (GetUnitCriticalChanceDone's player
 	// arm, Unit.cpp:2830-2832) folds into the resilience base: C++ applies
 	// ApplyResilience to critDone + the 188/308 flats (Unit.cpp:2871).
@@ -2170,6 +2177,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			victimParryBP = int32(math.Round(float64(vicSess.player.ParryPercentage) * 100))
 			victimBlockBP = int32(math.Round(float64(vicSess.player.BlockPercentage) * 100))
 			victimBlockBonusBP = vicSess.totalAuraModifier(spellAuraModBlockPercent) * 100
+			// Unit::GetDefenseSkillValue (Unit.cpp:2638): PvP reads the
+			// victim's MAX defense skill; the miss term reads
+			// GetMissPercentageFromDefense (StatSystem.cpp:729).
+			victimDefenseSkill = int32(vicSess.defenseSkillValue(true))
+			victimMissFromDefenseBP = vicSess.missPercentageFromDefenseBP()
 		}
 	}
 	// Creature victims (Unit.cpp:2676-2681): 49 total adds to the 5% dodge
@@ -2269,7 +2281,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			victimSitting = true
 		}
 	}
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, false, victimSitting, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0)
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isPetVictim, false, false, victimSitting, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP, victimDodgeBP, dodgeReductionBP, expertiseBP, 0, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, 0, victimDefenseSkill, victimMissFromDefenseBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
@@ -3677,7 +3689,7 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // the base, -500). Clamped at zero like C++. Callers gather the arms
 // from the same helpers the melee rolls use, so the bridge and the
 // roll can never drift apart.
-func meleeCritChanceAgainstBP(attackerLevel, victimLevel uint8, isPlayerVictim bool, critBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, critReductionBP, attackerCritAdjustBP int32) int32 {
+func meleeCritChanceAgainstBP(attackerLevel, victimLevel uint8, isPlayerVictim bool, critBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, critReductionBP, attackerCritAdjustBP int32, victimDefenseSkill uint32) int32 {
 	if attackerLevel == 0 {
 		attackerLevel = 1
 	}
@@ -3685,6 +3697,14 @@ func meleeCritChanceAgainstBP(attackerLevel, victimLevel uint8, isPlayerVictim b
 		victimLevel = 1
 	}
 	skillDiff := (int32(victimLevel) - int32(attackerLevel)) * 5
+	if victimDefenseSkill > 0 && isPlayerVictim {
+		// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2861): the skill arm
+		// reads the victim's defense skill (Unit::GetDefenseSkillValue,
+		// Unit.cpp:2638), not 5/level — a player victim's defense rating
+		// lowers the crit chance taken. The attacker weapon skill stays
+		// modeled as 5/level (no Go weapon-skill model, :2907).
+		skillDiff = int32(victimDefenseSkill) - int32(attackerLevel)*5
+	}
 	critChance := int32(500)
 	if isPlayerVictim {
 		critChance -= skillDiff * 4
@@ -3713,6 +3733,71 @@ func meleeCritChanceAgainstBP(attackerLevel, victimLevel uint8, isPlayerVictim b
 		critChance = 0
 	}
 	return critChance
+}
+
+// defenseSkillValue mirrors Unit::GetDefenseSkillValue (Unit.cpp:2638-2656)
+// for a player victim: in PvP (player attacker) the MAX defense skill,
+// otherwise the current skill value, plus the CR_DEFENSE_SKILL rating
+// bonus in both cases. A missing skill row reads as max (5/level) rather
+// than 0, so an unloaded skill table can never inflate crit taken.
+// Creature victims read GetMaxSkillValueForLevel = 5*level, which the
+// melee roll already models, so call sites only pass this for players.
+func (s *session) defenseSkillValue(vsPlayerAttacker bool) uint32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	level := s.player.Level
+	if level == 0 {
+		level = 1
+	}
+	maxSkill := uint32(level) * 5
+	var base uint32
+	if vsPlayerAttacker {
+		base = maxSkill
+	} else {
+		base = s.getSkillValue(95)
+		if base == 0 {
+			base = maxSkill
+		}
+	}
+	return base + uint32(s.ratingBonusValue(CombatRatingDefenseSkill))
+}
+
+// missDiminishingK mirrors StatSystem.cpp:675-689 (m_diminishing_k, class
+// index = class-1); shared with the dodge percentage's inline twin.
+var missDiminishingK = [...]float32{0.956, 0.956, 0.988, 0.988, 0.983, 0.956, 0.988, 0.983, 0.983, 0, 0.972}
+
+// missPercentageFromDefenseBP mirrors Player::GetMissPercentageFromDefense
+// (StatSystem.cpp:729-737): the nondiminishing leg is (current defense
+// skill - max skill) * 0.04%, the diminishing leg is the defense-rating
+// bonus * 0.04% run through CalculateDiminishingReturns (StatSystem.cpp:
+// 692-711) with miss_cap 16.0 (StatSystem.cpp:714-727). Zero when the
+// victim has no above-cap defense.
+func (s *session) missPercentageFromDefenseBP() int32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	level := s.player.Level
+	if level == 0 {
+		level = 1
+	}
+	maxSkill := uint32(level) * 5
+	skill := s.getSkillValue(95)
+	if skill == 0 {
+		skill = maxSkill
+	}
+	nondiminishing := float64(int32(skill)-int32(maxSkill)) * 0.04
+	diminishing := s.ratingBonusValue(CombatRatingDefenseSkill) * 0.04
+	if diminishing <= 0 {
+		return int32(math.Round(nondiminishing * 100))
+	}
+	classIdx := int(s.player.Class) - 1
+	if classIdx < 0 || classIdx >= len(missDiminishingK) {
+		return int32(math.Round(nondiminishing * 100))
+	}
+	k := float64(missDiminishingK[classIdx])
+	result := 16.0*diminishing/(diminishing+16.0*k) + nondiminishing
+	return int32(math.Round(result * 100))
 }
 
 // critTakenBP gathers the victim-side arms of
@@ -3835,6 +3920,10 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	// 187/188+308 flat [12], the post-resilience 197 total [13] — and the
 	// attacker's crit-base adjustment [14] (creature 52/290 auras, NO_CRIT
 	// zeroes the base). All signed basis points; absent means none.
+	// [15] is the player victim's defense skill (Unit.cpp:2638) for the
+	// crit leg and the crushing min-arm; [16] is the player victim's miss
+	// chance from defense (StatSystem.cpp:729) in basis points for the
+	// miss leg.
 	victimFlatCritTakenBP := int32(0)
 	if len(modifiers) > 12 {
 		victimFlatCritTakenBP = modifiers[12]
@@ -3847,25 +3936,45 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	if len(modifiers) > 14 {
 		attackerCritAdjustBP = modifiers[14]
 	}
+	// Optional 16th modifier: the player victim's defense skill in skill
+	// points (Unit::GetDefenseSkillValue, Unit.cpp:2638-2656) — the crit
+	// leg (Unit.cpp:2861) and the crushing min-arm (Unit.cpp:2310-2320)
+	// read defense skill, not 5/level. Absent or 0 keeps the 5/level
+	// model; creature victims never pass it (defense is 5*level there).
+	victimDefenseSkill := int32(0)
+	if len(modifiers) > 15 {
+		victimDefenseSkill = modifiers[15]
+	}
+	// Optional 17th modifier: the player victim's miss chance from
+	// defense (Player::GetMissPercentageFromDefense, StatSystem.cpp:
+	// 729-737) in basis points; absent means none. Creature victims
+	// never pass it (the creature arm is 0 outside NpcBots, :2762).
+	victimMissFromDefenseBP := int32(0)
+	if len(modifiers) > 16 {
+		victimMissFromDefenseBP = modifiers[16]
+	}
 
 	leveldif := int32(victimLevel) - int32(attackerLevel)
-	// Weapon/defense skill difference at 5 skill per level, the C++ 1:1
-	// model for every skillDiff arm below (GetWeaponSkillValue /
-	// GetMaxSkillValueForLevel have no Go skill-bonus model, so skills are
-	// 5/level by construction — same convention as the crushing-blow fix).
+	// Weapon skill difference at 5 skill per level: the miss/dodge/parry/
+	// block arms read victimMaxSkillValueForLevel - attackerWeaponSkill
+	// (GetWeaponSkillValue has no Go skill-bonus model, so weapon skill is
+	// 5/level by construction). The crit, crushing and miss-base arms read
+	// the victim's defense skill instead ([15]/[16], Unit.cpp:2861/2310
+	// and StatSystem.cpp:729) when a player victim passes it.
 	skillDiff := leveldif * 5
 
 	// 1. Miss chance: TrinityCore Unit::MeleeSpellMissChance (Unit.cpp:12408).
 	var missChance int32
 	if isPlayerVictim {
-		// Unit::GetUnitMissChance (Unit.cpp:2762): 5% base. The
-		// GetMissPercentageFromDefense above-cap term rides the Go
-		// defense-skill model only in the sheet percentages, so the roll
-		// keeps the flat 5% — same convention as the crushing-blow fix.
+		// Unit::GetUnitMissChance (Unit.cpp:2762): 5% base plus the
+		// victim's GetMissPercentageFromDefense term ([16], StatSystem.
+		// cpp:729-737) — above-cap defense skill and defense rating make
+		// attackers miss more. The final clamp below covers a negative
+		// term (defense skill below max).
 		// Skill arm (Unit.cpp:12433-12436): diff = victimMaxSkill -
 		// attackerWeaponSkill; diff>0 adds diff*0.04%, else diff*0.02%
 		// (percent) = 4/2 basis points per skill point.
-		missChance = 500
+		missChance = 500 + victimMissFromDefenseBP
 		if skillDiff > 0 {
 			missChance += skillDiff * 4
 		} else {
@@ -3988,9 +4097,17 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	// (Unit.cpp:2858). The victim-type skill arms:
 	// player: -skillDiff*0.04% (Unit.cpp:2889);
 	// creature: -skillDiff*0.12%, minus 3% when skillDiff>=15 (Unit.cpp:2890-2894).
+	// The skillDiff here is the defense-skill one (Unit.cpp:2861): a
+	// player victim's defense skill ([15]) replaces 5*leveldif — defense
+	// rating lowers crit taken. The attacker weapon skill stays modeled
+	// as 5/level (no Go weapon-skill model, :2907).
+	critSkillDiff := skillDiff
+	if victimDefenseSkill > 0 && isPlayerVictim {
+		critSkillDiff = victimDefenseSkill - int32(attackerLevel)*5
+	}
 	critChance := int32(500)
 	if isPlayerVictim {
-		critChance -= skillDiff * 4
+		critChance -= critSkillDiff * 4
 	} else {
 		critChance -= skillDiff * 12
 		if skillDiff >= 15 {
@@ -4031,14 +4148,22 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, i
 	// RANGED_ATTACK, Unit.cpp:1206-1214 — so the ranged-white path passes
 	// false); pets are controlled and can never crush. tmp =
 	// attackerMaxSkillValueForLevel - min(victimDefenseSkill,
-	// victimMaxSkillValueForLevel) clamped to >= 20, then tmp*200 - 1500. Go
-	// models no weapon/defense skill bonuses, so both skills are 5/level and
-	// the min arm is vacuous by construction. CREATURE_FLAG_EXTRA_NO_CRUSH
+	// victimMaxSkillValueForLevel) clamped to >= 20, then tmp*200 - 1500. A
+	// player victim's defense skill ([15]) feeds the min arm — defense
+	// rating lowers the crushing chance; creature victims read 5*level,
+	// so the min arm is vacuous for them. CREATURE_FLAG_EXTRA_NO_CRUSH
 	// (0x20, CreatureData.h:42) bars the attacker from crushing
 	// (Unit.cpp:2312).
 	crushingChance := int32(0)
 	if attackerCanCrush && !attackerNoCrush && attackerLevel >= victimLevel+4 {
 		skillDiff := int32(attackerLevel-victimLevel) * 5
+		if victimDefenseSkill > 0 && isPlayerVictim {
+			capped := victimDefenseSkill
+			if capped > int32(victimLevel)*5 {
+				capped = int32(victimLevel) * 5
+			}
+			skillDiff = int32(attackerLevel)*5 - capped
+		}
 		if skillDiff < 20 {
 			skillDiff = 20
 		}

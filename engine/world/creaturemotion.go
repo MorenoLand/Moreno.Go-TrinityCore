@@ -9814,10 +9814,17 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// resilience (Unit::CanApplyResilience, Unit.cpp:12333), so the
 	// reduction stays 0 here.
 	var victimFlatCritTakenBP, victimSpellWeaponCritBP int32
+	var victimDefenseSkill, victimMissFromDefenseBP int32
 	if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
 		victimFlatCritTakenBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerMeleeCritChance))*100)) +
 			int32(math.Round(target.Sess.victimCritChanceForCaster(motion.GUID)*100))
 		victimSpellWeaponCritBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
+		// Unit::GetDefenseSkillValue (Unit.cpp:2638): the attacker is a
+		// creature (TYPEID_UNIT), so a player victim reads the CURRENT
+		// defense skill; the miss term reads
+		// GetMissPercentageFromDefense (StatSystem.cpp:729).
+		victimDefenseSkill = int32(target.Sess.defenseSkillValue(false))
+		victimMissFromDefenseBP = target.Sess.missPercentageFromDefenseBP()
 	} else if !isPlayerVictim {
 		victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
 		victimFlatCritTakenBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerMeleeCritChance)*100 +
@@ -9833,7 +9840,7 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// m_ControlledByPlayer with no flag (TempSummon::InitStats,
 	// TemporarySummon.cpp:190-198), so ControlledByPlayer joins the
 	// gate — the flag alone would let it crush.
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, motion.UnitFlags&unitFlagPlayerControlled == 0 && !motion.ControlledByPlayer, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, motion.UnitFlags&unitFlagPlayerControlled == 0 && !motion.ControlledByPlayer, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP, victimDefenseSkill, victimMissFromDefenseBP)
 	if isPlayerVictim && target.Sess != nil {
 		if target.Sess.isImmuneToDamage(1) {
 			outcome = protocol.MeleeHitImmune
@@ -10196,9 +10203,10 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// melee hit from behind can daze the victim (SPELL_DAZED 1604,
 	// triggered). Fires on normal/crit/crushing/glancing outcomes;
 	// the 20% base (0.65*level+0.5 below 30) scales by the
-	// attacker/victim skill ratio x0.16, clamped to [0,40]. Go models
-	// no weapon/defense skill bonuses, so both skills are 5*level
-	// (crushing-blow convention, combat.go:2591). Pets and charmed
+	// attacker/victim skill ratio x0.16, clamped to [0,40] — the ratio
+	// is attacker max skill (5/level) over the victim's defense skill
+	// (Unit::GetDefenseSkillValue, Unit.cpp:2638/1535), so defense
+	// rating lowers the daze chance. Pets and charmed
 	// creatures are player-controlled and never daze (C++
 	// !IsControlledByPlayer, boss_ai.go:creatureIsPlayerControlled).
 	// The !victim->IsVehicle() arm (Unit.cpp:1526) is the victim's own
@@ -10235,7 +10243,13 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 		if victimLvl < 30 {
 			dazeChance = 0.65*victimLvl + 0.5
 		}
-		dazeChance *= attackerLvl / victimLvl * 0.16
+		victimDefense := victimLvl * 5
+		if isPlayerVictim && target.Sess != nil {
+			if def := target.Sess.defenseSkillValue(false); def > 0 {
+				victimDefense = float64(def)
+			}
+		}
+		dazeChance *= attackerLvl * 5 / victimDefense * 0.16
 		if dazeChance < 0 {
 			dazeChance = 0
 		}

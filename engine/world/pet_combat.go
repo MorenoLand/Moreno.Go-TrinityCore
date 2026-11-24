@@ -2566,7 +2566,15 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	// has nonzero crit chance.
 	victimSitting := isTargetPlayer && targetSess != nil && targetSess.player != nil && targetSess.player.StandState != 0
 	attackerExpertiseBP := s.creatureExpertiseReductionBP(petKey)
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, isPetVictim, false, false, victimSitting, false, canBlock, canParry, canDodge, critReductionBP, 0, 0, attackerExpertiseBP, victimDodgeBP, s.creatureDodgeReductionBP(petKey)+s.creatureEnemyDodgeBP(petKey), attackerExpertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP)
+	// Unit::GetDefenseSkillValue (Unit.cpp:2638): the attacker is a pet
+	// (TYPEID_UNIT), so a player victim reads the CURRENT defense skill;
+	// the miss term reads GetMissPercentageFromDefense (StatSystem.cpp:729).
+	var victimDefenseSkill, victimMissFromDefenseBP int32
+	if isTargetPlayer && targetSess != nil {
+		victimDefenseSkill = int32(targetSess.defenseSkillValue(false))
+		victimMissFromDefenseBP = targetSess.missPercentageFromDefenseBP()
+	}
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, true, isTargetPlayer, isPetVictim, false, false, victimSitting, false, canBlock, canParry, canDodge, critReductionBP, 0, 0, attackerExpertiseBP, victimDodgeBP, s.creatureDodgeReductionBP(petKey)+s.creatureEnemyDodgeBP(petKey), attackerExpertiseBP, victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP, victimDefenseSkill, victimMissFromDefenseBP)
 	if isTargetPlayer && targetSess != nil {
 		// Unit::CalculateMeleeDamage (Unit.cpp:1209-1223): the physical
 		// immune check runs on any victim ahead of the outcome roll.

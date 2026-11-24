@@ -3780,8 +3780,12 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if motion.FlagsExtra&0x00020000 != 0 {
 			adjustBP = -500
 		}
-		flatBP, weaponBP, isPlayerVictim, victimLevel, _ := s.server.critTakenBP(motion.GUID, targetGUID, motion.Map, motion.InstanceID, ranged)
-		bp := meleeCritChanceAgainstBP(uint8(motion.Level), victimLevel, isPlayerVictim, 0, flatBP, weaponBP, 0, adjustBP)
+		flatBP, weaponBP, isPlayerVictim, victimLevel, victimSess := s.server.critTakenBP(motion.GUID, targetGUID, motion.Map, motion.InstanceID, ranged)
+		var victimDefenseSkill uint32
+		if isPlayerVictim && victimSess != nil {
+			victimDefenseSkill = victimSess.defenseSkillValue(false)
+		}
+		bp := meleeCritChanceAgainstBP(uint8(motion.Level), victimLevel, isPlayerVictim, 0, flatBP, weaponBP, 0, adjustBP, victimDefenseSkill)
 		return []any{float64(bp) / 100}, nil
 	}
 	// GetCreatureSpellCooldownDelay is
