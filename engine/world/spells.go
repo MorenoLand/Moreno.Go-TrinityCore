@@ -43220,11 +43220,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// AuraEffect::HandleAuraControlVehicle CHANGE_AMOUNT arm
 			// (SpellAuraEffects.cpp:2987-3008): a re-cast merge that moves
 			// the ride aura's amount moves the passenger to the new seat —
-			// Unit::ChangeSeat (Unit.cpp:13133-13170) runs RemovePassenger
-			// + _EnterVehicle on the amount change, with no _ExitVehicle
-			// (SpellAuraEffects.cpp:3002). The merge above refreshed the
-			// amount but never re-ran the apply leg, so without this the
-			// aura claims the new seat while the kit keeps the old one.
+			// AuraEffect::ChangeAmount (SpellAuraEffects.cpp:662-683)
+			// runs RemovePassenger + _EnterVehicle/AddPassenger on the
+			// amount change, with no _ExitVehicle (SpellAuraEffects.cpp:
+			// 3002), not the Unit::ChangeSeat model — ChangeSeat only
+			// pre-validates the seat for the CMSG path (Unit.cpp:
+			// 13144-13146). The merge above refreshed the amount but
+			// never re-ran the apply leg, so without this the aura
+			// claims the new seat while the kit keeps the old one.
 			// The passenger is the aura's caster, so the arm only runs
 			// when the driving session is the caster's — a creature
 			// caster (or a foreign driver) must not move this session's
@@ -44362,10 +44365,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// (SpellAuraEffects.cpp:2987-3008), creature-target twin of the
 		// player merge leg above: a re-cast merge that moves the ride
 		// aura's amount moves the passenger to the new seat
-		// (Unit::ChangeSeat, Unit.cpp:13133-13170; no _ExitVehicle,
-		// SpellAuraEffects.cpp:3002). A player passenger moves through
-		// the driving session; a creature passenger through the
-		// server-side twin on the target's map/instance.
+		// (AuraEffect::ChangeAmount, SpellAuraEffects.cpp:662-683;
+		// no _ExitVehicle, SpellAuraEffects.cpp:3002). A player
+		// passenger moves through the driving session; a creature
+		// passenger through the server-side twin on the target's
+		// map/instance.
 		if eff.Aura == spellAuraControlVehicle {
 			if casterGUID == s.playerGUID {
 				s.applyControlVehicleSeatChange(ctx, targetGUID, int8(int32(amount)-1))
