@@ -2347,6 +2347,231 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 	return s.player.PetGUID
 }
 
+// handleSummonTypeTemp mirrors the Map::SummonCreature arms of
+// Spell::EffectSummonType (SpellEffects.cpp:2194-2440) for a player caster:
+// the VEHICLE-control arm (2361-2400), the VEHICLE/VEHICLE2-title arm
+// (2273-2278), the PUPPET arm (2353-2359), the MINIPET arm (2303-2315)
+// and the default leg (2319-2341). The guardian arms (Flags&512,
+// PET/GUARDIAN/GUARDIAN2/MINION titles, PET control) stay on
+// handleSummonPet, and TOTEM/LIGHTWELL titles stay out (summonTotem);
+// callers gate via summonPropsNeedsTemp. Every arm rides the shared
+// summonTempCreature funnel, so the create block, owner/creator stamps,
+// lifetime and phase match the creature path. Returns the summoned GUID,
+// or 0 when C++ returns without a summon — or without a log: the
+// !IsVehicle early return in the VEHICLE arm skips the
+// ExecuteLogEffectSummonObject tail, so the caller logs nothing. The
+// duration is GetDuration with the SPELLMOD_DURATION fold
+// (SpellEffects.cpp:2212-2214); the timed/dead-despawn choice follows
+// TempSummon::InitStats (TemporarySummon.cpp:180-186).
+func (s *session) handleSummonTypeTemp(ctx context.Context, spell wotlk.Spell, eff wotlk.SpellEffect, dest sessionDestSnapshot, props wotlk.SummonProperties) uint64 {
+	if s.player == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	entry := uint32(0)
+	if eff.MiscValue > 0 {
+		entry = uint32(eff.MiscValue)
+	}
+	if entry == 0 {
+		return 0
+	}
+	casterLevel := uint32(s.player.Level)
+	var duration int32
+	if spell.DurationIndex > 0 {
+		if dur, ok, derr := s.server.Data.SpellDuration(spell.DurationIndex, casterLevel); derr == nil && ok && dur > 0 {
+			duration = dur
+		}
+	}
+	duration = s.applySpellMod(spell, spellModDuration, duration)
+	x, y, z := s.player.X, s.player.Y, s.player.Z
+	if dest.Has {
+		x, y, z = dest.X, dest.Y, dest.Z
+	}
+	// C++ damage (SpellEffects.cpp:2225-2242): the effect's calculated
+	// value at the caster's level keys the multi-summon property-ID list
+	// and the VEHICLE arm's ride-spell/seat value.
+	value := eff.CalcValueForLevel(spell, casterLevel)
+	numSummons := uint32(1)
+	switch props.ID {
+	case 64, 61, 1101, 66, 648, 2301, 1061, 1261, 629, 181, 715, 1562, 833, 1161, 713:
+		if value > 0 {
+			numSummons = uint32(value)
+		}
+	}
+	radius := float32(0)
+	if v, ok, rerr := s.server.Data.SpellRadius(eff.RadiusIndex, casterLevel); rerr == nil && ok {
+		radius = v
+	}
+	summonType := uint8(tempSummonDeadDespawn)
+	var despawnMs uint32
+	if duration > 0 {
+		summonType = uint8(tempSummonTimedDespawn)
+		despawnMs = uint32(duration)
+	}
+	origin := tempSummonOrigin{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: s.playerGUID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, O: s.player.Orientation, Reach: float64(s.player.CombatReach)}
+	// spawnOne mirrors the creature path's spawnOne (boss_ai.go): the
+	// timed/dead-despawn choice, the creator stamp from the funnel, and
+	// the Map::SummonCreature mask bits (summonPropertiesMasks).
+	spawnOne := func(px, py, pz float32) *creatureMotion {
+		summoned := s.server.summonTempCreature(ctx, origin, entry, px, py, pz, s.player.Orientation, summonType, despawnMs)
+		if summoned == nil {
+			return nil
+		}
+		if guardian, minion := summonPropertiesMasks(props); guardian || minion {
+			s.server.motionMu.Lock()
+			summoned.IsGuardian = guardian
+			summoned.IsMinion = minion
+			s.server.motionMu.Unlock()
+		}
+		return summoned
+	}
+	// randomPoint mirrors WorldObject::GetRandomPoint (Object.cpp:1422),
+	// the creature path's twin.
+	randomPoint := func(cx, cy, cz float32, dist float32) (float32, float32, float32) {
+		if dist <= 0 {
+			return cx, cy, cz
+		}
+		angle := rand.Float32() * 2 * float32(math.Pi)
+		nd := rand.Float32() + rand.Float32()
+		if nd > 1 {
+			nd -= 2
+		}
+		d := dist * nd
+		return cx + d*float32(math.Cos(float64(angle))), cy + d*float32(math.Sin(float64(angle))), cz
+	}
+	switch props.Control {
+	case summonCategoryVehicle:
+		// Vehicle-control arm (SpellEffects.cpp:2361-2400): single Map
+		// summon; the ride cast (VEHICLE_SPELL_RIDE_HARDCODED 46598
+		// or the CalcValue-derived CONTROL_VEHICLE spell,
+		// TRIGGERED_FULL_MASK via the castSpellDirect funnel) runs
+		// only when the summon IsVehicle (the kit query, as on the
+		// creature path) — a non-vehicle summon returns before the
+		// ride cast, the faction set and the log tail. A small
+		// base-points value is the seat (SPELLVALUE_BASE_POINT0); a
+		// larger one names the ride spell when it carries
+		// SPELL_AURA_CONTROL_VEHICLE.
+		summoned := spawnOne(x, y, z)
+		if summoned == nil {
+			return 0
+		}
+		if s.server.getVehicleKit(summoned.Map, summoned.InstanceID, summoned.GUID) == nil {
+			return 0
+		}
+		rideSpellID := wotlk.VehicleSpellRideHardcoded
+		if value > int32(wotlk.MaxVehicleSeats) {
+			if rideSpell, found, err := s.server.Data.Spell(uint32(value)); err == nil && found {
+				for _, reff := range rideSpell.Effects {
+					if reff.Aura == spellAuraControlVehicle {
+						rideSpellID = rideSpell.ID
+						break
+					}
+				}
+			}
+		}
+		if value > 0 && value < int32(wotlk.MaxVehicleSeats) {
+			s.castSpellDirectWithBasePoint(ctx, rideSpellID, summoned.GUID, uint32(value))
+		} else {
+			s.castSpellDirect(ctx, rideSpellID, summoned.GUID)
+		}
+		faction := props.Faction
+		if faction == 0 {
+			faction = s.effectiveFactionTemplate(s.player.Race)
+		}
+		s.server.motionMu.Lock()
+		summoned.Faction = faction
+		s.server.motionMu.Unlock()
+		return summoned.GUID
+	case summonCategoryPuppet:
+		// Puppet arm (SpellEffects.cpp:2353-2359): single Map summon
+		// under the Puppet/Minion mask, so Minion::InitStats stamps
+		// the owner faction (TemporarySummon.cpp:341-360) and
+		// Puppet::InitStats sets REACT_PASSIVE (:457-461). The level
+		// leg (owner level, no stat recompute on motions) and the
+		// possess charm (InitSummon :463-468, no charm model) stay
+		// out, as on the creature path.
+		summoned := spawnOne(x, y, z)
+		if summoned == nil {
+			return 0
+		}
+		s.server.motionMu.Lock()
+		summoned.Faction = s.effectiveFactionTemplate(s.player.Race)
+		summoned.ReactStateKnown = true
+		summoned.ReactState = creatureReactPassive
+		s.server.motionMu.Unlock()
+		return summoned.GUID
+	case summonCategoryWild, summonCategoryAlly, summonCategoryUnk:
+		switch props.Title {
+		case summonTitleVehicle, summonTitleVehicle2:
+			// Vehicle-title arm (SpellEffects.cpp:2273-2278): a plain
+			// Map summon that forces nobody to enter.
+			// TempSummon::InitStats (TemporarySummon.cpp:226-231)
+			// takes the properties faction when set, else the owner
+			// faction when the summon is a vehicle.
+			summoned := spawnOne(x, y, z)
+			if summoned == nil {
+				return 0
+			}
+			faction := props.Faction
+			if faction == 0 && s.server.getVehicleKit(summoned.Map, summoned.InstanceID, summoned.GUID) != nil {
+				faction = s.effectiveFactionTemplate(s.player.Race)
+			}
+			if faction != 0 {
+				s.server.motionMu.Lock()
+				summoned.Faction = faction
+				s.server.motionMu.Unlock()
+			}
+			return summoned.GUID
+		case summonTitleMinipet:
+			// Minipet arm (SpellEffects.cpp:2303-2315): Map summon
+			// under the Minion mask, so the owner faction stamp
+			// applies; the template level already matches
+			// SelectLevel and the npcflag stamp rides the spawn
+			// stats. ImmuneToAll stays out (no immunity model on
+			// motions), as on the creature path.
+			summoned := spawnOne(x, y, z)
+			if summoned == nil {
+				return 0
+			}
+			s.server.motionMu.Lock()
+			summoned.Faction = s.effectiveFactionTemplate(s.player.Race)
+			s.server.motionMu.Unlock()
+			return summoned.GUID
+		default:
+			// Default leg (SpellEffects.cpp:2319-2341): numSummons
+			// spawns, later ones randomized within the effect
+			// radius; the ALLY owner/faction stamp (2333-2337)
+			// only — the funnel already stamps OwnerGUID.
+			var first *creatureMotion
+			for count := uint32(0); count < numSummons; count++ {
+				px, py, pz := x, y, z
+				if count > 0 {
+					px, py, pz = randomPoint(x, y, z, radius)
+				}
+				summoned := spawnOne(px, py, pz)
+				if summoned == nil {
+					continue
+				}
+				if props.Control == summonCategoryAlly {
+					s.server.motionMu.Lock()
+					summoned.Faction = s.effectiveFactionTemplate(s.player.Race)
+					s.server.motionMu.Unlock()
+				}
+				if first == nil {
+					first = summoned
+				}
+			}
+			if first == nil {
+				return 0
+			}
+			return first.GUID
+		}
+	default:
+		// Unknown control: Map::SummonCreature returns null (Object.cpp
+		// default arm) — no spawn.
+		return 0
+	}
+}
+
 func (s *session) handleDismissPet(ctx context.Context, spellID uint32) {
 	// Spell::EffectDismissPet (SpellEffects.cpp:4211) logs the unsummon of
 	// the dismissed pet; capture the GUID before unsummonPet clears it. A

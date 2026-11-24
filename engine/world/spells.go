@@ -525,7 +525,7 @@ const (
 	summonCategoryAlly    = 1 // SUMMON_CATEGORY_ALLY
 	summonCategoryPet     = 2 // SUMMON_CATEGORY_PET
 	summonCategoryPuppet  = 3 // SUMMON_CATEGORY_PUPPET — charm arm bridged via casterHasCharmedCreature (see checkSummonCast)
-	summonCategoryVehicle = 4 // SUMMON_CATEGORY_VEHICLE — no vehicle model on the creature-cast path
+	summonCategoryVehicle = 4 // SUMMON_CATEGORY_VEHICLE — vehicle-control arm (boss_ai.go creature path; pets.go player path)
 	summonCategoryUnk     = 5 // SUMMON_CATEGORY_UNK
 
 	// Summon titles for the generic-summon effect arm
@@ -534,10 +534,10 @@ const (
 	summonTitleGuardian  = 2  // SUMMON_TYPE_GUARDIAN — SummonGuardian arm
 	summonTitleMinion    = 3  // SUMMON_TYPE_MINION — SummonGuardian arm
 	summonTitleTotem     = 4  // SUMMON_TYPE_TOTEM — totem arm (creature path models it; session path uses summonTotem)
-	summonTitleMinipet   = 5  // SUMMON_TYPE_MINIPET — no minipet model
+	summonTitleMinipet   = 5  // SUMMON_TYPE_MINIPET — minipet arm (boss_ai.go creature path; pets.go player path)
 	summonTitleGuardian2 = 6  // SUMMON_TYPE_GUARDIAN2 — SummonGuardian arm
-	summonTitleVehicle   = 9  // SUMMON_TYPE_VEHICLE — no vehicle model
-	summonTitleVehicle2  = 10 // SUMMON_TYPE_VEHICLE2 — no vehicle model
+	summonTitleVehicle   = 9  // SUMMON_TYPE_VEHICLE — vehicle-title arm (boss_ai.go creature path; pets.go player path)
+	summonTitleVehicle2  = 10 // SUMMON_TYPE_VEHICLE2 — vehicle-title arm (boss_ai.go creature path; pets.go player path)
 	summonTitleLightwell = 11 // SUMMON_TYPE_LIGHTWELL — totem arm, no totem model on this path
 
 	// Temp summon types in the bridge's 0-based scheme (lua_creature_events.go
@@ -807,6 +807,33 @@ func summonPropertiesMasks(props wotlk.SummonProperties) (guardian, minion bool)
 		}
 	}
 	return guardian, guardian
+}
+
+// summonPropsNeedsTemp reports whether a SummonProperties row takes a
+// Map::SummonCreature temp summon on the player path instead of the
+// guardian/pet row: the VEHICLE and PUPPET controls, and under
+// WILD/ALLY/UNK the VEHICLE/VEHICLE2 and MINIPET titles plus the
+// default-leg titles (NONE/WILD2/WILD3/JEEVES). The Flags&512 carve-out
+// and the PET/GUARDIAN/GUARDIAN2/MINION titles stay guardian
+// (SummonGuardian, SpellEffects.cpp:2259-2271); TOTEM/LIGHTWELL stay
+// out (summonTotem).
+func summonPropsNeedsTemp(props wotlk.SummonProperties) bool {
+	switch props.Control {
+	case summonCategoryVehicle, summonCategoryPuppet:
+		return true
+	case summonCategoryWild, summonCategoryAlly, summonCategoryUnk:
+		if props.Flags&512 != 0 {
+			return false
+		}
+		switch props.Title {
+		case summonTitlePet, summonTitleGuardian, summonTitleMinion, summonTitleGuardian2, summonTitleTotem, summonTitleLightwell:
+			return false
+		default:
+			return true
+		}
+	default:
+		return false
+	}
 }
 
 // spellStartCastFlags mirrors the castFlags computation in
@@ -18788,9 +18815,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// spells outside totemDefinitions) — routing those through handleSummonPet would mint a
 					// permanent character_pet row (and a bogus PetGUID) on every totem
 					// cast. Lightwell has no Go twin and stays a documented no-bridge;
-					// every other title takes the guardian/pet path.
+					// the VEHICLE/PUPPET controls, the VEHICLE/VEHICLE2/MINIPET
+					// titles and the default-leg titles take the temp-summon twin
+					// (handleSummonTypeTemp); the guardian titles and PET control
+					// keep the guardian/pet path.
 					if eff.MiscValue != 0 {
 						summonTitle := uint32(0)
+						var summonProps wotlk.SummonProperties
 						summonPropsKnown := true
 						if s.server != nil && s.server.Data != nil {
 							if props, found, err := s.server.Data.SummonProperties(uint32(eff.MiscValueB)); err == nil {
@@ -18799,11 +18830,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 									summonPropsKnown = false
 								} else {
 									summonTitle = props.Title
+									summonProps = props
 								}
 							}
 						}
 						if summonPropsKnown && summonTitle != summonTitleTotem && summonTitle != summonTitleLightwell {
-							if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue), sessionDestSnapshotAt(sessionDestSnapshots, effectIndex)); guid != 0 {
+							if summonPropsNeedsTemp(summonProps) {
+								if guid := s.handleSummonTypeTemp(effCtx, spell, eff, sessionDestSnapshotAt(sessionDestSnapshots, effectIndex), summonProps); guid != 0 {
+									s.sendSummonObjectLog(spellID, eff.Effect, guid)
+								}
+							} else if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue), sessionDestSnapshotAt(sessionDestSnapshots, effectIndex)); guid != 0 {
 								s.sendSummonObjectLog(spellID, eff.Effect, guid)
 							}
 						}
@@ -31004,9 +31040,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// post-loop totem legs (summonTotem / summonSessionNoSlotTotem)
 			// have their triggered-path twin in this function's post-loop
 			// totem block below, so TOTEM titles stay out here to avoid
-			// double-summoning.
+			// double-summoning. The temp-summon arms (VEHICLE/PUPPET
+			// controls, VEHICLE/VEHICLE2/MINIPET/default titles) take
+			// handleSummonTypeTemp, mirroring the client arm.
 			if eff.MiscValue != 0 {
 				summonTitle := uint32(0)
+				var summonProps wotlk.SummonProperties
 				summonPropsKnown := true
 				if s.server != nil && s.server.Data != nil {
 					if props, found, err := s.server.Data.SummonProperties(uint32(eff.MiscValueB)); err == nil {
@@ -31015,11 +31054,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 							summonPropsKnown = false
 						} else {
 							summonTitle = props.Title
+							summonProps = props
 						}
 					}
 				}
 				if summonPropsKnown && summonTitle != summonTitleTotem && summonTitle != summonTitleLightwell {
-					if guid := s.handleSummonPet(ctx, spellID, uint32(eff.MiscValue), sessionDestSnapshotAt(triggeredDestSnapshots, effectIndex)); guid != 0 {
+					if summonPropsNeedsTemp(summonProps) {
+						if guid := s.handleSummonTypeTemp(ctx, spell, eff, sessionDestSnapshotAt(triggeredDestSnapshots, effectIndex), summonProps); guid != 0 {
+							s.sendSummonObjectLog(spellID, eff.Effect, guid)
+						}
+					} else if guid := s.handleSummonPet(ctx, spellID, uint32(eff.MiscValue), sessionDestSnapshotAt(triggeredDestSnapshots, effectIndex)); guid != 0 {
 						s.sendSummonObjectLog(spellID, eff.Effect, guid)
 					}
 				}

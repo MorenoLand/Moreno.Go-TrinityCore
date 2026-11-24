@@ -5707,13 +5707,21 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 				summonGuardian()
 			case summonTitleVehicle, summonTitleVehicle2:
 				// Vehicle-title arm (SpellEffects.cpp:2273-2278): a plain
-				// Map summon that forces nobody to enter. TempSummon::InitStats
-				// takes the properties faction when set; the vehicle-kit
-				// owner-faction sub-leg has no IsVehicle query at this site.
-				if summoned := spawnOne(baseX, baseY, baseZ); summoned != nil && props.Faction != 0 {
-					s.motionMu.Lock()
-					summoned.Faction = props.Faction
-					s.motionMu.Unlock()
+				// Map summon that forces nobody to enter.
+				// TempSummon::InitStats (TemporarySummon.cpp:226-231)
+				// takes the properties faction when set, else the owner
+				// faction when the summon is a vehicle (the kit query,
+				// as on the player path — summonTempCreature funnels
+				// through motionFor, which creates the kit at spawn
+				// for a template VehicleId).
+				if summoned := spawnOne(baseX, baseY, baseZ); summoned != nil {
+					if props.Faction != 0 {
+						s.motionMu.Lock()
+						summoned.Faction = props.Faction
+						s.motionMu.Unlock()
+					} else if s.getVehicleKit(summoned.Map, summoned.InstanceID, summoned.GUID) != nil {
+						stampOwnerFaction(summoned)
+					}
 				}
 			case summonTitleLightwell, summonTitleTotem:
 				// Lightwell/totem arm (SpellEffects.cpp:2280-2301): Map summon
