@@ -830,7 +830,26 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 	} else {
 		block.WriteU32(0)
 	}
-	block.WriteU16(0)
+	// Vehicle::InitMovementInfoForBase (Vehicle.cpp:617-631): a vehicle
+	// base's m_movementInfo.flags2 carries the DBC-mapped bits from kit
+	// creation (Vehicle ctor, Vehicle.cpp:57; Creature::CreateFromProto,
+	// Creature.cpp:1657), so the create block (Unit::BuildMovementPacket,
+	// Unit.cpp:13274-13279: flags u32, flags2 u16, time u32, position)
+	// carries them from birth. The teleport twin
+	// (lua_creature_events.go) and the player path (movement.go) already
+	// OR the kit bits in; the creature create block wrote 0 here, so a
+	// vehicle base spawned without NO_STRAFE / NO_JUMPING /
+	// FULL_SPEED_TURNING / ALWAYS_ALLOW_PITCHING / FULL_SPEED_PITCHING
+	// until its first teleport. The kit is keyed on the base's own map
+	// (creaturemotion.go materialization) and the observer's instance,
+	// the same key the aura folds above use.
+	var movementFlags2 uint16
+	if observer != nil && observer.server != nil && observer.player != nil && rawGUID != 0 {
+		if kit := observer.server.getVehicleKit(spawn.Map, observer.player.InstanceID, rawGUID); kit != nil {
+			movementFlags2 = kit.BaseMovementFlags2
+		}
+	}
+	block.WriteU16(movementFlags2)
 	block.WriteU32(uint32(time.Now().UnixMilli()))
 	block.WriteF32(spawn.X)
 	block.WriteF32(spawn.Y)

@@ -1386,9 +1386,13 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		// ejected mid-air falls to the ground on a SetFall spline
 		// instead of hanging at the exit position in the air. The fall
 		// launches before the 2s unsummon below (:13265), as in C++.
-		// Without a fall the move to the exit position rides the
-		// teleport broadcast, as in the Lua ExitVehicle arm.
-		if !s.fallAfterVehicleExit(motion.Map, motion.InstanceID, motion.GUID, occupantMotion) {
+		// The launch lifts the dead refusal: a passenger killed by the
+		// session melee/auto-shot path is still seated here (that path
+		// never unseats — no clearCreatureDeathState leg), and C++
+		// _ExitVehicle falls a corpse (MotionMaster.cpp:919-955 has
+		// no dead gate). Without a fall the move to the exit position
+		// rides the teleport broadcast, as in the Lua ExitVehicle arm.
+		if !s.fallAfterVehicleExitAllowDead(motion.Map, motion.InstanceID, motion.GUID, occupantMotion, true) {
 			_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: exitX, Y: exitY, Z: exitZ, Orientation: exitO})
 			s.broadcastCreatureTeleportMovement(motion.Map, motion.InstanceID, guid, exitX, exitY, exitZ, nearby, phase)
 		}
@@ -1559,27 +1563,25 @@ func (s *Server) exitDeadPlayerBasePassengers(ctx context.Context, mapID, instan
 	s.exitCreatureVehiclePassengers(mapID, instanceID, kit, true, nil)
 }
 
-// fallAfterVehicleExit mirrors the Unit::_ExitVehicle fall leg
+// fallAfterVehicleExitAllowDead mirrors the Unit::_ExitVehicle fall leg
 // (Unit.cpp:13238-13249) for a creature passenger leaving a base through
 // the server-side eject paths: a creature that cannot fly falls from the
 // exit position to the ground on a SetFall spline (EVENT_VEHICLE_EXIT,
 // id 1008) when the exit Z plus the base's collision height is above the
-// water-or-ground level, reusing the Lua ExitVehicle leg's helpers. The
-// launch refuses dead, rooted, and stunned passengers itself, so a
-// corpse left seated on a kit-drop stays put. It reports whether a fall
-// spline launched, so the caller can broadcast the exit-position
-// teleport when no fall runs, as the Lua ExitVehicle arm does.
-func (s *Server) fallAfterVehicleExit(mapID, instanceID uint32, baseGUID uint64, motion *creatureMotion) bool {
-	return s.fallAfterVehicleExitAllowDead(mapID, instanceID, baseGUID, motion, false)
-}
-
-// fallAfterVehicleExitAllowDead is the fallAfterVehicleExit twin for the
-// dying-passenger ExitVehicle leg (Unit::setDeathState, Unit.cpp:8915-8916):
-// the passenger's _ExitVehicle fall launches while it is JUST_DIED
-// (Unit.cpp:13238-13249; MotionMaster::MoveFall has no dead gate,
-// MotionMaster.cpp:919-955), so allowDead=true lifts the Go-side
-// Health==0 refusal in the launch. The eject/kit-drop callers keep the
-// default refusal — a corpse left seated on a kit-drop stays put.
+// water-or-ground level, reusing the Lua ExitVehicle leg's helpers. It
+// reports whether a fall spline launched, so the caller can broadcast the
+// exit-position teleport when no fall runs, as the Lua ExitVehicle arm
+// does. allowDead lifts the Go-side Health==0 refusal in the launch:
+// the dying-passenger leg (Unit::setDeathState, Unit.cpp:8915-8916)
+// passes true because the JUST_DIED _ExitVehicle fall launches
+// (MotionMaster::MoveFall has no dead gate, MotionMaster.cpp:919-955),
+// and the eject/kit-drop callers pass true too — a corpse CAN still be
+// seated there: the session melee/auto-shot kill path (executeMeleeSwing,
+// combat.go) and GM .die never unseat (no clearCreatureDeathState leg,
+// unlike the spell/pet/creature kill funnels), so the dead passenger
+// keeps its seat until the base dies or the kit drops, and C++
+// _ExitVehicle falls it then. Root/stun/not-move-aura and drop <0.1
+// still refuse, as in C++.
 func (s *Server) fallAfterVehicleExitAllowDead(mapID, instanceID uint32, baseGUID uint64, motion *creatureMotion, allowDead bool) bool {
 	if s == nil || motion == nil {
 		return false
@@ -1767,9 +1769,13 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 				// Unit::_ExitVehicle (Unit.cpp:13238-13249): the fall
 				// spline launches before the 2s unsummon, as in C++,
 				// so the accessory falls for its remaining lifetime.
+				// The launch lifts the dead refusal (see the
+				// fallAfterVehicleExitAllowDead twin): a corpse can still
+				// be seated on a kit-drop — the session kill path never
+				// unseats it — and C++ _ExitVehicle falls it.
 				// Without a fall the move to the exit position rides
 				// the teleport broadcast, as in the Lua ExitVehicle arm.
-				if !s.fallAfterVehicleExit(mapID, instanceID, kit.VehicleGUID, motion) {
+				if !s.fallAfterVehicleExitAllowDead(mapID, instanceID, kit.VehicleGUID, motion, true) {
 					_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: exitX, Y: exitY, Z: exitZ, Orientation: exitO})
 					s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, exitX, exitY, exitZ, nearby, phase)
 				}
@@ -1784,10 +1790,14 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 		s.motionMu.Unlock()
 		// Unit::_ExitVehicle (Unit.cpp:13238-13249): a ground creature
 		// ejected mid-air falls to the ground on a SetFall spline
-		// instead of hanging at the exit position in the air.
-		// Without a fall the move to the exit position rides the
-		// teleport broadcast, as in the Lua ExitVehicle arm.
-		if !s.fallAfterVehicleExit(mapID, instanceID, kit.VehicleGUID, motion) {
+		// instead of hanging at the exit position in the air. The
+		// launch lifts the dead refusal (see the
+		// fallAfterVehicleExitAllowDead twin): a corpse can still be
+		// seated on a kit-drop — the session kill path never unseats
+		// it — and C++ _ExitVehicle falls it. Without a fall the move
+		// to the exit position rides the teleport broadcast, as in the
+		// Lua ExitVehicle arm.
+		if !s.fallAfterVehicleExitAllowDead(mapID, instanceID, kit.VehicleGUID, motion, true) {
 			_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: exitX, Y: exitY, Z: exitZ, Orientation: exitO})
 			s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, exitX, exitY, exitZ, nearby, phase)
 		}
