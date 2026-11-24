@@ -4101,13 +4101,18 @@ func (s *Server) selectAIThreatTarget(motion *creatureMotion, targetType uint32,
 	if s == nil || motion == nil || motion.ThreatMgr == nil {
 		return 0, nil
 	}
+	ownReach := motion.combatReachOrDefault()
 	var candidates []aiThreatCandidate
 	for _, entry := range motion.ThreatMgr.SortedEntries() {
-		var vx, vy, vz float32
+		var vx, vy, vz, victimReach float32
 		var isPlayer bool
 		if sess := s.findSessionByGUID(entry.VictimGUID); sess != nil && sess.player != nil && sess.player.Map == motion.Map && sess.player.InstanceID == motion.InstanceID {
 			isPlayer = true
 			vx, vy, vz = sess.player.X, sess.player.Y, sess.player.Z
+			victimReach = sess.player.CombatReach
+			if victimReach <= 0 {
+				victimReach = 1.5
+			}
 			if aura != 0 {
 				spellID := aura
 				if spellID < 0 {
@@ -4122,6 +4127,7 @@ func (s *Server) selectAIThreatTarget(motion *creatureMotion, targetType uint32,
 			}
 		} else if target := s.findCreatureMotion(motion.Map, motion.InstanceID, entry.VictimGUID); target != nil {
 			vx, vy, vz = target.X, target.Y, target.Z
+			victimReach = target.combatReachOrDefault()
 			if aura != 0 {
 				spellID := aura
 				if spellID < 0 {
@@ -4147,18 +4153,21 @@ func (s *Server) selectAIThreatTarget(motion *creatureMotion, targetType uint32,
 		d := float32(distance3D(motion.X, motion.Y, motion.Z, vx, vy, vz))
 		// CreatureMethods::GetAITarget (CreatureMethods.h:706-799) filters
 		// on IsWithinDist (Object.cpp:1233-1236, Position.h:146-148):
-		// strict < on the squared distance. IsWithinDist DOES add
-		// both combat reaches (_IsWithinDist, Object.cpp:1147-1160,
+		// strict < on the squared distance. IsWithinDist adds both
+		// combat reaches (_IsWithinDist, Object.cpp:1147-1160,
 		// incOwnRadius/incTargetRadius default true) — the same reach
 		// leg Unit::IsWithinCombatRange (Unit.cpp:583-597) carries —
-		// so Go's raw-d comparison still omits the +reaches leg
-		// (pre-existing delta); only the boundary operators are
-		// fixed here. Positive dist keeps d < dist, negative dist
-		// keeps d >= -dist (skip iff within -dist).
-		if dist > 0 && d >= dist {
+		// so the comparison is against dist + both reaches, not the
+		// raw distance. Positive dist keeps d < dist + reaches,
+		// negative dist keeps d >= -dist + reaches (skip iff within
+		// -dist + reaches). The same-transport leg (_IsWithinDist
+		// compares transport-relative positions when both units ride
+		// the same transport) stays out: Go tracks no
+		// transport-relative creature coordinates.
+		if dist > 0 && d >= dist+ownReach+victimReach {
 			continue
 		}
-		if dist < 0 && d < -dist {
+		if dist < 0 && d < -dist+ownReach+victimReach {
 			continue
 		}
 		candidates = append(candidates, aiThreatCandidate{guid: entry.VictimGUID, dist: d})
@@ -6787,6 +6796,37 @@ func (s *Server) tryLaunchCreatureHomePath(motion *creatureMotion, speed float32
 	return s.launchCreaturePolySpline(motion, points, false, 0, motion.HomeO, true, speed, now, speed)
 }
 
+// interruptCreatureMovementBasedAuras is the creature twin of
+// Unit::InterruptMovementBasedAuras (Unit.cpp:562-570): a moved unit
+// strips AURA_INTERRUPT_FLAG_MOVE auras and a turned unit strips
+// AURA_INTERRUPT_FLAG_TURNING auras. C++ reads _positionUpdateInfo
+// from the per-tick Update (Unit::UpdatePosition, Unit.cpp:13401-13404:
+// relocated on any XYZ delta past 0.001, turned on any orientation
+// change past the fuzzy check); Go has no per-tick unit update and
+// snaps the spline endpoint at launch, so the strip rides the launch
+// with turned/relocated computed from the pre-launch interpolated
+// position, and the MOVE leg is gated on the unit not being a vehicle
+// passenger (GetVehicle(), Unit.h:1619 — motion.VehicleGUID) exactly
+// like the player packet arms (movement.go). Teleport-style snaps
+// stay out: C++ Relocate sets no _positionUpdateInfo. Called after
+// motionMu is released; turned/relocated/onVehicle are snapshotted
+// under the lock by the caller.
+func (s *Server) interruptCreatureMovementBasedAuras(m *creatureMotion, turned, relocated, onVehicle bool) {
+	if s == nil || m == nil || (!turned && !relocated) {
+		return
+	}
+	flags := uint32(0)
+	if turned {
+		flags |= auraInterruptFlagTurning
+	}
+	if relocated && !onVehicle {
+		flags |= auraInterruptFlagMove
+	}
+	if flags != 0 {
+		s.removeCreatureAurasWithInterruptFlags(m, flags)
+	}
+}
+
 // launchCreaturePolySpline launches a CalculatePath poly path
 // (Movement::MoveSplineInit::MovebyPath, MoveSplineInit.cpp:233-238):
 // the spline runs over the whole path, so the duration runs on the
@@ -6819,6 +6859,11 @@ func (s *Server) launchCreaturePolySpline(motion *creatureMotion, points []pathV
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
 	phase := motion.PhaseMask
 	transportGUID := motion.TransportGUID
+	// Unit::InterruptMovementBasedAuras (Unit.cpp:562-570) reads the
+	// pre-move interpolated position: snapshot it before the snap.
+	curX, curY, curZ := creatureSplinePosition(motion, now)
+	oldOrientation := motion.Orientation
+	onVehicle := motion.VehicleGUID != 0
 	motion.X, motion.Y, motion.Z = end.X, end.Y, end.Z
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
@@ -6850,7 +6895,12 @@ func (s *Server) launchCreaturePolySpline(motion *creatureMotion, points []pathV
 	if hasFacing {
 		motion.Orientation = facing
 	}
+	// Unit::UpdatePosition thresholds (Unit.cpp:13401-13404): any XYZ
+	// delta past 0.001 relocates; any orientation change turns.
+	turned := hasFacing && facing != oldOrientation
+	relocated := math.Abs(float64(end.X-curX)) > 0.001 || math.Abs(float64(end.Y-curY)) > 0.001 || math.Abs(float64(end.Z-curZ)) > 0.001
 	s.motionMu.Unlock()
+	s.interruptCreatureMovementBasedAuras(motion, turned, relocated, onVehicle)
 	if len(points) > 2 {
 		s.broadcastMonsterMoveMultiInInstance(mapID, instanceID, rawGUID, from.X, from.Y, from.Z, points, duration, walk, facing, hasFacing, phase, transportGUID, false, animTierNone)
 	} else {
@@ -7266,7 +7316,13 @@ func (s *Server) launchCreatureParabolicSpline(motion *creatureMotion, destX, de
 	motion.ScriptFollowTargetGUID = 0
 	motion.ScriptFollowDist = 0
 	motion.ScriptFollowAngle = 0
+	// No orientation change on a jump/knockback spline (orientationFixed
+	// only affects the wire flags), so turned is false; relocated reads
+	// the 0.001 UpdatePosition threshold (Unit.cpp:13401-13404).
+	relocated := math.Abs(float64(destX-fromX)) > 0.001 || math.Abs(float64(destY-fromY)) > 0.001 || math.Abs(float64(destZ-fromZ)) > 0.001
+	onVehicle := motion.VehicleGUID != 0
 	s.motionMu.Unlock()
+	s.interruptCreatureMovementBasedAuras(motion, false, relocated, onVehicle)
 	s.broadcastMonsterMoveJumpInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, verticalAccel, phase, transportGUID, orientationFixed)
 	return true
 }
@@ -7439,7 +7495,13 @@ func (s *Server) launchCreatureFallSplineAllowDead(motion *creatureMotion, destX
 	motion.ScriptFollowTargetGUID = 0
 	motion.ScriptFollowDist = 0
 	motion.ScriptFollowAngle = 0
+	// A fall spline never turns; relocated reads the 0.001
+	// UpdatePosition threshold (Unit.cpp:13401-13404) — the drop gate
+	// above already guarantees it, but the strip rides the same test.
+	relocated := math.Abs(float64(destX-fromX)) > 0.001 || math.Abs(float64(destY-fromY)) > 0.001 || math.Abs(float64(destZ-fromZ)) > 0.001
+	onVehicle := motion.VehicleGUID != 0
 	s.motionMu.Unlock()
+	s.interruptCreatureMovementBasedAuras(motion, false, relocated, onVehicle)
 	s.broadcastMonsterMoveFallInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, phase, transportGUID)
 	return true
 }
