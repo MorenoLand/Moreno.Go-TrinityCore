@@ -9700,6 +9700,15 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	targetLevel := uint8(1)
 	if isPlayerVictim && target.Sess.player.Level > 0 {
 		targetLevel = target.Sess.player.Level
+	} else if !isPlayerVictim && target.Level > 0 {
+		// Unit::RollMeleeOutcomeAgainst reads the victim's level for
+		// every skill-diff arm (miss/crit/dodge/parry/block/crushing,
+		// Unit.cpp:2191-2331); the creature-victim synth carries it in
+		// target.Level (creaturemotion.go:10308/11137), so a level-1
+		// default would slash miss to 10%, inflate crit and make
+		// crushing near-certain on same-level victims. The pet path
+		// already reads the motion level (pet_combat.go:1958).
+		targetLevel = target.Level
 	}
 	canBlock := isPlayerVictim && target.Sess.player.CanBlock && target.Sess.player.Block > 0
 	canParry := isPlayerVictim && (target.Sess.player.Level >= 10 || target.Sess.player.Level == 0)
@@ -10195,13 +10204,25 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// The !victim->IsVehicle() arm (Unit.cpp:1526) is the victim's own
 	// vehicle kit (Unit.cpp:842) — a player driving a multi-passenger
 	// mount is a vehicle base and cannot be dazed, a mere passenger
-	// carries no kit and still can be.
-	if isPlayerVictim &&
+	// carries no kit and still can be. Creature victims daze too
+	// (Unit.cpp:1525: player OR !isWorldBoss); the behind-arc test
+	// reads the victim motion's orientation and the world-boss gate
+	// is type_flags BOSS_MOB (Creature.cpp:2353, !IsPet() via the
+	// OwnerGUID==0 twin, lua_creature_events.go:3530).
+	victimBehind := false
+	victimWorldBoss := false
+	if isPlayerVictim {
+		victimBehind = !hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi)
+	} else if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil {
+		victimBehind = !hasInArc(vm.Orientation, vm.X, vm.Y, motion.X, motion.Y, math.Pi)
+		victimWorldBoss = vm.TypeFlags&creatureTypeFlagBossMob != 0 && vm.OwnerGUID == 0
+	}
+	if (isPlayerVictim || !victimWorldBoss) &&
 		(outcome == protocol.MeleeHitNormal || outcome == protocol.MeleeHitCrit ||
 			outcome == protocol.MeleeHitCrushing || outcome == protocol.MeleeHitGlancing) &&
 		!creatureIsPlayerControlled(motion) &&
 		s.getVehicleKit(target.Map, target.InstanceID, target.GUID) == nil &&
-		!hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi) {
+		victimBehind {
 		victimLvl := float64(targetLevel)
 		if victimLvl < 1 {
 			victimLvl = 1

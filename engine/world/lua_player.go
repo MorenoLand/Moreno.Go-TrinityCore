@@ -6768,7 +6768,12 @@ func (s *session) luaPlayer() *scripting.Object {
 	}
 	// StopSpellCast is UnitMethods::StopSpellCast (UnitMethods.h:2532-2537):
 	// Unit::CastStop (Unit.cpp:980-985) interrupts every current non-melee
-	// spell except except_spellid; the Eluna arg defaults to 0.
+	// spell except except_spellid; the Eluna arg defaults to 0. The loop
+	// covers CURRENT_GENERIC_SPELL, CURRENT_CHANNELED_SPELL and
+	// CURRENT_AUTOREPEAT_SPELL (InterruptSpell, Unit.cpp:3140-3172) — the
+	// channel and autorepeat legs ride the same except gate (a matching
+	// spell ID is left running), mirroring the silence-prevention
+	// twin's three-slot snapshot (spells.go:35836).
 	methods["StopSpellCast"] = func(_ context.Context, args []any) ([]any, error) {
 		var spellID uint32
 		if len(args) > 0 {
@@ -6780,9 +6785,17 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		s.castMu.Lock()
 		cur := s.activeCast
+		channel := s.activeChannel
+		repeatSpell := s.autoRepeatSpell
 		s.castMu.Unlock()
 		if cur != nil && (spellID == 0 || cur.SpellID != spellID) {
 			s.interruptCurrentCast()
+		}
+		if channel != nil && !channel.Stopped && (spellID == 0 || channel.SpellID != spellID) {
+			s.interruptCurrentChannel()
+		}
+		if repeatSpell != 0 && repeatSpell != spellID {
+			s.cancelAutoRepeatOnInterrupt()
 		}
 		return nil, nil
 	}
