@@ -6344,15 +6344,15 @@ func (s *session) luaPlayer() *scripting.Object {
 	// (movement_speed.go), the Unit::SetSpeedRate twin: the no-op-on-
 	// unchanged gate, the forced-speed-change ACK registration, and the
 	// SMSG_FORCE_*_SPEED_CHANGE to self plus MSG_MOVE_SET_*_SPEED to
-	// nearby. A rate <= 0 follows the creature SetSpeedRate precedent
-	// instead of C++'s clamp-to-0 store: it clears the script override
-	// and re-sends the aura-derived speed, so GetSpeed and the client
-	// agree (C++ would hold speed 0 until the next UpdateSpeed).
+	// nearby. A rate <= 0 STORES 0, exactly like C++: Unit::SetSpeedRate
+	// clamps a negative rate to 0 and stores it (Unit.cpp:8823-8830),
+	// and the stored 0 stays a live override — gmSpeedRatesKnown marks
+	// it so movementSpeeds() returns 0 instead of falling back to the
+	// aura speed — until the next aura-driven recompute clears it, as
+	// C++ UpdateSpeed overwriting m_speed_rate does.
 	// DELTAS: PropagateSpeedChange is MotionMaster-only (no Go bridge);
 	// the pet propagation (Unit.cpp:8855, out-of-combat only) needs no
-	// bridge since Go pets have no speed model; an aura-driven recompute
-	// for the type clears the override, exactly like C++ UpdateSpeed
-	// overwriting m_speed_rate.
+	// bridge since Go pets have no speed model.
 	methods["SetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -6366,11 +6366,7 @@ func (s *session) luaPlayer() *scripting.Object {
 			return nil, err
 		}
 		if rate <= 0 {
-			if s.gmSpeedRates[int(mt)] != 0 {
-				s.clearGMSpeedRate(int(mt))
-				opcodes := speedForceOpcodes[mt]
-				s.sendRuntimeMovementSpeed(opcodes[0], opcodes[1], s.movementSpeeds()[mt], mt == moveTypeRun)
-			}
+			s.setGMSpeedRate(int(mt), 0)
 			return nil, nil
 		}
 		s.setGMSpeedRate(int(mt), rate)

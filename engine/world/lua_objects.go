@@ -948,6 +948,11 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
 			s.server.applyCreatureDeathState(ctx, motion, uint8(st))
+			// Unit::setDeathState (Unit.cpp:8921) RemoveAllAurasOnDeath
+			// arm — see the handler twin in lua_creature_events.go.
+			if st != 0 && st != 4 {
+				s.server.clearCreatureAurasOnDeath(creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID})
+			}
 		}
 		return nil, nil
 	}
@@ -1422,18 +1427,26 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		motion := s.luaCreatureMotion(state.GUID, state.Entry)
 		return motion != nil && motion.ScriptStunned
 	})
-	// GetSpeed is UnitMethods::GetSpeed over the live motion's walk
-	// and run speeds with the handler twin's base fallbacks and
-	// move-type gate (MOVE_WALK=0, MOVE_RUN=1, MOVE_FLIGHT=6); a
-	// motion that no longer resolves reads the bases directly.
+	// GetSpeed is UnitMethods::GetSpeed over the live motion's walk,
+	// run and swim speeds with the handler twin's base fallbacks and
+	// move-type gate (MOVE_WALK=0, MOVE_RUN=1, MOVE_RUN_BACK=2,
+	// MOVE_SWIM=3, MOVE_SWIM_BACK=4, MOVE_FLIGHT=6,
+	// MOVE_FLIGHT_BACK=7); MOVE_FLIGHT folds creatureFlightSpeedRate
+	// like the handler twin, and the back types read
+	// creatureBackSpeed. A motion that no longer resolves reads the
+	// bases directly (a nil motion is aura-less, so the folds read 1.0).
 	methods["GetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
 		walk, run := float32(creatureBaseWalkSpeed), float32(creatureBaseRunSpeed)
-		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
-			walk, run = motion.Speed, motion.RunSpeed
+		swim, baseRunRate := float32(creatureBaseSwimSpeed), float32(1.0)
+		var motion *creatureMotion
+		if m := s.luaCreatureMotion(state.GUID, state.Entry); m != nil {
+			motion = m
+			walk, run = m.Speed, m.RunSpeed
+			swim, baseRunRate = m.SwimSpeed, m.BaseRunRate
 		}
 		switch mt {
 		case 0:
@@ -1446,10 +1459,20 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 				run = creatureBaseRunSpeed
 			}
 			return []any{run}, nil
+		case 2, 4, 7:
+			return []any{s.server.creatureBackSpeed(creatureAuraKeyForMotion(motion), motion, int(mt))}, nil
+		case 3:
+			if swim <= 0 {
+				if baseRunRate <= 0 {
+					baseRunRate = 1.0
+				}
+				swim = baseRunRate * creatureBaseSwimSpeed
+			}
+			return []any{swim}, nil
 		case 6:
-			return []any{float32(creatureBaseFlightSpeed)}, nil
+			return []any{float32(creatureBaseFlightSpeed) * s.server.creatureFlightSpeedRate(creatureAuraKeyForMotion(motion), motion)}, nil
 		default:
-			return nil, fmt.Errorf("GetSpeed supports MOVE_WALK=0, MOVE_RUN=1, MOVE_FLIGHT=6 only, got %d", mt)
+			return nil, fmt.Errorf("GetSpeed supports MOVE_WALK=0, MOVE_RUN=1, MOVE_RUN_BACK=2, MOVE_SWIM=3, MOVE_SWIM_BACK=4, MOVE_FLIGHT=6, MOVE_FLIGHT_BACK=7 only, got %d", mt)
 		}
 	}
 	// SetStandState is Unit::SetStandState (Unit.cpp:10557) over the
@@ -1672,10 +1695,10 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	}
 	// SetSpeed/SetSpeedRate are the session-creature twins of the
 	// handler bindings (UnitMethods.h:1532-1546): MOVE_RUN=1 only, rate
-	// <= 0 clears the script override, and refreshCreatureRunSpeed
-	// recomputes the rate and broadcasts SMSG_SPLINE_SET_RUN_SPEED
-	// to the visibility set — again a Server method, reachable from
-	// s.server with no handler-only state.
+	// <= 0 stores 0 with the slot known (Unit.cpp:8823), and
+	// refreshCreatureRunSpeed recomputes the rate and broadcasts
+	// SMSG_SPLINE_SET_RUN_SPEED to the visibility set — again a Server
+	// method, reachable from s.server with no handler-only state.
 	methods["SetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -1695,11 +1718,10 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.motionMu.Lock()
 		if rate <= 0 {
 			motion.ScriptRunRate = 0
-			motion.ScriptRunRateKnown = false
 		} else {
 			motion.ScriptRunRate = rate
-			motion.ScriptRunRateKnown = true
 		}
+		motion.ScriptRunRateKnown = true
 		s.server.motionMu.Unlock()
 		s.server.refreshCreatureRunSpeed(creatureAuraKeyForMotion(motion), motion.GUID)
 		return nil, nil

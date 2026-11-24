@@ -509,6 +509,30 @@ func (s *Server) despawnCreatureMotion(ctx context.Context, mapID, instanceID ui
 	isTempSummon, ownerGUID := m.IsTempSummon, m.OwnerGUID
 	x, y, z := m.X, m.Y, m.Z
 	s.motionMu.Unlock()
+	// Unit::RemoveAllFollowers (Unit.cpp:8890-8894), sole caller
+	// Unit::RemoveFromWorld (:9804): a departing unit's followers lose
+	// their target (AbstractFollower::SetTarget(nullptr)). Go has no
+	// m_followingMe set, so sweep the same map/instance motions and
+	// clear the follow (creaturemotion.go:417), chase (:409) and
+	// formation-leader (:918) slots pointing at the despawned GUID.
+	// The player-logout hook is OUT of scope (location unverified) —
+	// GAP-NOTED: no logout-time follower sweep exists yet.
+	s.motionMu.Lock()
+	for _, other := range s.motionMapLocked(mapID, instanceID) {
+		if other == nil {
+			continue
+		}
+		if other.ScriptFollowTargetGUID == guid {
+			other.ScriptFollowTargetGUID = 0
+		}
+		if other.ScriptChaseTargetGUID == guid {
+			other.ScriptChaseTargetGUID = 0
+		}
+		if other.FollowLeaderGUID == guid {
+			other.FollowLeaderGUID = 0
+		}
+	}
+	s.motionMu.Unlock()
 	// CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) cancels a
 	// cast in flight before RemoveFromWorld, ahead of destroy.
 	s.interruptCreatureCastsOnRemove(m)
@@ -636,6 +660,61 @@ var vehiclePassengerExitPosOverrides = map[uint32][4]float32{
 	32578: {2803.729, 7046.516, 5.362013, 4.73481},
 	32579: {2801.48, 7051.379, 5.362913, 4.73481},
 	32580: {2803.319, 7051.411, 5.362913, 4.73481},
+}
+
+// creatureBackSpeed is the Unit::GetSpeed (Unit.cpp:8811-8814) read
+// for the back move types (MOVE_RUN_BACK=2, MOVE_SWIM_BACK=4,
+// MOVE_FLIGHT_BACK=7): absolute yd/s = baseMoveSpeed[mtype] times
+// the m_speed_rate[mtype] fold. Unit::UpdateSpeed (Unit.cpp:8666-8673)
+// applies only debuffs to back types — no main-mod, no template
+// speed_run multiply (that arm is RUN/SWIM/FLIGHT only), no 191 cap —
+// so the rate starts at 1.0 and takes only the shared tail: the
+// strongest MOD_DECREASE_SPEED (33) slow, then the MOD_MINIMUM_SPEED
+// (305) floor over creatureMinSpeedBase, mirroring the slow/min tail
+// of creatureFlightSpeedRate (creaturemotion.go:1870-1961).
+// Base speeds are baseMoveSpeed (Unit.cpp:88-99): 4.5 run-back,
+// 2.5 swim-back, 4.5 flight-back.
+func (s *Server) creatureBackSpeed(key creatureAuraKey, motion *creatureMotion, moveType int) float32 {
+	var base float32
+	switch moveType {
+	case 2:
+		base = 4.5
+	case 4:
+		base = 2.5
+	case 7:
+		base = 4.5
+	default:
+		return 0
+	}
+	rate := float32(1.0)
+	var slow int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
+		if a < slow {
+			slow = a
+		}
+	}
+	if slow < 0 {
+		rate *= 1 + float32(slow)/100
+	}
+	var minMod int32
+	for _, a := range s.creatureAuraAmountsByType(key, spellAuraMinimumSpeed) {
+		if a > minMod {
+			minMod = a
+		}
+	}
+	if minMod > 0 {
+		baseRate := float32(1.0)
+		if motion != nil && motion.BaseRunRate > 0 {
+			baseRate = motion.BaseRunRate
+		}
+		if minSpeed := s.creatureMinSpeedBase(motion, baseRate) * float32(minMod) / 100; rate < minSpeed {
+			rate = minSpeed
+		}
+	}
+	if rate < 0 {
+		rate = 0
+	}
+	return base * rate
 }
 
 func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
@@ -1802,6 +1881,19 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{true}, nil
 	}
+	// IsThreatened is Unit::IsThreatened (Unit.cpp:8499-8502):
+	// !m_threatManager.IsThreatListEmpty() — the default (includeOffline
+	// false) arm, so offline refs do not count. Go twin is
+	// SortedEntriesAvailable (threat.go:2934), which drops offline refs;
+	// IsEmpty would wrongly count them. Backs the noth / lurker-below /
+	// alar evade checks (boss_noth.cpp:125, boss_lurker_below.cpp:230/362,
+	// boss_alar.cpp:359); the Lua arms still document the block.
+	methods["IsThreatened"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion.ThreatMgr == nil {
+			return []any{false}, nil
+		}
+		return []any{len(motion.ThreatMgr.SortedEntriesAvailable()) > 0}, nil
+	}
 	// IsHostileTo(target) is WorldObject::IsHostileTo (Object.cpp:2842-2845):
 	// GetReactionTo(target) <= REP_HOSTILE. The target may be a player
 	// object, a creature object, or a raw GUID. A wild creature vs a player
@@ -2854,6 +2946,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, fmt.Errorf("SetDeathState requires a DeathState 0-4, got %d", st)
 		}
 		s.applyCreatureDeathState(ctx, motion, uint8(st))
+		// Unit::setDeathState (Unit.cpp:8921) runs RemoveAllAurasOnDeath
+		// after ExitVehicle / RemoveAllControlled (both already inside
+		// applyCreatureDeathState): strip non-death-persistent auras on
+		// JUST_DIED / CORPSE / DEAD (s != ALIVE && s != JUST_RESPAWNED).
+		// This also releases a script-killed creature charmer's victim
+		// via the owned-aura sweep, so no separate uncharm sweep here.
+		if st != 0 && st != 4 {
+			s.clearCreatureAurasOnDeath(creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID})
+		}
 		return nil, nil
 	}
 	// ResetPlayerDamageReq is Creature::ResetPlayerDamageReq
@@ -7250,15 +7351,20 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// the creatureRunSpeedRate fold, 7.0 fallback), MOVE_FLIGHT=6 the
 	// creatureFlightSpeedRate fold (Unit::UpdateSpeed MOVE_FLIGHT arm,
 	// base 7.0; a script-set MOVE_FLIGHT rate replaces the fold while
-	// known, as in creatureRunSpeedRate). Other move types have no Go
-	// creature model and error, mirroring the SetSpeedRate rejection.
+	// known, as in creatureRunSpeedRate). MOVE_SWIM=3 reads the banked
+	// SwimSpeed (BaseRunRate * 4.722222 fallback, the
+	// creatureSplineVelocity pattern). The back types MOVE_RUN_BACK=2,
+	// MOVE_SWIM_BACK=4, MOVE_FLIGHT_BACK=7 read creatureBackSpeed —
+	// Unit::UpdateSpeed applies only the slow/min tail to back rates.
+	// MOVE_TURN_RATE=5 and MOVE_PITCH_RATE=8 have no Go creature model
+	// and error, mirroring the SetSpeedRate rejection.
 	methods["GetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
 		s.motionMu.Lock()
-		walk, run := motion.Speed, motion.RunSpeed
+		walk, run, swim, baseRunRate := motion.Speed, motion.RunSpeed, motion.SwimSpeed, motion.BaseRunRate
 		s.motionMu.Unlock()
 		switch mt {
 		case 0:
@@ -7271,23 +7377,35 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				run = creatureBaseRunSpeed
 			}
 			return []any{run}, nil
+		case 2, 4, 7:
+			return []any{s.creatureBackSpeed(creatureAuraKeyForMotion(motion), motion, int(mt))}, nil
+		case 3:
+			if swim <= 0 {
+				if baseRunRate <= 0 {
+					baseRunRate = 1.0
+				}
+				swim = baseRunRate * creatureBaseSwimSpeed
+			}
+			return []any{swim}, nil
 		case 6:
 			return []any{creatureBaseFlightSpeed * s.creatureFlightSpeedRate(creatureAuraKeyForMotion(motion), motion)}, nil
 		default:
-			return nil, fmt.Errorf("GetSpeed supports MOVE_WALK=0, MOVE_RUN=1, MOVE_FLIGHT=6 only, got %d", mt)
+			return nil, fmt.Errorf("GetSpeed supports MOVE_WALK=0, MOVE_RUN=1, MOVE_RUN_BACK=2, MOVE_SWIM=3, MOVE_SWIM_BACK=4, MOVE_FLIGHT=6, MOVE_FLIGHT_BACK=7 only, got %d", mt)
 		}
 	}
 	// SetSpeed is UnitMethods::SetSpeed (UnitMethods.h:1532-1546) for
 	// creatures: the Trinity arm calls SetSpeedRate(type, rate) with
 	// the rate form (the forced flag is voided in C++), so this is the
 	// SetSpeedRate bridge below with the third argument ignored:
-	// MOVE_RUN=1 and MOVE_FLIGHT=6, rate <= 0 clears the script
-	// override. The flight leg stores the m_speed_rate[MOVE_FLIGHT]
-	// slot with no refresh — Go has no SMSG_SPLINE_SET_FLIGHT_SPEED
-	// broadcast twin, and the rate feeds GetSpeed(MOVE_FLIGHT) reads
-	// only: no launched spline ever selects MOVE_FLIGHT for a creature
+	// MOVE_RUN=1 and MOVE_FLIGHT=6. rate <= 0 stores 0 with the slot
+	// known (Unit::SetSpeedRate Unit.cpp:8823 clamps rate < 0 to 0 and
+	// stores it; a stored 0 rate reads back as 0 from GetSpeed), it
+	// does NOT clear the script override. Both legs refresh via
+	// refreshCreatureRunSpeedMotion, which recomputes the banked speeds
+	// and broadcasts SMSG_SPLINE_SET_FLIGHT_SPEED (0x385) on a flight
+	// change. No launched spline ever selects MOVE_FLIGHT for a creature
 	// (MOVEMENTFLAG_FLYING is player-only), so neither MoveCirclePath
-	// nor creatureSplineVelocity reads it.
+	// nor creatureSplineVelocity reads the flight rate.
 	methods["SetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -7304,22 +7422,21 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.motionMu.Lock()
 			if rate <= 0 {
 				motion.ScriptFlightRate = 0
-				motion.ScriptFlightRateKnown = false
 			} else {
 				motion.ScriptFlightRate = rate
-				motion.ScriptFlightRateKnown = true
 			}
+			motion.ScriptFlightRateKnown = true
 			s.motionMu.Unlock()
+			s.refreshCreatureRunSpeedMotion(motion)
 			return nil, nil
 		}
 		s.motionMu.Lock()
 		if rate <= 0 {
 			motion.ScriptRunRate = 0
-			motion.ScriptRunRateKnown = false
 		} else {
 			motion.ScriptRunRate = rate
-			motion.ScriptRunRateKnown = true
 		}
+		motion.ScriptRunRateKnown = true
 		s.motionMu.Unlock()
 		s.refreshCreatureRunSpeed(creatureAuraKeyForMotion(motion), motion.GUID)
 		return nil, nil
@@ -7328,17 +7445,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// and MOVE_FLIGHT=6: the rate is the raw m_speed_rate multiplier on
 	// base move speed (7.0 yd/s run, 7.0 yd/s flight; C++ SetSpeed's
 	// absolute form divides by that base in Lua with a citation). The
-	// flight leg stores the m_speed_rate[MOVE_FLIGHT] slot with no
-	// refresh — Go has no SMSG_SPLINE_SET_FLIGHT_SPEED broadcast twin,
-	// and the rate feeds GetSpeed(MOVE_FLIGHT) reads only: no launched
-	// spline ever selects MOVE_FLIGHT for a creature (MOVEMENTFLAG_FLYING
-	// is player-only). Other move types have no Go
-	// creature model and are rejected. rate <= 0 clears
-	// the script override, restoring the aura-fold/template rate (the C++
-	// Reset arms that restore _baseSpeed/DefaultMoveSpeedRate/SPEED_RUN).
-	// The normal refresh path recomputes RunSpeed, rescales in-flight
-	// legs (PropagateSpeedChange) and broadcasts
-	// SMSG_SPLINE_SET_RUN_SPEED to the creature's visibility set.
+	// The flight leg stores the m_speed_rate[MOVE_FLIGHT] slot and
+	// refreshes via refreshCreatureRunSpeedMotion, which broadcasts
+	// SMSG_SPLINE_SET_FLIGHT_SPEED (0x385) on a flight change; the rate
+	// feeds GetSpeed(MOVE_FLIGHT) reads, and no launched spline ever
+	// selects MOVE_FLIGHT for a creature (MOVEMENTFLAG_FLYING is
+	// player-only). Other move types have no Go
+	// creature model and are rejected. rate <= 0 stores 0 with the slot
+	// known (Unit.cpp:8823 clamps rate < 0 to 0 and stores it), it does
+	// NOT clear the script override. The normal refresh path recomputes
+	// RunSpeed, rescales in-flight legs (PropagateSpeedChange) and
+	// broadcasts SMSG_SPLINE_SET_RUN_SPEED to the creature's visibility
+	// set.
 	methods["SetSpeedRate"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -7355,22 +7473,21 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.motionMu.Lock()
 			if rate <= 0 {
 				motion.ScriptFlightRate = 0
-				motion.ScriptFlightRateKnown = false
 			} else {
 				motion.ScriptFlightRate = rate
-				motion.ScriptFlightRateKnown = true
 			}
+			motion.ScriptFlightRateKnown = true
 			s.motionMu.Unlock()
+			s.refreshCreatureRunSpeedMotion(motion)
 			return nil, nil
 		}
 		s.motionMu.Lock()
 		if rate <= 0 {
 			motion.ScriptRunRate = 0
-			motion.ScriptRunRateKnown = false
 		} else {
 			motion.ScriptRunRate = rate
-			motion.ScriptRunRateKnown = true
 		}
+		motion.ScriptRunRateKnown = true
 		s.motionMu.Unlock()
 		s.refreshCreatureRunSpeed(creatureAuraKeyForMotion(motion), motion.GUID)
 		return nil, nil
@@ -7939,6 +8056,76 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if endCombat {
 			s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
 			s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
+		}
+		return nil, nil
+	}
+	// SetImmuneToPC is Unit::SetImmuneToPC (Unit.cpp:8453-8474): set/clear
+	// UNIT_FLAG_IMMUNE_TO_PC (0x100) with the same values-update broadcast
+	// as SetImmuneToAll above. On apply, a non-passive creature ends
+	// combat only against player-controlled others (Creature.h:127 keeps
+	// combat for REACT_PASSIVE) — the PC-scoped endImmuneCombat leg, NOT
+	// full ClearThreat, so NPC combat survives. DELTA:
+	// ValidateAttackersAndOwnTarget has no Go model, the accepted
+	// ClearInCombat delta.
+	methods["SetImmuneToPC"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("apply is required")
+		}
+		apply, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("apply must be a boolean")
+		}
+		const immuneFlag = uint32(0x100)
+		s.motionMu.Lock()
+		if apply {
+			motion.UnitFlags |= immuneFlag
+		} else {
+			motion.UnitFlags &^= immuneFlag
+		}
+		motion.UnitFlagsKnown = true
+		unitFlags := motion.UnitFlags
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+		endCombat := apply && !isCreaturePassive(motion)
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldFlags: unitFlags})
+		if endCombat {
+			s.endImmuneCombat(mapID, instanceID, motion, true, x, y, z, phase)
+		}
+		return nil, nil
+	}
+	// SetImmuneToNPC is Unit::SetImmuneToNPC (Unit.cpp:8476-8497), the
+	// mirror of SetImmuneToPC: UNIT_FLAG_IMMUNE_TO_NPC (0x200), ending
+	// combat only against non-player-controlled others (Creature.h:130
+	// keeps combat for REACT_PASSIVE). DELTA:
+	// ValidateAttackersAndOwnTarget has no Go model, the accepted
+	// ClearInCombat delta.
+	methods["SetImmuneToNPC"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("apply is required")
+		}
+		apply, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("apply must be a boolean")
+		}
+		const immuneFlag = uint32(0x200)
+		s.motionMu.Lock()
+		if apply {
+			motion.UnitFlags |= immuneFlag
+		} else {
+			motion.UnitFlags &^= immuneFlag
+		}
+		motion.UnitFlagsKnown = true
+		unitFlags := motion.UnitFlags
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+		endCombat := apply && !isCreaturePassive(motion)
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldFlags: unitFlags})
+		if endCombat {
+			s.endImmuneCombat(mapID, instanceID, motion, false, x, y, z, phase)
 		}
 		return nil, nil
 	}

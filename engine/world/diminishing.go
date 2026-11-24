@@ -559,11 +559,44 @@ func (s *session) clearDiminishings() {
 	}
 }
 
+// casterGUIDIsPlayer resolves the Unit::ApplyDiminishingToDuration source
+// rule (Unit.cpp:9050-9054): the 10s PvP cap applies only when the SOURCE —
+// the caster's charmer/owner when the caster is a pet or charmed unit
+// (caster->GetCharmerOrOwner()) — is a player. A live player session is a
+// player; a creature caster resolves through its motion's CharmerGUID /
+// OwnerGUID (the flagCreatureAssistContestedPvP pattern, threat.go); a wild
+// creature or a creature-owned creature reads as a creature caster, so
+// creature-cast CC on players takes no 10s cap in PvE.
+func (s *session) casterGUIDIsPlayer(casterGUID uint64) bool {
+	if s == nil || s.server == nil || casterGUID == 0 {
+		return false
+	}
+	if sess := s.server.findSessionByGUID(casterGUID); sess != nil && sess.player != nil {
+		return true
+	}
+	if s.player == nil {
+		return false
+	}
+	if m := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, casterGUID); m != nil {
+		for _, guid := range []uint64{m.CharmerGUID, m.OwnerGUID} {
+			if guid != 0 {
+				if sess := s.server.findSessionByGUID(guid); sess != nil && sess.player != nil {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // applyDiminishingToDuration calculates the final CC duration and determines immunity.
 // Mirrors TrinityCore Unit::ApplyDiminishingToDuration (Unit.cpp:9036-9099).
 // The triggered flag selects the aura-proc DR group variant
 // (Spell::PreprocessSpellHit, Spell.cpp:2798 — m_triggeredByAuraSpell != null).
-func (s *session) applyDiminishingToDuration(spell wotlk.Spell, durationMs uint32, isPvP, triggered bool) (DiminishingGroup, uint32, bool) {
+// casterIsPlayer is the Unit.cpp:9050-9054 source test: the 10s cap applies
+// only when the caster (charmer/owner-resolved) is a player; the target side
+// is always a player here (IsAffectedByDiminishingReturns, Unit.h:780).
+func (s *session) applyDiminishingToDuration(spell wotlk.Spell, durationMs uint32, casterIsPlayer, triggered bool) (DiminishingGroup, uint32, bool) {
 	group := getDiminishingReturnsGroup(spell, triggered)
 	if group == DiminishingNone || durationMs == 0 {
 		return DiminishingNone, durationMs, true
@@ -573,8 +606,10 @@ func (s *session) applyDiminishingToDuration(spell wotlk.Spell, durationMs uint3
 	// (Unit.cpp:9048-9062, the 2.2.0 rule): the cap is the spell's
 	// DiminishDurationLimit — the family-specific explicit cap when one
 	// matches, 10s otherwise, none when the group is not duration-limited
-	// (SpellInfo.cpp:2462-2528).
-	if isPvP {
+	// (SpellInfo.cpp:2462-2528) — and it applies only when the source is
+	// a player (Unit.cpp:9050-9054), so creature-cast CC on players takes
+	// no 10s cap in PvE.
+	if casterIsPlayer {
 		if limit := diminishingDurationLimitMs(spell, group); limit > 0 && durationMs > limit {
 			durationMs = limit
 		}

@@ -278,8 +278,9 @@ func (s *session) auraMultiplier(auraType uint32) float32 {
 // mounts (taxi legs, .modify mount) take the mounted formula where C++ would see the flag unset.
 func (s *session) mountedRunSpeed() float32 {
 	// A .modify speed override shadows the aura computation while active,
-	// mirroring m_speed_rate (Unit::GetSpeed, Unit.cpp:8811).
-	if ov := s.gmSpeedOverride(moveTypeRun); ov > 0 {
+	// mirroring m_speed_rate (Unit::GetSpeed, Unit.cpp:8811) — including
+	// a stored 0, which is an active speed-0 override (Unit.cpp:8823).
+	if ov, known := s.gmSpeedOverride(moveTypeRun); known {
 		return ov
 	}
 	main := s.maxPositiveAuraModifier(spellAuraIncreaseSpeed)
@@ -306,8 +307,9 @@ func (s *session) mountedRunSpeed() float32 {
 // the 191 normalization snare/daze immune-mask skip is vacuous for players.
 func (s *session) mountedFlightSpeed() float32 {
 	// A .modify speed override shadows the aura computation while active,
-	// mirroring m_speed_rate (Unit::GetSpeed, Unit.cpp:8811).
-	if ov := s.gmSpeedOverride(moveTypeFlight); ov > 0 {
+	// mirroring m_speed_rate (Unit::GetSpeed, Unit.cpp:8811) — including
+	// a stored 0, which is an active speed-0 override (Unit.cpp:8823).
+	if ov, known := s.gmSpeedOverride(moveTypeFlight); known {
 		return ov
 	}
 	main := s.totalAuraModifier(spellAuraIncreaseFlightSpeed) + s.totalAuraModifier(spellAuraIncreaseVehicleFlight)
@@ -375,9 +377,11 @@ func (s *session) movementSpeeds() [9]float32 {
 		3.14, // MOVE_PITCH_RATE
 	}
 	// .modify speed overrides shadow the aura-derived values while active
-	// (Unit::GetSpeed = m_speed_rate * base, Unit.cpp:8811).
+	// (Unit::GetSpeed = m_speed_rate * base, Unit.cpp:8811) — including a
+	// stored 0, which is an active speed-0 override (Unit.cpp:8823), not
+	// an unset slot.
 	for mtype := 0; mtype < len(speeds); mtype++ {
-		if ov := s.gmSpeedOverride(mtype); ov > 0 {
+		if ov, known := s.gmSpeedOverride(mtype); known {
 			speeds[mtype] = ov
 		}
 	}
@@ -597,7 +601,9 @@ var speedForceOpcodes = [9][2]protocol.Opcode{
 
 // setGMSpeedRate mirrors Unit::SetSpeedRate (Unit.cpp:8825-8880) for the
 // .modify speed command: the no-op-on-unchanged gate, the m_speed_rate
-// store (here gmSpeedRates), the forced-speed-change ACK registration, and
+// store (here gmSpeedRates, with gmSpeedRatesKnown so a stored 0 stays a
+// live override per the Unit.cpp:8823 clamp-and-store), the
+// forced-speed-change ACK registration, and
 // the SMSG_FORCE_*_SPEED_CHANGE to self plus MSG_MOVE_SET_*_SPEED to
 // nearby. PropagateSpeedChange is MotionMaster-only (no Go bridge) and the
 // pet propagation needs no bridge (Go pets have no speed model).
@@ -608,11 +614,15 @@ func (s *session) setGMSpeedRate(mtype int, rate float32) {
 	if rate < 0 {
 		rate = 0
 	}
-	// Update speed only on change (Unit.cpp:8827-8828).
-	if s.gmSpeedRates[mtype] == rate {
+	// Update speed only on change (Unit.cpp:8827-8828). A stored 0 is a
+	// live override (Unit.cpp:8823 clamps and stores it), so the gate
+	// must also require the known flag — a 0 in an unset slot is not a
+	// no-op, it is the first store of the override.
+	if s.gmSpeedRates[mtype] == rate && s.gmSpeedRatesKnown[mtype] {
 		return
 	}
 	s.gmSpeedRates[mtype] = rate
+	s.gmSpeedRatesKnown[mtype] = true
 	opcodes := speedForceOpcodes[mtype]
 	if opcodes[0] == 0 {
 		return
@@ -620,17 +630,21 @@ func (s *session) setGMSpeedRate(mtype int, rate float32) {
 	s.sendRuntimeMovementSpeed(opcodes[0], opcodes[1], rate*playerBaseMoveSpeed[mtype], mtype == moveTypeRun)
 }
 
-// gmSpeedOverride returns the absolute GM-forced speed for a move type, or
-// 0 when no override is active (Unit::GetSpeed =
+// gmSpeedOverride returns the absolute GM-forced speed for a move type
+// plus whether an override is active (Unit::GetSpeed =
 // m_speed_rate[mtype] * playerBaseMoveSpeed[mtype], Unit.cpp:8811-8814).
-func (s *session) gmSpeedOverride(mtype int) float32 {
+// The bool is load-bearing: C++ SetSpeedRate stores a clamped 0
+// (Unit.cpp:8823-8830), so a stored 0 is an active speed-0 override and
+// must shadow the aura speed exactly like a positive rate — a bare 0
+// return could not distinguish it from "no override".
+func (s *session) gmSpeedOverride(mtype int) (float32, bool) {
 	if s == nil || mtype < 0 || mtype >= len(s.gmSpeedRates) {
-		return 0
+		return 0, false
 	}
-	if rate := s.gmSpeedRates[mtype]; rate > 0 {
-		return rate * playerBaseMoveSpeed[mtype]
+	if !s.gmSpeedRatesKnown[mtype] {
+		return 0, false
 	}
-	return 0
+	return s.gmSpeedRates[mtype] * playerBaseMoveSpeed[mtype], true
 }
 
 // clearGMSpeedRate drops the GM override for a move type, mirroring C++
@@ -641,6 +655,7 @@ func (s *session) clearGMSpeedRate(mtype int) {
 		return
 	}
 	s.gmSpeedRates[mtype] = 0
+	s.gmSpeedRatesKnown[mtype] = false
 }
 
 // forcedSpeedMoveType maps an SMSG_FORCE_*_SPEED_CHANGE opcode to its

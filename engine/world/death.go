@@ -1336,6 +1336,13 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		}
 	}
 	if !spiritOfRedemption {
+		// Unit::setDeathState JUST_DIED (Unit.cpp:8915, 8951-8953):
+		// ExitVehicle before the aura strip, and UNIT_NPC_EMOTESTATE to
+		// 0 with health/power (health is already 0, power zeroed above).
+		// Aura-carrying rides are already stripped by clearDeathAuras;
+		// only aura-less Lua boarding is missed without the exit call.
+		s.exitVehicle(ctx)
+		s.player.EmoteState = 0
 		s.clearDiminishings()
 		s.stopMirrorTimers()
 		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
@@ -2302,8 +2309,8 @@ func (s *session) handleRepopRequest(ctx context.Context, payload []byte) bool {
 // after six minutes a dead player that has not released is converted to a
 // ghost and teleported to the graveyard (Player.cpp:1302). The reference
 // skips this on instanceable maps, under SPELL_AURA_PREVENT_RESURRECTION,
-// and while ghouled; the Go server has no instance maps and no raised-ghoul
-// pet model.
+// and while ghouled (Player.cpp:1303, IsGhouled = HasAura(SPELL_DK_RAISE_ALLY
+// 46619)); the Go server has no instance maps.
 func (s *Server) updatePlayerDeathTimers(ctx context.Context, now time.Time) {
 	s.sessionsMu.RLock()
 	var due []*session
@@ -2316,7 +2323,7 @@ func (s *Server) updatePlayerDeathTimers(ctx context.Context, now time.Time) {
 				continue
 			}
 		}
-		if sess.player.Health == 0 && sess.player.PlayerFlags&playerFlagGhost == 0 && !sess.hasAuraType(spellAuraPreventResurrection) && !sess.deathTimer.IsZero() && !now.Before(sess.deathTimer) {
+		if sess.player.Health == 0 && sess.player.PlayerFlags&playerFlagGhost == 0 && !sess.hasAuraType(spellAuraPreventResurrection) && !sess.playerHasAuraSpell(spellRaiseAlly) && !sess.deathTimer.IsZero() && !now.Before(sess.deathTimer) {
 			due = append(due, sess)
 		}
 	}

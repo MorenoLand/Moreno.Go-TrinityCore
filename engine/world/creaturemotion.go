@@ -83,6 +83,13 @@ type creatureMotion struct {
 	// Zero means unbanked; the velocity legs fall back to the unfolded
 	// BaseRunRate * 4.722222 until the first refresh runs.
 	SwimSpeed float32
+	// FlightSpeed is the yd/s flight speed banked by
+	// refreshCreatureRunSpeedMotion: the MOVE_FLIGHT fold of
+	// Unit::UpdateSpeed (Unit.cpp:8700-8726, 8744-8810) — the aura fold
+	// plus the minion follow borrow. Zero means unbanked, as for
+	// SwimSpeed; the first refresh banks it and broadcasts
+	// SMSG_SPLINE_SET_FLIGHT_SPEED (Unit::SetSpeedRate, Unit.cpp:8876-8880).
+	FlightSpeed float32
 	// BaseRunRate banks the creature_template speed_run rate feeding
 	// refreshCreatureRunSpeed (the Unit::UpdateSpeed twin): the aura fold
 	// multiplies this DB rate, so it must survive aura changes. Walk has
@@ -1667,8 +1674,9 @@ func (s *Server) creatureMinSpeedBase(motion *creatureMotion, base float32) floa
 // the `speed *= ToCreature()->GetCreatureTemplate()->speed_run` leg.
 // MOVE_WALK returns early in C++ so walk is untouched; MOVE_SWIM folds
 // in creatureSwimSpeedRate (banked on motion.SwimSpeed); MOVE_FLIGHT folds
-// in creatureFlightSpeedRate (read live by GetSpeed(6) — no banked flight
-// speed exists, no spline selects it); the minion follow catch-up arm rides
+// in creatureFlightSpeedRate (read live by GetSpeed(6); the refresh banks
+// it on motion.FlightSpeed for the SMSG_SPLINE_SET_FLIGHT_SPEED gate, but
+// no spline selects it); the minion follow catch-up arm rides
 // minionFollowBorrow below.
 func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
 	// A script-set rate replaces the aura fold outright: C++ keeps a
@@ -1731,7 +1739,7 @@ func (s *Server) creatureRunSpeedRate(key creatureAuraKey, motion *creatureMotio
 		}
 	}
 	var slow int32
-	rate = s.minionFollowBorrow(rate, motion, false)
+	rate = s.minionFollowBorrow(rate, motion, false, false)
 	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
 		if a < slow {
 			slow = a
@@ -1794,7 +1802,7 @@ func (s *Server) creatureSwimSpeedRate(key creatureAuraKey, motion *creatureMoti
 			}
 		}
 	}
-	rate = s.minionFollowBorrow(rate, motion, true)
+	rate = s.minionFollowBorrow(rate, motion, true, false)
 	var slow int32
 	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
 		if a < slow {
@@ -1838,10 +1846,16 @@ func (s *Server) creatureSwimSpeedRate(key creatureAuraKey, motion *creatureMoti
 // strongest MOD_DECREASE_SPEED (33), the MOD_MINIMUM_SPEED (305) floor. A
 // script-set rate replaces the aura fold outright, as in
 // creatureRunSpeedRate. The result is a rate; multiply by
-// creatureBaseFlightSpeed for yd/s, as GetSpeed(6) does.
-// Residual: the minion follow borrow is not applied — the owner flight
-// rate is not banked anywhere (no FlightSpeed field; GetSpeed(6) is the
-// only consumer), so there is no banked owner rate to borrow.
+// creatureBaseFlightSpeed for yd/s, as GetSpeed(6) does. The minion follow
+// borrow (Unit.cpp:8774-8788) applies after the 191 cap and before the
+// slow/min tail, as in the RUN and SWIM folds: a player owner reads
+// speeds[MOVE_FLIGHT] / creatureBaseFlightSpeed, a creature owner its
+// live creatureFlightSpeedRate — the motion.FlightSpeed bank is written
+// only by the refresh for its broadcast gate (0 until the first refresh)
+// and is not a rate the fold can trust, unlike banked RunSpeed/SwimSpeed,
+// so the owner leg recurses through the depth-capped variant below (cap
+// 2 borrow hops; C++ never recurses because GetSpeedRate reads banked
+// rates).
 // creatureCharmerVehicleFlightMod is the GetCharmer() half of the
 // player-controlled vehicle-flight arm (Unit.cpp:8719-8722): the charmer's
 // strongest MOD_INCREASE_VEHICLE_FLIGHT_SPEED (206) mod. The charmer is a
@@ -1868,6 +1882,17 @@ func (s *Server) creatureCharmerVehicleFlightMod(motion *creatureMotion) int32 {
 }
 
 func (s *Server) creatureFlightSpeedRate(key creatureAuraKey, motion *creatureMotion) float32 {
+	return s.creatureFlightSpeedRateDepth(key, motion, 0)
+}
+
+// creatureFlightSpeedRateDepth is creatureFlightSpeedRate with the borrow
+// depth threaded through: depth counts minion-follow borrow hops already
+// taken, so a minion whose owner is itself a minion borrows at most 2
+// hops before the borrow leg is skipped (the owner rate is then the plain
+// aura fold). C++ needs no such cap — GetSpeedRate reads banked rates —
+// but the Go creature-owner leg reads the live rate, which would recurse
+// without it.
+func (s *Server) creatureFlightSpeedRateDepth(key creatureAuraKey, motion *creatureMotion, depth int) float32 {
 	if motion != nil && motion.ScriptFlightRateKnown {
 		return motion.ScriptFlightRate
 	}
@@ -1934,6 +1959,13 @@ func (s *Server) creatureFlightSpeedRate(key creatureAuraKey, motion *creatureMo
 			}
 		}
 	}
+	// Unit::UpdateSpeed minion follow arm (Unit.cpp:8774-8788), after the
+	// 191 cap and before the slow/min tail, as in the RUN and SWIM folds.
+	// Skipped past the depth cap: the owner leg below already consumed
+	// the allowed borrow hops.
+	if depth < 2 {
+		rate = s.minionFollowBorrowDepth(rate, motion, false, true, depth)
+	}
 	var slow int32
 	for _, a := range s.creatureAuraAmountsByType(key, spellAuraDecreaseSpeed) {
 		if a < slow {
@@ -1961,15 +1993,23 @@ func (s *Server) creatureFlightSpeedRate(key creatureAuraKey, motion *creatureMo
 }
 
 // minionFollowBorrow is the Unit::UpdateSpeed minion follow arm
-// (Unit.cpp:8774-8788), shared by the RUN and SWIM folds: an out-of-combat
-// minion in FOLLOW whose followed target is its owner (also out of
-// combat) borrows the owner's rate for the move type when its own rate is
-// lower or it is within 10 yd, scaled by
+// (Unit.cpp:8774-8788), shared by the RUN, SWIM, and FLIGHT folds: an
+// out-of-combat minion in FOLLOW whose followed target is its owner (also
+// out of combat) borrows the owner's rate for the move type when its own
+// rate is lower or it is within 10 yd, scaled by
 // clamp(0.75+(dist-PET_FOLLOW_DIST)*0.05, 1, 1.3). The FOLLOW slot in Go
 // is ScriptFollowTargetGUID (stepScriptFollow / pet follow). The arm sits
 // after the 191 cap and before the slow/min tail in C++, and so it does
-// here — callers pass the post-cap rate.
-func (s *Server) minionFollowBorrow(rate float32, motion *creatureMotion, swim bool) float32 {
+// here — callers pass the post-cap rate. Exactly one of swim/flight may
+// be set; neither means MOVE_RUN. depth counts borrow hops already taken
+// and is threaded to the owner leg so the FLIGHT recursion (a creature
+// owner has no banked flight rate) terminates — see
+// creatureFlightSpeedRateDepth.
+func (s *Server) minionFollowBorrow(rate float32, motion *creatureMotion, swim, flight bool) float32 {
+	return s.minionFollowBorrowDepth(rate, motion, swim, flight, 0)
+}
+
+func (s *Server) minionFollowBorrowDepth(rate float32, motion *creatureMotion, swim, flight bool, depth int) float32 {
 	// The FOLLOW slot is ScriptFollowTargetGUID (stepScriptFollow, armed
 	// by .npc follow / DB followGUID spawns) or, for pets, PetCommandFollow
 	// (updatePetMotion follows the owner under that command with no
@@ -1977,7 +2017,7 @@ func (s *Server) minionFollowBorrow(rate float32, motion *creatureMotion, swim b
 	if motion == nil || !motion.IsMinion || motion.InCombat || motion.OwnerGUID == 0 || (motion.ScriptFollowTargetGUID != motion.OwnerGUID && motion.PetCommand != PetCommandFollow) {
 		return rate
 	}
-	ownerRate, ownerDist, ownerInCombat, ok := s.minionFollowOwnerRate(motion, swim)
+	ownerRate, ownerDist, ownerInCombat, ok := s.minionFollowOwnerRateDepth(motion, swim, flight, depth)
 	if !ok || ownerInCombat {
 		return rate
 	}
@@ -2001,14 +2041,27 @@ func (s *Server) minionFollowBorrow(rate float32, motion *creatureMotion, swim b
 // and combat state for the UpdateSpeed borrow: a player owner reads the
 // session's live speed and UNIT_FLAG_IN_COMBAT, a creature owner its
 // banked RunSpeed/SwimSpeed and motion.InCombat. Rates are GetSpeedRate
-// values — yd/s divided by the move type's base speed.
-func (s *Server) minionFollowOwnerRate(motion *creatureMotion, swim bool) (rate, dist float32, inCombat, ok bool) {
+// values — yd/s divided by the move type's base speed. The FLIGHT leg
+// has no banked owner rate the fold can trust (motion.FlightSpeed is
+// written only by the refresh for its broadcast gate, 0 until the first
+// refresh), so a creature owner reads its live
+// creatureFlightSpeedRateDepth at depth+1 — the depth cap in that
+// function bounds the recursion to 2 borrow hops. A player owner reads
+// speeds[MOVE_FLIGHT] / creatureBaseFlightSpeed (movementSpeeds() already
+// folds mountedFlightSpeed).
+func (s *Server) minionFollowOwnerRate(motion *creatureMotion, swim, flight bool) (rate, dist float32, inCombat, ok bool) {
+	return s.minionFollowOwnerRateDepth(motion, swim, flight, 0)
+}
+
+func (s *Server) minionFollowOwnerRateDepth(motion *creatureMotion, swim, flight bool, depth int) (rate, dist float32, inCombat, ok bool) {
 	if s == nil || motion == nil || motion.OwnerGUID == 0 {
 		return 0, 0, false, false
 	}
 	if sess := s.findSessionByGUID(motion.OwnerGUID); sess != nil && sess.player != nil {
 		speeds := sess.movementSpeeds()
-		if swim {
+		if flight {
+			rate = speeds[moveTypeFlight] / creatureBaseFlightSpeed
+		} else if swim {
 			rate = speeds[moveTypeSwim] / creatureBaseSwimSpeed
 		} else {
 			rate = speeds[moveTypeRun] / creatureBaseRunSpeed
@@ -2016,7 +2069,9 @@ func (s *Server) minionFollowOwnerRate(motion *creatureMotion, swim bool) (rate,
 		return rate, float32(distance3D(motion.X, motion.Y, motion.Z, sess.player.X, sess.player.Y, sess.player.Z)), sess.player.UnitFlags&unitFlagInCombat != 0, true
 	}
 	if cm := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.OwnerGUID); cm != nil {
-		if swim {
+		if flight {
+			rate = s.creatureFlightSpeedRateDepth(creatureAuraKeyForMotion(cm), cm, depth+1)
+		} else if swim {
 			speed := cm.SwimSpeed
 			if speed <= 0 {
 				base := float32(1.0)
@@ -2035,8 +2090,8 @@ func (s *Server) minionFollowOwnerRate(motion *creatureMotion, swim bool) (rate,
 }
 
 // refreshCreatureRunSpeed mirrors Unit::SetSpeedRate (Unit.cpp:8825-8880)
-// for AI-driven creatures: the no-op-on-unchanged gate, the run-speed
-// store, the PropagateSpeedChange in-flight leg rescale
+// for AI-driven creatures: the no-op-on-unchanged gate, the run/swim/
+// flight-speed stores, the PropagateSpeedChange in-flight leg rescale
 // (MotionMaster::PropagateSpeedChange, MotionMaster.cpp — the current
 // generator's UnitSpeedChanged recalculates the spline velocity mid-leg),
 // and SMSG_SPLINE_SET_RUN_SPEED (packed GUID + yd/s speed) to the
@@ -2062,17 +2117,20 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 	key := creatureAuraKeyForMotion(motion)
 	newSpeed := creatureBaseRunSpeed * s.creatureRunSpeedRate(key, motion)
 	newSwimSpeed := creatureBaseSwimSpeed * s.creatureSwimSpeedRate(key, motion)
+	newFlightSpeed := creatureBaseFlightSpeed * s.creatureFlightSpeedRate(key, motion)
 	now := time.Now()
 	s.motionMu.Lock()
 	oldSpeed := motion.RunSpeed
 	oldSwimSpeed := motion.SwimSpeed
-	if oldSpeed == newSpeed && oldSwimSpeed == newSwimSpeed {
+	oldFlightSpeed := motion.FlightSpeed
+	if oldSpeed == newSpeed && oldSwimSpeed == newSwimSpeed && oldFlightSpeed == newFlightSpeed {
 		s.motionMu.Unlock()
 		return
 	}
 	oldVel := motion.MoveVelocity
 	motion.RunSpeed = newSpeed
 	motion.SwimSpeed = newSwimSpeed
+	motion.FlightSpeed = newFlightSpeed
 	// A fall spline's duration derives from its drop (computeFallTime),
 	// not run speed, so a speed change must not rescale its MoveEnds.
 	// A leg carrying a banked explicit speed (MoveCharge / spline-chain
@@ -2151,6 +2209,17 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 		packet.WritePackedGUID(motion.GUID)
 		packet.WriteF32(newSwimSpeed)
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPLINE_SET_SWIM_SPEED), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+	}
+	if newFlightSpeed != oldFlightSpeed {
+		// Unit::SetSpeedRate (Unit.cpp:8821-8880, moveTypeToOpcode table
+		// Unit.cpp:8837-8847) sends SMSG_SPLINE_SET_FLIGHT_SPEED
+		// (0x385) on a flight-rate change for an AI-controlled unit, the
+		// MOVE_FLIGHT twin of the run/swim broadcasts above: packed GUID
+		// + f32 yd/s speed to the visibility set.
+		packet := protocol.NewBuffer(16)
+		packet.WritePackedGUID(motion.GUID)
+		packet.WriteF32(newFlightSpeed)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPLINE_SET_FLIGHT_SPEED), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 	}
 }
 

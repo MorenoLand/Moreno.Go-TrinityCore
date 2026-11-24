@@ -9045,7 +9045,7 @@ func (s *session) spellDiminishingBounced(spell wotlk.Spell, targetGUID uint64) 
 		// target is DR-affected) then the level modifier. Run on the
 		// target session so its GetDiminishing level applies; the taunt
 		// special-case mods only apply to creature targets (Unit.cpp:9069).
-		if _, newDuration, ok := targetSess.applyDiminishingToDuration(spell, uint32(maxDuration), true, false); ok && newDuration > 0 && newDuration < existing {
+		if _, newDuration, ok := targetSess.applyDiminishingToDuration(spell, uint32(maxDuration), s.casterGUIDIsPlayer(s.playerGUID), false); ok && newDuration > 0 && newDuration < existing {
 			return true
 		}
 	}
@@ -21488,6 +21488,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// of a damaging spell still engages the reflector via the return
 		// trip's AtTargetAttacked(unit).
 		if s.server != nil && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
+			// Unit::AtTargetAttacked PvP arm (Unit.cpp:8983-8990): a landed
+			// hostile hit flags the caster's owner-player PvP + contested
+			// whenever the target is player-owned and not a duel opponent
+			// — no target-flag precondition, unlike the _enablePVP leg
+			// above. Runs for damaging hits too (the damage funnels never
+			// flag), over all hit targets: player victims as well as
+			// player-owned creatures. The Spell.cpp:2611 !IsFriendlyTo
+			// gate rides isFriendlyLaunchTarget (the breakHitBySpellAuras
+			// twin), with the self-hit skip.
+			if s.player != nil {
+				for _, effectTarget := range hitTargets {
+					if effectTarget == 0 || effectTarget == s.playerGUID {
+						continue
+					}
+					if s.isFriendlyLaunchTarget(ctx, effectTarget) {
+						continue
+					}
+					s.server.flagTargetAttackedContestedPvP(s.playerGUID, effectTarget, s.player.Map, s.player.InstanceID)
+				}
+			}
 			if !damageEffectSeen {
 				for _, effectTarget := range hitTargets {
 					// Creature targets only (unit/pet/vehicle highs): a player
@@ -21519,6 +21539,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 						s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID, true)
 						s.server.engageAttackedTargetOwner(effCtx, effectTarget, s.playerGUID)
+						// Unit::AtTargetAttacked tap arm (Unit.cpp:8977-8982,
+						// SetLootRecipient): C++ taps on any landed hostile
+						// hit, not just damaging ones — a non-damaging
+						// debuff (Fear/Polymorph-class) on an untapped
+						// creature claims loot rights here; damaging hits
+						// already tap in the damage funnels. Damage 0
+						// claims the recipient without lowering the
+						// requirement (kill.go:92-118).
+						if s.player != nil {
+							if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, effectTarget); tm != nil {
+								s.server.motionMu.Lock()
+								newlyTapped := s.server.recordCreatureTap(tm, s.playerGUID, s.groupID, 0, tm.Health, true)
+								tappedFlags := tm.DynamicFlags
+								s.server.motionMu.Unlock()
+								if newlyTapped {
+									s.server.broadcastCreatureValuesUpdateInInstance(s.player.Map, s.player.InstanceID, effectTarget, map[int]uint32{
+										unitFieldDynamicFlags: tappedFlags,
+									})
+								}
+							}
+						}
 					}
 				}
 			}
@@ -40005,7 +40046,10 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			_ = s.sendAttackStop(victim, false)
 		}
 		if s.player.UnitFlags&unitFlagInCombat != 0 {
-			s.player.UnitFlags &^= unitFlagInCombat
+			// Unit::AtExitCombat (Unit.cpp:8964-8968) runs on the
+			// CombatStop flip — route through the flip gate so the
+			// LEAVE_COMBAT strip fires here too.
+			markPlayerOutOfCombat(context.Background(), s)
 			s.sendPlayerUpdate()
 		}
 	}
@@ -43087,13 +43131,21 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		var drGroup DiminishingGroup
 		if !positive && durationMs > 0 {
 			var ok bool
-			drGroup, durationMs, ok = targetSess.applyDiminishingToDuration(spell, durationMs, true, triggeredByAura)
+			drGroup, durationMs, ok = targetSess.applyDiminishingToDuration(spell, durationMs, s.casterGUIDIsPlayer(casterGUID), triggeredByAura)
 			if !ok {
 				// Target is immune to crowd control due to DR
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spell.ID, 38), true) // SPELL_FAILED_IMMUNE = 38
 				return
 			}
-			targetSess.incrDiminishing(drGroup)
+			// Unit::IncrDiminishing (Spell.cpp:2806-2809) only incrs when
+			// the group type is DRTYPE_ALL or (DRTYPE_PLAYER on a
+			// DR-affected target — a live session always is, so the
+			// type check alone gates it here): DRTYPE_NONE groups never
+			// incr, so a no-DR-group spell must not accumulate phantom
+			// hitCounts in the NONE slot.
+			if diminishingGroupType(drGroup) != diminishingTypeNone {
+				targetSess.incrDiminishing(drGroup)
+			}
 			targetSess.applyDiminishingAura(drGroup, true)
 			// WorldObject::ModSpellDuration (Object.cpp:2354-2400): the
 			// SPELL_AURA_MECHANIC_DURATION_MOD (232) always-sum and the

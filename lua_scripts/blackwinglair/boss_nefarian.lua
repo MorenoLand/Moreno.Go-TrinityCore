@@ -81,7 +81,7 @@
 -- the gossip select (see beginEvent), as is the Reset
 -- SetFaction(FACTION_FRIENDLY) arm (see onNefariusReset); the
 -- BeginEvent SetImmuneToPC(false) leg IS bridged
--- (RemoveFlag(59, 0x100)) and ported in C++ order at beginEvent
+-- (creature:SetImmuneToPC) and ported in C++ order at beginEvent
 -- (boss_nefarian.cpp:215); the barrier-cast / AttackStart legs still
 -- have no bridges — the timers are armed from the gossip select (the
 -- BeginEvent site) and combat begins on pull; no
@@ -419,11 +419,10 @@ local function beginEvent(creature, guid)
     -- C++ BeginEvent SetStandState(UNIT_STAND_STATE_STAND): the bridged
     -- leg of the arm; he stands up from the throne when the event begins.
     creature:SetStandState(UNIT_STAND_STATE_STAND)
-    -- C++ BeginEvent SetImmuneToPC(false) (boss_nefarian.cpp:215) ≡
-    -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC 0x100), in
+    -- C++ BeginEvent SetImmuneToPC(false) (boss_nefarian.cpp:215), in
     -- C++ order right after the stand change and before AttackStart
     -- (no bridge — the fight starts when a player pulls).
-    creature:RemoveFlag(59, 0x100)
+    creature:SetImmuneToPC(false)
     schedule(guid, "shadowbolt", math.random(3000, 10000), function()
         onNefariusShadowBolt(creature, guid)
     end)

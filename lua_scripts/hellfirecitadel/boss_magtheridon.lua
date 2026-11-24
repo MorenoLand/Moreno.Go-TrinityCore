@@ -123,7 +123,7 @@
 -- PORTED (boss_magtheridon.cpp:253, magtheridonEnterCombat below —
 -- the flag bridge is live since e9387671; the old "no flag bridge"
 -- claim is retracted for this leg); the paired SetImmuneToPC(false)
--- leg IS bridged (RemoveFlag(59, 0x100)) and ported in C++ order at
+-- leg IS bridged (creature:SetImmuneToPC) and ported in C++ order at
 -- magtheridonEnterCombat (boss_magtheridon.cpp:254); the channeler REACT_DEFENSIVE arm
 -- is PORTED 2026-10-20 (creature:SetReactState);
 -- the quake/blaze SPELLVALUE target-count args stay unmodeled
@@ -459,8 +459,8 @@ end
 -- the header deviation): EMOTE_BREAKS_FREE + SAY_FREE,
 -- RemoveAura(30205), RemoveFlag(UNIT_FIELD_FLAGS,
 -- UNIT_FLAG_NOT_SELECTABLE) (EVENT_RELEASED, boss_magtheridon.cpp:253;
--- the paired SetImmuneToPC(false) leg is PORTED below (RemoveFlag(59,
--- 0x100), C++ order after the NOT_SELECTABLE clear),
+-- the paired SetImmuneToPC(false) leg is PORTED below
+-- (C++ order after the NOT_SELECTABLE clear),
 -- phase released, the C++ timer set.
 local function magtheridonEnterCombat(event, creature)
     local guid = creature:GetGUIDLow()
@@ -504,9 +504,8 @@ local function magtheridonEnterCombat(event, creature)
     creature:Talk(SAY_FREE)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     -- C++ EVENT_RELEASED (boss_magtheridon.cpp:253-254), in C++ order
-    -- right after the NOT_SELECTABLE clear: SetImmuneToPC(false) ≡
-    -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC 0x100).
-    creature:RemoveFlag(59, 0x100)
+    -- right after the NOT_SELECTABLE clear: SetImmuneToPC(false).
+    creature:SetImmuneToPC(false)
     creature:RemoveAura(SPELL_SHADOW_CAGE_C)
     scheduleCombatTimers(creature, guid)
 end
@@ -586,7 +585,7 @@ magtheridonNearlyEmote = function(creature, guid)
 end
 
 -- C++ EVENT_RELEASED (boss_magtheridon.cpp:250-264): RemoveFlag
--- NOT_SELECTABLE, SetImmuneToPC(false) (RemoveFlag(59, 0x100)),
+-- NOT_SELECTABLE, SetImmuneToPC(false),
 -- DoZoneInCombat, phase 2, the MANTICRON_CUBE ENABLE leg is PORTED
 -- below (instanceData:SetData, event 8), then the combat timer
 -- set. Same gated map, same defer.
@@ -598,7 +597,7 @@ magtheridonReleased = function(creature, guid)
         return
     end
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
-    creature:RemoveFlag(59, 0x100)
+    creature:SetImmuneToPC(false)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     -- C++ EVENT_RELEASED (boss_magtheridon.cpp:257): the cubes go

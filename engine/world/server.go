@@ -755,8 +755,14 @@ type session struct {
 	// so a .modify speed override is transient by design — the next
 	// aura-driven recompute for that type overwrites it, exactly like C++.
 	gmSpeedRates [9]float32
-	attackTarget uint64
-	duelPartner  uint64
+	// gmSpeedRatesKnown marks a stored gmSpeedRates entry as a live
+	// override: C++ SetSpeedRate clamps a negative rate to 0 and STORES it
+	// (Unit.cpp:8823-8830), so a stored 0 is an active speed-0 override,
+	// not "cleared" — without the flag it would be indistinguishable from
+	// unset and movementSpeeds() would fall back to the aura speed.
+	gmSpeedRatesKnown [9]bool
+	attackTarget      uint64
+	duelPartner       uint64
 	// duelInitiator is the DuelInfo::Initiator analog (Player.h:239-248): true
 	// when this session cast the duel challenge (Spell::EffectDuel). Only the
 	// challenged party may accept (DuelHandler.cpp:27).

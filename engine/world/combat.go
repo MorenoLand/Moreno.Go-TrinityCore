@@ -945,6 +945,15 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if s.server != nil && s.player != nil {
 		s.server.triggerCritterFlee(ctx, target, s.player.X, s.player.Y, s.player.GUID)
 	}
+	// Unit::AtTargetAttacked (Unit.cpp:2141, 8983-8990) PvP arm: the swing
+	// fires it ahead of the outcome roll, so a miss flags too. The helper
+	// resolves the victim's owner-player (a player victim, or a
+	// pet/charmed creature) and skips wild creatures and duel opponents;
+	// the attacker here is always the player session, and the redirect
+	// below runs after the arm, as in C++ (Unit.cpp:2155-2156).
+	if s.server != nil && s.player != nil {
+		s.server.flagTargetAttackedContestedPvP(s.playerGUID, target.GUID, s.player.Map, s.player.InstanceID)
+	}
 	// Unit::AttackerStateUpdate (Unit.cpp:2141-2142): AtTargetAttacked then
 	// RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_MELEE_ATTACK) fires
 	// at the top of every swing, ahead of the next-swing-spell slot.
@@ -5033,6 +5042,13 @@ func markPlayerOutOfCombat(ctx context.Context, sess *session) {
 		return
 	}
 	sess.player.UnitFlags &^= unitFlagInCombat
+	// Unit::AtExitCombat (Unit.cpp:8964-8968): the sole C++ caller is
+	// CombatManager::UpdateOwnerCombatState, which runs it on every
+	// true->false combat-state flip — so the LEAVE_COMBAT aura strip
+	// lives here at the flip gate, not at individual exit sites
+	// (sanctuary, combatStopWithPets, Lua ClearInCombat, GM stop,
+	// idle-timeout sweep all flip through here).
+	sess.removeAurasWithInterruptFlags(auraInterruptFlagLeaveCombat)
 	sess.triggerPlayerEvent(ctx, scripting.PlayerEventLeaveCombat, sess.luaPlayer())
 }
 

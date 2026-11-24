@@ -401,7 +401,10 @@ local function fakeDeath(e, creature, entry, guid)
     -- (creature:RemoveAllAuras, lua_creature_events.go); the immune flags
     -- ride the SetFlag bridge (lua_creature_events.go:407) — the engine
     -- honors IMMUNE_TO_PC in melee/spell targeting, C++-exact. Damage
-    -- while feign-dead is still zeroed by the callers (header).
+    -- while feign-dead is still zeroed by the callers (header). C++ calls
+    -- SetImmuneToPC/NPC(true, true) here (boss_thekal.cpp:225-226,
+    -- 429-430, 538-539) — keepCombat=true, so the bridge's combat-end
+    -- leg would diverge; the SetFlag form stays.
     creature:RemoveAllAuras()
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_MASK)
     creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH, true)

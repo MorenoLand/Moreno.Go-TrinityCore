@@ -3213,6 +3213,73 @@ func (s *Server) removeThreatVictimFromAllLists(mapID, instanceID uint32, victim
 	}
 }
 
+// threatVictimIsPlayerControlled reports whether victimGUID belongs to a
+// player-controlled unit: a live player session, or a creature motion with
+// UNIT_FLAG_PLAYER_CONTROLLED (0x8) — a pet (OwnerGUID) or a charmed
+// creature. Unresolvable GUIDs read as wild creatures.
+func (s *Server) threatVictimIsPlayerControlled(mapID, instanceID uint32, victimGUID uint64) bool {
+	if s.findSessionByGUID(victimGUID) != nil {
+		return true
+	}
+	if motion := s.findCreatureMotion(mapID, instanceID, victimGUID); motion != nil {
+		return creatureIsPlayerControlled(motion) || motion.UnitFlags&unitFlagPlayerControlled != 0
+	}
+	return false
+}
+
+// endImmuneCombat ends the creature's combat refs against player-controlled
+// (wantPC) or non-player-controlled (!wantPC) others — the
+// Unit::SetImmuneToPC / SetImmuneToNPC combat-end leg (Unit.cpp:8453-8497):
+// only refs whose other has (PC) / lacks (NPC) UNIT_FLAG_PLAYER_CONTROLLED
+// end; the rest stay, so this is NOT the full ClearThreat of
+// SetImmuneToAll. Own-table entries drop with a threat-remove broadcast;
+// the creature also drops as victim from matching owners' tables (the
+// CombatReference twin: ending the ref ends combat for both sides).
+// InCombat clears only once the own table is empty — surviving refs keep
+// the creature in combat. ValidateAttackersAndOwnTarget has no Go model;
+// attackers keep a stale InCombat until their own teardown, the accepted
+// ClearInCombat delta.
+func (s *Server) endImmuneCombat(mapID, instanceID uint32, motion *creatureMotion, wantPC bool, x, y, z float32, phase uint32) {
+	if s == nil || motion == nil || motion.ThreatMgr == nil {
+		return
+	}
+	guid := motion.GUID
+	for _, entry := range motion.ThreatMgr.SortedEntries() {
+		if s.threatVictimIsPlayerControlled(mapID, instanceID, entry.VictimGUID) != wantPC {
+			continue
+		}
+		motion.ThreatMgr.RemoveThreat(entry.VictimGUID)
+		s.broadcastThreatRemoveInInstance(mapID, instanceID, x, y, z, guid, entry.VictimGUID, phase)
+	}
+	var owners []uint64
+	s.motionMu.Lock()
+	for ownerGUID, owner := range s.motionMapLocked(mapID, instanceID) {
+		if ownerGUID == guid || owner == nil || owner.ThreatMgr == nil {
+			continue
+		}
+		if (creatureIsPlayerControlled(owner) || owner.UnitFlags&unitFlagPlayerControlled != 0) != wantPC {
+			continue
+		}
+		if owner.ThreatMgr.HasVictim(guid) {
+			owners = append(owners, ownerGUID)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, ownerGUID := range owners {
+		owner := s.findCreatureMotion(mapID, instanceID, ownerGUID)
+		if owner == nil || owner.ThreatMgr == nil {
+			continue
+		}
+		owner.ThreatMgr.RemoveThreat(guid)
+		s.broadcastThreatRemoveInInstance(mapID, instanceID, owner.X, owner.Y, owner.Z, ownerGUID, guid, owner.PhaseMask)
+	}
+	if motion.ThreatMgr.IsEmpty() {
+		s.motionMu.Lock()
+		motion.InCombat = false
+		s.motionMu.Unlock()
+	}
+}
+
 // stopPlayerCombat mirrors the combat half of Unit::CombatStop (Unit.cpp:5809-5825)
 // reached on logout via Unit::CleanupBeforeRemoveFromMap (Unit.cpp:9845) and on
 // teleport via Player::TeleportTo (Player.cpp:1753 same-map unless
@@ -3244,15 +3311,15 @@ func (s *session) stopPlayerCombat(ctx context.Context) {
 	}
 	// CombatManager::UpdateOwnerCombatState (CombatManager.cpp) exit leg:
 	// leaving combat clears UNIT_FLAG_IN_COMBAT and runs Unit::AtExitCombat
-	// (Unit.cpp:8964), which strips AURA_INTERRUPT_FLAG_LEAVE_COMBAT auras
-	// (RemoveAurasWithInterruptFlags). The flag itself is the flip gate —
-	// C++ only runs AtExitCombat when the combat state actually changes
-	// (combatState != IsInCombat()), so a non-combat logout/teleport strips
-	// nothing. AtDisengage is a no-op virtual (Unit.h:1792).
+	// (Unit.cpp:8964) — the LEAVE_COMBAT aura strip now lives in
+	// markPlayerOutOfCombat, the central flip gate. The flag itself is
+	// the flip gate — C++ only runs AtExitCombat when the combat state
+	// actually changes (combatState != IsInCombat()), so a non-combat
+	// logout/teleport strips nothing. AtDisengage is a no-op virtual
+	// (Unit.h:1792).
 	if s.player.UnitFlags&unitFlagInCombat != 0 {
 		markPlayerOutOfCombat(ctx, s)
 		s.sendPlayerUpdate()
-		s.removeAurasWithInterruptFlags(auraInterruptFlagLeaveCombat)
 		// Player::AtExitCombat (Player.cpp:24573-24577): Death Knight rune
 		// grace windows reset on leaving combat.
 		if s.player.Class == classDeathKnight && s.runes != nil {
@@ -3974,6 +4041,75 @@ func (s *session) flagPlayerAssistContestedPvP(ctx context.Context, targetGUID u
 	s.pvpEnd = now
 	if changed {
 		s.sendPlayerUpdate()
+	}
+}
+
+// ownerPlayerForGUID resolves GetCharmerOrOwnerPlayerOrPlayerItself
+// (Object.cpp:2226-2233, Unit.h:1170) for a GUID on a map/instance: a live
+// player session first, else a creature motion's charmer, else its owner.
+// Nil for a wild creature or a creature-owned creature, and for a player
+// session on another map/instance (the map-local session model the assist
+// helpers use).
+func (s *Server) ownerPlayerForGUID(guid uint64, mapID, instanceID uint32) *session {
+	if s == nil || guid == 0 {
+		return nil
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+		return sess
+	}
+	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
+		for _, ownerGUID := range []uint64{m.CharmerGUID, m.OwnerGUID} {
+			if ownerGUID == 0 {
+				continue
+			}
+			if sess := s.findSessionByGUID(ownerGUID); sess != nil && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+				return sess
+			}
+		}
+	}
+	return nil
+}
+
+// flagTargetAttackedContestedPvP runs the Unit::AtTargetAttacked PvP arm
+// (Unit.cpp:8983-8990) for a landed hostile hit: whenever BOTH sides are
+// player-owned and not duelling, the attacker's owner-player is flagged PvP
+// (UpdatePvP(true)) and contested (SetContestedPvP) and loses its
+// ENTER_PVP_COMBAT-flagged auras. Unlike the narrower arms — the _enablePVP
+// leg (spells.go), which needs an already-PvP-flagged target, and the
+// ATTACK_PLAYER assist legs in this file — this arm has no target-flag
+// precondition: the first hostile hit flags. The duel skip mirrors C++
+// (myPlayerOwner->duel->Opponent == targetPlayerOwner) via the
+// chain_targets duel pattern (both DuelTeam != 0). The set is idempotent
+// (the packet fires only on a newly set bit), so overlap with the narrower
+// arms only refreshes the timers.
+func (s *Server) flagTargetAttackedContestedPvP(attackerGUID, targetGUID uint64, mapID, instanceID uint32) {
+	if s == nil || attackerGUID == 0 || targetGUID == 0 || attackerGUID == targetGUID {
+		return
+	}
+	attackerOwner := s.ownerPlayerForGUID(attackerGUID, mapID, instanceID)
+	targetOwner := s.ownerPlayerForGUID(targetGUID, mapID, instanceID)
+	if attackerOwner == nil || attackerOwner.player == nil || targetOwner == nil || targetOwner.player == nil {
+		return
+	}
+	if attackerOwner.duelPartner != 0 && attackerOwner.duelPartner == targetOwner.playerGUID && attackerOwner.player.DuelTeam != 0 && targetOwner.player.DuelTeam != 0 {
+		return
+	}
+	// Player::SetContestedPvP (Player.cpp:20725-20747): the 30s timer
+	// refreshes unconditionally, the flag sets once.
+	// Player::UpdatePvP(true) (Player.cpp:22196-22210): SetPvP(true) with
+	// EndTimer = now, so the 5-minute toggle-off countdown runs from
+	// this hit.
+	now := time.Now()
+	changed := attackerOwner.player.PlayerFlags&playerFlagContestedPVP == 0 || attackerOwner.player.PVPFlags&pvpFlagPvP == 0
+	attackerOwner.player.PlayerFlags |= playerFlagContestedPVP
+	attackerOwner.contestedPVPEnd = now.Add(30 * time.Second)
+	attackerOwner.player.PVPFlags |= pvpFlagPvP
+	attackerOwner.pvpEnd = now
+	// Unit::AtTargetAttacked (Unit.cpp:8990): the attacker's owner-player
+	// loses ENTER_PVP_COMBAT-flagged auras on the hit.
+	attackerOwner.removeAurasWithInterruptFlags(auraInterruptFlagEnterPvPCombat)
+	if changed {
+		attackerOwner.sendPlayerUpdate()
 	}
 }
 

@@ -757,11 +757,11 @@ local function croneLeaveCombat(event, creature)
     cancelTimers(creature:GetGUIDLow())
     -- C++ boss_crone::Initialize (bosses_opera.cpp:686-687): the spawn-hack
     -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) +
-    -- SetImmuneToPC(false) (= RemoveFlag(59, 0x100), Unit.cpp:8440-8449)
+    -- SetImmuneToPC(false) (Unit.cpp:8453-8474; the RemoveFlag(59, 0x100) form)
     -- runs on every Reset; ev23 fires on initial spawn, evade-reset and
     -- respawn (lua_creature_events.go:1560, creaturemotion.go:719).
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
-    creature:RemoveFlag(UNIT_FIELD_FLAGS, 0x100)
+    creature:SetImmuneToPC(false)
 end
 
 local function croneTargetDied(event, creature, victim)
