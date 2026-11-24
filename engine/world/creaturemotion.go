@@ -10054,12 +10054,15 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// (crushing-blow convention, combat.go:2591). Pets and charmed
 	// creatures are player-controlled and never daze (C++
 	// !IsControlledByPlayer, boss_ai.go:creatureIsPlayerControlled).
-	// The !victim->IsVehicle() arm stays unbridged — Go has no
-	// player-vehicle model.
+	// The !victim->IsVehicle() arm (Unit.cpp:1526) is the victim's own
+	// vehicle kit (Unit.cpp:842) — a player driving a multi-passenger
+	// mount is a vehicle base and cannot be dazed, a mere passenger
+	// carries no kit and still can be.
 	if isPlayerVictim &&
 		(outcome == protocol.MeleeHitNormal || outcome == protocol.MeleeHitCrit ||
 			outcome == protocol.MeleeHitCrushing || outcome == protocol.MeleeHitGlancing) &&
 		!creatureIsPlayerControlled(motion) &&
+		s.getVehicleKit(target.Map, target.InstanceID, target.GUID) == nil &&
 		!hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi) {
 		victimLvl := float64(targetLevel)
 		if victimLvl < 1 {
