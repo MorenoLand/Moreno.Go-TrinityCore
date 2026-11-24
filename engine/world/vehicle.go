@@ -4591,21 +4591,10 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 	// sets UNIT_FLAG_NOT_SELECTABLE when the new seat carries it.
 	s.applyVehicleSeatNotSelectable(nil, seatInfo, wasUnselectable)
 	s.player.VehicleSeat = assigned
-	// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the re-board is a
-	// new JoinEvent (Unit::ChangeSeat, Unit.cpp:13133-13170), so the
-	// transport re-stamps with the new seat's offsets — without this the
-	// merge arm leaves TransportSeat (and the offsets) on the old seat.
-	// The creature twin (applyCreatureControlVehicleSeatChange) already
-	// re-stamps; this is the same stamp as the enterVehicle board leg.
-	if _, newSeatInfo, newSeatAddon := kit.GetSeatForPassenger(s.playerGUID); newSeatInfo != nil {
-		s.player.TransportGUID = baseGUID
-		s.player.TransportX, s.player.TransportY, s.player.TransportZ = newSeatInfo.AttachmentOffsetX, newSeatInfo.AttachmentOffsetY, newSeatInfo.AttachmentOffsetZ
-		s.player.TransportO = 0
-		if newSeatAddon != nil {
-			s.player.TransportO = newSeatAddon.SeatOrientationOffset
-		}
-		s.player.TransportSeat = assigned
-	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:836-853, :865-869): the
+	// re-board runs the full Execute legs again — see
+	// applyVehicleSeatSwitchExecuteLegs.
+	s.applyVehicleSeatSwitchExecuteLegs(ctx, kit, baseGUID, assigned, seatInfo)
 	// Vehicle::RemovePassenger (Vehicle.cpp:517-518) and
 	// VehicleJoinEvent::Execute (Vehicle.cpp:871-876): the charm legs
 	// fire only on a creature base — a player kit never charms.
@@ -4749,6 +4738,59 @@ func (s *session) fireVehicleSeatAdd(ctx context.Context, kit *VehicleKit, newSe
 // (Unit.cpp:13144-13146) and ChangeAmount runs the pair
 // (SpellAuraEffects.cpp:662-683). The merge arm calls the halves
 // separately instead, so the remove hooks fire before the eject.
+
+// applyVehicleSeatSwitchExecuteLegs runs the VehicleJoinEvent::Execute
+// player legs that fire again on a seat switch (Vehicle.cpp:836-853,
+// :865-869). A switch is a new board: Unit::ChangeSeat
+// (Unit.cpp:13133-13170) re-applies the ride aura, whose ChangeAmount
+// unapply removes the passenger from the old seat and whose re-apply
+// re-boards through AddPassenger (AuraEffect::ChangeAmount,
+// SpellAuraEffects.cpp:662-683), so Execute runs again — the re-board
+// interrupts the passenger's non-melee spells, strips mounted auras,
+// stops charm and bind-sight casting, sends the cancel-expected-ride
+// packet, and temporarily unsummons the pet unless the new seat keeps
+// it, and re-stamps the transport with the new seat's offsets and seat
+// id. The packet SwitchSeat paths moved only the seat record, so the
+// transport offsets, cast state, and pet stayed on the old seat's
+// board. The charm grant, clear-target, threat transfer, and
+// PassengerBoarded/OnAddPassenger hooks already run at the call sites
+// (sendVehicleSeatControlChange / fireVehicleSeatSwitch) and stay
+// there; the root is already held from the first board, and the
+// battleground flag was already dropped there.
+func (s *session) applyVehicleSeatSwitchExecuteLegs(ctx context.Context, kit *VehicleKit, baseGUID uint64, assignedSeat int8, seatInfo *wotlk.VehicleSeatEntry) {
+	if s == nil || s.player == nil || kit == nil || baseGUID == 0 {
+		return
+	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:836-837): the re-board
+	// interrupts non-melee spells and strips mounted auras.
+	s.interruptCurrentCast()
+	s.interruptCurrentChannel()
+	s.clearOtherMountedAuras(0)
+	// VehicleJoinEvent::Execute (Vehicle.cpp:849-850): the re-board
+	// stops charm and bind-sight casting.
+	s.stopCastingBindSight()
+	s.stopPlayerCharmOnVehicleBoard(ctx)
+	// VehicleJoinEvent::Execute (Vehicle.cpp:851): the re-board sends
+	// the cancel-expected-ride packet again.
+	s.sendCancelExpectedRideVehicleAura()
+	// VehicleJoinEvent::Execute (Vehicle.cpp:852-853): the pet is
+	// temporarily unsummoned unless the new seat keeps it.
+	if seatInfo == nil || !seatInfo.HasFlag(wotlk.VehicleSeatFlagBKeepPet) {
+		s.temporarilyUnsummonPet(ctx)
+	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the re-board
+	// re-stamps the transport with the new seat's offsets and seat id.
+	s.player.TransportGUID = baseGUID
+	if seatInfo != nil {
+		s.player.TransportX, s.player.TransportY, s.player.TransportZ = seatInfo.AttachmentOffsetX, seatInfo.AttachmentOffsetY, seatInfo.AttachmentOffsetZ
+	}
+	s.player.TransportO = 0
+	if _, _, seatAddon := kit.GetSeatForPassenger(s.playerGUID); seatAddon != nil {
+		s.player.TransportO = seatAddon.SeatOrientationOffset
+	}
+	s.player.TransportSeat = assignedSeat
+}
+
 func (s *session) fireVehicleSeatSwitch(ctx context.Context, kit *VehicleKit, oldSeat, newSeat int8) {
 	if oldSeat == newSeat {
 		return
@@ -4906,6 +4948,7 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, nextSeat); switched {
 					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
+					s.applyVehicleSeatSwitchExecuteLegs(ctx, kit, kit.VehicleGUID, assigned, seatInfo)
 					s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
 					// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the
 					// ride aura on the new seat (ChangeAmount), so the old
@@ -5167,6 +5210,7 @@ func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []by
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, nextSeat); switched {
 					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
+					s.applyVehicleSeatSwitchExecuteLegs(ctx, kit, kit.VehicleGUID, assigned, seatInfo)
 					s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
 					// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the
 					// ride aura on the new seat (ChangeAmount), so the old
@@ -5206,6 +5250,7 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, prevSeat); switched {
 					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
+					s.applyVehicleSeatSwitchExecuteLegs(ctx, kit, kit.VehicleGUID, assigned, seatInfo)
 					s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
 					// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the
 					// ride aura on the new seat (ChangeAmount), so the old
@@ -5299,6 +5344,7 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 			if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, seat); switched {
 				oldSeat := s.player.VehicleSeat
 				s.player.VehicleSeat = assigned
+				s.applyVehicleSeatSwitchExecuteLegs(ctx, kit, kit.VehicleGUID, assigned, seatInfo)
 				s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
 				// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the
 				// ride aura on the new seat (ChangeAmount), so the old
