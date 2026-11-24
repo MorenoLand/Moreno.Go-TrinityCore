@@ -2909,7 +2909,7 @@ func (s *session) sendVehiclePetSpells(vehicleGUID uint64, spells []uint32) {
 	// reach the client in C++. An empty/invalid slot still carries the i+8
 	// type byte (the u16(0)/u8(0)/u8(i+8) miss arm), not a bare zero; the
 	// condition-fail arm shares that shape; the vehicle-spell condition
-	// gate (ConditionMgr.cpp:1039-1055) is NOT ported yet — TDB 26091
+	// gate (ConditionMgr.cpp:1047-1061) is NOT ported yet — TDB 26091
 	// carries 5 SourceTypeOrReferenceId 21 rows (Oculus drake spells
 	// 49592/50253/50344 gated on Urom DONE via CONDITION_INSTANCE_INFO,
 	// ICC abomination 71516 gated on item 49888 equipped), so the gate
