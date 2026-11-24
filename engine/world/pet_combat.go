@@ -9273,11 +9273,16 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	isCrit := false
 	if s.server != nil && s.server.Data != nil {
 		if hs, found, err := s.server.Data.Spell(spellID); err == nil && found {
-			chance := s.server.creatureSpellCritChanceDone(creatureAuraKeyForMotion(caster), caster.FlagsExtra&0x20000 != 0, uint8(hs.SchoolMask), hs, true)
-			// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the owner's
-			// SPELLMOD_CRITICAL_CHANCE folds into the done chance — the
-			// mod arm has no done-gate in C++.
+			// Unit::SpellCritChanceDone (Unit.cpp:7169-7172): a wild
+			// creature with no spell-mod owner never crits — the done
+			// chance stays zero for a possessed wild caster; a pet's
+			// mod owner is its owner session.
+			chance := 0.0
 			if modOwner := s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID); modOwner != nil {
+				chance = s.server.creatureSpellCritChanceDone(creatureAuraKeyForMotion(caster), caster.FlagsExtra&0x20000 != 0, uint8(hs.SchoolMask), hs, true)
+				// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the owner's
+				// SPELLMOD_CRITICAL_CHANCE folds into the done chance — the
+				// mod arm has no done-gate in C++.
 				chance = float64(modOwner.applySpellMod(hs, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
 			}
 			isCrit = chance > 0 && rand.Float64() < chance
@@ -10231,7 +10236,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	isCrit := false
 	if damage > 0 && s.server != nil && s.server.Data != nil {
 		if critSpell, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
-			chance := s.server.creatureSpellCritChanceDone(creatureAuraKeyForMotion(caster), caster.FlagsExtra&0x20000 != 0, schoolMask, critSpell, true)
+			// Unit::SpellCritChanceDone (Unit.cpp:7169-7172): a wild
+			// creature with no spell-mod owner never crits — the done
+			// chance stays zero for a possessed wild caster, and the
+			// taken fold below composes on that zero like C++.
+			chance := 0.0
 			// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782-7790): the taken
 			// fold runs unconditionally — no done-gate before it.
 			// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the
@@ -10239,6 +10248,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// GetSpellModOwner() — the pet's mod owner, nil for a
 			// possessed wild caster.
 			if modOwner := s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID); modOwner != nil {
+				chance = s.server.creatureSpellCritChanceDone(creatureAuraKeyForMotion(caster), caster.FlagsExtra&0x20000 != 0, schoolMask, critSpell, true)
 				chance = float64(modOwner.applySpellMod(critSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
 			}
 			if critSpell.DefenseType == spellDamageClassMagic || critSpell.DefenseType == spellDamageClassMelee || critSpell.DefenseType == spellDamageClassRanged {

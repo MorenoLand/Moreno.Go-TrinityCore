@@ -5835,8 +5835,12 @@ func raidProcJumpRadius(s *session, casterGUID uint64, eff *wotlk.SpellEffect) (
 
 // nextRaidMemberOrPetGUID mirrors Unit::GetNextRandomRaidMemberOrPet
 // (Unit.cpp:6423): a random alive, non-hostile raid member or guardian pet
-// within radius of the aura holder, excluding the holder itself. With no
-// group, only the holder's pet qualifies.
+// within radius of the aura holder, excluding the holder itself — but the
+// holder's own pet IS a candidate (Unit.cpp:6468-6472: the pet push sits
+// outside the Target != this guard). Duel-hostile members are excluded
+// (Unit.cpp:6465: !IsHostileTo — the duel/controlled-by-enemy leg; the
+// controlled-by-enemy half has no Go model). With no group, only the
+// holder's pet qualifies.
 func (s *session) nextRaidMemberOrPetGUID(radius float32) uint64 {
 	if s == nil || s.player == nil || s.server == nil || radius <= 0 {
 		return 0
@@ -5855,8 +5859,12 @@ func (s *session) nextRaidMemberOrPetGUID(radius float32) uint64 {
 		}
 	}
 	if s.groupID != 0 {
+		considerPet(s)
 		for _, m := range s.server.getGroupSessions(s.groupID) {
 			if m == nil || m.player == nil || m.playerGUID == s.playerGUID {
+				continue
+			}
+			if s.duelPartner == m.playerGUID && s.player.DuelTeam != 0 && m.player.DuelTeam != 0 {
 				continue
 			}
 			if m.player.Map != s.player.Map || m.player.InstanceID != s.player.InstanceID {

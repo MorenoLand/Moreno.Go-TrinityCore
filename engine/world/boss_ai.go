@@ -7225,9 +7225,16 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 		}
 		isCrit := false
 		{
-			chance := s.creatureSpellCritChanceDone(casterKey, m.FlagsExtra&0x20000 != 0, uint8(spell.SchoolMask), spell, true)
-			if modOwner != nil && modOwner.player != nil {
-				chance = float64(modOwner.applySpellMod(spell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+			// Unit::SpellCritChanceDone (Unit.cpp:7169-7172): a wild
+			// creature with no spell-mod owner never crits with spells,
+			// heals included — the chance stays zero unless a mod owner
+			// (player, pet owner, totem owner) exists.
+			chance := 0.0
+			if modOwner != nil {
+				chance = s.creatureSpellCritChanceDone(casterKey, m.FlagsExtra&0x20000 != 0, uint8(spell.SchoolMask), spell, true)
+				if modOwner.player != nil {
+					chance = float64(modOwner.applySpellMod(spell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+				}
 			}
 			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {

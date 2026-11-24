@@ -1235,14 +1235,29 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// IsCharmed reports the engine's charm state (creaturemotion.go
 	// charmCreatureFaction/uncharmCreature, the Unit::SetCharmedBy /
-	// RemoveCharmedBy twin). Lets Lua gate possess/charm-sensitive arms
-	// such as the Razuvious understudy's !isPossessedByPlayer() UpdateAI
-	// leg; in that fight the only charm source is priest Mind Control.
+	// RemoveCharmedBy twin). Lets Lua gate charm-sensitive arms such as
+	// the Razuvious understudy's !isPossessedByPlayer() UpdateAI leg:
+	// the C++ gate is vacuous there (UpdateCharmAI swaps a charmed
+	// creature's AI, so ScriptedAI::UpdateAI never runs while charmed,
+	// and Mind Control is a charm, not a possess), and Go has no AI
+	// swap, so IsCharmed() is the load-bearing twin.
 	methods["IsCharmed"] = func(_ context.Context, _ []any) ([]any, error) {
 		s.motionMu.Lock()
 		charmed := motion.Charmed
 		s.motionMu.Unlock()
 		return []any{charmed}, nil
+	}
+	// IsPossessedByPlayer is Unit::isPossessedByPlayer (Unit.cpp:6405-6408):
+	// UNIT_STATE_POSSESSED (motion.Possessed, set only for
+	// CHARM_TYPE_POSSESS, Unit.cpp:11886) with a player charmer
+	// (CharmerGUID passes the player-GUID type test). Narrower than
+	// IsCharmed: priest Mind Control is a charm, not a possess, so an
+	// MC'd unit reports false here.
+	methods["IsPossessedByPlayer"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		possessed := motion.Possessed && procActorIsPlayerGUID(motion.CharmerGUID)
+		s.motionMu.Unlock()
+		return []any{possessed}, nil
 	}
 	// IsSummon is Unit::IsSummon (Unit.h:837 — UNIT_MASK_SUMMON): true
 	// only for creatures stamped by the summon bridge (creaturemotion

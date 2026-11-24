@@ -34719,6 +34719,23 @@ func (s *session) targetAuraStacksByCaster(ctx context.Context, targetGUID uint6
 	return 0
 }
 
+// targetAuraEffectAmountByCaster mirrors Unit::GetAuraEffect(spellId,
+// effIndex, casterGUID) (Unit.h:1290): the amount of the victim's aura
+// effect of the given spell at the given effect index, cast by the given
+// caster — or false when the victim carries no such effect.
+func (s *session) targetAuraEffectAmountByCaster(ctx context.Context, targetGUID uint64, spellID uint32, effIndex int, casterGUID uint64) (int32, bool) {
+	for _, aura := range s.victimAurasForLookup(ctx, targetGUID) {
+		if aura == nil || aura.Stopped || aura.SpellID != spellID || aura.CasterGUID != casterGUID {
+			continue
+		}
+		if effIndex < 0 || effIndex >= len(aura.Amounts) || aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			return 0, false
+		}
+		return aura.Amounts[effIndex], true
+	}
+	return 0, false
+}
+
 // targetDiseasesByCaster mirrors Unit::GetDiseasesByCaster (Unit.cpp:4776):
 // the victim's SPELL_AURA_PERIODIC_DAMAGE / SPELL_AURA_LINKED effects whose
 // spell has DISPEL_DISEASE and whose caster matches. The count is per effect

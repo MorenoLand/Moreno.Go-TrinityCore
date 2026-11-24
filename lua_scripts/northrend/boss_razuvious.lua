@@ -109,8 +109,12 @@
 -- SPELL_UNDERSTUDY_BLOOD_STRIKE 61696) — PORTED 2026-10-23 as the
 -- event-7 understudyAIUpdate below: the timer is 0-initialized and
 -- never re-armed, so C++ casts on every AI tick; the
--- !isPossessedByPlayer() gates ride the new creature:IsCharmed()
--- bridge (lua_creature_events.go). OnCharmed — stays out: the arm's
+-- !isPossessedByPlayer() gates ride creature:IsCharmed()
+-- (lua_creature_events.go): the C++ gate is vacuous in this fight —
+-- UpdateCharmAI swaps a charmed creature's AI to PetAI, so the
+-- ScriptedAI UpdateAI never runs while MC'd, and Mind Control is a
+-- charm, not a possess — while Go has no AI swap, so IsCharmed() is
+-- the load-bearing twin. OnCharmed — stays out: the arm's
 -- only effects are SetUInt32Value emotestate + cross-AI DoZoneInCombat
 -- on Razuvious (different creature, instance-leg-gated — same stay-out
 -- as the understudy JustEngagedWith leg above, 2026-10-23 re-eval);
@@ -375,9 +379,12 @@ RegisterCreatureEvent(ENTRY_RAZUVIOUS, 24, razuviousReachHome)
 -- npc_dk_understudy (16803) UpdateAI, boss_razuvious.cpp:205-216. The
 -- bloodStrikeTimer is 0-initialized and never re-armed, so C++ casts
 -- Blood Strike (61696) on every AI tick. !isPossessedByPlayer() gates
--- both the UpdateVictim early-out and the cast; Lua twins it with
--- IsCharmed() — the only charm source in this fight is priest Mind
--- Control, so the engine's Charmed flag is exact here. GetVictim() nil
+-- both the UpdateVictim early-out and the cast. The C++ gate is
+-- vacuous in this fight: Mind Control is CHARM_TYPE_CHARM, never
+-- POSSESS, so isPossessedByPlayer() is always false, and while charmed
+-- UpdateCharmAI swaps the AI to PetAI, so this UpdateAI never runs.
+-- Go has no AI swap, so Lua twins the observable behavior with
+-- IsCharmed() — the MC'd understudy never self-casts. GetVictim() nil
 -- twins the !UpdateVictim() return; melee stays engine-driven, and the
 -- charmed (MC'd) understudy is pet-driven by the engine anyway.
 local SPELL_UNDERSTUDY_BLOOD_STRIKE = 61696 -- boss_razuvious.cpp:41

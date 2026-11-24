@@ -1507,10 +1507,12 @@ func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uin
 // scriptedTakenCritBonusCore mirrors the scripted taken-side arms of
 // Unit::SpellCritChanceTaken (Unit.cpp:7242-7341): Shatter, Glyph of
 // Shadowburn, Renewed Hope, Glyph of Fire Blast, Improved Faerie Fire,
-// Starfire/Insect Swarm, Exorcism, Lava Burst. Unlike the 179/197 taken
-// terms, these sit outside the !IsPositive block (Unit.cpp:7242) and fire
-// for positive spells too. Returns the bonus in percent points and whether
-// the hit is a forced crit (Exorcism, Lava Burst — C++ returns 100.0f).
+// Starfire/Insect Swarm, Flash of Light/Sacred Shield, Exorcism, Lava Burst.
+// Unlike the 179/197 taken terms, these sit outside the !IsPositive block
+// (Unit.cpp:7242) and fire for positive spells too — which is exactly how
+// the Flash of Light arm reaches its positive-only spell. Returns the bonus
+// in percent points and whether the hit is a forced crit (Exorcism, Lava
+// Burst — C++ returns 100.0f).
 // The remaining arms stay unbridged as verified no-bridges. Shiv poisons
 // (Unit.cpp:7308-7310): the arm sits inside the MAGIC-DmgClass case and
 // requires the caster's current generic spell to be Shiv (5938) at
@@ -1518,8 +1520,6 @@ func (s *session) tickScriptedTakenCritBonus(ctx context.Context, targetGUID uin
 // "Damage Type: Melee"), so its own direct cast takes the
 // GetUnitCriticalChanceTaken leg and never the MAGIC scripted section, and
 // periodic poison ticks evaluate after the instant Shiv cast finished.
-// Flash of Light/Sacred Shield is dead code in C++ (a positive-only spell
-// inside the scripted block).
 func (s *session) scriptedTakenCritBonusCore(ctx context.Context, targetGUID uint64, spell wotlk.Spell, spellKnown bool, vs scriptedTakenCritVictim) (float64, bool) {
 	bonus := 0.0
 	if s == nil || s.server == nil || s.server.Data == nil || !spellKnown {
@@ -1559,7 +1559,9 @@ func (s *session) scriptedTakenCritBonusCore(ctx context.Context, targetGUID uin
 					bonus += float64(aura.Amounts[index])
 				}
 			case 7997, 7998: // Renewed Hope
-				if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) && s.hasAura(6788) {
+				// Unit.cpp:7267-7269: HasAura(6788) runs on the victim
+				// (this), not the caster — Weakened Soul on the target.
+				if spellAffectedBySpellFamilyMask(auraSpell.SpellFamilyName, effect.SpellClassMask, spell) && s.targetHasAura(ctx, targetGUID, 6788) {
 					bonus += float64(aura.Amounts[index])
 				}
 			}
@@ -1593,10 +1595,17 @@ func (s *session) scriptedTakenCritBonusCore(ctx context.Context, targetGUID uin
 			}
 		}
 	case spellFamilyPaladin:
-		// Exorcism (Unit.cpp:7308-7313): guaranteed crit against demons
-		// and undead. The creature-type mask resolves lazily — only a
-		// Category-19 tick spell can reach it.
-		if spell.Category == 19 {
+		// Flash of Light (Unit.cpp:7314-7320): +crit when the victim
+		// carries Sacred Shield (58597) effect 1 cast by the victim
+		// themself (GetAuraEffect(58597, 1, GetGUID())).
+		if spell.SpellFamilyFlags[0]&0x40000000 != 0 {
+			if amt, ok := s.targetAuraEffectAmountByCaster(ctx, targetGUID, 58597, 1, targetGUID); ok {
+				bonus += float64(amt)
+			}
+		} else if spell.Category == 19 {
+			// Exorcism (Unit.cpp:7321-7327): guaranteed crit against demons
+			// and undead. The creature-type mask resolves lazily — only a
+			// Category-19 tick spell can reach it.
 			if mask, _ := s.targetCreatureTypeMask(ctx, targetGUID); mask&creatureTypeMaskDemonOrUndead != 0 {
 				return bonus, true
 			}
