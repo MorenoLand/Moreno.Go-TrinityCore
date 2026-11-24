@@ -1350,9 +1350,9 @@ func (s *Server) installPlayerVehicleAccessories(ctx context.Context, sess *sess
 
 // exitCreatureVehiclePassengers bridges the Unit::_ExitVehicle tail
 // (Unit.cpp:13252-13266) for creature passengers when a kit drops: a
-// minion accessory (UNIT_MASK_ACCESSORY) unsummons with its vehicle
-// (and dies with it when the vehicle died — Go temp summons vanish
-// rather than leaving a corpse, the standing temp-summon delta), while
+// minion accessory (UNIT_MASK_ACCESSORY) dies with a just-died base
+// (Unit.cpp:13261-13262) or unsummons 2000ms after the exit when the
+// base is alive (Unit.cpp:13265), the exitVehicleTail twin, while
 // a non-minion accessory simply unseats and stays in the world at its
 // last relocated position. Player seats are untouched: the player
 // eject/logout arms own those sessions.
@@ -1383,7 +1383,32 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 			s.smartPassengerBoarded(context.Background(), baseMotion, guid, motion.VehicleSeat, false)
 		}
 		if motion.VehicleAccessoryMinion {
-			s.expireTempSummonGuardian(context.Background(), motion)
+			// Unit.cpp:13258-13266, the exitVehicleTail twin. C++
+			// reads the base's getDeathState() == JUST_DIED, but Go
+			// never stores JUST_DIED — applyCreatureDeathState
+			// promotes it to CORPSE at once (creaturemotion.go) —
+			// so the observable twin of a just-died base is a dead
+			// base: Health 0 or a non-ALIVE DeathState. A player
+			// base has no motion; its Health read is the same test.
+			baseDead := false
+			if baseMotion != nil {
+				baseDead = baseMotion.Health == 0 || baseMotion.DeathState != creatureDeathAlive
+			} else if baseSess := s.findSessionByGUID(kit.VehicleGUID); baseSess != nil && baseSess.player != nil {
+				baseDead = baseSess.player.Health == 0
+			}
+			if baseDead {
+				s.applyCreatureDeathState(context.Background(), motion, creatureDeathJustDied)
+			} else {
+				// The kit is dropped, so the passenger has exited:
+				// unseat now and let the unsummon ride the 2s delay
+				// instead of expiring at once.
+				s.motionMu.Lock()
+				motion.VehicleGUID = 0
+				motion.VehicleSeat = 0
+				motion.Moving = false
+				s.motionMu.Unlock()
+				s.unsummonEjectedVehicleAccessory(motion, true)
+			}
 			continue
 		}
 		s.motionMu.Lock()

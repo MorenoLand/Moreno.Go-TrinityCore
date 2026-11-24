@@ -4448,6 +4448,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, x, y, z, nearby, phase)
 		}
 		s.syncCreatureVehiclePassengers(m)
+		// Unit::_ExitVehicle tail (Unit.cpp:13251-13266), shared with the
+		// player path via exitVehicleTail (vehicle.go): a minion vehicle
+		// base owned by this passenger despawns 1ms after the exit, and
+		// an accessory passenger dies with a just-died base, else
+		// unsummons after 2000ms. Runs after the fall spline / teleport
+		// above, as in C++ (the tail follows LaunchMoveSpline), and after
+		// the passenger sync, so a just-died accessory is not re-installed
+		// as a live base first. The player-only resummon leg (:13251-13252)
+		// rides the session path, not this helper.
+		s.exitVehicleTail(ctx, mapID, instanceID, baseGUID, guid)
 		return nil, nil
 	}
 	// EnterVehicle is Unit::EnterVehicle (Unit.cpp:13073-13079) for
