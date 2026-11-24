@@ -99,6 +99,52 @@ func (s *Server) addFormationRow(memberLow uint32, row formationRow) {
 	s.formationLeaders[row.leaderGUID] = append(s.formationLeaders[row.leaderGUID], memberLow)
 }
 
+// removeFormationMember mirrors CreatureGroup::RemoveMember
+// (CreatureGroups.cpp:217-223), reached from Unit::_EnterVehicle
+// (Unit.cpp:13109-13115): a player boarding a creature-base vehicle
+// that is part of a formation removes the base from its formation —
+// the member leaves the group and its formation pointer clears, so
+// it no longer assists the leader or follows it. The remaining
+// members keep their rows: C++ nulls only the leader pointer when
+// the removed member is the leader, and MemberEngagingTarget still
+// runs over the members left in the group. Runtime-only, matching
+// C++ (the DB row stays; a respawn re-adds through
+// FormationMgr::AddCreatureToGroup).
+func (s *Server) removeFormationMember(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.ensureFormationsLoaded(ctx)
+	memberLow := uint32(motion.GUID & 0x00FFFFFF)
+	s.formationMu.Lock()
+	row, ok := s.formationRows[memberLow]
+	if !ok {
+		s.formationMu.Unlock()
+		return
+	}
+	delete(s.formationRows, memberLow)
+	members := s.formationLeaders[row.leaderGUID]
+	for i, low := range members {
+		if low == memberLow {
+			members = append(members[:i], members[i+1:]...)
+			break
+		}
+	}
+	if len(members) == 0 {
+		delete(s.formationLeaders, row.leaderGUID)
+	} else {
+		s.formationLeaders[row.leaderGUID] = members
+	}
+	s.formationMu.Unlock()
+	// Creature::SetFormation(nullptr) twin: the live formation state
+	// clears so the step tick stops pulling the base into formation
+	// movement (stepFormationMember keys off FormationLeadGUID).
+	s.motionMu.Lock()
+	motion.FormationActive = false
+	motion.FormationLeadGUID = 0
+	s.motionMu.Unlock()
+}
+
 // memberEngagingTarget bridges CreatureGroup::MemberEngagingTarget
 // (CreatureGroups.cpp:226-255), reached via Creature::AtEngage
 // (Creature.cpp:3431-3453) — the Go call sites are the two fresh-engage

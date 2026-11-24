@@ -2902,15 +2902,26 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 		}
 	}
 
-	// Unit::_EnterVehicle (Unit.cpp:13088-13100): boarding a different
-	// vehicle exits the current one first; a same-vehicle re-entry on a
-	// different seat exits first too (the seatId arm removes the ride
-	// aura, whose remove leg runs _ExitVehicle, then re-boards on the
-	// new seat — VehicleJoinEvent::Execute, Vehicle.cpp:813-815, exits
-	// any seated passenger before seating). Same-seat re-entry keeps
-	// the seat (Unit.cpp:13095-13096).
+	// Unit::_EnterVehicle (Unit.cpp:13088-13101): boarding a different
+	// vehicle exits the current one first through ExitVehicle() — the
+	// ride aura strips from the old base and its remove leg runs
+	// _ExitVehicle — instead of unseating directly, which would leave
+	// the stale ride aura on the old base and the dummy aura on the
+	// caster. A seat with no ride aura (Lua/debug board) keeps the
+	// direct exit as its fallback. A same-vehicle re-entry on a
+	// different seat exits first too, but its :13100 strip already ran
+	// in the aura-apply callers (spells.go, except the aura being
+	// applied), so the branch below only fires for aura-less seats and
+	// keeps the direct exit. Same-seat re-entry keeps the seat
+	// (Unit.cpp:13095-13096).
 	if s.player.VehicleGUID != 0 && s.player.VehicleGUID != vehicleGUID {
-		s.exitVehicle(ctx)
+		oldVehGUID := s.player.VehicleGUID
+		if s.server != nil {
+			s.server.removeVehicleControlAuraFromBase(s.player.Map, s.player.InstanceID, oldVehGUID, s.playerGUID)
+		}
+		if s.player.VehicleGUID != 0 {
+			s.exitVehicle(ctx)
+		}
 	} else if s.player.VehicleGUID == vehicleGUID && seatID >= 0 && seatID != s.player.VehicleSeat {
 		s.exitVehicle(ctx)
 	}
@@ -2940,6 +2951,16 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 	var seatAddon *VehicleSeatAddon
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID); kit != nil {
+			// Unit::_EnterVehicle (Unit.cpp:13109-13115): a player
+			// boarding a creature-base vehicle that is part of a
+			// formation removes the base from its formation before
+			// AddPassenger; a player base (mount kit) never carries
+			// one. Runs before the seat eject below, as in C++.
+			if !kit.IsPlayer {
+				if base := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, vehicleGUID); base != nil {
+					s.server.removeFormationMember(ctx, base)
+				}
+			}
 			// Vehicle::AddPassenger (Vehicle.cpp:471-478): boarding a
 			// specific occupied seat ejects its current occupant first,
 			// of either kind — a creature occupant blocks the board
@@ -3155,7 +3176,17 @@ func (s *Server) ejectVehicleSeatOccupant(ctx context.Context, mapID, instanceID
 		return
 	}
 	if occSess := s.findSessionByGUID(occupant); occSess != nil {
-		occSess.exitVehicle(ctx)
+		// Vehicle::AddPassenger (Vehicle.cpp:471-478) ejects the
+		// seat's occupant through ExitVehicle() — the ride aura
+		// strips from the base first and its remove leg runs
+		// _ExitVehicle — instead of unseating directly, which would
+		// leave the stale ride aura on the base and the dummy aura
+		// on the caster. A seat with no ride aura (Lua/debug board)
+		// keeps the direct exit as its fallback.
+		s.removeVehicleControlAuraFromBase(mapID, instanceID, baseGUID, occupant)
+		if occSess.player != nil && occSess.player.VehicleGUID != 0 {
+			occSess.exitVehicle(ctx)
+		}
 		return
 	}
 	occMotion := s.findCreatureMotion(mapID, instanceID, occupant)
@@ -3172,6 +3203,26 @@ func (s *Server) ejectVehicleSeatOccupant(ctx context.Context, mapID, instanceID
 		if base := s.findCreatureMotion(mapID, instanceID, baseGUID); base != nil {
 			s.smartPassengerBoarded(ctx, base, occupant, freedSeat, false)
 		}
+		return
+	}
+	// Vehicle::AddPassenger (Vehicle.cpp:471-478) ejects the seat's
+	// occupant through ExitVehicle() — the ride aura strips from the
+	// base first and its remove leg runs _ExitVehicle through
+	// removeCreatureVehicleSeat — instead of unseating directly. A
+	// strip-unseated occupant already rode the exit position,
+	// fall-or-teleport and tail legs inside that path, so only the
+	// passenger-list sync remains; a seat with no ride aura
+	// (Lua/debug board) keeps the direct _ExitVehicle twin below as
+	// its fallback.
+	s.removeVehicleControlAuraFromBase(mapID, instanceID, baseGUID, occupant)
+	s.motionMu.Lock()
+	stillSeated := false
+	if m, ok := s.motionMapLocked(mapID, instanceID)[occupant]; ok && m != nil && m.VehicleGUID == baseGUID {
+		stillSeated = true
+	}
+	s.motionMu.Unlock()
+	if !stillSeated {
+		s.syncCreatureVehiclePassengers(occMotion)
 		return
 	}
 	// Unit::_ExitVehicle (Unit.cpp:13215-13234): the exit position is
