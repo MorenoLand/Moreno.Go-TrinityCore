@@ -1302,7 +1302,10 @@ func (s *Server) unsummonEjectedVehicleAccessory(motion *creatureMotion, wasAcce
 // (Go never ejected them at death), while the refill kept the stale accessory
 // + remaining timer and left the player riding. The eject leg follows the
 // evade reinstall's RemovePassenger pattern for creatures, with the
-// Unit::_ExitVehicle (Unit.cpp:13258-13265) fate for minion accessories:
+// Unit::_ExitVehicle (Unit.cpp:13215-13249) exit-position + fall legs —
+// the ejected creature relocates to the base position (+ seat addon)
+// and falls on a SetFall spline when airborne — and the
+// (Unit.cpp:13258-13265) fate for minion accessories:
 // the aura removal behind RemoveAllPassengers runs _ExitVehicle, and a
 // UNIT_MASK_ACCESSORY minion unsummons (UnSummon(2000)) while the base is
 // alive — only non-minion passengers stay in the world. The player leg
@@ -1349,6 +1352,18 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 			continue
 		}
 		occupantMotion := s.findCreatureMotion(motion.Map, motion.InstanceID, guid)
+		// Unit::_ExitVehicle (Unit.cpp:13215-13234): the exit position is
+		// the vehicle base position with the passenger's orientation,
+		// then the ModifyVehiclePassengerExitPos override, then the seat
+		// addon's Offset/Dest transform — captured BEFORE the seat frees
+		// below (Unit.cpp:13193): after RemovePassenger the addon lookup
+		// finds nothing. The old leg left the ejected passenger at its
+		// stale seat-offset position; C++ relocates it to the exit
+		// position on every eject, respawn included.
+		var exitX, exitY, exitZ, exitO float32
+		if occupantMotion != nil {
+			exitX, exitY, exitZ, exitO = s.creatureVehicleExitPosition(motion.GUID, occupantMotion, motion)
+		}
 		seatID, _, _, _ := kit.RemovePassenger(guid)
 		s.smartPassengerBoarded(ctx, motion, guid, seatID, false)
 		if occupantMotion == nil {
@@ -1356,12 +1371,27 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		}
 		wasAccessoryMinion := occupantMotion.VehicleAccessoryMinion
 		s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(motion), s.luaMotionCreature(occupantMotion))
+		// The exit position lands here, before the fall below, so the
+		// fall spline launches from it (Unit.cpp:13238-13249), as in the
+		// death/kit-drop twin (exitCreatureVehiclePassengers).
 		s.motionMu.Lock()
+		occupantMotion.X, occupantMotion.Y, occupantMotion.Z, occupantMotion.Orientation = exitX, exitY, exitZ, exitO
+		phase := occupantMotion.PhaseMask
 		occupantMotion.VehicleGUID = 0
 		occupantMotion.VehicleSeat = 0
 		occupantMotion.VehicleAccessoryMinion = false
 		occupantMotion.Moving = false
 		s.motionMu.Unlock()
+		// Unit::_ExitVehicle (Unit.cpp:13238-13249): a ground creature
+		// ejected mid-air falls to the ground on a SetFall spline
+		// instead of hanging at the exit position in the air. The fall
+		// launches before the 2s unsummon below (:13265), as in C++.
+		// Without a fall the move to the exit position rides the
+		// teleport broadcast, as in the Lua ExitVehicle arm.
+		if !s.fallAfterVehicleExit(motion.Map, motion.InstanceID, motion.GUID, occupantMotion) {
+			_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: exitX, Y: exitY, Z: exitZ, Orientation: exitO})
+			s.broadcastCreatureTeleportMovement(motion.Map, motion.InstanceID, guid, exitX, exitY, exitZ, nearby, phase)
+		}
 		s.unsummonEjectedVehicleAccessory(occupantMotion, wasAccessoryMinion)
 	}
 	origin := s.summonOriginFromMotion(motion)
@@ -1407,34 +1437,62 @@ func (s *Server) installPlayerVehicleAccessories(ctx context.Context, sess *sess
 }
 
 // removeCreatureVehicleSeat mirrors the Unit::setDeathState ExitVehicle
-// leg (Unit.cpp:8915-8916) for a creature leaving its base's kit without
-// the movement/fall/tail arms: Vehicle::RemovePassenger frees the seat
-// (Vehicle.cpp:518) and OnRemovePassenger fires for creature bases
-// (Vehicle.cpp:538-539) with the SmartAI passenger-boarded (false)
-// event; a player base stays silent per the C++ TYPEID_UNIT gate. The
-// passenger's vehicle fields clear with the seat, as _ExitVehicle
-// clears the vehicle pointer. Returns false when the creature was not
-// seated in the named base's kit — the seat may already be gone when a
-// death sweep re-enters through applyCreatureDeathState, and the fire
-// must not double. A base that teleported away keys its kit under
-// another map, so every kit for the base GUID is swept, not just the
-// passenger's own map.
+// leg (Unit.cpp:8915-8916) for a dying creature passenger: C++ runs the
+// FULL _ExitVehicle, not a plain unseat — ExitVehicle removes the
+// SPELL_AURA_CONTROL_VEHICLE aura and the remove leg runs
+// caster->_ExitVehicle() (SpellAuraEffects.cpp:3000), which frees the
+// seat (Vehicle::RemovePassenger, Vehicle.cpp:497-543: seat reset :515,
+// OnRemovePassenger :539), relocates to the exit position (base
+// position + ModifyVehiclePassengerExitPos + seat addon, Unit.cpp:
+// 13215-13234), and falls to the ground on a SetFall spline when the
+// passenger cannot fly (Unit.cpp:13238-13249). The SmartAI
+// passenger-boarded (false) event rides the hook, and a player base
+// stays silent per the C++ TYPEID_UNIT gate. The _ExitVehicle TAIL
+// (Unit.cpp:13251-13266: minion-base DespawnOrUnsummon(1ms), accessory
+// UnSummon(2000)) is NOT run here — the accessory leg would re-apply
+// the death state to a passenger already dying when its base is dead,
+// so it stays a flagged follow-up. Returns false when the creature was
+// not seated in the named base's kit — the seat may already be gone
+// when a death sweep re-enters through applyCreatureDeathState, and
+// the fire must not double. A base that teleported away keys its kit
+// under another map, so every kit for the base GUID is swept, not just
+// the passenger's own map.
 func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceID uint32, passengerGUID, baseGUID uint64) bool {
 	if s == nil || passengerGUID == 0 || baseGUID == 0 {
 		return false
 	}
 	removed := false
+	var exitMotion *creatureMotion
+	var exitX, exitY, exitZ, exitO float32
+	var exitMapID, exitInstanceID, exitPhase uint32
 	for _, loc := range s.findVehicleKits(baseGUID) {
+		baseMotion := s.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, baseGUID)
+		passengerMotion := s.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, passengerGUID)
+		// Unit::_ExitVehicle (Unit.cpp:13193): the seat addon is read
+		// BEFORE RemovePassenger — after removal the seat is empty
+		// and the lookup finds nothing — so the exit position is
+		// captured here, ahead of the seat free below.
+		var px, py, pz, po float32
+		if passengerMotion != nil {
+			px, py, pz, po = s.creatureVehicleExitPosition(baseGUID, passengerMotion, baseMotion)
+		}
 		seatID, _, _, ok := loc.kit.RemovePassenger(passengerGUID)
 		if !ok {
 			continue
 		}
 		removed = true
-		if base := s.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, baseGUID); base != nil {
-			if motion := s.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, passengerGUID); motion != nil {
-				s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion))
+		if baseMotion != nil {
+			if passengerMotion != nil {
+				s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(baseMotion), s.luaMotionCreature(passengerMotion))
 			}
-			s.smartPassengerBoarded(ctx, base, passengerGUID, seatID, false)
+			s.smartPassengerBoarded(ctx, baseMotion, passengerGUID, seatID, false)
+		}
+		if exitMotion == nil && passengerMotion != nil {
+			exitMotion = passengerMotion
+			exitX, exitY, exitZ, exitO = px, py, pz, po
+			s.motionMu.Lock()
+			exitMapID, exitInstanceID, exitPhase = passengerMotion.Map, passengerMotion.InstanceID, passengerMotion.PhaseMask
+			s.motionMu.Unlock()
 		}
 	}
 	if removed {
@@ -1444,6 +1502,29 @@ func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceI
 			motion.VehicleSeat = 0
 			motion.Moving = false
 			s.motionMu.Unlock()
+		}
+		if exitMotion != nil {
+			// Unit::_ExitVehicle (Unit.cpp:13215-13249): the dying
+			// passenger relocates to the exit position (base position
+			// + ModifyVehiclePassengerExitPos + seat addon, captured
+			// above) and, when it cannot fly and the exit Z plus the
+			// base's collision height is above the ground, falls to
+			// it on a SetFall spline (EVENT_VEHICLE_EXIT) instead of
+			// hanging at the seat-offset position in mid-air. Without
+			// a fall the move rides the teleport broadcast, as in the
+			// Lua ExitVehicle arm. The launch lifts the Go-side dead
+			// refusal: MotionMaster::MoveFall has no dead gate
+			// (MotionMaster.cpp:919-955).
+			s.motionMu.Lock()
+			exitMotion.VehicleGUID = 0
+			exitMotion.VehicleSeat = 0
+			exitMotion.Moving = false
+			exitMotion.X, exitMotion.Y, exitMotion.Z, exitMotion.Orientation = exitX, exitY, exitZ, exitO
+			s.motionMu.Unlock()
+			if !s.fallAfterVehicleExitAllowDead(exitMapID, exitInstanceID, baseGUID, exitMotion, true) {
+				_, nearby := buildTeleportMovementPackets(passengerGUID, movementInfo{Time: s.gameTimeMilliseconds(), X: exitX, Y: exitY, Z: exitZ, Orientation: exitO})
+				s.broadcastCreatureTeleportMovement(exitMapID, exitInstanceID, passengerGUID, exitX, exitY, exitZ, nearby, exitPhase)
+			}
 		}
 	}
 	return removed
@@ -1489,6 +1570,17 @@ func (s *Server) exitDeadPlayerBasePassengers(ctx context.Context, mapID, instan
 // spline launched, so the caller can broadcast the exit-position
 // teleport when no fall runs, as the Lua ExitVehicle arm does.
 func (s *Server) fallAfterVehicleExit(mapID, instanceID uint32, baseGUID uint64, motion *creatureMotion) bool {
+	return s.fallAfterVehicleExitAllowDead(mapID, instanceID, baseGUID, motion, false)
+}
+
+// fallAfterVehicleExitAllowDead is the fallAfterVehicleExit twin for the
+// dying-passenger ExitVehicle leg (Unit::setDeathState, Unit.cpp:8915-8916):
+// the passenger's _ExitVehicle fall launches while it is JUST_DIED
+// (Unit.cpp:13238-13249; MotionMaster::MoveFall has no dead gate,
+// MotionMaster.cpp:919-955), so allowDead=true lifts the Go-side
+// Health==0 refusal in the launch. The eject/kit-drop callers keep the
+// default refusal — a corpse left seated on a kit-drop stays put.
+func (s *Server) fallAfterVehicleExitAllowDead(mapID, instanceID uint32, baseGUID uint64, motion *creatureMotion, allowDead bool) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -1502,7 +1594,7 @@ func (s *Server) fallAfterVehicleExit(mapID, instanceID uint32, baseGUID uint64,
 	height := z + s.vehicleBaseCollisionHeight(mapID, instanceID, baseGUID)
 	level, ground := s.mapWaterOrGroundLevel(mapID, x, y, height, terrainDefaultCollisionHeight)
 	if level > terrainInvalidHeight && height > level {
-		return s.launchCreatureFallSpline(motion, x, y, ground, movementInformVehicleExit)
+		return s.launchCreatureFallSplineAllowDead(motion, x, y, ground, movementInformVehicleExit, allowDead)
 	}
 	return false
 }

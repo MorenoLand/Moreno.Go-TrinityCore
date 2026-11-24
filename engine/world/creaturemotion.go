@@ -2420,7 +2420,17 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 	// ALIVE or JUST_RESPAWNED.
 	if state != creatureDeathAlive && state != creatureDeathJustRespawned {
 		if passengerBaseGUID != 0 {
-			s.removeCreatureVehicleSeat(ctx, mapID, instanceID, guid, passengerBaseGUID)
+			// Unit::setDeathState JUST_DIED arm (Unit.cpp:8927-8940):
+			// the motion-master clear / StopMoving / DisableSpline
+			// run only if (!isOnVehicle) — a dying passenger exits
+			// first (ExitVehicle, :8915-8916) and its _ExitVehicle
+			// fall spline survives. A seat actually freed here is
+			// the isOnVehicle twin, so the stop below is skipped; a
+			// stale VehicleGUID (no seat) leaves the stop in place,
+			// as in C++ when GetVehicle() is null.
+			if s.removeCreatureVehicleSeat(ctx, mapID, instanceID, guid, passengerBaseGUID) {
+				stopMotion = false
+			}
 		}
 		if kit := s.getVehicleKit(mapID, instanceID, guid); kit != nil {
 			s.exitCreatureVehiclePassengers(mapID, instanceID, kit, state == creatureDeathJustDied, nil)
@@ -7239,8 +7249,24 @@ func (s *Server) vehicleBaseCollisionHeight(mapID, instanceID uint32, baseGUID u
 // (ScriptMovePointID/dest) so the prologue landing gate can fire the
 // MovementInform EFFECT arrival (event 28). A drop under 0.1 launches
 // nothing (MotionMaster.cpp:931-933), and a dead creature launches
-// nothing, like the parabolic core.
+// nothing by default, like the parabolic core — the setDeathState
+// ExitVehicle leg lifts that Go-side gate via
+// launchCreatureFallSplineAllowDead (MotionMaster::MoveFall itself has
+// no dead check, MotionMaster.cpp:919-955).
 func (s *Server) launchCreatureFallSpline(motion *creatureMotion, destX, destY, destZ float32, id uint32) bool {
+	return s.launchCreatureFallSplineAllowDead(motion, destX, destY, destZ, id, false)
+}
+
+// launchCreatureFallSplineAllowDead is the launchCreatureFallSpline twin
+// for the Unit::setDeathState ExitVehicle leg (Unit.cpp:8915-8916):
+// MotionMaster::MoveFall (MotionMaster.cpp:919-955) gates only on the
+// ground-near (<0.1) and ROOT/STUNNED legs, so a JUST_DIED passenger's
+// _ExitVehicle fall launches (Unit.cpp:13238-13249) and the JUST_DIED
+// arm then leaves it alone (Unit.cpp:8927-8940, skipped when
+// isOnVehicle). allowDead=true lifts only the Go-side Health==0
+// refusal; every other gate (root/stun/not-move aura, drop <0.1) still
+// applies, and the kit-drop paths keep the default refusal.
+func (s *Server) launchCreatureFallSplineAllowDead(motion *creatureMotion, destX, destY, destZ float32, id uint32, allowDead bool) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -7251,7 +7277,7 @@ func (s *Server) launchCreatureFallSpline(motion *creatureMotion, destX, destY, 
 	// motionMu (auraMu ordering, cf. launchCreatureScriptSplineSpeed).
 	notMoveAura := s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion))
 	s.motionMu.Lock()
-	if motion.Health == 0 || motion.ScriptRooted || motion.ScriptStunned || notMoveAura {
+	if (motion.Health == 0 && !allowDead) || motion.ScriptRooted || motion.ScriptStunned || notMoveAura {
 		s.motionMu.Unlock()
 		return false
 	}
