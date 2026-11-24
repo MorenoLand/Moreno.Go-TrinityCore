@@ -4483,10 +4483,9 @@ func (s *Server) smartActionSetIngamePhaseMask(ctx context.Context, motion *crea
 		if tm == nil {
 			continue
 		}
-		s.motionMu.Lock()
-		tm.PhaseMask = mask
-		tm.PhaseMaskKnown = true
-		s.motionMu.Unlock()
+		// Creature::SetPhaseMask (Creature.cpp:656-668): the write
+		// propagates to seated passengers.
+		s.setCreaturePhaseMask(tm, mask)
 	}
 }
 

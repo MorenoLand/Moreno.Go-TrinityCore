@@ -1948,6 +1948,74 @@ func (s *Server) propagatePlayerPhaseToVehicleRoot(sess *session) {
 	}
 }
 
+// setCreaturePhaseMask mirrors Creature::SetPhaseMask
+// (Creature.cpp:656-668): a no-op mask change neither rewrites the slot
+// nor propagates; otherwise the slot is written and every seated
+// passenger gets the same mask through its own SetPhaseMask (a player
+// passenger through the Player::SetPhaseMask twin, a creature passenger
+// recursively, so a nested vehicle base re-propagates to its own seats).
+// Go keeps the phase in two levers — the stored motion.PhaseMask and the
+// runtime 261-phase override map the visibility reads prefer
+// (creatureEffectivePhaseMask) — so both are written; the base's own 261
+// recompute overwrites the override key when its own phase next changes,
+// the same way the player-side twin relies on it. The visited set caps
+// the climb: the board guards forbid a seat cycle, but a corrupted chain
+// must not recurse forever the way C++'s unbounded loop would.
+func (s *Server) setCreaturePhaseMask(motion *creatureMotion, mask uint32) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.setCreaturePhaseMaskVisited(motion, mask, map[uint64]struct{}{})
+}
+
+func (s *Server) setCreaturePhaseMaskVisited(motion *creatureMotion, mask uint32, visited map[uint64]struct{}) {
+	if s == nil || motion == nil || visited == nil {
+		return
+	}
+	s.motionMu.Lock()
+	guid, mapID, instanceID, stored := motion.GUID, motion.Map, motion.InstanceID, motion.PhaseMask
+	s.motionMu.Unlock()
+	if _, ok := visited[guid]; ok {
+		return
+	}
+	visited[guid] = struct{}{}
+	if stored == mask && s.creatureEffectivePhaseMask(motion) == mask {
+		return
+	}
+	s.motionMu.Lock()
+	motion.PhaseMask = mask
+	motion.PhaseMaskKnown = true
+	s.motionMu.Unlock()
+	key := creatureAuraKeyForMotion(motion)
+	s.auraMu.Lock()
+	if s.creaturePhaseOverride == nil {
+		s.creaturePhaseOverride = make(map[creatureAuraKey]uint32)
+	}
+	s.creaturePhaseOverride[key] = mask
+	s.auraMu.Unlock()
+	kit := s.getVehicleKit(mapID, instanceID, guid)
+	if kit == nil {
+		return
+	}
+	kit.mu.RLock()
+	guids := make([]uint64, 0, len(kit.Seats))
+	for _, seat := range kit.Seats {
+		if seat != nil && seat.Passenger.GUID != 0 {
+			guids = append(guids, seat.Passenger.GUID)
+		}
+	}
+	kit.mu.RUnlock()
+	for _, passengerGUID := range guids {
+		if sess := s.findSessionByGUID(passengerGUID); sess != nil && sess.player != nil {
+			miscSetPhaseMask(sess, mask)
+			continue
+		}
+		if passenger := s.findCreatureMotion(mapID, instanceID, passengerGUID); passenger != nil {
+			s.setCreaturePhaseMaskVisited(passenger, mask, visited)
+		}
+	}
+}
+
 // setCreatureVehicleNotSelectable mirrors the VehicleJoinEvent::Execute
 // NOT_SELECTABLE leg (Vehicle.cpp:855-856) for a creature passenger: a
 // seat carrying VEHICLE_SEAT_FLAG_PASSENGER_NOT_SELECTABLE sets

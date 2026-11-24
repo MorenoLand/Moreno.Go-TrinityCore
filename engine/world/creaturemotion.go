@@ -11037,6 +11037,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// evades unconditionally, so the temporary-only case
 			// skips the evade here (the tick returns, as C++'s
 			// UpdateVictim-false early return does).
+			// Creature::SelectVictim (Creature.cpp:1234-1236): a creature
+			// riding a vehicle returns nullptr without evading when no
+			// acceptable target remains — the vehicle may eat the mob,
+			// so the passenger must not evade off its seat.
+			if motion.VehicleGUID != 0 {
+				return
+			}
 			if anyInvis, permanentInvis := s.creatureInvisibilityAuraState(creatureAuraKeyForMotion(motion)); anyInvis && !permanentInvis {
 				return
 			}

@@ -4764,10 +4764,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		s.motionMu.Lock()
-		motion.PhaseMask = mask
-		motion.PhaseMaskKnown = true
-		s.motionMu.Unlock()
+		// Creature::SetPhaseMask (Creature.cpp:656-668): the write
+		// propagates to seated passengers.
+		s.setCreaturePhaseMask(motion, mask)
 		return nil, nil
 	}
 	// GetMap is WorldObject::GetMap (WorldObjectMethods.h): the DBC-backed
