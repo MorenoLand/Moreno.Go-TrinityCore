@@ -5295,7 +5295,7 @@ func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool
 		// in C++ either, so nothing is sent for them.
 		if s.player.VehicleGUID != 0 && s.server != nil {
 			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil && !kit.IsPlayer && kit.CharmerGUID() == s.playerGUID {
-				s.sendVehiclePetSpells(s.player.VehicleGUID, s.server.loadCreatureSpells(ctx, kit.CreatureEntry))
+				s.sendVehiclePetSpells(ctx, s.player.VehicleGUID, kit.CreatureEntry, s.server.loadCreatureSpells(ctx, kit.CreatureEntry))
 			}
 		}
 		return true

@@ -340,6 +340,8 @@ const conditionSourceSpellImplicitTarget = 13 // CONDITION_SOURCE_TYPE_SPELL_IMP
 
 const conditionSourceSpellClickEvent = 18 // CONDITION_SOURCE_TYPE_SPELL_CLICK_EVENT (ConditionMgr.h:141)
 
+const conditionSourceVehicleSpell = 21 // CONDITION_SOURCE_TYPE_VEHICLE_SPELL (ConditionMgr.h:144)
+
 // Object type bits from the C++ TypeMask enum (ObjectGuid.h:48-56).
 // isType (Object.h:91) tests (mask & m_objectType) != 0 with the mask
 // truncated to uint16. m_objectType accumulates OBJECT (Object.cpp:71) |
@@ -787,6 +789,42 @@ func (s *session) meetSpellClickConditions(ctx context.Context, clickEntry, spel
 	})
 }
 
+// meetVehicleSpellConditions mirrors ConditionMgr::IsObjectMeetingVehicleSpellConditions
+// (ConditionMgr.cpp:1039-1053): `conditions` rows for source type 21 keyed on the
+// vehicle entry (SourceGroup) and spell id (SourceEntry) must evaluate with the
+// player as condition target 0 and the vehicle as target 1. A missing row set
+// passes; a missing table degrades to pass, other query errors fail closed like
+// the spell-click arm.
+func (s *session) meetVehicleSpellConditions(ctx context.Context, vehicleEntry, spellID uint32, vehicleGUID uint64) (bool, error) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true, nil
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx,
+		"SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceGroup = ? AND SourceEntry = ? ORDER BY ElseGroup",
+		conditionSourceVehicleSpell, vehicleEntry, spellID)
+	if err != nil {
+		if missingTable(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	defer rows.Close()
+	var conditions []conditionRow
+	for rows.Next() {
+		var row conditionRow
+		if err := rows.Scan(&row.ElseGroup, &row.ConditionType, &row.ConditionTarget, &row.Value1, &row.Value2, &row.Value3, &row.Negative); err != nil {
+			return false, err
+		}
+		conditions = append(conditions, row)
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return s.evalConditionGroups(ctx, conditions, func(ctx context.Context, row conditionRow) (bool, error) {
+		return s.evalCondition(ctx, row, vehicleEntry, vehicleGUID)
+	})
+}
+
 // meetGossipMenuConditions mirrors the Conditions arm of Player::GetGossipTextId
 // (Player.cpp:14722): a gossip_menu title row applies only when its attached
 // conditions pass.
@@ -1071,6 +1109,24 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 		active := s.server.cachedActiveGameEvents(ctx)
 		_, ok := active[row.Value1]
 		return ok, nil
+	case 13: // CONDITION_INSTANCE_INFO (ConditionMgr.cpp:293-318)
+		// Value3 selects the instance-info kind (ConditionMgr.h:167-170):
+		// DATA 0, GUID_DATA 1, BOSS_STATE 2, DATA64 3. Only BOSS_STATE
+		// has a Go reader (instanceBossState); the other kinds have no
+		// instance-data model and fail closed, as do rows evaluated
+		// outside a dungeon (C++ requires map->IsDungeon() and a
+		// non-nil instance script — a map with no stored boss states
+		// reads TO_BE_DECIDED, which never equals a DONE row). The
+		// condition target is the vehicle (target 1 of
+		// ConditionSourceInfo(player, vehicle)), which shares the
+		// player's map and instance.
+		if s.player == nil || s.server == nil {
+			return false, nil
+		}
+		if row.Value3 != 2 {
+			return false, nil
+		}
+		return s.server.instanceBossState(s.player.Map, s.player.InstanceID, uint32(row.Value1)) == uint8(row.Value2), nil
 	case 14: // CONDITION_QUEST_NONE
 		status, _ := s.characterQuestStatus(ctx, uint32(row.Value1))
 		rewarded := count("SELECT COUNT(1) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, row.Value1)

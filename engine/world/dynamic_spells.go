@@ -1182,7 +1182,7 @@ func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, ca
 		s.uncharmCreature(key, charmerGUID)
 		if charmer := s.findSessionByGUID(charmerGUID); charmer != nil && charmer.player != nil && charmer.player.Map == key.Map && charmer.player.InstanceID == key.InstanceID {
 			charmer.sendClientControl(key.GUID, false)
-			charmer.sendVehiclePetSpells(0, nil)
+			charmer.sendVehiclePetSpells(context.Background(), 0, 0, nil)
 		}
 	}
 	if wasPossessPet {

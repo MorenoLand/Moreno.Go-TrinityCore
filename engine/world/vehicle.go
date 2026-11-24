@@ -1674,7 +1674,7 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 				sess.applyVehicleSeatNotSelectable(seatInfo, nil, wasUnselectable)
 				if seatInfo != nil && seatInfo.CanControl() && !kit.IsPlayer {
 					sess.sendClientControl(kit.VehicleGUID, false)
-					sess.sendVehiclePetSpells(0, nil)
+					sess.sendVehiclePetSpells(ctx, 0, 0, nil)
 				}
 				sess.castVehicleExitParachute(ctx, kit.VehicleGUID)
 				if base := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID); base != nil {
@@ -2554,7 +2554,7 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 			sess.applyVehicleSeatNotSelectable(seatInfo, nil, wasUnselectable)
 			if seatInfo != nil && seatInfo.CanControl() && !kit.IsPlayer {
 				sess.sendClientControl(kit.VehicleGUID, false)
-				sess.sendVehiclePetSpells(0, nil)
+				sess.sendVehiclePetSpells(context.Background(), 0, 0, nil)
 			}
 			sess.castVehicleExitParachute(context.Background(), kit.VehicleGUID)
 			if vehicleObj != nil {
@@ -2878,7 +2878,7 @@ func (s *session) sendClientControl(targetGUID uint64, allowMove bool) {
 
 // sendVehiclePetSpells generates SMSG_PET_SPELLS (0x179) with vehicle action bar.
 // Reference: Player::VehicleSpellInitialize (Player.cpp:21183-21224).
-func (s *session) sendVehiclePetSpells(vehicleGUID uint64, spells []uint32) {
+func (s *session) sendVehiclePetSpells(ctx context.Context, vehicleGUID uint64, vehicleEntry uint32, spells []uint32) {
 	if s == nil || s.conn == nil {
 		return
 	}
@@ -2909,13 +2909,18 @@ func (s *session) sendVehiclePetSpells(vehicleGUID uint64, spells []uint32) {
 	// reach the client in C++. An empty/invalid slot still carries the i+8
 	// type byte (the u16(0)/u8(0)/u8(i+8) miss arm), not a bare zero; the
 	// condition-fail arm shares that shape; the vehicle-spell condition
-	// gate (ConditionMgr.cpp:1047-1061) is NOT ported yet — TDB 26091
-	// carries 5 SourceTypeOrReferenceId 21 rows (Oculus drake spells
+	// gate (ConditionMgr.cpp:1039-1053) sends that same miss arm for a
+	// spell whose conditions fail — TDB 26091 carries 5
+	// SourceTypeOrReferenceId 21 rows (Oculus drake spells
 	// 49592/50253/50344 gated on Urom DONE via CONDITION_INSTANCE_INFO,
 	// ICC abomination 71516 gated on item 49888 equipped), so the gate
 	// is a real gap, not vacuous.
 	for i := 0; i < 10; i++ {
 		if i < 8 && i < len(spells) && spells[i] > 0 {
+			if meets, err := s.meetVehicleSpellConditions(ctx, vehicleEntry, spells[i], vehicleGUID); err != nil || !meets {
+				buf.WriteU32(uint32(i+8) << 24)
+				continue
+			}
 			buf.WriteU32(spells[i] | (uint32(i+8) << 24))
 		} else if i < 8 {
 			buf.WriteU32(uint32(i+8) << 24)
@@ -3733,7 +3738,7 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 				if seatInfo.CanControl() && !kit.IsPlayer {
 					s.sendClientControl(vehicleGUID, true)
 					spells := s.server.loadCreatureSpells(context.Background(), kit.CreatureEntry)
-					s.sendVehiclePetSpells(vehicleGUID, spells)
+					s.sendVehiclePetSpells(ctx, vehicleGUID, kit.CreatureEntry, spells)
 				}
 				if seatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) {
 					s.player.UnitFlags |= 0x02000000 // UNIT_FLAG_NOT_SELECTABLE
@@ -4097,7 +4102,7 @@ func (s *session) exitVehicle(ctx context.Context) {
 			// never charmed, so there is nothing to release.
 			if seatInfo.CanControl() && primary != nil && !primary.IsPlayer {
 				s.sendClientControl(oldVehGUID, false)
-				s.sendVehiclePetSpells(0, nil)
+				s.sendVehiclePetSpells(ctx, 0, 0, nil)
 			}
 			// Vehicle::RemovePassenger (Vehicle.cpp:928-930): the
 			// NOT_SELECTABLE flag is only cleared when the passenger
@@ -4607,13 +4612,13 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 	if seatInfo != nil && !kit.IsPlayer && seatInfo.CanControl() {
 		s.sendClientControl(kit.VehicleGUID, true)
 		spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
-		s.sendVehiclePetSpells(kit.VehicleGUID, spells)
+		s.sendVehiclePetSpells(ctx, kit.VehicleGUID, kit.CreatureEntry, spells)
 	} else if oldSeatInfo != nil && !kit.IsPlayer && oldSeatInfo.CanControl() {
 		// Vehicle::RemovePassenger (Vehicle.cpp:517-518) drops the
 		// charm when the old seat could control and the new seat
 		// cannot; the JoinEvent re-charms only on a control seat.
 		s.sendClientControl(kit.VehicleGUID, false)
-		s.sendVehiclePetSpells(0, nil)
+		s.sendVehiclePetSpells(ctx, 0, 0, nil)
 	}
 	s.fireVehicleSeatAdd(ctx, kit, assigned)
 	s.sendPlayerUpdate()
@@ -4771,10 +4776,10 @@ func (s *session) sendVehicleSeatControlChange(ctx context.Context, kit *Vehicle
 	if newSeatInfo != nil && newSeatInfo.CanControl() {
 		s.sendClientControl(kit.VehicleGUID, true)
 		spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
-		s.sendVehiclePetSpells(kit.VehicleGUID, spells)
+		s.sendVehiclePetSpells(ctx, kit.VehicleGUID, kit.CreatureEntry, spells)
 	} else if oldSeatInfo != nil && oldSeatInfo.CanControl() {
 		s.sendClientControl(kit.VehicleGUID, false)
-		s.sendVehiclePetSpells(0, nil)
+		s.sendVehiclePetSpells(ctx, 0, 0, nil)
 	}
 }
 
