@@ -2423,7 +2423,7 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 			s.removeCreatureVehicleSeat(ctx, mapID, instanceID, guid, passengerBaseGUID)
 		}
 		if kit := s.getVehicleKit(mapID, instanceID, guid); kit != nil {
-			s.exitCreatureVehiclePassengers(mapID, instanceID, kit, state == creatureDeathJustDied)
+			s.exitCreatureVehiclePassengers(mapID, instanceID, kit, state == creatureDeathJustDied, nil)
 		}
 	}
 	// SmartAI::JustDied (SmartAI.cpp:570-575) runs
@@ -16327,8 +16327,10 @@ func (s *Server) pruneCreatureMotion(ctx context.Context, now time.Time) {
 		// Unit::RemoveFromWorld drops the kit). Without it a
 		// pruned base's accessories stay seated on a base that no
 		// longer exists, until respawn re-materializes a fresh
-		// kit; a pruned motion with no kit is a no-op here.
-		s.removeVehicleKit(motion.Map, motion.InstanceID, motion.GUID)
+		// kit; a pruned motion with no kit is a no-op here. The
+		// deleted motion rides along as the departing base, so
+		// the ev6 fire still has a base object.
+		s.removeVehicleKitWithBase(motion.Map, motion.InstanceID, motion.GUID, motion)
 	}
 }
 

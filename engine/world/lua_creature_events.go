@@ -546,8 +546,10 @@ func (s *Server) despawnCreatureMotion(ctx context.Context, mapID, instanceID ui
 	// before Unit::RemoveFromWorld drops the kit,
 	// Creature.cpp:314-322), so a script-despawned base's
 	// accessories unsummon on the kit-drop fate instead of
-	// lingering seated on a despawned base.
-	s.removeVehicleKit(mapID, instanceID, guid)
+	// lingering seated on a despawned base. The deleted motion
+	// rides along as the departing base, so the ev6 fire in
+	// exitCreatureVehiclePassengers still has a base object.
+	s.removeVehicleKitWithBase(mapID, instanceID, guid, m)
 	if maxHealth == 0 {
 		maxHealth = 1
 	}

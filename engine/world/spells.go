@@ -38089,7 +38089,7 @@ func (s *Server) clearCreatureAurasOnDeath(key creatureAuraKey) {
 	// Unit::setDeathState's JUST_DIED window (Unit.cpp:8903/8921),
 	// before Creature.cpp:2115 promotes the base to CORPSE.
 	if kit := s.getVehicleKit(key.Map, key.InstanceID, key.GUID); kit != nil {
-		s.exitCreatureVehiclePassengers(key.Map, key.InstanceID, kit, true)
+		s.exitCreatureVehiclePassengers(key.Map, key.InstanceID, kit, true, nil)
 	}
 	// Unit::RemoveAllAurasOnDeath's m_ownedAuras loop (Unit.cpp:4364-4370):
 	// auras the dying creature cast on other targets are destroyed too.
@@ -39638,7 +39638,8 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			// kit still exists (the SetVehicle remove leg's arm);
 			// creature accessories ride removeVehicleKit's
 			// exitCreatureVehiclePassengers (minions vanish, the rest
-			// unseat at their last relocated coords). The packet goes
+			// unseat at the exit position: base position plus
+			// orientation, hook, and seat addon). The packet goes
 			// before the kit drop, matching C++'s order.
 			if s.server != nil {
 				if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID); kit != nil {
