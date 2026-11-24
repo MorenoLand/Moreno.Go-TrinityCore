@@ -2224,6 +2224,11 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 		// below; a base that never resolves still roots (the root has
 		// no position dependency) and skips the spline.
 		_, _, seatAddon := kit.GetSeatForPassenger(passenger.GUID)
+		// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the board
+		// stamps the passenger's transport with the seat offsets.
+		s.server.motionMu.Lock()
+		stampCreatureVehicleTransport(passenger, vehicleGUID, assigned, seatInfo, seatAddon)
+		s.server.motionMu.Unlock()
 		baseX, baseY, baseZ, baseO, hasBase := float32(0), float32(0), float32(0), float32(0), false
 		if base := s.findCreatureMotion(vehicleGUID); base != nil {
 			baseX, baseY, baseZ, baseO, hasBase = base.X, base.Y, base.Z, base.Orientation, true

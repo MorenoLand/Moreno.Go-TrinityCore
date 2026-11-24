@@ -291,6 +291,11 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	// below; a base that never resolves still roots (the root has
 	// no position dependency) and skips the spline.
 	_, _, seatAddon := kit.GetSeatForPassenger(passengerGUID)
+	// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the board
+	// stamps the passenger's transport with the seat offsets.
+	s.motionMu.Lock()
+	stampCreatureVehicleTransport(motion, ref.baseGUID, assigned, seatInfo, seatAddon)
+	s.motionMu.Unlock()
 	baseX, baseY, baseZ, baseO, hasBase := float32(0), float32(0), float32(0), float32(0), false
 	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil {
 		baseX, baseY, baseZ, baseO, hasBase = base.X, base.Y, base.Z, base.Orientation, true
@@ -350,6 +355,10 @@ func (s *Server) luaVehicleRemovePassenger(ctx context.Context, ref *luaVehicleR
 	motion.VehicleSeat = 0
 	motion.Moving = false
 	s.motionMu.Unlock()
+	// Vehicle::RemovePassenger (Vehicle.cpp:518-529): the
+	// transport leg runs here, after the seat frees and
+	// before the OnRemovePassenger hooks below.
+	s.inheritOrResetCreatureVehicleTransport(effMap, effInstance, motion, ref.baseGUID)
 	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil && seatOK {
 		// Vehicle::RemovePassenger (Vehicle.cpp:536-539): the AI
 		// PassengerBoarded(false) call precedes the OnRemovePassenger

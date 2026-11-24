@@ -947,6 +947,11 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 		// with the transport-enter flag, ahead of the threat
 		// transfer below.
 		_, _, seatAddon := kit.GetSeatForPassenger(summoned.GUID)
+		// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the board
+		// stamps the passenger's transport with the seat offsets.
+		s.motionMu.Lock()
+		stampCreatureVehicleTransport(summoned, baseGUID, assigned, seatInfo, seatAddon)
+		s.motionMu.Unlock()
 		s.rootAndSplineBoardingCreaturePassenger(summoned, baseGUID, seatInfo, seatAddon, motion.X, motion.Y, motion.Z, motion.Orientation, true)
 		s.transferPassengerThreatToVehicleBase(origin.Map, origin.InstanceID, summoned.GUID, baseGUID)
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
@@ -1402,6 +1407,11 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 		// with the transport-enter flag, ahead of the threat
 		// transfer below.
 		_, _, seatAddon := kit.GetSeatForPassenger(summoned.GUID)
+		// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the board
+		// stamps the passenger's transport with the seat offsets.
+		s.motionMu.Lock()
+		stampCreatureVehicleTransport(summoned, baseGUID, assigned, seatInfo, seatAddon)
+		s.motionMu.Unlock()
 		s.rootAndSplineBoardingCreaturePassenger(summoned, baseGUID, seatInfo, seatAddon, x, y, z, o, true)
 		s.transferPassengerThreatToVehicleBase(origin.Map, origin.InstanceID, summoned.GUID, baseGUID)
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
@@ -1552,6 +1562,10 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		occupantMotion.VehicleAccessoryMinion = false
 		occupantMotion.Moving = false
 		s.motionMu.Unlock()
+		// Vehicle::RemovePassenger (Vehicle.cpp:518-529): the
+		// transport leg runs here, after the seat frees and
+		// before the fall below.
+		s.inheritOrResetCreatureVehicleTransport(motion.Map, motion.InstanceID, occupantMotion, motion.GUID)
 		// Unit::_ExitVehicle (Unit.cpp:13238-13249): a ground creature
 		// ejected mid-air falls to the ground on a SetFall spline
 		// instead of hanging at the exit position in the air. The fall
@@ -1575,7 +1589,7 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 			continue
 		}
 		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
-		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
+		assigned, seatInfo, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
 		if !ok {
 			// VehicleJoinEvent::Abort (Vehicle.cpp:943-944)
 			// despawns only UNIT_MASK_ACCESSORY passengers —
@@ -1592,6 +1606,12 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		summoned.VehicleSeat = assigned
 		summoned.VehicleAccessoryMinion = acc.IsMinion
 		summoned.Moving = false
+		s.motionMu.Unlock()
+		_, _, seatAddon := kit.GetSeatForPassenger(summoned.GUID)
+		// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the board
+		// stamps the passenger's transport with the seat offsets.
+		s.motionMu.Lock()
+		stampCreatureVehicleTransport(summoned, baseGUID, assigned, seatInfo, seatAddon)
 		s.motionMu.Unlock()
 		kit.mu.Lock()
 		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
@@ -1715,6 +1735,10 @@ func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceI
 			motion.VehicleSeat = 0
 			motion.Moving = false
 			s.motionMu.Unlock()
+			// Vehicle::RemovePassenger (Vehicle.cpp:518-529): the
+			// transport leg runs here, after the seat frees and
+			// before the unroot below.
+			s.inheritOrResetCreatureVehicleTransport(mapID, instanceID, motion, baseGUID)
 		}
 		// Unit::_ExitVehicle (Unit.cpp:13202-13210): the seat freed
 		// above, the board root clears unless a MOD_ROOT aura or the
@@ -2045,6 +2069,10 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 				motion.VehicleSeat = 0
 				motion.Moving = false
 				s.motionMu.Unlock()
+				// Vehicle::RemovePassenger (Vehicle.cpp:518-529): the
+				// transport leg runs here, after the seat frees and
+				// before the fall below.
+				s.inheritOrResetCreatureVehicleTransport(mapID, instanceID, motion, kit.VehicleGUID)
 				// Unit::_ExitVehicle (Unit.cpp:13238-13249): the fall
 				// spline launches before the 2s unsummon, as in C++,
 				// so the accessory falls for its remaining lifetime.
@@ -2066,6 +2094,10 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 		motion.VehicleSeat = 0
 		motion.Moving = false
 		s.motionMu.Unlock()
+		// Vehicle::RemovePassenger (Vehicle.cpp:518-529): the
+		// transport leg runs here, after the seat frees and
+		// before the fall below.
+		s.inheritOrResetCreatureVehicleTransport(mapID, instanceID, motion, kit.VehicleGUID)
 		// Unit::_ExitVehicle (Unit.cpp:13238-13249): a ground creature
 		// ejected mid-air falls to the ground on a SetFall spline
 		// instead of hanging at the exit position in the air. The
@@ -2100,8 +2132,10 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 // it, and only the player-packet path called setPosition, so a
 // creature base's kit sat at 0,0,0. Transport-riding bases stay out:
 // their passengers relocate through the transport arm (transports.go).
+// A base riding a vehicle keeps syncing: its TransportGUID is the
+// stamped vehicle base (VehicleJoinEvent :865-869), not a real transport.
 func (s *Server) syncCreatureVehiclePassengers(motion *creatureMotion) {
-	if s == nil || motion == nil || motion.TransportGUID != 0 {
+	if s == nil || motion == nil || (motion.TransportGUID != 0 && motion.VehicleGUID == 0) {
 		return
 	}
 	kit := s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID)
@@ -2755,6 +2789,64 @@ func (s *Server) interruptBoardingCreaturePassenger(motion *creatureMotion) {
 	s.removeCreatureAurasByType(creatureAuraKeyForMotion(motion), spellAuraMounted)
 }
 
+// stampCreatureVehicleTransport runs the VehicleJoinEvent::Execute
+// transport stamp (Vehicle.cpp:865-869) for a creature passenger that
+// just seated: MOVEMENTFLAG_ONTRANSPORT with the seat attachment
+// offsets, the seat addon's orientation offset, the assigned seat, and
+// the base GUID. The player twin is the enterVehicle stamp; a creature
+// board without it leaves TransportGUID 0 while VehicleGUID is set, so
+// the movement packets and the exit inherit leg cannot tell the
+// passenger rides anything. Caller holds motionMu.
+func stampCreatureVehicleTransport(motion *creatureMotion, baseGUID uint64, seat int8, seatInfo *wotlk.VehicleSeatEntry, addon *VehicleSeatAddon) {
+	if motion == nil || seatInfo == nil {
+		return
+	}
+	o := float32(0)
+	if addon != nil {
+		o = addon.SeatOrientationOffset
+	}
+	motion.TransportGUID = baseGUID
+	motion.TransportX, motion.TransportY, motion.TransportZ = seatInfo.AttachmentOffsetX, seatInfo.AttachmentOffsetY, seatInfo.AttachmentOffsetZ
+	motion.TransportO = o
+	motion.TransportSeat = seat
+}
+
+// inheritOrResetCreatureVehicleTransport runs the Vehicle::RemovePassenger
+// transport leg (Vehicle.cpp:518-529) for a creature passenger leaving a
+// vehicle: a base that itself rides a transport hands the passenger the
+// base's transport (GUID + offsets + seat), otherwise the passenger's
+// transport resets. The base's transport is recoverable only when it was
+// stamped at board (base.VehicleGUID != 0): a base riding a real
+// transport carries no offsets on its motion, so the passenger resets
+// instead of keeping the exited vehicle's stale stamp — a stale GUID
+// would park the creature behind the stepCreatureMotion transport gate
+// forever. Runs after the seat frees, before the OnRemovePassenger hooks,
+// as in C++.
+func (s *Server) inheritOrResetCreatureVehicleTransport(mapID, instanceID uint32, motion *creatureMotion, baseGUID uint64) {
+	if s == nil || motion == nil {
+		return
+	}
+	var inheritGUID uint64
+	var ix, iy, iz, io float32
+	var iseat int8
+	if baseGUID != 0 {
+		if base := s.findCreatureMotion(mapID, instanceID, baseGUID); base != nil {
+			s.motionMu.Lock()
+			if base.TransportGUID != 0 && base.VehicleGUID != 0 {
+				inheritGUID, ix, iy, iz, io, iseat = base.TransportGUID, base.TransportX, base.TransportY, base.TransportZ, base.TransportO, base.TransportSeat
+			}
+			s.motionMu.Unlock()
+		}
+	}
+	s.motionMu.Lock()
+	if inheritGUID != 0 {
+		motion.TransportGUID, motion.TransportX, motion.TransportY, motion.TransportZ, motion.TransportO, motion.TransportSeat = inheritGUID, ix, iy, iz, io, iseat
+	} else {
+		motion.TransportGUID, motion.TransportX, motion.TransportY, motion.TransportZ, motion.TransportO, motion.TransportSeat = 0, 0, 0, 0, 0, 0
+	}
+	s.motionMu.Unlock()
+}
+
 // rootAndSplineBoardingCreaturePassenger runs the VehicleJoinEvent::Execute
 // root and board-spline legs (Vehicle.cpp:884, :887-892) for a creature
 // passenger that just seated, after the clear-target (:883) and before the
@@ -3365,12 +3457,13 @@ func (s *session) exitVehicle(ctx context.Context) {
 		// the passenger's transport. The base's transport is its
 		// stored m_movementInfo (the kit snapshot, acked from the
 		// driver's packets) — or, when the driver never moved, the
-		// base motion's static-passenger TransportGUID, whose offsets
-		// Go cannot recover (creatureMotion carries no transport
-		// offsets), so the passenger keeps its own. Only the snapshot
-		// carries offsets, so only it arms the inherit leg; the motion
-		// GUID — or a player base's session TransportGUID — only
-		// vetoes the reset.
+		// base motion's stamped transport (a vehicle passenger's seat
+		// offsets, VehicleJoinEvent :865-869) or its static-passenger
+		// TransportGUID, whose offsets Go cannot recover, so the
+		// passenger keeps its own. The snapshot and the stamped motion
+		// both carry offsets, so both arm the inherit leg; an
+		// unstamped motion GUID — or a player base's session
+		// TransportGUID — only vetoes the reset.
 		if primary != nil {
 			baseOnTransport := false
 			var baseTransport *transportMovement
@@ -3380,6 +3473,18 @@ func (s *session) exitVehicle(ctx context.Context) {
 			}
 			if !baseOnTransport {
 				if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, oldVehGUID); motion != nil && motion.TransportGUID != 0 {
+					// A base whose transport was stamped at board (a
+					// vehicle passenger, VehicleJoinEvent :865-869)
+					// arms the inherit leg with its stamp; a real-
+					// transport base carries no offsets on its motion
+					// and only vetoes the reset, as before.
+					if motion.VehicleGUID != 0 {
+						s.server.motionMu.Lock()
+						if motion.TransportGUID != 0 {
+							baseTransport = &transportMovement{GUID: motion.TransportGUID, X: motion.TransportX, Y: motion.TransportY, Z: motion.TransportZ, Orientation: motion.TransportO, Seat: motion.TransportSeat}
+						}
+						s.server.motionMu.Unlock()
+					}
 					baseOnTransport = true
 				} else if baseSess := s.server.findSessionByGUID(oldVehGUID); baseSess != nil && baseSess.player != nil && baseSess.player.TransportGUID != 0 {
 					baseOnTransport = true
@@ -3761,6 +3866,18 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 		}
 		if !baseOnTransport {
 			if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, baseGUID); motion != nil && motion.TransportGUID != 0 {
+				// A base whose transport was stamped at board (a
+				// vehicle passenger, VehicleJoinEvent :865-869) arms
+				// the inherit leg with its stamp; a real-transport
+				// base carries no offsets on its motion and only
+				// vetoes the reset, as before.
+				if motion.VehicleGUID != 0 {
+					s.server.motionMu.Lock()
+					if motion.TransportGUID != 0 {
+						baseTransport = &transportMovement{GUID: motion.TransportGUID, X: motion.TransportX, Y: motion.TransportY, Z: motion.TransportZ, Orientation: motion.TransportO, Seat: motion.TransportSeat}
+					}
+					s.server.motionMu.Unlock()
+				}
 				baseOnTransport = true
 			} else if baseSess := s.server.findSessionByGUID(baseGUID); baseSess != nil && baseSess.player != nil && baseSess.player.TransportGUID != 0 {
 				baseOnTransport = true
@@ -3807,8 +3924,10 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 // charm arm only fires for a player passenger on a creature base
 // (Vehicle.cpp:871-876), so a creature passenger takes no control. A
 // failed re-board leaves the creature off the vehicle with only the
-// remove hooks fired; creature passengers carry no TransportGUID stamp
-// (positions ride syncCreatureVehiclePassengers), so no transport leg.
+// remove hooks fired, then runs the RemovePassenger transport leg
+// (inherit-or-reset, Vehicle.cpp:518-529); a successful re-board
+// re-stamps the transport with the new seat's offsets
+// (VehicleJoinEvent, Vehicle.cpp:865-869).
 func (s *Server) applyCreatureControlVehicleSeatChange(ctx context.Context, mapID, instanceID uint32, baseGUID, casterGUID uint64, newSeat int8) {
 	if s == nil || baseGUID == 0 || casterGUID == 0 {
 		return
@@ -3839,11 +3958,22 @@ func (s *Server) applyCreatureControlVehicleSeatChange(ctx context.Context, mapI
 		motion.VehicleGUID = 0
 		motion.VehicleSeat = 0
 		s.motionMu.Unlock()
+		// Vehicle::RemovePassenger (Vehicle.cpp:518-529): the
+		// failed re-board leaves the creature off the vehicle,
+		// so the transport leg runs here.
+		s.inheritOrResetCreatureVehicleTransport(mapID, instanceID, motion, baseGUID)
 		s.syncVehicleBaseNPCFlag(mapID, instanceID, baseGUID)
 		return
 	}
 	s.motionMu.Lock()
 	motion.VehicleSeat = assigned
+	s.motionMu.Unlock()
+	// The re-board is a new JoinEvent (Unit::ChangeSeat,
+	// Unit.cpp:13133-13170), so the transport re-stamps
+	// with the new seat's offsets (Vehicle.cpp:865-869).
+	_, seatInfo, seatAddon := kit.GetSeatForPassenger(casterGUID)
+	s.motionMu.Lock()
+	stampCreatureVehicleTransport(motion, baseGUID, assigned, seatInfo, seatAddon)
 	s.motionMu.Unlock()
 	s.fireCreatureVehicleSeatAdd(ctx, mapID, instanceID, kit, baseGUID, casterGUID, assigned)
 	s.syncVehicleBaseNPCFlag(mapID, instanceID, baseGUID)

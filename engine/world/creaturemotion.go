@@ -53,9 +53,14 @@ type creatureMotion struct {
 	Map                    uint32
 	InstanceID             uint32
 	TransportGUID          uint64
-	VehicleGUID            uint64 // base GUID while seated on a vehicle (Vehicle::AddPassenger seat); 0 = not seated
-	VehicleSeat            int8   // seat id on VehicleGUID's kit; valid only while VehicleGUID != 0
-	VehicleAccessoryMinion bool   // UNIT_MASK_ACCESSORY twin (Vehicle.cpp:404): set only for minion accessories, whose fate is bound to the vehicle
+	TransportX             float32 // seat-offset transport position stamped on vehicle board (VehicleJoinEvent, Vehicle.cpp:865-869); valid only while TransportGUID != 0
+	TransportY             float32
+	TransportZ             float32
+	TransportO             float32 // seat orientation offset (VehicleSeatAddon.SeatOrientationOffset, Vehicle.cpp:860-864)
+	TransportSeat          int8    // seat id on TransportGUID's kit (VehicleJoinEvent, Vehicle.cpp:865-869)
+	VehicleGUID            uint64  // base GUID while seated on a vehicle (Vehicle::AddPassenger seat); 0 = not seated
+	VehicleSeat            int8    // seat id on VehicleGUID's kit; valid only while VehicleGUID != 0
+	VehicleAccessoryMinion bool    // UNIT_MASK_ACCESSORY twin (Vehicle.cpp:404): set only for minion accessories, whose fate is bound to the vehicle
 	HomeX                  float32
 	HomeY                  float32
 	HomeZ                  float32
@@ -2351,6 +2356,13 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 		}
 		motion.VehicleGUID = 0
 		motion.VehicleSeat = 0
+		// The vehicle transport stamp clears with the seat
+		// (Vehicle::RemovePassenger :518-529 reset leg): a dead
+		// passenger rides nothing, and a stale GUID would park the
+		// respawned creature behind the stepCreatureMotion gate.
+		motion.TransportGUID = 0
+		motion.TransportX, motion.TransportY, motion.TransportZ, motion.TransportO = 0, 0, 0, 0
+		motion.TransportSeat = 0
 		motion.Moving = false
 		if state == creatureDeathJustDied {
 			motion.Health = 0
@@ -8773,7 +8785,7 @@ func (s *Server) summonedMotionsInRange(players []playerPos, distance float64) [
 	s.motionMu.Lock()
 	for _, p := range players {
 		for _, motion := range s.motionMapLocked(p.Map, p.InstanceID) {
-			if motion == nil || !motion.IsTempSummon || motion.TransportGUID != 0 {
+			if motion == nil || !motion.IsTempSummon || (motion.TransportGUID != 0 && motion.VehicleGUID == 0) {
 				continue
 			}
 			if _, dup := seen[motion]; dup {
@@ -10158,7 +10170,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion == nil {
 		return
 	}
-	if motion.TransportGUID != 0 {
+	// A vehicle passenger carries a stamped TransportGUID (the vehicle
+	// base, VehicleJoinEvent :865-869), but it still steps: this gate is
+	// for real transport riders only, whose movement the transport arm
+	// drives. Seated turrets keep their AIUpdate.
+	if motion.TransportGUID != 0 && motion.VehicleGUID == 0 {
 		motion.Moving = false
 		return
 	}
