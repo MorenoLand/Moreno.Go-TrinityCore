@@ -4518,7 +4518,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		state.MaxHealth = maxHealth
 		if state.Health > maxHealth {
-			state.Health = maxHealth
+			state.Health = playerSetHealthGuard(state.Health, state.PlayerFlags&playerFlagGhost != 0, maxHealth)
 		}
 		s.sendPlayerUpdate()
 		return nil, nil
@@ -4585,13 +4585,12 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.sendPlayerUpdate()
 		return nil, nil
 	}
-	// SetMaxPower is Unit::SetMaxPower (Unit.cpp:9654) via Eluna
+	// SetMaxPower is Unit::SetMaxPower (Unit.cpp:9654-9678) via Eluna
 	// (UnitMethods.h:1692): (type = -1, amount). A nil type reads the
 	// current power; a missing amount errors, matching C++'s
-	// required third argument. The current power is left untouched
-	// (C++ does not clamp it on max change). Powers 0-6 are valid —
-	// the handler twin's 0-4 cap is creature-side; runic power (6)
-	// is a real player power.
+	// required third argument. When the new max drops below the current
+	// power, SetPower clamps the current down (Unit.cpp:9676-9677).
+	// Powers 0-6 are valid; runic power (6) is a real player power.
 	methods["SetMaxPower"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("SetMaxPower requires a power type and amount")
@@ -4612,6 +4611,9 @@ func (s *session) luaPlayer() *scripting.Object {
 			return nil, err
 		}
 		state.MaxPowers[power] = amt
+		if state.Powers[power] > amt {
+			state.Powers[power] = amt
+		}
 		s.sendPlayerUpdate()
 		return nil, nil
 	}
@@ -5346,6 +5348,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
+		health = playerSetHealthGuard(state.Health, state.PlayerFlags&playerFlagGhost != 0, health)
 		if health > state.MaxHealth {
 			health = state.MaxHealth
 		}

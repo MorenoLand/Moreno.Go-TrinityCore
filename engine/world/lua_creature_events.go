@@ -3736,6 +3736,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, err
 		}
 		s.motionMu.Lock()
+		health = creatureSetHealthGuard(motion.DeathState, health)
 		if health > motion.MaxHealth {
 			health = motion.MaxHealth
 		}
@@ -3761,8 +3762,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.MaxHealth = maxHealth
 		updates := map[int]uint32{unitFieldMaxHealth: maxHealth}
 		if motion.Health > maxHealth {
-			motion.Health = maxHealth
-			updates[unitFieldHealth] = maxHealth
+			motion.Health = creatureSetHealthGuard(motion.DeathState, maxHealth)
+			updates[unitFieldHealth] = motion.Health
 		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
@@ -3862,7 +3863,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// return on an unchanged type, then the UNIT_FIELD_BYTES_0 power-type
 	// byte, then Creature::UpdateMaxPower (StatSystem.cpp:1030-1041) over
 	// GetCreatePowerValue (Unit.cpp:9679-9701): ENERGY 100, RAGE 1000,
-	// FOCUS/HAPPINESS/RUNE 0, RUNIC_POWER 1000 for a non-pet creature; MANA keeps the banked
+	// FOCUS 100 / HAPPINESS 1050000 for hunter pets (0 otherwise), RUNE 0, RUNIC_POWER 1000;
+	// MANA keeps the banked
 	// spawn mana. The current-power legs follow the C++ switch: RAGE
 	// resets to 0, FOCUS fills to max, ENERGY/MANA keep current. The
 	// group/pet update-flag legs are player/pet-only. No bytes-0
@@ -3897,15 +3899,17 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			motion.Powers[powerType] = 0
 			updates[unitFieldPower1+int(powerType)] = 0
 		case 2: // POWER_FOCUS
-			motion.MaxPowers[powerType] = 0
-			motion.BaseMaxPowers[powerType] = 0
-			updates[unitFieldMaxPower1+int(powerType)] = 0
-			motion.Powers[powerType] = 0
-			updates[unitFieldPower1+int(powerType)] = 0
+			focusMax := getCreatePowerValue(2, motion.PetType == petTypeHunter, 0)
+			motion.MaxPowers[powerType] = focusMax
+			motion.BaseMaxPowers[powerType] = focusMax
+			updates[unitFieldMaxPower1+int(powerType)] = focusMax
+			motion.Powers[powerType] = focusMax
+			updates[unitFieldPower1+int(powerType)] = focusMax
 		case 4: // POWER_HAPPINESS
-			motion.MaxPowers[powerType] = 0
-			motion.BaseMaxPowers[powerType] = 0
-			updates[unitFieldMaxPower1+int(powerType)] = 0
+			happinessMax := getCreatePowerValue(4, motion.PetType == petTypeHunter, 0)
+			motion.MaxPowers[powerType] = happinessMax
+			motion.BaseMaxPowers[powerType] = happinessMax
+			updates[unitFieldMaxPower1+int(powerType)] = happinessMax
 		case 5: // POWER_RUNE
 			motion.MaxPowers[powerType] = 0
 			motion.BaseMaxPowers[powerType] = 0
@@ -3988,16 +3992,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldPower1 + int(powerType): uint32(next)})
 		return []any{gain}, nil
 	}
-	// SetMaxPower is Unit::SetMaxPower (Unit.cpp): writes
-	// UNIT_FIELD_MAXPOWER1+type and broadcasts the update field. The current
-	// power is left untouched (C++ does not clamp current on max change).
+	// SetMaxPower is Unit::SetMaxPower (Unit.cpp:9654-9678): writes
+	// UNIT_FIELD_MAXPOWER1+type and broadcasts the update field; when the new
+	// max drops below the current power, SetPower clamps the current down
+	// (Unit.cpp:9676-9677), so the power field rides along. Domain 0-6
+	// (the old 0-4 cap wrongly rejected RUNE/RUNIC_POWER).
 	methods["SetMaxPower"] = func(_ context.Context, args []any) ([]any, error) {
 		powerType, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		if powerType > 4 {
-			return nil, fmt.Errorf("SetMaxPower requires a power type 0-4, got %d", powerType)
+		if powerType > 6 {
+			return nil, fmt.Errorf("SetMaxPower requires a power type 0-6, got %d", powerType)
 		}
 		value, err := luaUint32Arg(args, 1)
 		if err != nil {
@@ -4005,9 +4011,20 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		motion.MaxPowers[powerType] = value
+		updates := map[int]uint32{unitFieldMaxPower1 + int(powerType): value}
+		if motion.Powers[powerType] > value {
+			motion.Powers[powerType] = value
+			if powerType == 0 {
+				motion.Mana = value
+			}
+			updates[unitFieldPower1+int(powerType)] = value
+		}
+		if powerType == 0 {
+			motion.MaxMana = value
+		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
-		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldMaxPower1 + int(powerType): value})
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, updates)
 		return nil, nil
 	}
 	// AttackStop is Unit::AttackStop (Unit.cpp:5763-5787): when the

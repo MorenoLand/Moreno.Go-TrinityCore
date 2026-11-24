@@ -1955,8 +1955,8 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		motion.MaxHealth = maxHealth
 		updates := map[int]uint32{unitFieldMaxHealth: maxHealth}
 		if motion.Health > maxHealth {
-			motion.Health = maxHealth
-			updates[unitFieldHealth] = maxHealth
+			motion.Health = creatureSetHealthGuard(motion.DeathState, maxHealth)
+			updates[unitFieldHealth] = motion.Health
 		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.server.motionMu.Unlock()
@@ -2061,9 +2061,10 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			map[int]uint32{unitFieldPower1 + int(power): uint32(next)})
 		return nil, nil
 	}
-	// SetMaxPower is Unit::SetMaxPower (UnitMethods.h:1692) for
+	// SetMaxPower is Unit::SetMaxPower (Unit.cpp:9654-9678) for
 	// session creatures: (type = -1, amount), nil type reading the
-	// current power, current power untouched, max field broadcast.
+	// current power; when the new max drops below the current power,
+	// SetPower clamps the current down (Unit.cpp:9676-9677).
 	methods["SetMaxPower"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("SetMaxPower requires a power type and amount")
@@ -2091,10 +2092,20 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		s.server.motionMu.Lock()
 		motion.MaxPowers[power] = amt
+		updates := map[int]uint32{unitFieldMaxPower1 + int(power): amt}
+		if motion.Powers[power] > amt {
+			motion.Powers[power] = amt
+			if power == 0 {
+				motion.Mana = amt
+			}
+			updates[unitFieldPower1+int(power)] = amt
+		}
+		if power == 0 {
+			motion.MaxMana = amt
+		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.server.motionMu.Unlock()
-		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
-			map[int]uint32{unitFieldMaxPower1 + int(power): amt})
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, updates)
 		return nil, nil
 	}
 	// SetPowerType is Unit::SetPowerType (Unit.cpp:5523-5569) via
@@ -2104,7 +2115,8 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// twin's 0-4 cap (the session power trio already serves 0-6).
 	// The early return on an unchanged type, the
 	// GetCreatePowerValue max legs (Unit.cpp:9679-9701: ENERGY
-	// 100, RAGE 1000, FOCUS/HAPPINESS 0, RUNIC 1000, RUNE 0; MANA
+	// 100, RAGE 1000, FOCUS 100 / HAPPINESS 1050000 for hunter pets (0 otherwise),
+	// RUNIC 1000, RUNE 0; MANA
 	// keeps its banked spawn mana, Creature::UpdateMaxPower's
 	// modifier legs unmodeled), and the current-power legs (RAGE
 	// resets to 0, FOCUS fills to its max of 0, others keep their
@@ -2140,15 +2152,17 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			motion.Powers[powerType] = 0
 			updates[unitFieldPower1+int(powerType)] = 0
 		case 2: // POWER_FOCUS
-			motion.MaxPowers[powerType] = 0
-			motion.BaseMaxPowers[powerType] = 0
-			updates[unitFieldMaxPower1+int(powerType)] = 0
-			motion.Powers[powerType] = 0
-			updates[unitFieldPower1+int(powerType)] = 0
+			focusMax := getCreatePowerValue(2, motion.PetType == petTypeHunter, 0)
+			motion.MaxPowers[powerType] = focusMax
+			motion.BaseMaxPowers[powerType] = focusMax
+			updates[unitFieldMaxPower1+int(powerType)] = focusMax
+			motion.Powers[powerType] = focusMax
+			updates[unitFieldPower1+int(powerType)] = focusMax
 		case 4: // POWER_HAPPINESS
-			motion.MaxPowers[powerType] = 0
-			motion.BaseMaxPowers[powerType] = 0
-			updates[unitFieldMaxPower1+int(powerType)] = 0
+			happinessMax := getCreatePowerValue(4, motion.PetType == petTypeHunter, 0)
+			motion.MaxPowers[powerType] = happinessMax
+			motion.BaseMaxPowers[powerType] = happinessMax
+			updates[unitFieldMaxPower1+int(powerType)] = happinessMax
 		case 5: // POWER_RUNE
 			motion.MaxPowers[powerType] = 0
 			motion.BaseMaxPowers[powerType] = 0
@@ -2334,6 +2348,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			s.server.motionMu.Unlock()
 			return nil, nil
 		}
+		health = creatureSetHealthGuard(motion.DeathState, health)
 		if health > motion.MaxHealth {
 			health = motion.MaxHealth
 		}
