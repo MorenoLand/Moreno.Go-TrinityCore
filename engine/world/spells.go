@@ -3402,10 +3402,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// Durability == 0, the checkSpellRangedWeaponCast pattern), the same
 	// shape as mainHandWeaponIsDagger but for any ITEM_CLASS_WEAPON. The
 	// Player::IsUseEquipedWeapon(true) legs (Player.cpp:13657-13661) are
-	// unbridged: IsInFeralForm has no Go model (ShapeshiftForm carries no
-	// cat/bear/dire-bear form consts) and UNIT_FLAG_DISARMED has no Go
-	// UnitFlags bit. The creature leg (!UNIT_VIRTUAL_ITEM_SLOT_ID) is
-	// unbridged: creature motions carry no virtual-item model.
+	// unbridged: no Go twin reads the feral/disarm state on this path
+	// (isInFeralForm exists on playerState but is not consulted here),
+	// and UNIT_FLAG_DISARMED has no Go UnitFlags bit. The creature leg
+	// (!UNIT_VIRTUAL_ITEM_SLOT_ID) is unbridged: creature motions carry
+	// no virtual-item model.
 	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
 	if spell.Mechanic == mechanicDisarm && targetGUID != 0 && targetGUID != s.playerGUID {
 		if _, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer && !s.targetPlayerHasMainHandWeapon(ctx, targetGUID) {
@@ -24920,8 +24921,7 @@ func (s *session) attackPowerMultiplier(ctx context.Context, ranged, normalized 
 	if s == nil || s.player == nil {
 		return baseAttackTimeMs / 1000.0
 	}
-	form := s.player.ShapeshiftForm
-	feral := form == 1 || form == 5 || form == 8 // FORM_CAT, FORM_BEAR, FORM_DIREBEAR
+	feral := s.player.isInFeralForm() // FORM_CAT, FORM_BEAR, FORM_DIREBEAR
 	attackTime, slot := s.player.AttackTime, equipSlotMainhand
 	if ranged {
 		attackTime, slot = s.player.RangedAttackTime, equipSlotRanged

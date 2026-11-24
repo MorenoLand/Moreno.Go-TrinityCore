@@ -270,6 +270,9 @@ func (s *session) luaPlayer() *scripting.Object {
 	// state. Backs the druid forms-trinket CheckProc gate
 	// (spell_druid.cpp:367-385).
 	methods["GetShapeshiftForm"] = luaNoArgs(func() any { return uint32(state.ShapeshiftForm) })
+	// IsInFeralForm is Unit::IsInFeralForm (Unit.cpp:9164-9168): cat,
+	// bear or direbear form.
+	methods["IsInFeralForm"] = luaNoArgs(func() any { return state.isInFeralForm() })
 	methods["GetRace"] = luaNoArgs(func() any { return state.Race })
 	methods["GetClass"] = luaNoArgs(func() any { return state.Class })
 	// GetClassMask/GetRaceMask are Unit::GetClassMask/GetRaceMask

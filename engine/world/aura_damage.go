@@ -30,11 +30,7 @@ func (s *session) attackFitsAuraRequirement(ctx context.Context, spell wotlk.Spe
 	if s == nil || s.server == nil {
 		return false
 	}
-	var form uint8
-	if s.player != nil {
-		form = s.player.ShapeshiftForm
-	}
-	if form == 1 || form == 5 || form == 8 { // FORM_CAT, FORM_BEAR, FORM_DIREBEAR
+	if s.player.isInFeralForm() { // FORM_CAT, FORM_BEAR, FORM_DIREBEAR
 		return false
 	}
 	var slot uint8

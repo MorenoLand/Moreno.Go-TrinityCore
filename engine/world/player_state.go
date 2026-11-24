@@ -2403,7 +2403,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	// time (written by loadTransformDisplay before this rebuild) must
 	// survive; the weapon damage rows are superseded by the level-based
 	// feral formula below (StatSystem.cpp:586-595).
-	feralForm := state.ShapeshiftForm == 1 || state.ShapeshiftForm == 5 || state.ShapeshiftForm == 8
+	feralForm := state.isInFeralForm()
 	// Unit::CanUseAttackType (Unit.cpp:2462-2475): a disarmed attack type's
 	// weapon arms never apply — Player::_ApplyWeaponDamage
 	// (Player.cpp:7772-7775) early-outs on apply while the flag is set.

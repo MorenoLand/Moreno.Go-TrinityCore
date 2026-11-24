@@ -12,6 +12,23 @@ import (
 // through refreshTransformDisplay, by state.ShapeshiftForm.
 const formShadow uint8 = 0x1C
 
+// formCat/formBear/formDirebear mirror FORM_CAT/FORM_BEAR/FORM_DIREBEAR
+// (SpellAuraDefines.h:407-410): the feral shapeshift forms read by
+// Unit::IsInFeralForm (Unit.cpp:9164-9168).
+const (
+	formCat      uint8 = 1
+	formBear     uint8 = 5
+	formDirebear uint8 = 8
+)
+
+// isInFeralForm is Unit::IsInFeralForm (Unit.cpp:9164-9168).
+func (s *playerState) isInFeralForm() bool {
+	if s == nil {
+		return false
+	}
+	return s.ShapeshiftForm == formCat || s.ShapeshiftForm == formBear || s.ShapeshiftForm == formDirebear
+}
+
 func playerPowerType(state *playerState) uint8 {
 	if state == nil {
 		return 0
@@ -503,13 +520,13 @@ func (s *session) applyShapeshiftFormEffects(ctx context.Context, spellID uint32
 	// needs a twin. Energy forms keep their power (the cat arm zeroes
 	// energy itself below); stances only fire for warriors, already rage.
 	switch form {
-	case 5, 8: // FORM_BEAR / FORM_DIREBEAR
+	case formBear, formDirebear: // FORM_BEAR / FORM_DIREBEAR
 		if playerPowerType(s.player) != powerRage {
 			s.adjustSpellPower(ctx, s.playerGUID, int32(powerRage), -int64(s.player.Powers[powerRage]))
 		}
 	}
 	switch form {
-	case 1, 5, 8: // cat/bear/direbear carry non-mana power: the Furor arms
+	case formCat, formBear, formDirebear: // cat/bear/direbear carry non-mana power: the Furor arms
 		chance := s.furorProcChance()
 		if form == 1 {
 			oldPower := s.player.Powers[powerEnergy]

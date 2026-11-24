@@ -827,6 +827,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// (0, SpellAuraDefines.h:409) — the C++ default for a unit whose
 	// form was never set. The player-surface twin reads the live state.
 	methods["GetShapeshiftForm"] = luaNoArgs(func() any { return uint32(0) })
+	// IsInFeralForm is Unit::IsInFeralForm (Unit.cpp:9164-9168):
+	// creatures carry no shapeshift form in the Go model (see
+	// GetShapeshiftForm above), so this reads false.
+	methods["IsInFeralForm"] = luaNoArgs(func() any { return false })
 	methods["IsPvPFlagged"] = luaNoArgs(func() any {
 		s.motionMu.Lock()
 		defer s.motionMu.Unlock()
