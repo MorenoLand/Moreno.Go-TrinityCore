@@ -34,13 +34,13 @@ type statCandidate struct {
 // quirk for exact same-spell ties is not replicated. A spell is assumed
 // to sit in at most one EXCLUSIVE_SAME_EFFECT group per aura type, as
 // C++ itself asserts (SpellMgr.cpp:404).
-func (s *session) auraStatMods(excludeSpellID uint32, extra ...*activeAura) (flat [5]int32, baseMult, totalMult [5]float32) {
+func (s *session) auraStatMods(excludeSpellID uint32, extra ...*activeAura) (flat [5]int32, baseMult, totalMult [5]float32, posFlat, negFlat [5]int32) {
 	for i := range baseMult {
 		baseMult[i] = 1
 		totalMult[i] = 1
 	}
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
-		return flat, baseMult, totalMult
+		return flat, baseMult, totalMult, posFlat, negFlat
 	}
 	var c29, c80, c137 [5][]statCandidate
 	auras := s.loadedAuras()
@@ -98,6 +98,14 @@ func (s *session) auraStatMods(excludeSpellID uint32, extra ...*activeAura) (fla
 	for st := 0; st < 5; st++ {
 		for _, w := range statWinners(c29[st], cache) {
 			flat[st] += w.amount
+			// Unit::UpdateStatBuffMod (Unit.cpp:5094-5151) splits the aura-29
+			// flat leg by sign before the pct factor applies, so the
+			// POSSTAT/NEGSTAT display fields carry the split, not the net.
+			if w.amount > 0 {
+				posFlat[st] += w.amount
+			} else if w.amount < 0 {
+				negFlat[st] += w.amount
+			}
 		}
 		m := float32(1)
 		for _, w := range statWinners(c80[st], cache) {
@@ -110,7 +118,7 @@ func (s *session) auraStatMods(excludeSpellID uint32, extra ...*activeAura) (fla
 		}
 		totalMult[st] = m
 	}
-	return flat, baseMult, totalMult
+	return flat, baseMult, totalMult, posFlat, negFlat
 }
 
 // statWinners applies the exclusive-same-effect gate to one stat's

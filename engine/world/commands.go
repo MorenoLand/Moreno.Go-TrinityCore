@@ -119,7 +119,10 @@ func (s *session) sendPlayerUpdate() {
 	}
 	for i := 0; i < 5; i++ {
 		fields[unitFieldStat0+i] = s.player.Stats[i]
-		fields[unitFieldPosStat0+i] = s.player.Stats[i]
+		// Unit::UpdateStatBuffMod (Unit.cpp:5094-5151) display split,
+		// recomputed with the stat fold in calculatePlayerStats.
+		fields[unitFieldPosStat0+i] = math.Float32bits(s.player.PosStatMods[i])
+		fields[unitFieldNegStat0+i] = math.Float32bits(s.player.NegStatMods[i])
 	}
 	for i, p := range s.player.Powers {
 		fields[unitFieldPower1+i] = p

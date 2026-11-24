@@ -405,6 +405,12 @@ type playerState struct {
 	Buyback                         [12]*buybackSlot
 	Stats                           [5]uint32
 	BaseStats                       [5]uint32
+	// PosStatMods/NegStatMods carry the Unit::UpdateStatBuffMod
+	// (Unit.cpp:5094-5151) display split: the per-stat positive and
+	// negative buff modifiers (items + aura-29, times the 80/137 pct
+	// factor), written to UNIT_FIELD_POSSTAT0/NEGSTAT0.
+	PosStatMods                     [5]float32
+	NegStatMods                     [5]float32
 	MeleeCrit                       float32
 	RangedCrit                      float32
 	OffhandCrit                     float32
@@ -2575,7 +2581,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	// basePct multiply covers them too, not just the create stat. At this
 	// point state.Stats holds base + items only (aura residue is
 	// impossible: every entry path rebuilds from BaseStats).
-	statFlat, statBaseMult, statTotalMult := s.auraStatMods(0)
+	statFlat, statBaseMult, statTotalMult, statPosFlat, statNegFlat := s.auraStatMods(0)
 	for i := 0; i < 5; i++ {
 		items := int64(state.Stats[i]) - int64(state.BaseStats[i])
 		v := int64(float64(int64(state.BaseStats[i])+items)*float64(statBaseMult[i])) + int64(statFlat[i])
@@ -2584,6 +2590,22 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 			v = 0
 		}
 		state.Stats[i] = uint32(v)
+		// Unit::UpdateStatBuffMod (Unit.cpp:5094-5151): the display split
+		// is the items/enchants flat (UNIT_MOD_STAT BASE_VALUE) plus the
+		// aura-29 flat leg, each split by sign, times the 80/137 pct
+		// factor. The level base stat never enters it, and the guardian
+		// leg stays out (no Go guardian stat model).
+		factor := statBaseMult[i] * statTotalMult[i]
+		var pos, neg float32
+		if items > 0 {
+			pos += float32(items)
+		} else {
+			neg += float32(items)
+		}
+		pos += float32(statPosFlat[i])
+		neg += float32(statNegFlat[i])
+		state.PosStatMods[i] = pos * factor
+		state.NegStatMods[i] = neg * factor
 	}
 
 	// Aura resistance modifiers (aura_resistance.go): the per-school
@@ -4295,10 +4317,10 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 			statVal = uint32(20 + int(state.Level)*2)
 		}
 		values[unitFieldStat0+i] = statVal
-		baseStat := state.BaseStats[i]
-		if baseStat < statVal {
-			values[unitFieldPosStat0+i] = statVal - baseStat
-		}
+		// Unit::UpdateStatBuffMod (Unit.cpp:5094-5151) display split,
+		// recomputed with the stat fold in calculatePlayerStats.
+		values[unitFieldPosStat0+i] = math.Float32bits(state.PosStatMods[i])
+		values[unitFieldNegStat0+i] = math.Float32bits(state.NegStatMods[i])
 	}
 	armor := state.Armor
 	if armor == 0 {
