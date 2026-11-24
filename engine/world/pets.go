@@ -1491,7 +1491,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		s.server.activeCreatureAuras[petKey] = make(map[uint32]*activeAura)
 	}
 	for _, aura := range pending {
-		aura.Slot = uint8(len(s.server.activeCreatureAuras[petKey]) % 64)
+		aura.Slot = s.server.firstFreeCreatureAuraSlot(petKey)
 		s.server.creatureAuras[petKey][aura.SpellID] = struct{}{}
 		s.server.activeCreatureAuras[petKey][aura.SpellID] = aura
 		loaded = append(loaded, aura)

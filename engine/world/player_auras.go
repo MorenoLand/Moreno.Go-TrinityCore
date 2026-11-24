@@ -334,7 +334,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		s.rooted = true
 	}
 	for _, aura := range pending {
-		aura.Slot = uint8(len(s.activeAuras))
+		aura.Slot = s.firstFreePlayerAuraSlot()
 		s.auras[aura.SpellID] = struct{}{}
 		s.auraSlots[aura.SpellID] = aura.Slot
 		s.activeAuras[aura.SpellID] = aura
@@ -355,6 +355,28 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		s.addOwnerPetAuraEffects(ctx, aura.SpellID, aura.EffectMask)
 	}
 	return nil
+}
+
+// firstFreePlayerAuraSlot mirrors the AuraApplication::_Init slot search
+// (SpellAuras.cpp:69-78) for the load paths: the first free visible-aura
+// slot in 0..MAX_AURAS-1 (255, SpellAuraDefines.h:28) among the session's
+// live auras. The live apply paths scan 0..63 instead (the group-update
+// cap, MAX_AURAS_GROUP_UPDATE) over auraSlots; the load paths seed both
+// maps, so they scan the wider range. Returns 255 when no slot is free —
+// the C++ no-slot sentinel. Caller must hold castMu.
+func (s *session) firstFreePlayerAuraSlot() uint8 {
+	used := make(map[uint8]bool, len(s.activeAuras))
+	for _, aura := range s.activeAuras {
+		if aura != nil {
+			used[aura.Slot] = true
+		}
+	}
+	for slot := 0; slot < 256; slot++ {
+		if !used[uint8(slot)] {
+			return uint8(slot)
+		}
+	}
+	return 255
 }
 
 func normalizeAuraRemainingCharges(procCharges uint32, savedCharges int64) uint8 {
@@ -415,7 +437,7 @@ func (s *session) loadGlyphAuras(state *playerState) {
 		if _, exists := s.activeAuras[glyph.SpellID]; exists {
 			continue
 		}
-		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, ApplyResilience: true, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level, StoredCasterLevel: state.Level}
+		aura := &activeAura{SpellID: glyph.SpellID, CasterGUID: state.GUID, TargetGUID: state.GUID, ApplyResilience: true, Slot: s.firstFreePlayerAuraSlot(), Positive: true, CasterLevel: state.Level, StoredCasterLevel: state.Level}
 		for index, effect := range spell.Effects {
 			if effect.Effect == 0 || effect.Aura == 0 {
 				continue

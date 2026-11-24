@@ -338,7 +338,7 @@ func (s *session) applyTotemEnemyDebuff(totem *activeTotem, m *creatureMotion, s
 	if s.server.creatureAuras[key] == nil {
 		s.server.creatureAuras[key] = make(map[uint32]struct{})
 	}
-	slot := uint8(len(s.server.activeCreatureAuras[key]))
+	slot := s.server.firstFreeCreatureAuraSlot(key)
 	if previous := s.server.activeCreatureAuras[key][spellID]; previous != nil {
 		previous.Stopped = true
 		if previous.Timer != nil {

@@ -12,6 +12,29 @@ type creatureAuraKey struct {
 	GUID       uint64
 }
 
+// firstFreeCreatureAuraSlot mirrors the AuraApplication::_Init slot
+// search (SpellAuras.cpp:69-78): the first free visible-aura slot in
+// 0..MAX_AURAS-1 (255, SpellAuraDefines.h:28) among the target's live
+// creature auras. A stopped record still occupies its slot until the
+// remove leg deletes it, matching C++ where the slot frees only on
+// _Remove. Returns 255 when no slot is free — the C++ no-slot sentinel
+// (slot stays MAX_AURAS, no visible aura is registered). Caller must
+// hold auraMu.
+func (s *Server) firstFreeCreatureAuraSlot(key creatureAuraKey) uint8 {
+	used := make(map[uint8]bool, len(s.activeCreatureAuras[key]))
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura != nil {
+			used[aura.Slot] = true
+		}
+	}
+	for slot := 0; slot < 256; slot++ {
+		if !used[uint8(slot)] {
+			return uint8(slot)
+		}
+	}
+	return 255
+}
+
 func creatureAuraKeyForTarget(target combatTarget) creatureAuraKey {
 	return creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
 }

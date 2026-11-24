@@ -259,9 +259,10 @@ func (s *Server) modifyDestructibleHealth(ctx context.Context, mapID, instanceID
 // optional health reset for the target state. Documented no-bridge:
 // EnableCollision (no Go collision model), AI()->Damaged/AI()->Destroyed
 // (no Go GO-AI model — the Eluna ON_DAMAGED/ON_DESTROYED legs fire
-// below), Battleground::DestroyGate (no Go battleground model), and the
-// DestructibleModelData State1/2/3Wmo display ids (no Go DBC model —
-// the template displayId stands in). EventInform fires below, after
+// below), and the DestructibleModelData State1/2/3Wmo display ids (no Go DBC model —
+// the template displayId stands in). Battleground::DestroyGate is bridged
+// for IoC in the destroyed arm below (GameObject.cpp:2329-2332): a destroyed
+// gate GO marks the BG gate destroyed via DamageICGate. EventInform fires below, after
 // objectsMu is released like the Eluna legs (C++ fires it first in
 // each case arm, before the flags — the order is unobservable here:
 // no 71 row sits on a destructible-building entry in TDB 26091).
@@ -331,6 +332,22 @@ func (s *Server) setDestructibleBuildingState(ctx context.Context, mapID, instan
 		fields[gameObjectBytes1] = uint32(rec.GOState) | uint32(GameObjectTypeDestructibleBuilding)<<8 | uint32(rec.GOArtKit)<<16 | uint32(rec.AnimProgress)<<24
 	}
 	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, goGUID, fields)
+	// GameObject::SetDestructibleState (GameObject.cpp:2329-2332): a
+	// destroyed building whose attacker resolves to a battleground
+	// player informs the battleground, which marks the gate destroyed
+	// (BattlegroundIC::DestroyGate). The GO entry resolves the gate
+	// through icGates; lethal damage drives the gate record straight
+	// to destroyed — C++ has no BG-level damaged gate state, the
+	// damaged arm lives on the GO itself, and DestroyGate keys the
+	// keep off the gate entry, so the attacker session is unused.
+	if state == goDestructibleDestroyed && mapID == ICMapID {
+		for i := range icGates {
+			if icGates[i].GameObjectId == tpl.Entry {
+				s.DamageICGate(mapID, uint8(i), ^uint32(0), nil)
+				break
+			}
+		}
+	}
 	// Eluna GAMEOBJECT_EVENT_ON_DAMAGED (8) / ON_DESTROYED (7), fired from
 	// GameObject::SetDestructibleState (GameObject.cpp:2294/2322):
 	// (event, go, attacker). The intact/rebuilding arms fire no hook in

@@ -8792,7 +8792,22 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		}
 		slot, found := targetSess.auraSlots[spell.ID]
 		if !found {
-			slot = uint8(len(targetSess.auraSlots))
+			// Visible-aura slot (AuraApplication::_Init,
+			// SpellAuras.cpp:69-78): the first free slot, like the
+			// sibling player apply paths — the len() stamp collided
+			// with a live aura's slot once one had been removed.
+			used := make(map[uint8]bool)
+			for _, sl := range targetSess.auraSlots {
+				used[sl] = true
+			}
+			var freeSlot uint8
+			for sl := uint8(0); sl < 64; sl++ {
+				if !used[sl] {
+					freeSlot = sl
+					break
+				}
+			}
+			slot = freeSlot
 			targetSess.auraSlots[spell.ID] = slot
 		}
 		aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, ApplyResilience: applyResilience, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), StoredCasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
@@ -9016,7 +9031,14 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		}
 		s.server.unregisterSingleCastAura(previous)
 	}
-	slot := uint8(len(s.server.activeCreatureAuras[targetKey]))
+	// Visible-aura slot (AuraApplication::_Init, SpellAuras.cpp:69-78):
+	// a re-application reuses the stopped record's slot, a fresh apply
+	// takes the first free slot — the len() stamp collided once auras
+	// had been removed.
+	slot := s.server.firstFreeCreatureAuraSlot(targetKey)
+	if previous := s.server.activeCreatureAuras[targetKey][spell.ID]; previous != nil {
+		slot = previous.Slot
+	}
 	aura := &activeAura{SpellID: spell.ID, DispelType: spell.DispelType, Mechanic: spell.Mechanic, AuraType: effect.Aura, EffectMask: effectMask, RecalculateMask: recalculateMask, CasterGUID: caster.GUID, TargetGUID: targetGUID, TargetKey: targetKey, SchoolMask: spell.SchoolMask, MiscValue: effect.MiscValue, Amount: uint32(amount), Amounts: amounts, ApplyResilience: applyResilience, BaseAmounts: baseAmounts, DurationMs: durationMs, PeriodMs: periodMs, RemainingMs: durationMs, Slot: slot, Positive: positive, CasterLevel: uint8(casterLevel(caster)), StoredCasterLevel: uint8(casterLevel(caster)), AuraInterruptFlags: spell.AuraInterruptFlags, TriggerSpell: effect.TriggerSpell, StackAmount: spell.StackAmount, HideDuration: spell.AttributesEx5&spellAttr5HideDuration != 0, StackCount: 1, OwnerPetAura: source.SpellID != 0, OwnerPetAuraSourceSpell: source.SpellID, OwnerPetAuraSourceEffect: source.EffectIndex, OwnerPetAuraSourceDamage: sourceDamage, OwnerPetAuraRemoveOnChange: removeOnChange}
 	s.server.activeCreatureAuras[targetKey][spell.ID] = aura
 	// Spell::DoSpellEffectHit (Spell.cpp:2842): the fresh apply marks this

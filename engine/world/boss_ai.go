@@ -11013,7 +11013,14 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			}
 			continue
 		}
-		slot := uint8(len(s.activeCreatureAuras[targetKey]) % 64)
+		// Visible-aura slot (AuraApplication::_Init, SpellAuras.cpp:69-78):
+		// a re-application reuses the stopped record's slot, a fresh apply
+		// takes the first free slot — the len()%64 stamp collided once
+		// 64 auras were live.
+		slot := s.firstFreeCreatureAuraSlot(targetKey)
+		if existing != nil {
+			slot = existing.Slot
+		}
 		// The fresh record carries this effect's amount in Amounts/BaseAmounts
 		// too: the per-effect loop only refreshes later effects through
 		// refreshAuraEffectBasepoints, so without this Amounts[0] stayed 0

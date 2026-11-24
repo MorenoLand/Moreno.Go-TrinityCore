@@ -866,10 +866,10 @@ func (s *Server) tickICVehicleTimers(ctx context.Context, ic *icBattlegroundStat
 // no seat-0 passenger, demolishers/siege not in use); the
 // capturing team's vehicles spawn at the node positions, skipping
 // slots already alive; the siege engine spawns flagged
-// NOT_SELECTABLE|CANNOT_SWIM (SetImmuneToPC has no engine model,
-// so that leg stays out). The seaforium-bomb arm (:781-791) stays
-// out: Go has no BG gameobject spawn (AddObject) helper. The
-// caller's ic.mu is held.
+// NOT_SELECTABLE|CANNOT_SWIM|IMMUNE_TO_PC (BattlegroundIC.cpp:770-772;
+// IMMUNE_TO_PC is unitFlagImmuneToPC, player_state.go:152). The
+// seaforium-bomb arm (:781-791) stays out: Go has no BG gameobject
+// spawn (AddObject) helper. The caller's ic.mu is held.
 func (s *Server) captureICNodeVehicles(ctx context.Context, ic *icBattlegroundState, nodeID uint8, team uint32) {
 	if s == nil || ic == nil || team == ICTeamNeutral {
 		return
@@ -957,7 +957,7 @@ func (s *Server) captureICNodeVehicles(ctx context.Context, ic *icBattlegroundSt
 			if s.addICBGCreature(ctx, ic, ownSiege, entry, icWorkshopVehiclePositions[4], team) {
 				if siege := s.getICBGCreature(ic, ownSiege); siege != nil {
 					s.motionMu.Lock()
-					siege.UnitFlags |= unitFlagNotSelectable | icUnitFlagCannotSwim
+					siege.UnitFlags |= unitFlagNotSelectable | icUnitFlagCannotSwim | unitFlagImmuneToPC
 					flags := siege.UnitFlags
 					s.motionMu.Unlock()
 					s.broadcastCreatureValuesUpdateInInstance(ICMapID, siege.InstanceID, siege.GUID, map[int]uint32{unitFieldFlags: flags})

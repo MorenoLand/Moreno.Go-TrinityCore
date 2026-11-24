@@ -40105,7 +40105,11 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// dropped (RemoveAurasDueToSpell). The caster==target gate mirrors
 	// the apply leg's C++ no-op; RemovePendingEventsForPassenger has no
 	// Go model, and the 53111 Devour Humanoid kill/despawn arm is vacuous
-	// here (player-target direction, creature-caster only).
+	// here (player-target direction, creature-caster only). GAP 2 resolved
+	// strip 74: no 53111-specific stack decrease exists — the kill arm
+	// fires on whole-aura removal, and stack decreases only via the generic
+	// dispel/RemoveAuraFromStack paths (already ported); the arm stays
+	// blocked on GAP 1 (no server-side Kill) + the missing 53111 DBC row.
 	if wasControlVehicle && !removeVetoed && removedCasterGUID != 0 && removedCasterGUID != s.playerGUID && s.server != nil {
 		if caster := s.server.findSessionByGUID(removedCasterGUID); caster != nil && caster.player != nil {
 			if caster.player.VehicleGUID == s.playerGUID {
@@ -44480,7 +44484,14 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// resolved session -> same-map motion -> SpellLevel via
 	// auraStoredCasterLevel — not the casting session's level; the zero-caster
 	// case keeps the session level as before.
-	slot := uint8(len(s.server.activeCreatureAuras[targetKey]) % 64)
+	// Visible-aura slot (AuraApplication::_Init, SpellAuras.cpp:69-78):
+	// a re-application reuses the stopped record's slot (same spell+caster
+	// reuse), a fresh apply takes the first free slot — the len()%64
+	// stamp collided once 64 auras were live.
+	slot := s.server.firstFreeCreatureAuraSlot(targetKey)
+	if existing, exists := s.server.activeCreatureAuras[targetKey][spell.ID]; exists && existing != nil {
+		slot = existing.Slot
+	}
 	aura := &activeAura{
 		SpellID:            spell.ID,
 		DispelType:         spell.DispelType,
@@ -50440,7 +50451,11 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 	// same-spell dummy aura on the caster is dropped (RemoveAurasDueToSpell).
 	// RemovePendingEventsForPassenger has no Go model; the 53111 Devour
 	// Humanoid kill/despawn arm is vacuous here (creature-caster direction,
-	// unmodeled).
+	// unmodeled). GAP 2 resolved strip 74: no 53111-specific stack decrease
+	// exists — the kill arm fires on whole-aura removal, and stack decreases
+	// only via the generic dispel/RemoveAuraFromStack paths (already ported);
+	// the arm stays blocked on GAP 1 (no server-side Kill) + the missing
+	// 53111 DBC row.
 	if wasControlVehicle {
 		if caster := s.server.findSessionByGUID(controlVehicleCaster); caster != nil && caster.player != nil {
 			if caster.player.VehicleGUID == key.GUID {
@@ -50824,7 +50839,11 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	// same-spell dummy aura on the caster is dropped (RemoveAurasDueToSpell).
 	// RemovePendingEventsForPassenger has no Go model; the 53111 Devour
 	// Humanoid kill/despawn arm is vacuous here (creature-caster direction,
-	// unmodeled).
+	// unmodeled). GAP 2 resolved strip 74: no 53111-specific stack decrease
+	// exists — the kill arm fires on whole-aura removal, and stack decreases
+	// only via the generic dispel/RemoveAuraFromStack paths (already ported);
+	// the arm stays blocked on GAP 1 (no server-side Kill) + the missing
+	// 53111 DBC row.
 	if wasControlVehicle && !removeVetoed {
 		if caster := s.findSessionByGUID(controlVehicleCaster); caster != nil && caster.player != nil {
 			if caster.player.VehicleGUID == key.GUID {
