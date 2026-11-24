@@ -16296,6 +16296,15 @@ func (s *Server) pruneCreatureMotion(ctx context.Context, now time.Time) {
 	// discarded (CallAllFunctions).
 	for _, motion := range removed {
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnRemove)
+		// Unit::RemoveFromWorld (Unit.cpp:9789) drops the vehicle
+		// kit when the creature leaves the world — the grid-unload
+		// twin of this TTL prune (Creature::RemoveFromWorld,
+		// Creature.cpp:314-322, fires OnRemove before
+		// Unit::RemoveFromWorld drops the kit). Without it a
+		// pruned base's accessories stay seated on a base that no
+		// longer exists, until respawn re-materializes a fresh
+		// kit; a pruned motion with no kit is a no-op here.
+		s.removeVehicleKit(motion.Map, motion.InstanceID, motion.GUID)
 	}
 }
 

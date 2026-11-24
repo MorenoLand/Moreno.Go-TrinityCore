@@ -864,7 +864,7 @@ func (s *Server) removeVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) 
 	delete(s.instanceVehicleKits, key)
 	s.vehicleMu.Unlock()
 	if kit != nil {
-		s.exitCreatureVehiclePassengers(mapID, instanceID, kit)
+		s.exitCreatureVehiclePassengers(mapID, instanceID, kit, false)
 	}
 }
 
@@ -1397,14 +1397,21 @@ func (s *Server) installPlayerVehicleAccessories(ctx context.Context, sess *sess
 }
 
 // exitCreatureVehiclePassengers bridges the Unit::_ExitVehicle tail
-// (Unit.cpp:13252-13266) for creature passengers when a kit drops: a
+// (Unit.cpp:13252-13266) for creature passengers leaving a base: a
 // minion accessory (UNIT_MASK_ACCESSORY) dies with a just-died base
 // (Unit.cpp:13261-13262) or unsummons 2000ms after the exit when the
-// base is alive (Unit.cpp:13265), the exitVehicleTail twin, while
-// a non-minion accessory simply unseats and stays in the world at its
-// last relocated position. Player seats are untouched: the player
-// eject/logout arms own those sessions.
-func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *VehicleKit) {
+// base is alive or a corpse (Unit.cpp:13265), the exitVehicleTail
+// twin, while a non-minion accessory simply unseats and stays in the
+// world at its last relocated position. baseJustDied is true only
+// for the death-time eject (clearCreatureAurasOnDeath, the
+// RemoveAllAurasOnDeath twin, which runs while the base is still
+// JUST_DIED); kit drops (removeVehicleKit, the RemoveFromWorld
+// twin) always pass false — a dead base there is CORPSE, never
+// JUST_DIED (Creature.cpp:2115 promotes after the strip). The base
+// motion cannot tell the phases apart — Health 0 reads dead in
+// both — so the caller passes the phase. Player seats are
+// untouched: the player eject/logout arms own those sessions.
+func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *VehicleKit, baseJustDied bool) {
 	if s == nil || kit == nil {
 		return
 	}
@@ -1426,25 +1433,32 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 		if motion == nil {
 			continue
 		}
+		// Unit::_ExitVehicle (Unit.cpp:13196) frees the seat first —
+		// Vehicle::RemovePassenger resets it (Vehicle.cpp:518)
+		// before the OnRemovePassenger hook (:538-539) — so a kit
+		// that survives the exit (a dead base's kit, dropped only at
+		// RemoveFromWorld) does not keep listing the departed
+		// passenger; the resetVehicleKitOnRespawn twin already drops
+		// stale seats the same way.
+		kit.RemovePassenger(guid)
 		if vehicleObj != nil {
 			s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, vehicleObj, s.luaMotionCreature(motion))
 			s.smartPassengerBoarded(context.Background(), baseMotion, guid, motion.VehicleSeat, false)
 		}
 		if motion.VehicleAccessoryMinion {
-			// Unit.cpp:13258-13266, the exitVehicleTail twin. C++
-			// reads the base's getDeathState() == JUST_DIED, but Go
-			// never stores JUST_DIED — applyCreatureDeathState
-			// promotes it to CORPSE at once (creaturemotion.go) —
-			// so the observable twin of a just-died base is a dead
-			// base: Health 0 or a non-ALIVE DeathState. A player
-			// base has no motion; its Health read is the same test.
-			baseDead := false
-			if baseMotion != nil {
-				baseDead = baseMotion.Health == 0 || baseMotion.DeathState != creatureDeathAlive
-			} else if baseSess := s.findSessionByGUID(kit.VehicleGUID); baseSess != nil && baseSess.player != nil {
-				baseDead = baseSess.player.Health == 0
-			}
-			if baseDead {
+			// Unit::_ExitVehicle (Unit.cpp:13258-13266): a minion
+			// accessory dies with a JUST_DIED base and unsummons
+			// (UnSummon(2000)) on any other exit. The two call
+			// sites observe different phases: the death-time eject
+			// runs while the base is still JUST_DIED —
+			// Unit::setDeathState sets JUST_DIED before the strip
+			// (Unit.cpp:8903/8921), and Creature::setDeathState
+			// promotes to CORPSE only after (Creature.cpp:2115) —
+			// so baseJustDied is true there and the accessory
+			// dies. A kit drop always observes CORPSE or a live
+			// base, so baseJustDied is false and the accessory
+			// takes the 2s unsummon.
+			if baseJustDied {
 				s.applyCreatureDeathState(context.Background(), motion, creatureDeathJustDied)
 			} else {
 				// The kit is dropped, so the passenger has exited:

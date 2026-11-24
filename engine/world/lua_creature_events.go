@@ -539,6 +539,15 @@ func (s *Server) despawnCreatureMotion(ctx context.Context, mapID, instanceID ui
 	// The helper fires 31 then the RemoveFromWorld leg 37, in C++
 	// order (previously this leg fired 37 before 31, and 20 last).
 	s.fireServerDeleteCreature(ctx, m)
+	// Unit::RemoveFromWorld (Unit.cpp:9789) drops the vehicle kit
+	// when the creature leaves the world (Vehicle::Uninstall,
+	// Vehicle.cpp:123-124): the kit-drop runs after the delete
+	// event (Creature::RemoveFromWorld fires OnRemoveFromWorld
+	// before Unit::RemoveFromWorld drops the kit,
+	// Creature.cpp:314-322), so a script-despawned base's
+	// accessories unsummon on the kit-drop fate instead of
+	// lingering seated on a despawned base.
+	s.removeVehicleKit(mapID, instanceID, guid)
 	if maxHealth == 0 {
 		maxHealth = 1
 	}

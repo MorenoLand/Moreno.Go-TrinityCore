@@ -38071,6 +38071,26 @@ func (s *Server) clearCreatureAurasOnDeath(key creatureAuraKey) {
 		delete(s.creatureAuras, key)
 	}
 	s.auraMu.Unlock()
+	// Vehicle::RemoveAllPassengers by way of the death aura strip:
+	// every passenger casts a SPELL_AURA_CONTROL_VEHICLE aura on
+	// the base (Vehicle.cpp:256-257), RemoveAllAurasOnDeath strips
+	// it (Unit.cpp:4353-4372 — no 236 spell is passive or
+	// death-persistent), and the remove leg
+	// (SpellAuraEffects.cpp:2987-3008) runs caster->_ExitVehicle()
+	// for every passenger; _ExitVehicle (Unit.cpp:13258-13262)
+	// kills a UNIT_MASK_ACCESSORY passenger when the base is
+	// JUST_DIED. Go models no ride aura for creature passengers —
+	// accessories board through kit.AddPassenger (vehicle.go) and
+	// Lua EnterVehicle boards the same way — so the strip above
+	// never reaches them and they stay seated on the corpse; the
+	// remove legs only ever see player casters. Player seats are
+	// already exited by the strip above and skipped by the helper.
+	// The sweep passes baseJustDied: the strip runs inside
+	// Unit::setDeathState's JUST_DIED window (Unit.cpp:8903/8921),
+	// before Creature.cpp:2115 promotes the base to CORPSE.
+	if kit := s.getVehicleKit(key.Map, key.InstanceID, key.GUID); kit != nil {
+		s.exitCreatureVehiclePassengers(key.Map, key.InstanceID, kit, true)
+	}
 	// Unit::RemoveAllAurasOnDeath's m_ownedAuras loop (Unit.cpp:4364-4370):
 	// auras the dying creature cast on other targets are destroyed too.
 	s.sweepOwnedAurasOnDeath(key.GUID)
