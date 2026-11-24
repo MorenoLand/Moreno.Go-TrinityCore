@@ -4304,6 +4304,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			packetInfo.X, packetInfo.Y, packetInfo.Z, packetInfo.Orientation = x, y, z, o
 		}
 		s.motionMu.Unlock()
+		// Vehicle::InitMovementInfoForBase (Vehicle.cpp:617-631): the
+		// base's m_movementInfo.flags2 carries the DBC-mapped bits from
+		// kit creation (Vehicle ctor, Vehicle.cpp:57), so the teleport
+		// packet built from it (Unit::SendTeleportPacket,
+		// Unit.cpp:13353-13355) carries them. The OR covers both arms
+		// above: a never-moved base keeps the fresh packet but still
+		// gains the bits, and a moved base keeps its acked packet with
+		// the bits merged in. Placed after the Unlock: the kit lookup
+		// takes vehicleMu, and no lock is held here.
+		if kit := s.getVehicleKit(mapID, instanceID, guid); kit != nil {
+			packetInfo.Flags2 |= kit.BaseMovementFlags2
+		}
 		if packetInfo.Transport != nil && packetInfo.Flags&movementOnTransport != 0 {
 			if spawn, found := s.transportSpawnForGUID(packetInfo.Transport.GUID); found {
 				ox, oy, oz, oo := CalculatePassengerOffset(spawn.X, spawn.Y, spawn.Z, spawn.Orientation, x, y, z, o)

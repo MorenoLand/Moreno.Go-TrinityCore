@@ -63,12 +63,21 @@ func (s *VehicleSeat) IsEmpty() bool {
 // VehicleKit manages seats, passengers, and accessories for a vehicle unit.
 // Reference: TrinityCore Vehicle.h / Vehicle.cpp.
 type VehicleKit struct {
-	mu                   sync.RWMutex
-	VehicleGUID          uint64
-	VehicleID            uint32
-	CreatureEntry        uint32
-	IsPlayer             bool
-	VehicleInfo          *wotlk.VehicleEntry
+	mu            sync.RWMutex
+	VehicleGUID   uint64
+	VehicleID     uint32
+	CreatureEntry uint32
+	IsPlayer      bool
+	VehicleInfo   *wotlk.VehicleEntry
+	// BaseMovementFlags2 is the Vehicle::InitMovementInfoForBase
+	// (Vehicle.cpp:617-631) twin: the Vehicle.dbc Flags mapped onto
+	// MovementFlags2 at kit creation (the Vehicle ctor calls
+	// InitMovementInfoForBase, Vehicle.cpp:57). Set once in
+	// createVehicleKit; read by the base's movement-info consumers
+	// (player create block, creature teleport twin). Set from the DBC
+	// flags in hand at creation, like the VehicleInfo rows above, so
+	// readers take no extra lock.
+	BaseMovementFlags2   uint16
 	Seats                map[int8]*VehicleSeat
 	UsableSeatNum        uint32
 	Accessories          []VehicleAccessory
@@ -493,6 +502,34 @@ func (srv *Server) triggerVehicleEvent(event int, vehicle *scripting.Object, arg
 	}
 }
 
+// vehicleBaseMovementFlags2 maps Vehicle.dbc Flags onto the MovementFlags2
+// bits Vehicle::InitMovementInfoForBase (Vehicle.cpp:617-631) ORs into the
+// base's m_movementInfo.flags2. The mapping is NOT 1:1 — note the cross:
+// VEHICLE_FLAG_ALLOW_PITCHING (0x10) sets MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING
+// (0x20), while VEHICLE_FLAG_FULLSPEEDPITCHING (0x20) sets
+// MOVEMENTFLAG2_FULL_SPEED_PITCHING (0x10) (VehicleDefines.h:39-43,
+// UnitDefines.h:273-278). The wotlk VehicleFlag constants already carry the
+// DBC values (engine/data/wotlk/vehicle.go:17-21).
+func vehicleBaseMovementFlags2(vehicleFlags uint32) uint16 {
+	var flags2 uint16
+	if vehicleFlags&wotlk.VehicleFlagNoStrafe != 0 {
+		flags2 |= movement2NoStrafe
+	}
+	if vehicleFlags&wotlk.VehicleFlagNoJumping != 0 {
+		flags2 |= movement2NoJumping
+	}
+	if vehicleFlags&wotlk.VehicleFlagFullSpeedTurning != 0 {
+		flags2 |= movement2FullSpeedTurning
+	}
+	if vehicleFlags&wotlk.VehicleFlagAllowPitching != 0 {
+		flags2 |= movement2AlwaysAllowPitching
+	}
+	if vehicleFlags&wotlk.VehicleFlagFullSpeedPitching != 0 {
+		flags2 |= movement2FullSpeedPitching
+	}
+	return flags2
+}
+
 // createVehicleKit initializes a VehicleKit for a given GUID, caching seats and accessories.
 // Reference: Unit::CreateVehicleKit (Unit.cpp:8320-8336) & Vehicle::Vehicle (Vehicle.cpp:36-58).
 func (s *Server) createVehicleKit(mapID, instanceID uint32, vehicleGUID uint64, vehicleID uint32, creatureEntry uint32, isPlayer bool) *VehicleKit {
@@ -576,6 +613,17 @@ func (s *Server) createVehicleKit(mapID, instanceID uint32, vehicleGUID uint64, 
 			s.instanceVehicleKits = make(map[vehicleKitKey]*VehicleKit)
 		}
 		s.instanceVehicleKits[key] = kit
+	}
+	// Vehicle::InitMovementInfoForBase (Vehicle.cpp:617-631), called from
+	// the Vehicle ctor (Vehicle.cpp:57): the base's m_movementInfo.flags2
+	// gains the DBC-mapped bits at kit creation. Stored on the kit, not
+	// written into the base's motion/session store here: the
+	// creature-materialization call sites run under motionMu, which a
+	// motion-store write would need to re-take, and the kit is the
+	// existing home for creation-time DBC facts (VehicleInfo above); the
+	// base's movement-info consumers OR the bits in at read time.
+	if kit.VehicleInfo != nil {
+		kit.BaseMovementFlags2 = vehicleBaseMovementFlags2(kit.VehicleInfo.Flags)
 	}
 	return kit
 }
@@ -2319,18 +2367,10 @@ func (s *session) exitVehicle(ctx context.Context) {
 		}
 	}
 
-	// Unit::_ExitVehicle (Unit.cpp:13207, 13251-13252): the fall baseline
-	// resets to the exit position, and a temporarily-unsummoned pet is
-	// resummoned.
+	// Unit::_ExitVehicle (Unit.cpp:13207): the fall baseline resets to
+	// the exit position.
 	s.lastFallZ = s.player.Z
 	s.lastFallTime = 0
-	s.resummonTemporaryPet(ctx)
-	// Unit::_ExitVehicle tail (Unit.cpp:13254-13266): a minion vehicle
-	// base owned by the exiting player despawns 1ms after the exit; the
-	// accessory legs cannot fire for a player passenger (a player never
-	// carries UNIT_MASK_ACCESSORY) and ride the same helper for the
-	// creature ExitVehicle arm.
-	s.server.exitVehicleTail(ctx, s.player.Map, s.player.InstanceID, oldVehGUID, s.playerGUID)
 
 	// Unit::_ExitVehicle (Unit.cpp:13215-13234): the exit position is the
 	// vehicle base position with the passenger's orientation, then the
@@ -2352,6 +2392,20 @@ func (s *session) exitVehicle(ctx context.Context) {
 	if !seatedOnOtherMap && !s.farTeleportPending {
 		s.applyVehicleExitPosition(oldVehGUID, seatAddon)
 	}
+
+	// Unit::_ExitVehicle (Unit.cpp:13251-13252): a temporarily-unsummoned
+	// pet is resummoned after the MoveTo spline launch (:13246-13249),
+	// so it runs after the exit position above, not before it.
+	s.resummonTemporaryPet(ctx)
+
+	// Unit::_ExitVehicle tail (Unit.cpp:13254-13266): the tail follows the
+	// MoveTo spline launch (:13246-13249), so it runs after the exit
+	// position above, not before it. A minion vehicle base owned by the
+	// exiting player despawns 1ms after the exit; the accessory legs
+	// cannot fire for a player passenger (a player never carries
+	// UNIT_MASK_ACCESSORY) and ride the same helper for the creature
+	// ExitVehicle arm, which calls it once on its own path.
+	s.server.exitVehicleTail(ctx, s.player.Map, s.player.InstanceID, oldVehGUID, s.playerGUID)
 
 	s.player.VehicleGUID = 0
 	s.player.VehicleSeat = 0

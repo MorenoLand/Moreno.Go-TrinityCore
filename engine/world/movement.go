@@ -44,6 +44,18 @@ const (
 	maxPositionCoordinate           = 17066.666015625
 )
 
+// movement2NoStrafe..movement2AlwaysAllowPitching port the MovementFlags2
+// half of Vehicle::InitMovementInfoForBase (Vehicle.cpp:617-631): the
+// Vehicle.dbc flags map onto the base's m_movementInfo.flags2 at kit
+// creation. Values are UnitDefines.h:273-278.
+const (
+	movement2NoStrafe            uint16 = 0x00000001 // MOVEMENTFLAG2_NO_STRAFE
+	movement2NoJumping           uint16 = 0x00000002 // MOVEMENTFLAG2_NO_JUMPING
+	movement2FullSpeedTurning    uint16 = 0x00000008 // MOVEMENTFLAG2_FULL_SPEED_TURNING
+	movement2FullSpeedPitching   uint16 = 0x00000010 // MOVEMENTFLAG2_FULL_SPEED_PITCHING
+	movement2AlwaysAllowPitching uint16 = 0x00000020 // MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING
+)
+
 type movementInfo struct {
 	GUID            uint64
 	Flags           uint32
@@ -1483,6 +1495,19 @@ func (s *session) movementInfoForCreate(state playerState) movementInfo {
 		info.Flags |= movementRoot
 	} else {
 		info.Flags &^= movementRoot
+	}
+	// Vehicle::InitMovementInfoForBase (Vehicle.cpp:617-631): a player
+	// vehicle base carries the DBC-mapped flags2 in m_movementInfo from
+	// kit creation, so the create block — and the teleport packets built
+	// from it — carries them until the next client ack overwrites the
+	// store with the client's own DBC-derived flags2. The kit holds the
+	// mapped bits (BaseMovementFlags2, set in createVehicleKit); the
+	// lookup is by the player's own GUID, so a driving passenger never
+	// inherits the ridden base's bits.
+	if s != nil && s.server != nil {
+		if kit := s.server.getVehicleKit(state.Map, state.InstanceID, state.GUID); kit != nil {
+			info.Flags2 |= kit.BaseMovementFlags2
+		}
 	}
 	return info
 }
