@@ -84,6 +84,14 @@ type VehicleKit struct {
 	InstalledAccessories []uint64
 	AccessoriesInstalled bool // install latch: the spawn InstallAllAccessories attempt runs once per kit; the evade Reset(true) reinstall bypasses it (resetVehicleKitOnReachHome, minion rows only)
 	InstallEventFired    bool // install latch: VEHICLE_EVENT_ON_INSTALL fired once per kit, on the first passenger sync (Creature::AddToWorld Install twin)
+	// uninstalling is Vehicle::Uninstall's STATUS_UNINSTALLING
+	// (Vehicle.cpp:108-118): set when the kit leaves the server maps,
+	// before the passenger exit sweep runs. C++ is single-threaded,
+	// so the status checks in AddPassenger (:428-429) and
+	// InstallAccessory (:388-389) are the only guard; Go's map delete
+	// alone leaves a stale kit pointer boardable after the sweep
+	// snapshotted its seats. Guarded by mu.
+	uninstalling         bool
 	LastShootPos         [3]float32
 	X, Y, Z, Orientation float32
 	// movementInfo is the driven vehicle's m_movementInfo
@@ -301,11 +309,30 @@ func (v *VehicleKit) GetNextEmptySeat(currSeatID int8, forward bool) (int8, bool
 	}
 }
 
+// isUninstalling reports whether the kit is being uninstalled
+// (Vehicle::Uninstall, Vehicle.cpp:118 sets STATUS_UNINSTALLING
+// before RemoveAllPassengers). A board racing the removal reads it
+// through AddPassenger / the install sites below.
+func (v *VehicleKit) isUninstalling() bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return v.uninstalling
+}
+
 // AddPassenger attempts to board a passenger onto the vehicle at seatID (-1 for first available).
 // Reference: Vehicle::AddPassenger (Vehicle.cpp:426-484).
 func (v *VehicleKit) AddPassenger(passengerGUID uint64, seatID int8, wasUnselectable bool) (assignedSeat int8, seatInfo *wotlk.VehicleSeatEntry, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+
+	// Vehicle::AddPassenger (Vehicle.cpp:428-434): no boarding while
+	// the vehicle is uninstalling — the status check runs before the
+	// already-seated scan, as in C++. A same-seat re-entry on a kit
+	// mid-removal fails here instead of re-running the JoinEvent legs
+	// on a detached kit; the exit sweep ejects the passenger.
+	if v.uninstalling {
+		return -1, nil, false
+	}
 
 	// If already in vehicle, return current seat
 	for id, s := range v.Seats {
@@ -971,6 +998,14 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 	origin := s.summonOriginFromMotion(motion)
 	baseGUID := motion.GUID
 	for _, acc := range minions {
+		// Vehicle::InstallAccessory (Vehicle.cpp:388-395) refuses
+		// to install while the vehicle is uninstalling — before
+		// summoning, so no accessory exists to strand. The
+		// AddPassenger refusal below is the backstop for a
+		// removal landing mid-row.
+		if kit.isUninstalling() {
+			continue
+		}
 		summoned := s.summonTempCreature(ctx, origin, acc.AccessoryEntry, motion.X, motion.Y, motion.Z, motion.Orientation, acc.SummonType, acc.SummonTime)
 		if summoned == nil {
 			continue
@@ -1073,6 +1108,20 @@ func (s *Server) removeVehicleKitWithBase(mapID, instanceID uint32, vehicleGUID 
 		delete(s.vehicleKits, vehicleGUID)
 	}
 	delete(s.instanceVehicleKits, key)
+	if kit != nil {
+		// Vehicle::Uninstall (Vehicle.cpp:118) sets
+		// STATUS_UNINSTALLING before RemoveAllPassengers runs: the
+		// flag is set under vehicleMu beside the map delete, so a
+		// board racing the removal on another goroutine sees it
+		// (AddPassenger refuses) and the exit sweep below
+		// snapshots a seat set no later board can join. Lock order
+		// is vehicleMu before the kit's mu: no VehicleKit method
+		// takes vehicleMu, and no caller holds the kit's mu across
+		// a server call, so the order never inverts.
+		kit.mu.Lock()
+		kit.uninstalling = true
+		kit.mu.Unlock()
+	}
 	s.vehicleMu.Unlock()
 	if kit != nil {
 		s.exitCreatureVehiclePassengers(mapID, instanceID, kit, false, base)
@@ -1437,6 +1486,14 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 	kit.AccessoriesInstalled = true
 	kit.mu.Unlock()
 	for _, acc := range accessories {
+		// Vehicle::InstallAccessory (Vehicle.cpp:388-395) refuses
+		// to install while the vehicle is uninstalling — before
+		// summoning, so no accessory exists to strand. The
+		// AddPassenger refusal below is the backstop for a
+		// removal landing mid-row.
+		if kit.isUninstalling() {
+			continue
+		}
 		summoned := s.summonTempCreature(ctx, origin, acc.AccessoryEntry, x, y, z, o, acc.SummonType, acc.SummonTime)
 		if summoned == nil {
 			continue
@@ -1692,6 +1749,14 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 	origin := s.summonOriginFromMotion(motion)
 	baseGUID := motion.GUID
 	for _, acc := range accessories {
+		// Vehicle::InstallAccessory (Vehicle.cpp:388-395) refuses
+		// to install while the vehicle is uninstalling — before
+		// summoning, so no accessory exists to strand. The
+		// AddPassenger refusal below is the backstop for a
+		// removal landing mid-row.
+		if kit.isUninstalling() {
+			continue
+		}
 		summoned := s.summonTempCreature(ctx, origin, acc.AccessoryEntry, motion.X, motion.Y, motion.Z, motion.Orientation, acc.SummonType, acc.SummonTime)
 		if summoned == nil {
 			continue
