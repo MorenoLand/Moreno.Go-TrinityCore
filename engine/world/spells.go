@@ -23276,9 +23276,10 @@ func (s *session) auraEffectAmountFromCaster(spellID uint32, effIndex int, caste
 }
 
 // auraEffectAmountByFamilyIcon mirrors the family+icon leg of
-// Unit::GetAuraEffect (Unit.cpp): the first live effect of the given aura
-// type whose spell matches family and icon at effIndex. Returns the applied
-// amount, falling back to the DBC base (SpellAuraEffects.cpp:386).
+// Unit::GetAuraEffect (Unit.cpp:4510-4522): the first live effect of the
+// given aura type whose spell matches family and icon, with no family
+// flags set, at effIndex. Returns the applied amount, falling back to
+// the DBC base (SpellAuraEffects.cpp:386).
 func (s *session) auraEffectAmountByFamilyIcon(auraType uint32, family uint32, iconID uint32, effIndex int) (int32, bool) {
 	if s.server == nil || s.server.Data == nil || effIndex < 0 {
 		return 0, false
@@ -23292,6 +23293,9 @@ func (s *session) auraEffectAmountByFamilyIcon(auraType uint32, family uint32, i
 			continue
 		}
 		if auraSpell.SpellFamilyName != family || auraSpell.SpellIconID != iconID {
+			continue
+		}
+		if auraSpell.SpellFamilyFlags[0] != 0 || auraSpell.SpellFamilyFlags[1] != 0 || auraSpell.SpellFamilyFlags[2] != 0 {
 			continue
 		}
 		if auraSpell.Effects[effIndex].Aura != auraType {
