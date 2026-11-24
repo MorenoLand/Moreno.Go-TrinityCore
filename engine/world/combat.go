@@ -1015,8 +1015,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	damage := uint32(20 + int(s.player.Level)*5)
 	// absorbedDmg carries the pre-absorb portion for the rage-from-damage
 	// legs (Unit.cpp:789-924): the dealt leg uses post-absorb damage while the
-	// received leg adds the absorbed amount back.
+	// received leg adds the absorbed amount back. absorbed/absorbed2 are the
+	// per-component absorbed amounts for the attacker-state-update packet
+	// (Unit::SendAttackStateUpdate, Unit.cpp:5442-5500).
 	absorbedDmg := uint32(0)
+	var absorbed, absorbed2 uint32
 	if maxDmg > minDmg && minDmg > 0 {
 		attSpeed := float64(attTime) / 1000.0
 		if attSpeed <= 0 {
@@ -1383,7 +1386,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				absorbFull0, absorbPart0, absorbFull1, absorbPart1 := false, false, false, false
 				if damage > 0 {
 					bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(1))
-					absorbed, remaining := vicSess.applyAbsorptionShields(damage-bypass, 1)
+					var remaining uint32
+					absorbed, remaining = vicSess.applyAbsorptionShields(damage-bypass, 1)
 					absorbedDmg = absorbed
 					damage = remaining + bypass
 					absorbFull0 = remaining == 0 && absorbed > 0
@@ -1391,7 +1395,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				}
 				if damage2 > 0 {
 					bypass2 := absorbIgnoreBypass(damage2, s.absorbIgnorePct(secondSchool))
-					absorbed2, remaining2 := vicSess.applyAbsorptionShields(damage2-bypass2, uint8(secondSchool))
+					var remaining2 uint32
+					absorbed2, remaining2 = vicSess.applyAbsorptionShields(damage2-bypass2, uint8(secondSchool))
 					absorbedDmg += absorbed2
 					damage2 = remaining2 + bypass2
 					absorbFull1 = remaining2 == 0 && absorbed2 > 0
@@ -1416,14 +1421,16 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		absorbFull0, absorbPart0, absorbFull1, absorbPart1 := false, false, false, false
 		if damage > 0 {
 			bypass := absorbIgnoreBypass(damage, s.absorbIgnorePct(1))
-			absorbed, remaining := s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, 1)
+			var remaining uint32
+			absorbed, remaining = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage-bypass, 1)
 			damage = remaining + bypass
 			absorbFull0 = remaining == 0 && absorbed > 0
 			absorbPart0 = absorbed > 0 && !absorbFull0
 		}
 		if damage2 > 0 {
 			bypass2 := absorbIgnoreBypass(damage2, s.absorbIgnorePct(secondSchool))
-			absorbed2, remaining2 := s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage2-bypass2, uint8(secondSchool))
+			var remaining2 uint32
+			absorbed2, remaining2 = s.server.applyCreatureAbsorptionShields(creatureAuraKeyForTarget(target), damage2-bypass2, uint8(secondSchool))
 			damage2 = remaining2 + bypass2
 			absorbFull1 = remaining2 == 0 && absorbed2 > 0
 			absorbPart1 = absorbed2 > 0 && !absorbFull1
@@ -1532,7 +1539,15 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if damage >= target.Health && target.Health > 0 {
 		overkill = damage - target.Health
 	}
-	asuPayload := protocol.BuildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
+	// Unit::SendAttackStateUpdate (Unit.cpp:5442-5500): the packet carries the
+	// per-component post-absorb damage plus the absorb arrays — damage was
+	// summed with damage2 above (DealMeleeDamage summed-total convention),
+	// so the comp0 damage is the difference; resist is 0, the melee swing
+	// path has no resist model (the CalcAbsorbResist resist leg is unported).
+	asuPayload := protocol.BuildAttackerStateUpdateFull(s.playerGUID, target.GUID, []protocol.AttackerStateUpdateDamage{
+		{SchoolMask: spellSchoolMaskNormal, Damage: damage - damage2, Absorb: absorbed},
+		{SchoolMask: secondSchool, Damage: damage2, Absorb: absorbed2},
+	}, overkill, hitInfo, targetState, blocked)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPayload, true)
 	if s.server != nil {
 		// Unit::SendAttackStateUpdate (Unit.cpp): SendMessageToSet on the

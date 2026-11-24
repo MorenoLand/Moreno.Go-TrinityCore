@@ -10282,7 +10282,15 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 			damageShieldSide{key: creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}},
 			shieldGateDamage)
 	}
-	asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
+	// Unit::SendAttackStateUpdate (Unit.cpp:5442-5500): the packet carries the
+	// per-component post-absorb damage plus the absorb array. The damage is
+	// shieldGateDamage — post-absorb, pre-god, pre-split, matching C++
+	// Damages[0].Damage (the ASU precedes DealMeleeDamage in C++; the live
+	// damage was god-negated and split above). Resist is 0, the creature
+	// melee path has no resist model.
+	asuPkt := protocol.BuildAttackerStateUpdateFull(motion.GUID, target.GUID, []protocol.AttackerStateUpdateDamage{
+		{SchoolMask: spellSchoolMaskNormal, Damage: shieldGateDamage, Absorb: absorbedDmg},
+	}, overkill, hitInfo, targetState, blocked)
 	if target.Sess != nil {
 		target.Sess.debug("creature melee attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)
 	}
