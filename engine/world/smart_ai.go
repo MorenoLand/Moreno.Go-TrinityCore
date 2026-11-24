@@ -4037,7 +4037,7 @@ func (s *Server) smartActionRemoveAuras(ctx context.Context, motion *creatureMot
 // (SmartScript.cpp:2255-2261): every unit target loses all applied
 // auras of the given AuraType (param1, no validation, matching the
 // C++ cast) — the vehicle-exit leg. Players take the session
-// removeAurasByType twin (Unit::RemoveAurasByType, Unit.cpp:3884),
+// removeAurasByType twin (Unit::RemoveAurasByType, Unit.cpp:4067),
 // creatures the removeCreatureAurasByType twin; other targets are
 // skipped, mirroring the smartActionRemoveAuras target loop. TDB
 // 26091: 0 rows.

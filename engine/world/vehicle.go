@@ -3574,6 +3574,21 @@ func (s *session) applyVehicleExitPosition(vehicleGUID uint64, addon *VehicleSea
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = baseX, baseY, baseZ, o
 }
 
+// resolveChangeSeatID resolves a Unit::ChangeSeat seat id: a negative id
+// moves to the next empty seat forward from the current seat
+// (Unit.cpp:13144, ChangeSeat's next=true default, Unit.h:1632); a
+// non-negative id passes through. False when no empty seat follows the
+// current one — the C++ GetNextEmptySeat end, so the switch refuses.
+func resolveChangeSeatID(kit *VehicleKit, oldSeat, newSeat int8) (int8, bool) {
+	if newSeat >= 0 {
+		return newSeat, true
+	}
+	if kit == nil {
+		return -1, false
+	}
+	return kit.GetNextEmptySeat(oldSeat, true)
+}
+
 // applyControlVehicleSeatChange runs the Unit::ChangeSeat seat switch
 // (Unit.cpp:13133-13170) for a SPELL_AURA_CONTROL_VEHICLE re-cast merge:
 // the ride aura's amount already refreshed to the new seat, and the
@@ -3582,12 +3597,13 @@ func (s *session) applyVehicleExitPosition(vehicleGUID uint64, addon *VehicleSea
 // fireVehicleSeatSwitch hook pair, the same twin the CMSG seat-change
 // handler rides. Same-seat and unseated casters are no-ops
 // (Unit.cpp:13095-13096); an occupied or missing dest seat refuses,
-// as in C++ (Unit.cpp:13144-13146).
+// as in C++ (Unit.cpp:13144-13146). A merged amount of 0 (seat -1)
+// resolves to the next empty seat forward, the ChangeSeat -1 arm.
 func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID uint64, newSeat int8) {
-	if s == nil || s.server == nil || s.player == nil || baseGUID == 0 || newSeat < 0 {
+	if s == nil || s.server == nil || s.player == nil || baseGUID == 0 {
 		return
 	}
-	if s.player.VehicleGUID != baseGUID || s.player.VehicleSeat == newSeat {
+	if s.player.VehicleGUID != baseGUID {
 		return
 	}
 	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, baseGUID)
@@ -3595,7 +3611,11 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 		return
 	}
 	oldSeat := s.player.VehicleSeat
-	assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, newSeat)
+	resolved, ok := resolveChangeSeatID(kit, oldSeat, newSeat)
+	if !ok || resolved == oldSeat {
+		return
+	}
+	assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, resolved)
 	if !switched {
 		return
 	}
@@ -3608,6 +3628,44 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 	s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
 	s.sendPlayerUpdate()
 	s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
+}
+
+// applyCreatureControlVehicleSeatChange is the creature-passenger twin of
+// applyControlVehicleSeatChange: a SPELL_AURA_CONTROL_VEHICLE re-cast
+// merge whose caster is a creature moves that creature to the new seat
+// (Unit::ChangeSeat, Unit.cpp:13133-13170) — motion.VehicleSeat plus the
+// kit SwitchSeat plus the fireCreatureVehicleSeatSwitch hook pair. The
+// CanControl leg is absent by C++ design: the JoinEvent charm arm only
+// fires for a player passenger on a creature base
+// (Vehicle.cpp:871-876), so a creature passenger takes no control. A
+// merged amount of 0 (seat -1) resolves like the player twin, to the
+// next empty seat forward.
+func (s *Server) applyCreatureControlVehicleSeatChange(ctx context.Context, mapID, instanceID uint32, baseGUID, casterGUID uint64, newSeat int8) {
+	if s == nil || baseGUID == 0 || casterGUID == 0 {
+		return
+	}
+	motion := s.findCreatureMotion(mapID, instanceID, casterGUID)
+	if motion == nil || motion.VehicleGUID != baseGUID {
+		return
+	}
+	kit := s.getVehicleKit(mapID, instanceID, baseGUID)
+	if kit == nil {
+		return
+	}
+	oldSeat := motion.VehicleSeat
+	resolved, ok := resolveChangeSeatID(kit, oldSeat, newSeat)
+	if !ok || resolved == oldSeat {
+		return
+	}
+	assigned, _, switched := kit.SwitchSeat(casterGUID, resolved)
+	if !switched {
+		return
+	}
+	s.motionMu.Lock()
+	motion.VehicleSeat = assigned
+	s.motionMu.Unlock()
+	s.fireCreatureVehicleSeatSwitch(ctx, mapID, instanceID, kit, baseGUID, casterGUID, oldSeat, assigned)
+	s.syncVehicleBaseNPCFlag(mapID, instanceID, baseGUID)
 }
 
 // fireVehicleSeatSwitch fires the Vehicle::RemovePassenger /
@@ -3641,6 +3699,33 @@ func (s *session) fireVehicleSeatSwitch(ctx context.Context, kit *VehicleKit, ol
 	s.server.transferPassengerThreatToVehicleBase(s.player.Map, s.player.InstanceID, s.playerGUID, s.player.VehicleGUID)
 	s.server.smartPassengerBoarded(ctx, base, s.playerGUID, newSeat, true)
 	s.server.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.server.luaMotionCreature(base), s.luaPlayer(), newSeat)
+}
+
+// fireCreatureVehicleSeatSwitch is the creature-passenger twin of
+// fireVehicleSeatSwitch: the Vehicle::RemovePassenger /
+// Vehicle::AddPassenger hook pair for a creature seat switch, with the
+// same threat-transfer and clear-target legs between them
+// (VehicleJoinEvent::Execute, Vehicle.cpp:883, :895-896, :900-902). A
+// player base stays silent per the TYPEID_UNIT gate: it resolves to no
+// creature motion, like the player twin's kit.IsPlayer guard.
+func (s *Server) fireCreatureVehicleSeatSwitch(ctx context.Context, mapID, instanceID uint32, kit *VehicleKit, baseGUID, passengerGUID uint64, oldSeat, newSeat int8) {
+	if s == nil || kit == nil || kit.IsPlayer || oldSeat == newSeat {
+		return
+	}
+	base := s.findCreatureMotion(mapID, instanceID, baseGUID)
+	if base == nil {
+		return
+	}
+	passenger := s.findCreatureMotion(mapID, instanceID, passengerGUID)
+	if passenger == nil {
+		return
+	}
+	s.smartPassengerBoarded(ctx, base, passengerGUID, oldSeat, false)
+	s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(passenger))
+	s.sendPassengerClearTarget(mapID, instanceID, passengerGUID, passenger.X, passenger.Y, passenger.Z, passenger.PhaseMask)
+	s.transferPassengerThreatToVehicleBase(mapID, instanceID, passengerGUID, baseGUID)
+	s.smartPassengerBoarded(ctx, base, passengerGUID, newSeat, true)
+	s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(passenger), newSeat)
 }
 
 // handleChangeSeatsOnControlledVehicle processes CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE (0x49B).

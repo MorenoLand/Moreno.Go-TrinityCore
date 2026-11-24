@@ -7971,7 +7971,7 @@ func (s *session) removeAurasWithMechanic(mechanicMask uint32) {
 
 // removeAurasByTypeFromCaster is the caster-filtered twin of
 // removeAurasByType (Unit::RemoveAurasByType(auraType, casterGUID),
-// Unit.cpp:3884): only auras of the type cast by casterGUID come off,
+// Unit.cpp:4067): only auras of the type cast by casterGUID come off,
 // so one GM's unbindsight never strips another caster's aura.
 func (s *session) removeAurasByTypeFromCaster(auraType uint32, casterGUID uint64) {
 	if s == nil || s.player == nil {
@@ -8013,7 +8013,7 @@ func (s *session) removeAurasByTypeFromCasterExcept(auraType uint32, casterGUID 
 }
 
 // removeAurasByTypeExcept is the except-aura twin of removeAurasByType
-// (Unit::RemoveAurasByType(auraType, casterGUID, except), Unit.cpp:3884):
+// (Unit::RemoveAurasByType(auraType, casterGUID, except), Unit.cpp:4067):
 // every applied aura of the given type comes off except the named spell,
 // the Glyph of Polymorph (spell_mage.cpp:831-840) Shadow Word: Death
 // (32409) carve-out. Snapshot under castMu, remove outside it.
@@ -43228,10 +43228,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// The passenger is the aura's caster, so the arm only runs
 			// when the driving session is the caster's — a creature
 			// caster (or a foreign driver) must not move this session's
-			// player to the creature's seat; creature passengers need
-			// their own seat-change twin.
-			if eff.Aura == spellAuraControlVehicle && casterGUID == s.playerGUID {
-				s.applyControlVehicleSeatChange(ctx, targetGUID, int8(int32(amount)-1))
+			// player to the creature's seat; a creature passenger
+			// seat-changes through the server-side twin on the
+			// target's map/instance.
+			if eff.Aura == spellAuraControlVehicle {
+				if casterGUID == s.playerGUID {
+					s.applyControlVehicleSeatChange(ctx, targetGUID, int8(int32(amount)-1))
+				} else if s.server != nil {
+					s.server.applyCreatureControlVehicleSeatChange(ctx, targetSess.player.Map, targetSess.player.InstanceID, targetGUID, casterGUID, int8(int32(amount)-1))
+				}
 			}
 			return
 		}
@@ -44358,11 +44363,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// player merge leg above: a re-cast merge that moves the ride
 		// aura's amount moves the passenger to the new seat
 		// (Unit::ChangeSeat, Unit.cpp:13133-13170; no _ExitVehicle,
-		// SpellAuraEffects.cpp:3002). Same caster gate as the player
-		// leg: the passenger is the caster, and only the caster's own
-		// session may move its player.
-		if eff.Aura == spellAuraControlVehicle && casterGUID == s.playerGUID {
-			s.applyControlVehicleSeatChange(ctx, targetGUID, int8(int32(amount)-1))
+		// SpellAuraEffects.cpp:3002). A player passenger moves through
+		// the driving session; a creature passenger through the
+		// server-side twin on the target's map/instance.
+		if eff.Aura == spellAuraControlVehicle {
+			if casterGUID == s.playerGUID {
+				s.applyControlVehicleSeatChange(ctx, targetGUID, int8(int32(amount)-1))
+			} else if s.server != nil {
+				s.server.applyCreatureControlVehicleSeatChange(ctx, targetKey.Map, targetKey.InstanceID, targetGUID, casterGUID, int8(int32(amount)-1))
+			}
 		}
 		return
 	}
@@ -44835,16 +44844,31 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// creature at seat amount-1. The IsVehicle gate is the vehicle kit's
 	// presence; caster==target can't occur here (player GUID vs creature
 	// GUID namespaces are disjoint). Seat -1 rides AddPassenger's
-	// any-usable-seat fallback, the C++ 0/0-seat convention.
-	if eff.Aura == spellAuraControlVehicle && s.player != nil && s.server != nil {
-		if kit := s.server.getVehicleKit(targetKey.Map, targetKey.InstanceID, targetGUID); kit != nil {
-			// Unit::_EnterVehicle (Unit.cpp:13100): entering on a new
-			// ride aura clears the rider's older CONTROL_VEHICLE auras
-			// from the base, sparing the aura being applied — their
-			// remove legs exit the rider first, so the board below
-			// re-seats fresh. Runs before the board, as in C++.
-			s.server.removeVehicleControlAuraFromBaseExcept(targetKey.Map, targetKey.InstanceID, targetGUID, casterGUID, spell.ID)
-			s.enterVehicle(ctx, targetGUID, int8(int32(amount)-1))
+	// any-usable-seat fallback, the C++ 0/0-seat convention. A player
+	// caster boards through the driving session; a creature caster
+	// (boss_ai area-aura fan-out, area_auras) boards through the
+	// server-side AddPassenger twin, mirroring the player-target
+	// branch's creature arm — the old s.player gate left the creature
+	// caster standing beside the vehicle.
+	if eff.Aura == spellAuraControlVehicle && s.server != nil {
+		if casterGUID == s.playerGUID && s.player != nil {
+			if kit := s.server.getVehicleKit(targetKey.Map, targetKey.InstanceID, targetGUID); kit != nil {
+				// Unit::_EnterVehicle (Unit.cpp:13100): entering on a new
+				// ride aura clears the rider's older CONTROL_VEHICLE auras
+				// from the base, sparing the aura being applied — their
+				// remove legs exit the rider first, so the board below
+				// re-seats fresh. Runs before the board, as in C++.
+				s.server.removeVehicleControlAuraFromBaseExcept(targetKey.Map, targetKey.InstanceID, targetGUID, casterGUID, spell.ID)
+				s.enterVehicle(ctx, targetGUID, int8(int32(amount)-1))
+			}
+		} else if motion := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, casterGUID); motion != nil {
+			// Unit::_EnterVehicle (Unit.cpp:13100), creature twin of
+			// the player arm above; the kit gate is the IsVehicle
+			// twin (SpellAuraEffects.cpp:2972).
+			if kit := s.server.getVehicleKit(targetKey.Map, targetKey.InstanceID, targetGUID); kit != nil {
+				s.server.removeVehicleControlAuraFromBaseExcept(targetKey.Map, targetKey.InstanceID, targetGUID, casterGUID, spell.ID)
+			}
+			s.server.luaVehicleAddPassenger(ctx, &luaVehicleRef{server: s.server, mapID: targetKey.Map, instanceID: targetKey.InstanceID, baseGUID: targetGUID}, casterGUID, int8(int32(amount)-1))
 		}
 	}
 	// AuraEffect::HandlePreventFleeing apply leg (SpellAuraEffects.cpp): a
@@ -50439,7 +50463,7 @@ func (s *Server) removeCreatureAura(key creatureAuraKey, spellID uint32) {
 }
 
 // removeCreatureAurasByType is the creature-target twin of session
-// removeAurasByType (Unit::RemoveAurasByType, Unit.cpp:3884): drops the
+// removeAurasByType (Unit::RemoveAurasByType, Unit.cpp:4067): drops the
 // target's activeCreatureAuras whose recorded AuraType matches. Snapshot
 // under auraMu, remove outside it — removeCreatureAura locks auraMu itself.
 func (s *Server) removeCreatureAurasByType(key creatureAuraKey, auraType uint32) {
@@ -50463,7 +50487,7 @@ func (s *Server) removeCreatureAurasByType(key creatureAuraKey, auraType uint32)
 
 // removeCreatureAurasByTypeFromCaster is the caster-filtered twin of
 // removeCreatureAurasByType (Unit::RemoveAurasByType(auraType,
-// casterGUID), Unit.cpp:3884): only auras of the type cast by
+// casterGUID), Unit.cpp:4067): only auras of the type cast by
 // casterGUID come off.
 func (s *Server) removeCreatureAurasByTypeFromCaster(key creatureAuraKey, auraType uint32, casterGUID uint64) {
 	if s == nil || key.GUID == 0 {
@@ -50510,7 +50534,7 @@ func (s *Server) removeCreatureAurasByTypeFromCasterExcept(key creatureAuraKey, 
 
 // removeCreatureAurasByTypeExcept is the creature-target twin of
 // session removeAurasByTypeExcept (Unit::RemoveAurasByType(auraType,
-// casterGUID, except), Unit.cpp:3884): every applied aura of the given
+// casterGUID, except), Unit.cpp:4067): every applied aura of the given
 // type comes off except the named spell, the Glyph of Polymorph
 // (spell_mage.cpp:831-840) Shadow Word: Death (32409) carve-out.
 func (s *Server) removeCreatureAurasByTypeExcept(key creatureAuraKey, auraType uint32, exceptSpellID uint32) {

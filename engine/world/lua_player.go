@@ -4860,7 +4860,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.removePlayerAuraFromStack(spell)}, nil
 	}
-	// RemoveAurasByType is Unit::RemoveAurasByType (Unit.cpp:3884) for
+	// RemoveAurasByType is Unit::RemoveAurasByType (Unit.cpp:4067) for
 	// players: every live engine-applied aura whose stored AuraType
 	// matches is removed via the session removeAurasByType funnel
 	// (spells.go), the player twin of the handler-creature method
