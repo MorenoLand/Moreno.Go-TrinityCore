@@ -2955,12 +2955,57 @@ func (s *Server) removeVehicleControlAuraFromBaseExcept(mapID, instanceID uint32
 	s.removeCreatureAurasByTypeFromCasterExcept(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: baseGUID}, spellAuraControlVehicle, casterGUID, exceptSpellID)
 }
 
+// stopPlayerCharmOnVehicleBoard mirrors the Player::StopCastingCharm
+// leg of VehicleJoinEvent::Execute (Vehicle.cpp:849;
+// Player.cpp:20940-20967): boarding a vehicle releases every unit the
+// player currently charms. Unit::RemoveCharmAuras (Unit.cpp:6525-6531)
+// strips the charm auras from the charmed unit, and their remove legs
+// uncharm it; a charm with no aura row left (debug/Lua charm) still
+// uncharms via SetCharm(charm, false) (:20960-20966). The IsGhouled
+// leg has no Go model (RemoveGhoul has no analog, death.go) and a
+// puppet carries no per-motion marker, so it takes the uncharm path
+// instead of UnSummon; a charmed player target has no Go charm model
+// either (checkCharmCast). The charmed-vehicle ExitVehicle leg is a
+// no-op here: the _EnterVehicle exit-first arm above already seated
+// the player out of any previous vehicle. The 236 ride aura never
+// sets CharmerGUID on the boarded base, so the scan cannot catch the
+// base being boarded — only a separately mind-controlled unit.
+func (s *session) stopPlayerCharmOnVehicleBoard(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	var charmed []creatureAuraKey
+	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if motion != nil && motion.Charmed && motion.CharmerGUID == s.playerGUID {
+			charmed = append(charmed, creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID})
+		}
+	}
+	s.server.motionMu.Unlock()
+	for _, key := range charmed {
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraCharm, s.playerGUID)
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraModPossessPet, s.playerGUID)
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraModPossess, s.playerGUID)
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraAoeCharm, s.playerGUID)
+		if m := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); m != nil && m.Charmed && m.CharmerGUID == s.playerGUID {
+			s.server.uncharmCreature(key, s.playerGUID)
+		}
+	}
+}
+
 // enterVehicle places the session's player into the specified vehicle and seat.
 // Reference: Unit::_EnterVehicle (Unit.cpp:8320) & VehicleJoinEvent::Execute (Vehicle.cpp:790-910).
 func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID int8) {
 	if s == nil || s.player == nil {
 		return
 	}
+
+	// Unit::_EnterVehicle (Unit.cpp:13095-13096): a same-vehicle
+	// same-seat re-entry keeps the seat — AddPassenger returns the
+	// current seat and no JoinEvent fires, so the Execute-only legs
+	// below (charm/bind-sight stops) must not run for it. Captured
+	// before the exit-first arm below can mutate the seat.
+	sameSeatReentry := s.player.VehicleGUID == vehicleGUID && seatID >= 0 && seatID == s.player.VehicleSeat
 
 	// VehicleJoinEvent::Execute (Vehicle.cpp:808-813): a passenger
 	// that died before the board aborts instead of seating.
@@ -3130,13 +3175,20 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 		}
 	}
 
-	// VehicleJoinEvent::Execute (Vehicle.cpp:840): boarding interrupts the
-	// passenger's non-melee spells, and (Vehicle.cpp:841) strips mounted
-	// auras; the pet is temporarily unsummoned unless the seat carries
-	// VEHICLE_SEAT_FLAG_B_KEEP_PET (Vehicle.cpp:850-852).
+	// VehicleJoinEvent::Execute (Vehicle.cpp:836-837): boarding interrupts the
+	// passenger's non-melee spells, and (Vehicle.cpp:837) strips mounted
+	// auras; (Vehicle.cpp:849-850) the board stops the player's charm and
+	// bind-sight — a mind-controlled unit is released, a farsight/possess
+	// viewpoint is dropped — ahead of the pet unsummon below; the pet is
+	// temporarily unsummoned unless the seat carries
+	// VEHICLE_SEAT_FLAG_B_KEEP_PET (Vehicle.cpp:852-853).
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
 	s.clearOtherMountedAuras(0)
+	if !sameSeatReentry {
+		s.stopCastingBindSight()
+		s.stopPlayerCharmOnVehicleBoard(ctx)
+	}
 	if seatInfo == nil || !seatInfo.HasFlag(wotlk.VehicleSeatFlagBKeepPet) {
 		s.temporarilyUnsummonPet(ctx)
 	}

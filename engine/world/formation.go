@@ -188,6 +188,117 @@ func (s *Server) isLiveFormationLeader(leaderLow uint32) bool {
 	return false
 }
 
+// formationIsFormed reports CreatureGroup::_formed for a leader low
+// (CreatureGroups.cpp:262-278): set by FormationReset(false) on the
+// leader's Motion_Initialize, cleared by FormationReset(true) when the
+// leader dies.
+func (s *Server) formationIsFormed(leaderLow uint32) bool {
+	s.formationMu.RLock()
+	defer s.formationMu.RUnlock()
+	return s.formationFormed != nil && s.formationFormed[leaderLow]
+}
+
+// formationReset mirrors CreatureGroup::FormationReset
+// (CreatureGroups.cpp:262-278), reached from Creature::Motion_Initialize
+// (Creature.cpp:1088-1098, dismiss=false) and from
+// Creature::setDeathState JUST_DIED (Creature.cpp:2104-2107,
+// dismiss=true). Every live non-leader roster member either waits idle
+// for the leader's order (MoveIdle) or resumes its default movement
+// (MotionMaster()->Initialize()); _formed flips with the arm. Members
+// mid-leg keep the in-flight atomic spline — C++ cancels the generator
+// outright, which the atomic-spline model cannot express (the same
+// documented delta as the leader-dead arm in stepFormationMember);
+// the hold or release applies once the leg arrives.
+func (s *Server) formationReset(ctx context.Context, mapID, instanceID uint32, leaderGUID uint64, dismiss bool) {
+	if s == nil || leaderGUID == 0 {
+		return
+	}
+	leaderLow := uint32(leaderGUID & 0x00FFFFFF)
+	if !s.isLiveFormationLeader(leaderLow) {
+		return
+	}
+	s.ensureFormationsLoaded(ctx)
+	s.formationMu.RLock()
+	memberLows := append([]uint32(nil), s.formationLeaders[leaderLow]...)
+	s.formationMu.RUnlock()
+	s.formationMu.Lock()
+	if s.formationFormed == nil {
+		s.formationFormed = make(map[uint32]bool)
+	}
+	if dismiss {
+		delete(s.formationFormed, leaderLow)
+	} else {
+		s.formationFormed[leaderLow] = true
+	}
+	s.formationMu.Unlock()
+	s.motionMu.Lock()
+	motions := s.motionMapLocked(mapID, instanceID)
+	for _, low := range memberLows {
+		if low == leaderLow {
+			continue
+		}
+		for guid, m := range motions {
+			if uint32(guid&0x00FFFFFF) != low {
+				continue
+			}
+			if m == nil || m.Health == 0 {
+				break
+			}
+			m.FormationActive = false
+			if dismiss {
+				m.FormationIdle = false
+				m.FormationLeadGUID = 0
+			} else {
+				m.FormationIdle = true
+				m.FormationLeadGUID = leaderGUID
+			}
+			break
+		}
+	}
+	s.motionMu.Unlock()
+}
+
+// formationMotionInitialize mirrors Creature::Motion_Initialize
+// (Creature.cpp:1088-1098), reached from AIM_Create (:1066) on spawn
+// and from setDeathState JUST_RESPAWNED (:2150) on respawn: a formation
+// leader's init idles its live members and forms the group, while a
+// non-leader member of an already-formed group waits idle for the
+// leader's order instead of starting its default movement. A member
+// whose group was never formed (leader dead or never spawned) starts
+// its default movement, as in C++.
+func (s *Server) formationMotionInitialize(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || motion.IsTempSummon {
+		return
+	}
+	memberLow := uint32(motion.GUID & 0x00FFFFFF)
+	if memberLow == 0 || memberLow >= 2000000 {
+		return
+	}
+	s.ensureFormationsLoaded(ctx)
+	row, ok := s.formationRowFor(memberLow)
+	if !ok {
+		return
+	}
+	if memberLow == row.leaderGUID {
+		s.formationReset(ctx, motion.Map, motion.InstanceID, motion.GUID, false)
+		return
+	}
+	if !s.formationIsFormed(row.leaderGUID) {
+		return
+	}
+	var leaderGUID uint64
+	s.motionMu.Lock()
+	for guid, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+		if uint32(guid&0x00FFFFFF) == row.leaderGUID && m != nil {
+			leaderGUID = m.GUID
+			break
+		}
+	}
+	motion.FormationIdle = true
+	motion.FormationLeadGUID = leaderGUID
+	s.motionMu.Unlock()
+}
+
 // removeFormationMember mirrors CreatureGroup::RemoveMember
 // (CreatureGroups.cpp:217-223), reached from Unit::_EnterVehicle
 // (Unit.cpp:13109-13115): a player boarding a creature-base vehicle
@@ -439,6 +550,7 @@ func (s *Server) formationLeaderStartedMoving(ctx context.Context, motion *creat
 			continue
 		}
 		member.FormationActive = true
+		member.FormationIdle = false
 		member.FormationLeadGUID = motion.GUID
 		member.FormationDist = row.dist
 		member.FormationAngle = row.angle + float32(math.Pi)

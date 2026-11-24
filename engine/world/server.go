@@ -300,6 +300,7 @@ type Server struct {
 	formationMu              sync.RWMutex
 	formationRows            map[uint32]formationRow // creature_formations by member low GUID (FormationMgr::_creatureGroupMap)
 	formationLeaders         map[uint32][]uint32     // leader low GUID -> member low GUIDs
+	formationFormed          map[uint32]bool         // leader low GUID -> CreatureGroup::_formed (CreatureGroups.cpp:262-278)
 	formationLoaded          bool
 	creatureRespawns         map[uint32]creatureRespawn
 	instanceCreatureRespawns map[instanceAdmissionKey]map[uint32]creatureRespawn
