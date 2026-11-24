@@ -798,6 +798,7 @@ type session struct {
 	swingErrorMsg             uint8
 	autoRepeatSpell           uint32
 	autoRepeatTarget          uint64
+	autoRepeatFirstCast       bool // m_AutoRepeatFirstCast (Unit.cpp:3043): first cast after (re)starting autorepeat waits >=500ms
 	isMoving                  bool
 	isFalling                 bool
 	isFallingFar              bool // MOVEMENTFLAG_FALLING_FAR (UnitDefines.h:236): the STUCK-spell movement exemptions key on this flag exactly (Spell.cpp:3814, 5319)
@@ -2055,11 +2056,21 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 					buf.WritePackedGUID(sess.playerGUID)
 					_ = sess.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
 				} else if !sess.isMoving || sess.autoRepeatSpell == 75 {
-					if dist >= minRange && dist <= maxRange {
-						rangedSpeed := 2 * time.Second
-						if sess.player.RangedAttackTime > 0 {
-							rangedSpeed = sess.getHastedRangedSpeed(time.Duration(sess.player.RangedAttackTime) * time.Millisecond)
+					rangedSpeed := 2 * time.Second
+					if sess.player.RangedAttackTime > 0 {
+						rangedSpeed = sess.getHastedRangedSpeed(time.Duration(sess.player.RangedAttackTime) * time.Millisecond)
+					}
+					// Unit::_UpdateAutoRepeatSpell (Unit.cpp:3043-3046):
+					// the first cast after (re)starting autorepeat waits
+					// at least 500ms (Auto Shot excepted); the flag clears
+					// on every update, before the range castroutine.
+					if sess.autoRepeatFirstCast && sess.autoRepeatSpell != 75 {
+						if remaining := rangedSpeed - now.Sub(sess.lastRangedSwing); remaining < 500*time.Millisecond {
+							sess.lastRangedSwing = now.Add(-(rangedSpeed - 500*time.Millisecond))
 						}
+					}
+					sess.autoRepeatFirstCast = false
+					if dist >= minRange && dist <= maxRange {
 						// Unit::ApplyAttackTimePercentMod
 						// (Unit.cpp:10847-10864), RANGED_ATTACK arm:
 						// a haste change mid-shot preserves the

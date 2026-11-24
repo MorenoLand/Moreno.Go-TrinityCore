@@ -12738,6 +12738,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if (spell.AttributesEx1&spellAttr2AutoRepeatFlag != 0) || spellID == 75 || spellID == 5019 {
 		s.autoRepeatSpell = spellID
 		s.autoRepeatTarget = targetGUID
+		s.autoRepeatFirstCast = true // Unit::_UpdateAutoRepeatSpell (Unit.cpp:3043): first cast waits >=500ms
 		// SpellHistory::StartCooldown (SpellHistory.cpp:308-311) runs
 		// inside startRealSpellCooldown: a zero-cooldown shoot-category
 		// (76) or auto-repeat spell other than 75 takes the ranged
