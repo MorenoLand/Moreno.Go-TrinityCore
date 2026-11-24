@@ -1080,6 +1080,13 @@ func (s *session) beginTaxiFlight(ctx context.Context, nodes []uint32, pathIDs [
 		s.stunCharmedUnit()
 		s.removeAurasWithInterruptFlags(auraInterruptFlagMount)
 	}
+	// FlightPathMovementGenerator::DoReset (FlightPathMovementGenerator.cpp:74):
+	// taking off combat-stops the owner with pets (includingCast=false
+	// default — no cast interrupt, only the attack stop + out-of-combat flag
+	// + pet stop). Runs after the mount leg, as in C++ (SendDoFlight mounts
+	// first, the generator resets on activation). A temp-unsummoned pet above
+	// makes the pet leg a no-op when mounted; with no mount it still applies.
+	s.combatStopWithPets(ctx, false)
 	if chargeFirstHop {
 		// Player::ActivateTaxiPathTo (Player.cpp:21668): the first leg is
 		// deducted at departure; later legs on hop arrival.

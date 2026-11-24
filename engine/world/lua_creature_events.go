@@ -7003,10 +7003,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// applyCreatureMotionToSpawn, no immediate update packet) plus the
 	// CombatStop() arm (Unit.cpp:5809, includingCast=false default):
 	// own victim dropped with SMSG_ATTACK_STOP, visual target cleared,
-	// attackers removed, threat cleared, InCombat false. DELTAS: the
-	// CombatStopWithPets leg is unmodeled (no pet attack-stop primitive
-	// that does not halt motion), same delta as the player twin; the
-	// false leg only clears the flag, no CombatStop, per C++.
+	// attackers removed, threat cleared, InCombat false, plus the
+	// CombatStopWithPets minion leg (UnitMethods.h:1901): controlled motions
+	// drop their victims via stopControlledCreatureAttacks. The false leg
+	// only clears the flag, no CombatStop, per C++.
 	methods["SetSanctuary"] = func(_ context.Context, args []any) ([]any, error) {
 		apply := true
 		if len(args) >= 1 {
@@ -7053,6 +7053,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.removeCreatureAttackers(mapID, instanceID, guid)
 			s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
 			s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
+			// UnitMethods.h:1901: CombatStopWithPets() — controlled motions
+			// drop their victims too (no motion halt: attack stop only).
+			s.stopControlledCreatureAttacks(mapID, instanceID, guid)
 		}
 		return nil, nil
 	}

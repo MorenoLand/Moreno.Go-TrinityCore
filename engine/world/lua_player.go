@@ -647,10 +647,8 @@ func (s *session) luaPlayer() *scripting.Object {
 	// attack stop + in-combat clear, the handleCmdCombatStop twin.
 	// DELTAS: the RemoveAllAttackers leg (attackers stop attacking this
 	// unit) has no Go bridge, same documented gap as the command twin;
-	// the CombatStopWithPets leg is unmodeled (no pet attack-stop
-	// primitive that does not halt motion); the creature surface stays
-	// unwired (no creature bytes2-byte1 field — motion tracks only the
-	// byte-0 sheath state).
+	// the creature surface stays unwired (no creature bytes2-byte1 field —
+	// motion tracks only the byte-0 sheath state).
 	methods["SetSanctuary"] = func(ctx context.Context, args []any) ([]any, error) {
 		apply, err := extraBool("SetSanctuary", args)
 		if err != nil {
@@ -664,6 +662,10 @@ func (s *session) luaPlayer() *scripting.Object {
 				_ = s.sendAttackStop(victim, false)
 			}
 			markPlayerOutOfCombat(ctx, s)
+			// UnitMethods.h:1901: CombatStopWithPets() (includingCast=false
+			// default) — the pet drops its victim too, via the stopOwnPetAttacks
+			// twin (no motion halt: it only clears TargetGUID/InCombat/threat).
+			s.stopOwnPetAttacks()
 		} else {
 			state.PVPFlags &^= pvpFlagSanctuary
 		}

@@ -2566,6 +2566,44 @@ func (s *Server) fanOutBytes2FlagToControlled(mapID, instanceID uint32, guid uin
 	}
 }
 
+// stopControlledCreatureAttacks runs the minion leg of Unit::CombatStopWithPets
+// (Unit.cpp:5828-5845) for a creature owner: every motion it controls
+// (CharmerGUID or OwnerGUID, the fanOutBytes2FlagToControlled enumeration)
+// drops its victim with SMSG_ATTACK_STOP, clears threat and leaves combat.
+// Motion is untouched — the stop is an attack stop, not a halt.
+func (s *Server) stopControlledCreatureAttacks(mapID, instanceID uint32, guid uint64) {
+	if s == nil || guid == 0 {
+		return
+	}
+	type stoppedVictim struct {
+		guid, victim uint64
+		x, y, z      float32
+		phase        uint32
+	}
+	var stopped []stoppedVictim
+	s.motionMu.Lock()
+	for _, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion == nil || (motion.CharmerGUID != guid && motion.OwnerGUID != guid) {
+			continue
+		}
+		victim := motion.TargetGUID
+		motion.TargetGUID = 0
+		motion.InCombat = false
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.ClearThreat()
+		}
+		// Unit::AttackStop (Unit.cpp:5763-5789) sends SMSG_ATTACK_STOP only
+		// when an attack was actually in progress.
+		if victim != 0 {
+			stopped = append(stopped, stoppedVictim{motion.GUID, victim, motion.X, motion.Y, motion.Z, motion.PhaseMask})
+		}
+	}
+	s.motionMu.Unlock()
+	for _, st := range stopped {
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(st.guid, st.victim, false), mapID, instanceID, st.x, st.y, st.z, st.phase)
+	}
+}
+
 func (s *Server) findCreatureMotionLocked(mapID, instanceID uint32, guid uint64) *creatureMotion {
 	motions := s.motionMapLocked(mapID, instanceID)
 	if motion := motions[guid]; motion != nil && motion.Map == mapID && motion.InstanceID == instanceID {

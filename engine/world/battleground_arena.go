@@ -1144,13 +1144,19 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 			sess.removeTargetAurasByType(ctx, sess.playerGUID, spellAuraModShapeshift)
 		}
 		// ResurrectPlayer(1.0f) + SpawnCorpseBones for the dead
-		// (Battleground.cpp:736-739); the living CombatStop() arm has no Go
-		// model (no combat-stop API in engine/world), no-bridge.
+		// (Battleground.cpp:736-739); the living CombatStop() arm
+		// (Battleground.cpp:739-740) is subsumed by the
+		// CombatStopWithPets(true) call below, which includes CombatStop.
 		if sess.player.Health == 0 {
 			sess.resurrectPlayer(ctx, 1.0)
 			sess.spawnCorpseBones(ctx)
 		}
-		s.resetPlayerPowers(sess)                      // ResetAllPowers (Battleground.cpp:791)
+		s.resetPlayerPowers(sess) // ResetAllPowers (Battleground.cpp:791)
+		// CombatStopWithPets(true) (Battleground.cpp:793): interrupt casts,
+		// drop the attack and the in-combat flag, and stop the pet's attack.
+		// Runs for every roster member, dead or alive — the dead were just
+		// resurrected above, but a dead owner's pet may still be fighting.
+		sess.combatStopWithPets(ctx, true)
 		sess.sendClientControl(sess.playerGUID, false) // BlockMovement (Battleground.cpp:808-812)
 		// The honor-bonus / arena-point reward arms (Battleground.cpp:742-786)
 		// are gated by IsRandom() || BattlegroundMgr::IsBGWeekend(GetTypeID());

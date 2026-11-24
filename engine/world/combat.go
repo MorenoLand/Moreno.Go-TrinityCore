@@ -2761,6 +2761,11 @@ func (s *session) stopPvPCombatForSanctuary(ctx context.Context) {
 	s.attackTarget = 0
 	_ = s.sendAttackStop(victim, false)
 	markPlayerOutOfCombat(ctx, s)
+	// Player::UpdateArea (Player.cpp:7182): entering sanctuary combat-stops
+	// WITH pets — the entering player's pet drops its victim too. The
+	// opponent's pets attacking this player are the RemoveAllAttackers leg
+	// (Unit.cpp:5814), which has no Go bridge and stays out.
+	s.stopOwnPetAttacks()
 	s.sendPlayerUpdate()
 	if opponent.attackTarget == s.playerGUID {
 		opponent.attackTarget = 0
@@ -4247,6 +4252,34 @@ func (s *session) stopControlledPetCombat() {
 	stopPkt := buildAttackStop(s.player.PetGUID, victim, false)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 	s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
+}
+
+// combatStopWithPets mirrors Unit::CombatStopWithPets (Unit.cpp:5828-5845) for
+// a player session: the owner's CombatStop (Unit.cpp:5809-5826, the own attack
+// stop + out-of-combat flag) plus the same stop for the controlled pet
+// (m_Controlled; Go models the one summoned pet via PetGUID, the duel twin's
+// scope — charmed units have no possess model). The npcbot leg is
+// fork-specific and has no Go model. RemoveAllAttackers (attackers stop
+// attacking this unit, Unit.cpp:5814) has no Go bridge and stays out, same as
+// the SetSanctuary twin documents. includingCast interrupts non-melee casts
+// and autorepeat, matching CombatStop(true); false leaves casts alone.
+func (s *session) combatStopWithPets(ctx context.Context, includingCast bool) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if includingCast {
+		s.interruptCurrentCast()
+		s.interruptCurrentChannel()
+		s.cancelAutoRepeatOnInterrupt()
+	}
+	// Unit::AttackStop (Unit.cpp:5763-5789) sends SMSG_ATTACK_STOP only when
+	// an attack was actually in progress.
+	if victim := s.attackTarget; victim != 0 {
+		s.attackTarget = 0
+		_ = s.sendAttackStop(victim, false)
+	}
+	markPlayerOutOfCombat(ctx, s)
+	s.stopOwnPetAttacks()
 }
 
 // DuelCompleteType mirrors TrinityCore's DuelCompleteType enum.
