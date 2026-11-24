@@ -235,8 +235,11 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	// last usable seat clears the base's spell-click flag.
 	s.syncVehicleBaseNPCFlag(effMap, effInstance, ref.baseGUID)
 	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil {
-		s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion), assigned)
+		// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the AI
+		// PassengerBoarded(true) call precedes the OnAddPassenger
+		// script hook.
 		s.smartPassengerBoarded(ctx, base, passengerGUID, assigned, true)
+		s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion), assigned)
 		s.syncCreatureVehiclePassengers(base)
 		return
 	}
@@ -270,8 +273,9 @@ func (s *Server) luaVehicleRemovePassenger(ctx context.Context, ref *luaVehicleR
 		return
 	}
 	var seatID int8
+	seatOK := false
 	if kit != nil {
-		seatID, _, _, _ = kit.RemovePassenger(passengerGUID)
+		seatID, _, _, seatOK = kit.RemovePassenger(passengerGUID)
 	}
 	// Vehicle::RemovePassenger (Vehicle.cpp:508-509): freeing a usable
 	// seat restores the base's spell-click flag.
@@ -281,8 +285,14 @@ func (s *Server) luaVehicleRemovePassenger(ctx context.Context, ref *luaVehicleR
 	motion.VehicleSeat = 0
 	motion.Moving = false
 	s.motionMu.Unlock()
-	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil {
-		s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion))
+	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil && seatOK {
+		// Vehicle::RemovePassenger (Vehicle.cpp:536-539): the AI
+		// PassengerBoarded(false) call precedes the OnRemovePassenger
+		// script hook. A seat already freed fires nothing: C++
+		// asserts the seat exists (Vehicle.cpp:501-504), and a
+		// JUST_DIED accessory keeps a stale VehicleGUID after the
+		// kit-drop sweep already fired ev6 for it.
 		s.smartPassengerBoarded(ctx, base, passengerGUID, seatID, false)
+		s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion))
 	}
 }

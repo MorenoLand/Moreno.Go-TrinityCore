@@ -1141,8 +1141,11 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 				// OnRemovePassenger for creature bases only; a player
 				// base stays silent per the C++ TYPEID_UNIT gate.
 				if base := s.findCreatureMotion(mapID, instanceID, vehicleGUID); base != nil {
-					s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion))
+					// Vehicle::RemovePassenger (Vehicle.cpp:536-539):
+					// the AI PassengerBoarded(false) call precedes
+					// the OnRemovePassenger script hook.
 					s.smartPassengerBoarded(ctx, base, guid, seatID, false)
+					s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion))
 				}
 				// Vehicle::RemovePassenger (Vehicle.cpp:508-509):
 				// freeing a usable seat restores the base's

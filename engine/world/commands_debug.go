@@ -2162,6 +2162,11 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 		passenger.Moving = false
 		s.server.motionMu.Unlock()
 		if base := s.findCreatureMotion(vehicleGUID); base != nil {
+			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the AI
+			// PassengerBoarded(true) call precedes the OnAddPassenger
+			// script hook — the debug board fires it like every other
+			// board, not just the hook.
+			s.server.smartPassengerBoarded(ctx, base, passenger.GUID, assigned, true)
 			s.server.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.server.luaMotionCreature(base), s.server.luaMotionCreature(passenger), assigned)
 		}
 		// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): boarding the

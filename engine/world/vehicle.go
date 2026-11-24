@@ -925,8 +925,11 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
 		kit.mu.Unlock()
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
-			s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(summoned), assigned)
+			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the
+			// AI PassengerBoarded(true) call precedes the
+			// OnAddPassenger script hook.
 			s.smartPassengerBoarded(ctx, base, summoned.GUID, assigned, true)
+			s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(summoned), assigned)
 			if acc.IsMinion {
 				s.triggerVehicleEvent(scripting.VehicleEventOnInstallAccessory, s.luaMotionCreature(base), s.luaMotionCreature(summoned))
 			}
@@ -1281,9 +1284,12 @@ func (s *Server) loadVehicleAccessories(ctx context.Context) {
 // UNIT_MASK_ACCESSORY for minions, then the HandleSpellClick twin:
 // kit.AddPassenger seats the motion (the player-only enterVehicle
 // cannot board creatures), and this sync's own relocate fan-out below
-// moves it onto the seat offsets. Occupied seats are skipped, not
-// ejected: C++ clears passengers first, but Go installs a tick after
-// spawn, when a player may already have boarded. A failed board
+// moves it onto the seat offsets. An occupied target seat ejects its
+// occupant first (Vehicle.cpp:471-478, the ejectVehicleSeatOccupant
+// twin): C++ clears passengers before the spawn install
+// (Vehicle.cpp:86-87), but Go installs a tick after spawn, when a
+// player may already have boarded the accessory's seat, so the
+// AddPassenger eject leg is live here. A failed board
 // despawns the just-summoned accessory (the VehicleJoinEvent::Abort
 // twin). GUID-based vehicle_accessory rows are not loaded in Go, so
 // the install covers the template list only.
@@ -1317,6 +1323,16 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 		if summoned == nil {
 			continue
 		}
+		// Vehicle::AddPassenger (Vehicle.cpp:471-478) kicks the occupant
+		// off an occupied target seat before the new passenger boards,
+		// via the full _ExitVehicle twin: the spawn install runs a tick
+		// after spawn, when a player may already have boarded the
+		// accessory's seat, and without the eject the kit board fails
+		// and the fresh summon despawns below. A player on the seat
+		// exits through the session exitVehicle leg, as in C++. The
+		// player-base mount install shares this body with a fresh kit,
+		// so the eject no-ops there.
+		s.ejectVehicleSeatOccupant(ctx, origin.Map, origin.InstanceID, kit, baseGUID, acc.SeatID, summoned.GUID)
 		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
 		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
 		if !ok {
@@ -1339,8 +1355,11 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 		// shares this body, so the base-motion gate keeps it silent
 		// there, matching the C++ TYPEID_UNIT gate.
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
-			s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(summoned), assigned)
+			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the
+			// AI PassengerBoarded(true) call precedes the
+			// OnAddPassenger script hook.
 			s.smartPassengerBoarded(ctx, base, summoned.GUID, assigned, true)
+			s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(summoned), assigned)
 			if acc.IsMinion {
 				s.triggerVehicleEvent(scripting.VehicleEventOnInstallAccessory, s.luaMotionCreature(base), s.luaMotionCreature(summoned))
 			}
@@ -1439,8 +1458,11 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 			// exit leg fires it only when it removes the seat itself.
 			if seatID, _, _, ok := kit.RemovePassenger(guid); ok {
 				if base := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID); base != nil {
-					s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), sess.luaPlayer())
+					// Vehicle::RemovePassenger (Vehicle.cpp:536-539):
+					// the AI PassengerBoarded(false) call precedes
+					// the OnRemovePassenger script hook.
 					s.smartPassengerBoarded(ctx, base, guid, seatID, false)
+					s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), sess.luaPlayer())
 				}
 			}
 			continue
@@ -1458,13 +1480,17 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		if occupantMotion != nil {
 			exitX, exitY, exitZ, exitO = s.creatureVehicleExitPosition(motion.GUID, occupantMotion, motion)
 		}
-		seatID, _, _, _ := kit.RemovePassenger(guid)
-		s.smartPassengerBoarded(ctx, motion, guid, seatID, false)
+		seatID, _, _, seatOK := kit.RemovePassenger(guid)
+		if seatOK {
+			s.smartPassengerBoarded(ctx, motion, guid, seatID, false)
+		}
 		if occupantMotion == nil {
 			continue
 		}
 		wasAccessoryMinion := occupantMotion.VehicleAccessoryMinion
-		s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(motion), s.luaMotionCreature(occupantMotion))
+		if seatOK {
+			s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(motion), s.luaMotionCreature(occupantMotion))
+		}
 		// The exit position lands here, before the fall below, so the
 		// fall spline launches from it (Unit.cpp:13238-13249), as in the
 		// death/kit-drop twin (exitCreatureVehiclePassengers).
@@ -1514,8 +1540,11 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
 		kit.mu.Unlock()
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
-			s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(summoned), assigned)
+			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the
+			// AI PassengerBoarded(true) call precedes the
+			// OnAddPassenger script hook.
 			s.smartPassengerBoarded(ctx, base, summoned.GUID, assigned, true)
+			s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(summoned), assigned)
 			if acc.IsMinion {
 				s.triggerVehicleEvent(scripting.VehicleEventOnInstallAccessory, s.luaMotionCreature(base), s.luaMotionCreature(summoned))
 			}
@@ -1598,10 +1627,13 @@ func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceI
 		}
 		removed = true
 		if baseMotion != nil {
+			// Vehicle::RemovePassenger (Vehicle.cpp:536-539): the
+			// AI PassengerBoarded(false) call precedes the
+			// OnRemovePassenger script hook.
+			s.smartPassengerBoarded(ctx, baseMotion, passengerGUID, seatID, false)
 			if passengerMotion != nil {
 				s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(baseMotion), s.luaMotionCreature(passengerMotion))
 			}
-			s.smartPassengerBoarded(ctx, baseMotion, passengerGUID, seatID, false)
 		}
 		if exitMotion == nil && passengerMotion != nil {
 			exitMotion = passengerMotion
@@ -1820,13 +1852,23 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 		if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
 			// A live base's players eject through the session arm
 			// (exitVehicle fires ev6 itself while the base motion
-			// still resolves). A departing base's players have no
+			// still resolves) — including the no-aura boardings
+			// (Lua Vehicle:AddPassenger) the death aura strip
+			// never reaches: RemoveAllPassengers (Vehicle.cpp:
+			// 231-257) removes CONTROL_VEHICLE auras, but a
+			// passenger with no 236 aura has nothing to strip, so
+			// skipping here stranded them seated on a dead base
+			// with no ev6. The 236-boarded are already out by the
+			// time this sweep runs (the strip's remove leg exits
+			// them first), so this is a no-op for them, not a
+			// second fire. A departing base's players have no
 			// other eject — the kit-drop is their _ExitVehicle, so
 			// the seat frees first (Vehicle.cpp:518), ev6 fires on
 			// the departing base (:538-539), and the session tail
 			// runs with its own fire arm no-op'd (seat gone, kit
 			// deregistered, base motion deleted).
 			if departingBase == nil {
+				sess.exitVehicle(context.Background())
 				continue
 			}
 			seatID, _, _, ok := kit.RemovePassenger(guid)
@@ -1834,8 +1876,11 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 				continue
 			}
 			if vehicleObj != nil {
-				s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, vehicleObj, sess.luaPlayer())
+				// Vehicle::RemovePassenger (Vehicle.cpp:536-539):
+				// the AI PassengerBoarded(false) call precedes the
+				// OnRemovePassenger script hook.
 				s.smartPassengerBoarded(context.Background(), baseMotion, guid, seatID, false)
+				s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, vehicleObj, sess.luaPlayer())
 			}
 			sess.exitVehicle(context.Background())
 			continue
@@ -1860,10 +1905,15 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 		// RemoveFromWorld) does not keep listing the departed
 		// passenger; the resetVehicleKitOnRespawn twin already drops
 		// stale seats the same way.
-		kit.RemovePassenger(guid)
-		if vehicleObj != nil {
+		seatID, _, _, seatOK := kit.RemovePassenger(guid)
+		if vehicleObj != nil && seatOK {
+			// Vehicle::RemovePassenger (Vehicle.cpp:536-539): the
+			// AI PassengerBoarded(false) call precedes the
+			// OnRemovePassenger script hook. A seat already freed
+			// fires nothing: C++ asserts the seat exists, and the
+			// kit-drop sweep already fired ev6 for it.
+			s.smartPassengerBoarded(context.Background(), baseMotion, guid, seatID, false)
 			s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, vehicleObj, s.luaMotionCreature(motion))
-			s.smartPassengerBoarded(context.Background(), baseMotion, guid, motion.VehicleSeat, false)
 		}
 		// The exit position lands here, before the tail below, so the
 		// fall spline launches from it (Unit.cpp:13238-13249) and the
@@ -2589,8 +2639,11 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 			// (mount kits) stay silent per the C++ TYPEID_UNIT gate.
 			if !kit.IsPlayer {
 				if base := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, vehicleGUID); base != nil {
-					s.server.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.server.luaMotionCreature(base), s.luaPlayer(), assigned)
+					// VehicleJoinEvent::Execute (Vehicle.cpp:900-902):
+					// the AI PassengerBoarded(true) call precedes
+					// the OnAddPassenger script hook.
 					s.server.smartPassengerBoarded(ctx, base, s.playerGUID, assigned, true)
+					s.server.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.server.luaMotionCreature(base), s.luaPlayer(), assigned)
 				}
 			}
 			// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): boarding
@@ -2709,8 +2762,13 @@ func (s *Server) exitVehicleTail(ctx context.Context, mapID, instanceID uint32, 
 // the seat frees (Unit.cpp:13193), kit removal with ev6, fall-or-
 // teleport, then exitVehicleTail. A stale seat — a GUID with neither
 // session nor motion — frees the seat with the SmartAI
-// passenger-removed event only, the reinstall twin (C++ would ASSERT on
-// the missing unit; Go degrades to the seat free). Callers skip the
+// passenger-removed event only, the reinstall twin. C++ would ASSERT
+// on the missing unit (Vehicle.cpp:476; Errors.h WPAssert aborts, a
+// PERFORMANCE_PROFILING build compiles it out and the null deref
+// crashes instead) — the abort stays out, a stale seat is a
+// bookkeeping bug, not a reason to kill the server, but the ASSERT's
+// observability leg is ported: the violation is logged with the seat
+// context before degrading to the seat free. Callers skip the
 // call when the incoming passenger is already seated on this base: the
 // board no-ops into its current seat, so there is no seat to take.
 // exceptGUID is the incoming passenger; re-boarding its own seat is
@@ -2729,6 +2787,14 @@ func (s *Server) ejectVehicleSeatOccupant(ctx context.Context, mapID, instanceID
 	}
 	occMotion := s.findCreatureMotion(mapID, instanceID, occupant)
 	if occMotion == nil {
+		// Vehicle::AddPassenger (Vehicle.cpp:471-478): C++ ASSERTs
+		// the occupant resolves to a unit before ejecting it; the
+		// abort stays out (see the function header), but the
+		// violation is logged with the seat context before
+		// degrading to the seat free.
+		if s.Logger != nil {
+			s.Logger.Error("stale vehicle seat occupant has no unit", "baseGUID", baseGUID, "seat", seatID, "occupantGUID", occupant)
+		}
 		freedSeat, _, _, _ := kit.RemovePassenger(occupant)
 		if base := s.findCreatureMotion(mapID, instanceID, baseGUID); base != nil {
 			s.smartPassengerBoarded(ctx, base, occupant, freedSeat, false)
@@ -2846,8 +2912,11 @@ func (s *session) exitVehicle(ctx context.Context) {
 		// exactly when the primary-kit removal succeeded.
 		if primary != nil && !primary.IsPlayer && seatInfo != nil {
 			if base := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, oldVehGUID); base != nil {
-				s.server.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.server.luaMotionCreature(base), s.luaPlayer())
+				// Vehicle::RemovePassenger (Vehicle.cpp:536-539):
+				// the AI PassengerBoarded(false) call precedes the
+				// OnRemovePassenger script hook.
 				s.server.smartPassengerBoarded(ctx, base, s.playerGUID, seatID, false)
+				s.server.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.server.luaMotionCreature(base), s.luaPlayer())
 			}
 		}
 		if seatInfo != nil {
@@ -3089,8 +3158,11 @@ func (s *session) releaseVehicleStateAtLogout(ctx context.Context) {
 				// first successful removal fires once, matching the
 				// single C++ vehicle the passenger sat in.
 				if base := s.server.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, vehGUID); base != nil {
-					s.server.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.server.luaMotionCreature(base), s.luaPlayer())
+					// Vehicle::RemovePassenger (Vehicle.cpp:536-539):
+					// the AI PassengerBoarded(false) call precedes
+					// the OnRemovePassenger script hook.
 					s.server.smartPassengerBoarded(ctx, base, s.playerGUID, seatID, false)
+					s.server.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.server.luaMotionCreature(base), s.luaPlayer())
 					vehicleFired = true
 				}
 				// Vehicle::RemovePassenger (Vehicle.cpp:508-509):
@@ -3162,6 +3234,30 @@ func (s *session) applyVehicleExitPosition(vehicleGUID uint64, addon *VehicleSea
 	o := s.player.Orientation
 	baseX, baseY, baseZ, o = applyVehicleSeatExitAddon(baseX, baseY, baseZ, o, addon)
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = baseX, baseY, baseZ, o
+}
+
+// fireVehicleSeatSwitch fires the Vehicle::RemovePassenger /
+// Vehicle::AddPassenger hook pair for a seat switch. Unit::ChangeSeat
+// (Unit.cpp:13133-13170) re-applies the ride aura's amount, whose
+// CHANGE_AMOUNT handlers run RemovePassenger first — OnRemovePassenger
+// fires, with no _ExitVehicle (SpellAuraEffects.cpp:3002) — then
+// _EnterVehicle, which boards the new seat and fires OnAddPassenger
+// (VehicleJoinEvent::Execute, Vehicle.cpp:900-902). Each hook is
+// preceded by its AI PassengerBoarded call (Vehicle.cpp:536-539,
+// :900-902). A player base stays silent per the TYPEID_UNIT gate:
+// it resolves to no creature motion.
+func (s *session) fireVehicleSeatSwitch(ctx context.Context, kit *VehicleKit, oldSeat, newSeat int8) {
+	if s == nil || s.server == nil || s.player == nil || kit == nil || kit.IsPlayer || oldSeat == newSeat {
+		return
+	}
+	base := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
+	if base == nil {
+		return
+	}
+	s.server.smartPassengerBoarded(ctx, base, s.playerGUID, oldSeat, false)
+	s.server.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.server.luaMotionCreature(base), s.luaPlayer())
+	s.server.smartPassengerBoarded(ctx, base, s.playerGUID, newSeat, true)
+	s.server.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.server.luaMotionCreature(base), s.luaPlayer(), newSeat)
 }
 
 // handleChangeSeatsOnControlledVehicle processes CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE (0x49B).
@@ -3242,12 +3338,14 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if nextSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, next); ok {
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, nextSeat); switched {
+					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
 					if seatInfo != nil && seatInfo.CanControl() {
 						s.sendClientControl(kit.VehicleGUID, true)
 						spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
 						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
 					}
+					s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
 					s.sendPlayerUpdate()
 					// A switch across the CanEnterOrExit boundary moves
 					// UsableSeatNum (see SwitchSeat); the base's
@@ -3472,12 +3570,14 @@ func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []by
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if nextSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, true); ok {
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, nextSeat); switched {
+					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
 					if seatInfo != nil && seatInfo.CanControl() {
 						s.sendClientControl(kit.VehicleGUID, true)
 						spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
 						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
 					}
+					s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
 					s.sendPlayerUpdate()
 					// A switch across the CanEnterOrExit boundary moves
 					// UsableSeatNum (see SwitchSeat); the base's
@@ -3503,12 +3603,14 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if prevSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, false); ok {
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, prevSeat); switched {
+					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
 					if seatInfo != nil && seatInfo.CanControl() {
 						s.sendClientControl(kit.VehicleGUID, true)
 						spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
 						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
 					}
+					s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
 					s.sendPlayerUpdate()
 					// A switch across the CanEnterOrExit boundary moves
 					// UsableSeatNum (see SwitchSeat); the base's
@@ -3571,12 +3673,14 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 			if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, seat); switched {
+				oldSeat := s.player.VehicleSeat
 				s.player.VehicleSeat = assigned
 				if seatInfo != nil && seatInfo.CanControl() {
 					s.sendClientControl(kit.VehicleGUID, true)
 					spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
 					s.sendVehiclePetSpells(kit.VehicleGUID, spells)
 				}
+				s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
 				s.sendPlayerUpdate()
 				// A switch across the CanEnterOrExit boundary moves
 				// UsableSeatNum (see SwitchSeat); the base's
