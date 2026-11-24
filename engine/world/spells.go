@@ -8598,7 +8598,13 @@ func (s *session) checkCasterAurasMechanic(spell wotlk.Spell, allowedMask, auraT
 }
 
 // hasAuraMechanic reports whether any of the caster's live auras carries one
-// of the mechanics in mask (Unit::HasAuraWithMechanic, Unit.cpp).
+// of the mechanics in mask (Unit::HasAuraWithMechanic, Unit.cpp:4727-4742).
+// The spell-level leg is checked outright (Unit.cpp:4732-4733); only the
+// per-effect leg is HasEffect-gated: only effects inside the aura's
+// EffectMask count (Unit.cpp:4736-4739), so a mechanic sitting on an
+// unapplied effect of the same spell does not match — the
+// spellMechanicMask twin ORs every effect's mechanic regardless of the
+// mask and over-matches here.
 func (s *session) hasAuraMechanic(mask uint32) bool {
 	if s == nil || s.player == nil {
 		return false
@@ -8613,8 +8619,20 @@ func (s *session) hasAuraMechanic(mask uint32) bool {
 		if aura == nil || aura.Stopped {
 			continue
 		}
-		if sp, found, _ := s.server.Data.Spell(id); found && spellMechanicMask(sp)&mask != 0 {
+		sp, found, err := s.server.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		if sp.Mechanic != 0 && mask&(1<<sp.Mechanic) != 0 {
 			return true
+		}
+		for i, eff := range sp.Effects {
+			if i >= 8 || aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			if eff.Effect != 0 && eff.Mechanic != 0 && mask&(1<<eff.Mechanic) != 0 {
+				return true
+			}
 		}
 	}
 	return false

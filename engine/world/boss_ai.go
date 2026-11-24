@@ -14893,7 +14893,7 @@ func (s *Server) creatureCasterAurasMechanic(m *creatureMotion, spell wotlk.Spel
 // creatureHasAuraMechanic mirrors Unit::HasAuraWithMechanic (Unit.cpp)
 // for a creature caster: true when any of the creature's live auras
 // carries one of the mechanics in mask. The spell-level leg is checked
-// outright (Unit.cpp:4734-4735); only the per-effect leg is
+// outright (Unit.cpp:4732-4733); only the per-effect leg is
 // HasEffect-gated (Unit.cpp:4736-4739), so a mechanic sitting on an
 // unapplied effect of the same spell does not match. Feeds the
 // immune-shield arm of CheckCasterAuras (Spell.cpp:6327-6329).
