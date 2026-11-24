@@ -147,6 +147,24 @@ func (ref luaUnitRef) attackerSession() *session {
 // swap (_addAttacker/_removeAttacker) has no Go model — no per-unit
 // attacker set exists; threat lists cover engagement — and the
 // offhand-attack-timer delay has no Go swing-timer model. Go models
+// creatureAttackControlledByPlayer is Unit::IsControlledByPlayer
+// (Unit.h:1168) for the Attack path: the attacker is controlled by a
+// player when its charmer or owner is a player (HIGHGUID_PLAYER is the
+// zero high word, as in motionCanHaveThreatList's CreatedByGUID test).
+// Creature-owned summons are not player-controlled, so they engage via
+// EngageWithTarget like wild creatures; creatureIsPlayerControlled
+// (boss_ai.go) is the looser power-cost gate that counts any owner,
+// and must not be used here.
+func creatureAttackControlledByPlayer(m *creatureMotion) bool {
+	if m == nil {
+		return false
+	}
+	if m.CharmerGUID != 0 && m.CharmerGUID>>48 == 0 {
+		return true
+	}
+	return m.OwnerGUID != 0 && m.OwnerGUID>>48 == 0
+}
+
 // UNIT_STATE_MELEE_ATTACKING as merely having a target (conditions.go),
 // with no melee/ranged distinction, so a same-victim call changes
 // nothing and returns false; C++ would return true on a melee-state
@@ -228,7 +246,13 @@ func luaUnitAttack(ctx context.Context, attacker luaUnitRef, victimGUID uint64, 
 	srv.motionMu.Lock()
 	wasInCombat := motion.InCombat
 	wild := motion.OwnerGUID == 0 && motion.CharmerGUID == 0
-	if wild {
+	// Unit::Attack (Unit.cpp:5734) engages via EngageWithTarget
+	// (Unit.cpp:8429-8438) unless the attacker is controlled by a
+	// player; EngageWithTarget itself branches on CanHaveThreatList,
+	// so a creature-owned summon (owner = a creature, not wild) seeds
+	// 0.0f threat here while a pet or player-charmed creature does
+	// not. The AtEngage dismount/home legs below stay on the wild arm.
+	if !creatureAttackControlledByPlayer(motion) && motionCanHaveThreatList(motion) {
 		if motion.ThreatMgr == nil {
 			motion.ThreatMgr = NewThreatManager(motion)
 		}
@@ -237,11 +261,11 @@ func luaUnitAttack(ctx context.Context, attacker luaUnitRef, victimGUID uint64, 
 		// current victim (the engage path's GetCurrentVictim arm is
 		// aggro-driven, this one is script-driven).
 		srv.creatureAddThreat(motion, victimGUID, 0.0, true, srv.findSessionByGUID(victimGUID), srv.findCreatureMotionLocked(motion.Map, motion.InstanceID, victimGUID))
+	}
+	if wild {
 		// Unit::Attack (Unit.cpp:5734) engages wild creatures via
 		// EngageWithTarget -> AddThreat, so a fresh Attack dismounts and
 		// re-homes (Creature::AtEngage, Creature.cpp:3435-3436, 3446-3447).
-		// Controlled creatures never reach EngageWithTarget there (the
-		// IsControlledByPlayer gate), so the legs ride the wild arm only.
 		if !wasInCombat {
 			atEngageDismount(motion)
 			atEngageSetHomePosition(motion)

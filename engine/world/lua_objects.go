@@ -1350,7 +1350,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return state.GUID
 	})
-	methods["IsServiceProvider"] = luaNoArgs(func() any { return state.NPCFlags&0x007FC0F2 != 0 })
+	methods["IsServiceProvider"] = luaNoArgs(func() any { return state.NPCFlags&0x003FE090 != 0 })
 	// GetMountId is Unit::GetMountID (Unit.h:933): the
 	// UNIT_FIELD_MOUNTDISPLAYID read over the live motion Mount slot;
 	// a motion that no longer resolves reads 0.

@@ -703,9 +703,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// plus the gossip/quest/vendor/trainer/taxi/spirit/innkeeper/
 	// auctioneer/service-provider set are the Unit.h:1006-1021
 	// UNIT_NPC_FLAGS reads over the live motion flags, mirroring the
-	// session surface's masks (IsTrainer 0x70 and IsServiceProvider
-	// 0x007FC0F2 are supersets of the C++-exact 0x10 / 0x003FE090;
-	// see the recensus detail note). GetClassMask is Unit::GetClassMask (Unit.h:852) over the
+	// session surface's masks (IsTrainer 0x70 is a superset of the
+	// C++-exact 0x10; IsServiceProvider 0x003FE090 is the C++-exact
+	// Unit::IsServiceProvider mask, Unit.cpp:8420-8428 — vendor /
+	// trainer / flightmaster / petitioner / battlemaster / banker /
+	// innkeeper / spirithealer / spiritguide / tabarddesigner /
+	// auctioneer; questgiver, stablemaster and the trainer-class /
+	// trainer-profession bits are NOT in it). GetClassMask is Unit::GetClassMask (Unit.h:852) over the
 	// motion's template unit_class; GetRaceMask reads 0, the creature
 	// race byte Creature::InitEntry never sets. IsPvPFlagged is
 	// Unit::IsPvP (Unit.h:914) over the motion bytes2 byte 1, whose
@@ -732,7 +736,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	methods["IsSpiritService"] = npcFlag(0x0000C000)
 	methods["IsInnkeeper"] = npcFlag(0x00010000)
 	methods["IsAuctioneer"] = npcFlag(0x00200000)
-	methods["IsServiceProvider"] = npcFlag(0x007FC0F2)
+	methods["IsServiceProvider"] = npcFlag(0x003FE090)
 	methods["GetClassMask"] = luaNoArgs(func() any {
 		s.motionMu.Lock()
 		defer s.motionMu.Unlock()
@@ -7581,7 +7585,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// Mount is Unit::Mount (Unit.cpp:8310): SetUInt32Value(
 	// UNIT_FIELD_MOUNTDISPLAYID, mount) when the id is nonzero, then
 	// SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_MOUNT 0x08000000,
-	// UnitDefines.h:151). applyCreatureMotionToSpawn overlays motion.Mount
+	// UnitDefines.h:151), then RemoveAurasWithInterruptFlags(
+	// AURA_INTERRUPT_FLAG_MOUNT) (Unit.cpp:8361) — the player-only
+	// vehicle/pet/charm legs are vacuous for creatures, so the aura
+	// leg is the only one beyond display + flag. applyCreatureMotionToSpawn overlays motion.Mount
 	// onto the spawn record (creatures.go), so intro / phase mount arms
 	// (mandokir Reset MODEL_OHGAN_MOUNT 15271, ...) port with real
 	// client-visible effect.
@@ -7598,11 +7605,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.UnitFlagsKnown = true
 		motion.MountKnown = true
 		s.motionMu.Unlock()
+		s.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagMount)
 		return nil, nil
 	}
 	// Dismount is Unit::Dismount (Unit.cpp:8365): early-return when not
 	// mounted (the UNIT_FLAG_MOUNT check is IsMounted), then clear
-	// UNIT_FIELD_MOUNTDISPLAYID and the flag. MountKnown forces the 0
+	// UNIT_FIELD_MOUNTDISPLAYID and the flag, broadcast SMSG_DISMOUNT
+	// (Unit.cpp:8384-8386), and RemoveAurasWithInterruptFlags(
+	// AURA_INTERRUPT_FLAG_NOT_MOUNTED) (Unit.cpp:8403). The collision
+	// height and vehicle legs are player-only in C++ and correctly
+	// omitted. MountKnown forces the 0
 	// clear into the update mask, mirroring the EmoteState bridge.
 	methods["Dismount"] = func(_ context.Context, args []any) ([]any, error) {
 		s.motionMu.Lock()
@@ -7614,7 +7626,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.UnitFlags &^= 0x08000000
 		motion.UnitFlagsKnown = true
 		motion.MountKnown = true
+		mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+		guid := motion.GUID
 		s.motionMu.Unlock()
+		packet := protocol.NewBuffer(packedGUIDSize(guid))
+		packet.WritePackedGUID(guid)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DISMOUNT), packet.Bytes(), mapID, instanceID, x, y, z, phase)
+		s.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagNotMounted)
 		return nil, nil
 	}
 	// IsMounted is Unit::IsMounted (Unit.cpp): HasFlag(UNIT_FIELD_FLAGS,

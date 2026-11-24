@@ -23623,7 +23623,13 @@ func (s *session) spellDamageApFlat(ctx context.Context, spell wotlk.Spell, targ
 // auras and the OVERRIDE_CLASS_SCRIPTS / family scripted arms. Spells with
 // SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS skip it entirely (Unit.cpp:6747-6750).
 func (s *session) spellDamagePctDone(ctx context.Context, spell wotlk.Spell, targetGUID uint64, target combatTarget) float64 {
-	if spell.AttributesEx6&spellAttr6LimitPctDamageMods != 0 {
+	// Unit.cpp:6748-6749 — ATTR6 returns 1.0 wholesale in the spell
+	// twin, but a weapon-damage spell rides the Melee funnel
+	// (SpellEffects.cpp:3466), where ATTR6 gates only the school leg
+	// (Unit.cpp:8043-8044) and the versus / aurastate / class-script
+	// legs still apply — so the wholesale early-out runs only for
+	// non-weapon spells.
+	if spell.AttributesEx6&spellAttr6LimitPctDamageMods != 0 && !spellHasWeaponDamageEffect(spell) {
 		return 1.0
 	}
 	mod := 1.0
@@ -23633,7 +23639,9 @@ func (s *session) spellDamagePctDone(ctx context.Context, spell wotlk.Spell, tar
 	// On the weapon-damage funnel (Unit::MeleeDamageBonusDone, Unit.cpp:8040-8045)
 	// the arm is skipped for physical spells — NORMAL-school mods are already
 	// factored into base melee damage. Non-physical weapon spells keep the arm.
-	if !(spellHasWeaponDamageEffect(spell) && spell.SchoolMask&spellSchoolMaskNormal != 0) {
+	// The ATTR6 gate rides here too (Unit.cpp:8043-8044): an ATTR6
+	// weapon-damage spell skips the school leg even when non-physical.
+	if !(spellHasWeaponDamageEffect(spell) && spell.SchoolMask&spellSchoolMaskNormal != 0) && spell.AttributesEx6&spellAttr6LimitPctDamageMods == 0 {
 		for _, amt := range s.auraTypeModifiersByMiscMask(auraModDamagePercentDone, spell.SchoolMask) {
 			mod *= 1 + float64(amt)/100
 		}
@@ -23713,6 +23721,13 @@ func (s *session) spellDamagePctClassScripts(ctx context.Context, spell wotlk.Sp
 				addPct(ae.amount)
 			}
 		case 6427, 6428, 6579, 6580: // Dirty Deeds: effect 0 carries the expected value in negative state
+			// Unit.cpp:8119-8120 — MeleeDamageBonusDone lists only
+			// 6427/6428; 6579/6580 exist only in SpellDamagePctDone
+			// (:6899-6900), so a weapon-damage spell (the C++ Melee
+			// funnel, SpellEffects.cpp:3466) never fires them.
+			if (ae.misc == 6579 || ae.misc == 6580) && spellHasWeaponDamageEffect(spell) {
+				break
+			}
 			if victimHealthless35 {
 				addPct(-ae.eff0)
 			}

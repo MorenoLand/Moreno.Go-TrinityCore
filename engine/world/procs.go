@@ -245,6 +245,22 @@ func RollPPMChance(ppm float64, weaponSpeedMs uint32) bool {
 	return rand.Float64()*100 < chancePct
 }
 
+// ppmWithProcMod folds SPELLMOD_PROC_PER_MINUTE over a PPM chance
+// (Unit::GetPPMProcChance, Unit.cpp:8304-8306): the mod owner applies
+// its op-26 modifiers to the proc spell's PPM before the roll. An
+// unresolvable proc spell carries no family mask to match mods
+// against, so the base PPM stands.
+func (s *session) ppmWithProcMod(procSpellID uint32, ppm float64) float64 {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return ppm
+	}
+	spell, found, err := s.server.Data.Spell(procSpellID)
+	if err != nil || !found {
+		return ppm
+	}
+	return s.applySpellModFloat(spell, spellModProcPerMinute, ppm)
+}
+
 // procChanceDefault resolves the proc roll chance for a triggered proc spell.
 // Mirrors TrinityCore SpellMgr::LoadSpellProc (SpellMgr.cpp:1597): a proc entry
 // with no explicit Chance and no ProcsPerMinute falls back to the proc spell's
@@ -898,7 +914,7 @@ func (s *session) procItemCombatSpells(ctx context.Context, target combatTarget,
 				if attType == protocol.OffAttack {
 					speed = offTime
 				}
-				if !RollPPMChance(sp.ppm, speed) {
+				if !RollPPMChance(s.ppmWithProcMod(sp.spellID, sp.ppm), speed) {
 					continue
 				}
 			} else {
@@ -929,28 +945,28 @@ func (s *session) procItemCombatSpells(ctx context.Context, target combatTarget,
 func (s *session) fireWeaponEnchantProc(ctx context.Context, target combatTarget, encID uint32, attTime uint32) {
 	switch encID {
 	case EnchantIDBerserking:
-		if RollPPMChance(1.0, attTime) {
+		if RollPPMChance(s.ppmWithProcMod(ProcSpellBerserking, 1.0), attTime) {
 			s.castSpellDirect(ctx, ProcSpellBerserking, s.playerGUID)
 		}
 	case EnchantIDMongoose:
-		if RollPPMChance(1.0, attTime) {
+		if RollPPMChance(s.ppmWithProcMod(ProcSpellMongoose, 1.0), attTime) {
 			s.castSpellDirect(ctx, ProcSpellMongoose, s.playerGUID)
 		}
 	case EnchantIDExecutioner:
-		if RollPPMChance(1.0, attTime) {
+		if RollPPMChance(s.ppmWithProcMod(ProcSpellExecutioner, 1.0), attTime) {
 			s.castSpellDirect(ctx, ProcSpellExecutioner, s.playerGUID)
 		}
 	case EnchantIDCrusader:
-		if RollPPMChance(1.0, attTime) {
+		if RollPPMChance(s.ppmWithProcMod(ProcSpellCrusader, 1.0), attTime) {
 			s.castSpellDirect(ctx, ProcSpellCrusader, s.playerGUID)
 		}
 	case EnchantIDBlackMagic:
-		if !s.isProcOnCooldown(ProcSpellBlackMagic) && RollPPMChance(1.0, attTime) {
+		if !s.isProcOnCooldown(ProcSpellBlackMagic) && RollPPMChance(s.ppmWithProcMod(ProcSpellBlackMagic, 1.0), attTime) {
 			s.castSpellDirect(ctx, ProcSpellBlackMagic, s.playerGUID)
 			s.triggerProcCooldown(ProcSpellBlackMagic, 35*time.Second)
 		}
 	case EnchantIDFieryWeapon:
-		if RollPPMChance(6.0, attTime) {
+		if RollPPMChance(s.ppmWithProcMod(ProcSpellFieryWeapon, 6.0), attTime) {
 			s.castSpellDirect(ctx, ProcSpellFieryWeapon, target.GUID)
 		}
 	case EnchantIDInstantPois:
