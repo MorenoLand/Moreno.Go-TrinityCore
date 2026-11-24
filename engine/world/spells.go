@@ -7992,7 +7992,7 @@ func (s *session) removeAurasByTypeFromCaster(auraType uint32, casterGUID uint64
 
 // removeAurasByTypeFromCasterExcept is the caster-filtered except-aura twin
 // of removeAurasByTypeFromCaster (Unit::RemoveAurasByType(auraType,
-// casterGUID, except), Unit.cpp:3884): every applied aura of the given type
+// casterGUID, except), Unit.cpp:4067): every applied aura of the given type
 // cast by casterGUID comes off except the named spell. Snapshot under
 // castMu, remove outside it.
 func (s *session) removeAurasByTypeFromCasterExcept(auraType uint32, casterGUID uint64, exceptSpellID uint32) {
@@ -43225,7 +43225,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// (SpellAuraEffects.cpp:3002). The merge above refreshed the
 			// amount but never re-ran the apply leg, so without this the
 			// aura claims the new seat while the kit keeps the old one.
-			if eff.Aura == spellAuraControlVehicle {
+			// The passenger is the aura's caster, so the arm only runs
+			// when the driving session is the caster's — a creature
+			// caster (or a foreign driver) must not move this session's
+			// player to the creature's seat; creature passengers need
+			// their own seat-change twin.
+			if eff.Aura == spellAuraControlVehicle && casterGUID == s.playerGUID {
 				s.applyControlVehicleSeatChange(ctx, targetGUID, int8(int32(amount)-1))
 			}
 			return
@@ -44353,8 +44358,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// player merge leg above: a re-cast merge that moves the ride
 		// aura's amount moves the passenger to the new seat
 		// (Unit::ChangeSeat, Unit.cpp:13133-13170; no _ExitVehicle,
-		// SpellAuraEffects.cpp:3002).
-		if eff.Aura == spellAuraControlVehicle {
+		// SpellAuraEffects.cpp:3002). Same caster gate as the player
+		// leg: the passenger is the caster, and only the caster's own
+		// session may move its player.
+		if eff.Aura == spellAuraControlVehicle && casterGUID == s.playerGUID {
 			s.applyControlVehicleSeatChange(ctx, targetGUID, int8(int32(amount)-1))
 		}
 		return
@@ -50479,7 +50486,7 @@ func (s *Server) removeCreatureAurasByTypeFromCaster(key creatureAuraKey, auraTy
 
 // removeCreatureAurasByTypeFromCasterExcept is the caster-filtered
 // except-aura twin of removeCreatureAurasByTypeFromCaster
-// (Unit::RemoveAurasByType(auraType, casterGUID, except), Unit.cpp:3884):
+// (Unit::RemoveAurasByType(auraType, casterGUID, except), Unit.cpp:4067):
 // every applied aura of the given type cast by casterGUID comes off except
 // the named spell. Snapshot under auraMu, remove outside it.
 func (s *Server) removeCreatureAurasByTypeFromCasterExcept(key creatureAuraKey, auraType uint32, casterGUID uint64, exceptSpellID uint32) {
