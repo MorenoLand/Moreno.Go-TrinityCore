@@ -4668,6 +4668,10 @@ func (s *Server) applyCreatureControlVehicleSeatChange(ctx context.Context, mapI
 		s.syncVehicleBaseNPCFlag(mapID, instanceID, baseGUID)
 		return
 	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:836-837): the re-board
+	// interrupts the passenger's non-melee spells and strips mounted
+	// auras, ahead of the NOT_SELECTABLE leg below.
+	s.interruptBoardingCreaturePassenger(motion)
 	// VehicleJoinEvent::Execute (Vehicle.cpp:855-856): the re-board
 	// sets UNIT_FLAG_NOT_SELECTABLE when the new seat carries it.
 	s.setCreatureVehicleNotSelectable(motion, seatInfo)
@@ -4862,9 +4866,26 @@ func (s *Server) fireCreatureVehicleSeatAdd(ctx context.Context, mapID, instance
 		return
 	}
 	s.sendPassengerClearTarget(mapID, instanceID, passengerGUID, passenger.X, passenger.Y, passenger.Z, passenger.PhaseMask)
+	// VehicleJoinEvent::Execute (Vehicle.cpp:884, :887-892): the
+	// re-board roots the passenger and runs the seat-offset spline,
+	// between the clear-target (:883) and the threat transfer
+	// (:895-896) below. The root re-assert is a no-op across the
+	// switch (the ChangeAmount unapply never unroots); the spline
+	// is the real leg — the twin re-stamped only transport offsets,
+	// leaving motion.X/Y/Z on the old seat.
+	_, seatInfo, seatAddon := kit.GetSeatForPassenger(passengerGUID)
+	s.rootAndSplineBoardingCreaturePassenger(passenger, baseGUID, seatInfo, seatAddon, base.X, base.Y, base.Z, base.Orientation, true)
 	s.transferPassengerThreatToVehicleBase(mapID, instanceID, passengerGUID, baseGUID)
 	s.smartPassengerBoarded(ctx, base, passengerGUID, newSeat, true)
 	s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(passenger), newSeat)
+	// VehicleJoinEvent::Execute (Vehicle.cpp:905-906): the board
+	// fires OnInstallAccessory when the passenger carries
+	// UNIT_MASK_ACCESSORY — InstallAccessory sets it only for
+	// minions (Vehicle.cpp:404), so the stored minion flag gates
+	// here, as on the first-board install path.
+	if passenger.VehicleAccessoryMinion {
+		s.triggerVehicleEvent(scripting.VehicleEventOnInstallAccessory, s.luaMotionCreature(base), s.luaMotionCreature(passenger))
+	}
 }
 
 // handleChangeSeatsOnControlledVehicle processes CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE (0x49B).

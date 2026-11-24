@@ -27,7 +27,86 @@ const (
 	ICTeamAlliance uint32 = 0
 	ICTeamHorde    uint32 = 1
 	ICTeamNeutral  uint32 = 2
+)
 
+// BattlegroundIC.h BG_IC_NPCs slot ordinals (BattlegroundIC.h:357-421):
+// the BG-creature registry is a slot-indexed GUID vector
+// (Battleground::BgCreatures, Battleground.h:457), sized
+// MAX_NORMAL_NPCS_SPAWNS + MAX_WORKSHOP_SPAWNS + MAX_DOCKS_SPAWNS +
+// MAX_SPIRIT_GUIDES_SPAWNS + MAX_HANGAR_NPCS_SPAWNS
+// (BattlegroundIC.cpp:48-49). Only the vehicle and boss slots the
+// ported arms touch are named here.
+const (
+	icNPCSlotOverlordAgmar   uint32 = 0
+	icNPCSlotHalfordWyrmbane uint32 = 1
+	icNPCSlotSiegeEngineA    uint32 = 34
+	icNPCSlotSiegeEngineH    uint32 = 35
+	icNPCSlotDemolisher1A    uint32 = 36
+	icNPCSlotDemolisher1H    uint32 = 40
+	icNPCSlotGlaiveThrower1A uint32 = 44
+	icNPCSlotGlaiveThrower1H uint32 = 46
+	icNPCSlotCatapult1A      uint32 = 48
+	icNPCSlotCatapult1H      uint32 = 52
+)
+
+// BG_IC_Factions (BattlegroundIC.h:25-28): 1732 Alliance, 1735 Horde.
+const (
+	icFactionAlliance uint32 = 1732
+	icFactionHorde    uint32 = 1735
+)
+
+// UNIT_FLAG_CANNOT_SWIM (UnitDefines.h:138): no Go named const exists.
+const icUnitFlagCannotSwim uint32 = 0x00004000
+
+// BG_IC_WorkshopVehicles (BattlegroundIC.h:510-517): 4 demolishers +
+// siege engine at index 4. BG_IC_DocksVehiclesGlaives (:519-522) and
+// BG_IC_DocksVehiclesCatapults (:525-530).
+var icWorkshopVehiclePositions = [5][4]float32{
+	{751.8281, -852.732666, 12.5250978, 1.46607661},
+	{761.809, -854.2274, 12.5263243, 1.46607661},
+	{783.4722, -853.9601, 12.54775, 1.71042264},
+	{793.055542, -852.71875, 12.5671329, 1.71042264},
+	{773.680542, -884.092041, 16.8090363, 1.58824956},
+}
+
+var icDocksGlaivePositions = [2][4]float32{
+	{779.3125, -342.972229, 12.2104874, 4.712389},
+	{790.029541, -342.899323, 12.2128582, 4.71238},
+}
+
+var icDocksCatapultPositions = [4][4]float32{
+	{757.283, -341.7795, 12.2113762, 4.729842},
+	{766.947937, -342.053833, 12.2009945, 4.694},
+	{800.3785, -342.607635, 12.1669979, 4.6774},
+	{810.7257, -342.083344, 12.1675768, 4.66},
+}
+
+// BG_IC_NpcSpawnlocs (BattlegroundIC.h:471-472): faction boss spawns.
+var icBossSpawnPositions = [2][4]float32{
+	{1295.44, -765.733, 70.0541, 0.0},
+	{224.983, -831.573, 60.9034, 0.0},
+}
+
+// icBGCreature is one Battleground::BgCreatures slot
+// (Battleground.h:457): the creature GUID plus the spawn record, so a
+// slot whose motion was pruned after death can re-spawn from the
+// stored entry/position instead of needing a live motion.
+type icBGCreature struct {
+	Entry      uint32
+	GUID       uint64
+	InstanceID uint32
+	X, Y, Z, O float32
+	Team       uint32
+}
+
+const (
+	// WORKSHOP_UPDATE_TIME / DOCKS_UPDATE_TIME
+	// (BattlegroundIC.h:193-194): 180000ms vehicle respawn cadence.
+	icWorkshopUpdateMs int64 = 180000
+	icDocksUpdateMs    int64 = 180000
+)
+
+const (
 	// Node Types (0..6)
 	ICNodeRefinery   uint8 = 0
 	ICNodeQuarry     uint8 = 1
@@ -383,8 +462,20 @@ type icBattlegroundState struct {
 	PrematureCountDown     bool      // == m_PrematureCountDown (Battleground.cpp:359): a roster-collapse countdown is armed
 	PrematureTimerMs       int64     // == m_PrematureCountDownTimer: ms left on the premature-finish countdown
 	VehiclesDestroyed      map[uint64]uint32
-	StopTicker             chan struct{}
-	ResourceAccumMs        int64 // ms accumulated toward the next 45s resource tick
+	// Creatures is the Battleground::BgCreatures registry
+	// (Battleground.h:457): slot -> spawn record for the BG
+	// creatures the ported arms manage (workshop/docks vehicles,
+	// faction bosses). The caller's ic.mu is held.
+	Creatures map[uint32]icBGCreature
+	// DocksTimerMs / WorkshopTimerMs are docksTimer /
+	// siegeEngineWorkshopTimer (BattlegroundIC.cpp:110-166): ms
+	// left until the next dead-vehicle respawn sweep while the
+	// node is controlled; reset to the full update time on fire
+	// and on capture (BattlegroundIC.cpp:666-667, :720-721).
+	DocksTimerMs    int64
+	WorkshopTimerMs int64
+	StopTicker      chan struct{}
+	ResourceAccumMs int64 // ms accumulated toward the next 45s resource tick
 }
 
 func isICGameObject(entry uint32) bool {
@@ -465,6 +556,9 @@ func (s *Server) getOrCreateICState(mapID uint32) *icBattlegroundState {
 			MatchStartTime:         time.Now(),
 			Winner:                 -1,
 			VehiclesDestroyed:      make(map[uint64]uint32),
+			Creatures:              make(map[uint32]icBGCreature),
+			DocksTimerMs:           icDocksUpdateMs,
+			WorkshopTimerMs:        icWorkshopUpdateMs,
 			StopTicker:             make(chan struct{}),
 		}
 
@@ -516,6 +610,9 @@ func (s *Server) resetICStateForNewMatch(ic *icBattlegroundState) {
 	ic.AllianceBossAlive = true
 	ic.HordeBossAlive = true
 	ic.VehiclesDestroyed = make(map[uint64]uint32)
+	ic.Creatures = make(map[uint32]icBGCreature)
+	ic.DocksTimerMs = icDocksUpdateMs
+	ic.WorkshopTimerMs = icWorkshopUpdateMs
 	ic.ResourceAccumMs = 0
 	ic.Winner = -1
 	ic.EndedAt = time.Time{}
@@ -546,7 +643,19 @@ func (s *Server) deleteICState(mapID uint32) {
 			ic.Nodes[i].CaptureTimer = nil
 		}
 	}
+	// The registry's motions live in the match instance; dropping
+	// the state orphans them as manual-despawn temp summons, so
+	// despawn them here (ic.mu released — despawnCreatureMotion
+	// takes motionMu and fires delete events).
+	creatures := make([]icBGCreature, 0, len(ic.Creatures))
+	for _, rec := range ic.Creatures {
+		creatures = append(creatures, rec)
+	}
+	ic.Creatures = make(map[uint32]icBGCreature)
 	ic.mu.Unlock()
+	for _, rec := range creatures {
+		s.despawnCreatureMotion(context.Background(), ICMapID, rec.InstanceID, rec.GUID)
+	}
 	s.icMu.Lock()
 	destroyed := s.icState[mapID] == ic
 	if destroyed {
@@ -555,6 +664,306 @@ func (s *Server) deleteICState(mapID uint32) {
 	s.icMu.Unlock()
 	if destroyed {
 		s.triggerBGEvent(mapID, scripting.BGEventOnPreDestroy)
+	}
+}
+
+// icBGInstanceID resolves the live IoC match instance from the first
+// entered session on the map (sess.bgData.InstanceID), mirroring the
+// bgRewardTargets membership scan. 0 when no IC player is loaded —
+// no match is running, so no BG creature can spawn.
+func (s *Server) icBGInstanceID() uint32 {
+	if s == nil {
+		return 0
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 {
+			continue
+		}
+		entered := false
+		for i := range sess.bgQueues {
+			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == ICMapID && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave) {
+				entered = true
+				break
+			}
+		}
+		if entered {
+			return sess.bgData.InstanceID
+		}
+	}
+	return 0
+}
+
+// addICBGCreature is Battleground::AddCreature
+// (Battleground.cpp:1444-1497) for the IC registry: spawns the entry
+// at the slot position as a manual-despawn temp summon (C++ creates a
+// plain Creature with RESPAWN_ONE_DAY; Go has no DB-backed BG spawn,
+// so the temp-summon funnel is the spawn path), stamps the BG faction
+// (HandleCapturedNodes calls SetFaction(BG_IC_Factions[team]) after
+// every AddCreature), and stores the GUID in the slot. The caller's
+// ic.mu is held. False when no match instance is live or the spawn
+// fails.
+func (s *Server) addICBGCreature(ctx context.Context, ic *icBattlegroundState, slot, entry uint32, pos [4]float32, team uint32) bool {
+	if s == nil || ic == nil {
+		return false
+	}
+	instanceID := s.icBGInstanceID()
+	if instanceID == 0 {
+		return false
+	}
+	summoned := s.summonTempCreature(ctx, tempSummonOrigin{Map: ICMapID, InstanceID: instanceID}, entry, pos[0], pos[1], pos[2], pos[3], 7, 0)
+	if summoned == nil {
+		return false
+	}
+	faction := icFactionAlliance
+	if team == ICTeamHorde {
+		faction = icFactionHorde
+	}
+	s.motionMu.Lock()
+	summoned.Faction = faction
+	summoned.FactionKnown = true
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdateInInstance(ICMapID, instanceID, summoned.GUID, map[int]uint32{unitFieldFaction: faction})
+	ic.Creatures[slot] = icBGCreature{Entry: entry, GUID: summoned.GUID, InstanceID: instanceID, X: pos[0], Y: pos[1], Z: pos[2], O: pos[3], Team: team}
+	return true
+}
+
+// getICBGCreature is Battleground::GetBGCreature
+// (Battleground.cpp:1402-1415): the slot's live motion, or nil when
+// the slot is empty or the motion was pruned. The caller's ic.mu is
+// held.
+func (s *Server) getICBGCreature(ic *icBattlegroundState, slot uint32) *creatureMotion {
+	if s == nil || ic == nil {
+		return nil
+	}
+	rec, ok := ic.Creatures[slot]
+	if !ok || rec.GUID == 0 {
+		return nil
+	}
+	return s.findCreatureMotion(ICMapID, rec.InstanceID, rec.GUID)
+}
+
+// delICBGCreature is Battleground::DelCreature
+// (Battleground.cpp:1504-1520): AddObjectToRemoveList + clear the
+// slot. The caller's ic.mu is held.
+func (s *Server) delICBGCreature(ctx context.Context, ic *icBattlegroundState, slot uint32) {
+	if s == nil || ic == nil {
+		return
+	}
+	if rec, ok := ic.Creatures[slot]; ok && rec.GUID != 0 {
+		s.despawnCreatureMotion(ctx, ICMapID, rec.InstanceID, rec.GUID)
+	}
+	delete(ic.Creatures, slot)
+}
+
+// respawnICBGCreature runs Creature::Respawn(true) for a registry
+// slot: a live motion is left alone, a dead motion respawns in
+// place (respawnCreatureNow), and a pruned motion re-spawns fresh
+// from the stored record (a MANUAL_DESPAWN temp summon's corpse is
+// pruned after death, so the motion may be gone by the 180s sweep).
+// The caller's ic.mu is held.
+func (s *Server) respawnICBGCreature(ctx context.Context, ic *icBattlegroundState, slot uint32) {
+	if s == nil || ic == nil {
+		return
+	}
+	rec, ok := ic.Creatures[slot]
+	if !ok {
+		return
+	}
+	motion := s.findCreatureMotion(ICMapID, rec.InstanceID, rec.GUID)
+	if motion == nil {
+		delete(ic.Creatures, slot)
+		s.addICBGCreature(ctx, ic, slot, rec.Entry, [4]float32{rec.X, rec.Y, rec.Z, rec.O}, rec.Team)
+		return
+	}
+	if motion.Health == 0 {
+		spawnGUID := uint32(rec.GUID & 0x00FFFFFF)
+		s.respawnCreatureNow(ctx, motion, spawnGUID, rec.Entry)
+	}
+}
+
+// tickICVehicleTimers runs the PostUpdateImpl vehicle respawn arms
+// (BattlegroundIC.cpp:110-166): every DOCKS_UPDATE_TIME /
+// WORKSHOP_UPDATE_TIME (180s) while the node is controlled, respawn
+// the faction's dead docks/workshop vehicles; the workshop siege
+// engine, when alive and flagged NOT_SELECTABLE|CANNOT_SWIM|
+// IMMUNE_TO_PC, loses NOT_SELECTABLE|IMMUNE_TO_PC (CANNOT_SWIM
+// stays, per the sniff note), and when alive unflagged heals to
+// full. The C++ loops run `u < _4` / `u < _2` — iterating only
+// slots 1..3 (catapults/demolishers) and 1 (glaives), an upstream
+// off-by-one that skips the last slot; replicated verbatim. The
+// caller's ic.mu is held; driven from TickICResources on the 1s
+// world tick.
+func (s *Server) tickICVehicleTimers(ctx context.Context, ic *icBattlegroundState, elapsedMs int64) {
+	if s == nil || ic == nil || elapsedMs <= 0 {
+		return
+	}
+	docks := &ic.Nodes[ICNodeDocks]
+	if docks.State == ICNodeStateControlledA || docks.State == ICNodeStateControlledH {
+		if ic.DocksTimerMs <= elapsedMs {
+			catapult1, glaive1 := icNPCSlotCatapult1A, icNPCSlotGlaiveThrower1A
+			if docks.Faction == ICTeamHorde {
+				catapult1, glaive1 = icNPCSlotCatapult1H, icNPCSlotGlaiveThrower1H
+			}
+			for slot := catapult1; slot < catapult1+3; slot++ {
+				s.respawnICBGCreature(ctx, ic, slot)
+			}
+			for slot := glaive1; slot < glaive1+1; slot++ {
+				s.respawnICBGCreature(ctx, ic, slot)
+			}
+			ic.DocksTimerMs = icDocksUpdateMs
+		} else {
+			ic.DocksTimerMs -= elapsedMs
+		}
+	}
+	workshop := &ic.Nodes[ICNodeWorkshop]
+	if workshop.State == ICNodeStateControlledA || workshop.State == ICNodeStateControlledH {
+		if ic.WorkshopTimerMs <= elapsedMs {
+			siegeSlot := icNPCSlotSiegeEngineA
+			demolisher1 := icNPCSlotDemolisher1A
+			if workshop.Faction == ICTeamHorde {
+				siegeSlot, demolisher1 = icNPCSlotSiegeEngineH, icNPCSlotDemolisher1H
+			}
+			if siege := s.getICBGCreature(ic, siegeSlot); siege != nil {
+				s.motionMu.Lock()
+				alive, flags, health, maxHealth := siege.Health > 0, siege.UnitFlags, siege.Health, siege.MaxHealth
+				s.motionMu.Unlock()
+				if alive {
+					if flags&(unitFlagNotSelectable|icUnitFlagCannotSwim|unitFlagImmuneToPC) != 0 {
+						s.motionMu.Lock()
+						siege.UnitFlags &^= unitFlagNotSelectable | unitFlagImmuneToPC
+						flags = siege.UnitFlags
+						s.motionMu.Unlock()
+						s.broadcastCreatureValuesUpdateInInstance(ICMapID, siege.InstanceID, siege.GUID, map[int]uint32{unitFieldFlags: flags})
+					} else if health < maxHealth {
+						s.motionMu.Lock()
+						siege.Health = maxHealth
+						s.motionMu.Unlock()
+						s.broadcastCreatureValuesUpdateInInstance(ICMapID, siege.InstanceID, siege.GUID, map[int]uint32{unitFieldHealth: maxHealth})
+					}
+				} else {
+					s.respawnICBGCreature(ctx, ic, siegeSlot)
+				}
+			}
+			for slot := demolisher1; slot < demolisher1+3; slot++ {
+				s.respawnICBGCreature(ctx, ic, slot)
+			}
+			ic.WorkshopTimerMs = icWorkshopUpdateMs
+		} else {
+			ic.WorkshopTimerMs -= elapsedMs
+		}
+	}
+}
+
+// captureICNodeVehicles runs the Docks/Workshop arms of
+// BattlegroundIC::HandleCapturedNodes (BattlegroundIC.cpp:662-791)
+// with recapture=false: the caller is resolveICNodeCapture, which
+// fires only from the 60s banner timer (= the PostUpdateImpl
+// needChange arm, :194), never from the defend path (:475,
+// recapture=true). On capture the node's respawn timer resets to
+// full; unused enemy vehicles are deleted (glaives/catapults with
+// no seat-0 passenger, demolishers/siege not in use); the
+// capturing team's vehicles spawn at the node positions, skipping
+// slots already alive; the siege engine spawns flagged
+// NOT_SELECTABLE|CANNOT_SWIM (SetImmuneToPC has no engine model,
+// so that leg stays out). The seaforium-bomb arm (:781-791) stays
+// out: Go has no BG gameobject spawn (AddObject) helper. The
+// caller's ic.mu is held.
+func (s *Server) captureICNodeVehicles(ctx context.Context, ic *icBattlegroundState, nodeID uint8, team uint32) {
+	if s == nil || ic == nil || team == ICTeamNeutral {
+		return
+	}
+	switch nodeID {
+	case ICNodeDocks:
+		if ic.DocksTimerMs < icDocksUpdateMs {
+			ic.DocksTimerMs = icDocksUpdateMs
+		}
+		enemyGlaive1, enemyCatapult1 := icNPCSlotGlaiveThrower1H, icNPCSlotCatapult1H
+		ownGlaive1, ownCatapult1 := icNPCSlotGlaiveThrower1A, icNPCSlotCatapult1A
+		if team == ICTeamHorde {
+			enemyGlaive1, enemyCatapult1 = icNPCSlotGlaiveThrower1A, icNPCSlotCatapult1A
+			ownGlaive1, ownCatapult1 = icNPCSlotGlaiveThrower1H, icNPCSlotCatapult1H
+		}
+		for slot := enemyGlaive1; slot < enemyGlaive1+1; slot++ {
+			if m := s.getICBGCreature(ic, slot); m != nil {
+				if kit := s.getVehicleKit(ICMapID, m.InstanceID, m.GUID); kit != nil && kit.GetPassenger(0) == 0 {
+					s.delICBGCreature(ctx, ic, slot)
+				}
+			}
+		}
+		for slot := enemyCatapult1; slot < enemyCatapult1+3; slot++ {
+			if m := s.getICBGCreature(ic, slot); m != nil {
+				if kit := s.getVehicleKit(ICMapID, m.InstanceID, m.GUID); kit != nil && kit.GetPassenger(0) == 0 {
+					s.delICBGCreature(ctx, ic, slot)
+				}
+			}
+		}
+		for i := 0; i < 2; i++ {
+			slot := ownGlaive1 + uint32(i)
+			if m := s.getICBGCreature(ic, slot); m != nil && m.Health > 0 {
+				continue
+			}
+			entry := ICCreatureGlaiveThrowerA
+			if team == ICTeamHorde {
+				entry = ICCreatureGlaiveThrowerH
+			}
+			s.addICBGCreature(ctx, ic, slot, entry, icDocksGlaivePositions[i], team)
+		}
+		for i := 0; i < 4; i++ {
+			slot := ownCatapult1 + uint32(i)
+			if m := s.getICBGCreature(ic, slot); m != nil && m.Health > 0 {
+				continue
+			}
+			s.addICBGCreature(ctx, ic, slot, ICCreatureCatapult, icDocksCatapultPositions[i], team)
+		}
+	case ICNodeWorkshop:
+		if ic.WorkshopTimerMs < icWorkshopUpdateMs {
+			ic.WorkshopTimerMs = icWorkshopUpdateMs
+		}
+		enemyDemolisher1, enemySiege := icNPCSlotDemolisher1H, icNPCSlotSiegeEngineH
+		ownDemolisher1, ownSiege := icNPCSlotDemolisher1A, icNPCSlotSiegeEngineA
+		if team == ICTeamHorde {
+			enemyDemolisher1, enemySiege = icNPCSlotDemolisher1A, icNPCSlotSiegeEngineA
+			ownDemolisher1, ownSiege = icNPCSlotDemolisher1H, icNPCSlotSiegeEngineH
+		}
+		for slot := enemyDemolisher1; slot < enemyDemolisher1+3; slot++ {
+			if m := s.getICBGCreature(ic, slot); m != nil {
+				if kit := s.getVehicleKit(ICMapID, m.InstanceID, m.GUID); kit != nil && !kit.IsVehicleInUse() {
+					s.delICBGCreature(ctx, ic, slot)
+				}
+			}
+		}
+		for i := 0; i < 4; i++ {
+			slot := ownDemolisher1 + uint32(i)
+			if m := s.getICBGCreature(ic, slot); m != nil && m.Health > 0 {
+				continue
+			}
+			s.addICBGCreature(ctx, ic, slot, ICCreatureDemolisher, icWorkshopVehiclePositions[i], team)
+		}
+		if m := s.getICBGCreature(ic, enemySiege); m != nil {
+			if kit := s.getVehicleKit(ICMapID, m.InstanceID, m.GUID); kit != nil && !kit.IsVehicleInUse() {
+				s.delICBGCreature(ctx, ic, enemySiege)
+			}
+		}
+		if m := s.getICBGCreature(ic, ownSiege); m == nil || m.Health == 0 {
+			entry := ICCreatureSiegeEngineA
+			if team == ICTeamHorde {
+				entry = ICCreatureSiegeEngineH
+			}
+			if m != nil && m.Health == 0 {
+				s.delICBGCreature(ctx, ic, ownSiege)
+			}
+			if s.addICBGCreature(ctx, ic, ownSiege, entry, icWorkshopVehiclePositions[4], team) {
+				if siege := s.getICBGCreature(ic, ownSiege); siege != nil {
+					s.motionMu.Lock()
+					siege.UnitFlags |= unitFlagNotSelectable | icUnitFlagCannotSwim
+					flags := siege.UnitFlags
+					s.motionMu.Unlock()
+					s.broadcastCreatureValuesUpdateInInstance(ICMapID, siege.InstanceID, siege.GUID, map[int]uint32{unitFieldFlags: flags})
+				}
+			}
+		}
 	}
 }
 
@@ -798,6 +1207,14 @@ func (s *Server) resolveICNodeCapture(ic *icBattlegroundState, nodeID uint8) {
 		s.syncICNodeAuraTeam(ic, nodeID, team)
 	}
 
+	// BattlegroundIC::HandleCapturedNodes (BattlegroundIC.cpp:662-791)
+	// with recapture=false: the docks/workshop vehicle delete/spawn
+	// arms. resolveICNodeCapture fires only from the 60s banner
+	// timer, so the recapture=true defend path never reaches here.
+	if nodeID == ICNodeDocks || nodeID == ICNodeWorkshop {
+		s.captureICNodeVehicles(context.Background(), ic, nodeID, team)
+	}
+
 	nodeName := icNodeNames[nodeID]
 	teamName := "Alliance"
 	if team == ICTeamHorde {
@@ -849,6 +1266,23 @@ func (s *Server) DamageICGate(mapID uint32, gateID uint8, damage uint32, attacke
 		s.updateICWorldState(mapID, info.ClosedWS, 0)
 		s.updateICWorldState(mapID, info.OpenWS, 1)
 		s.broadcastBattlegroundMessage(mapID, fmt.Sprintf("%s has been destroyed!", info.Name))
+		// BattlegroundIC::DestroyGate (BattlegroundIC.cpp:845-858):
+		// the first destroyed gate of a keep spawns its faction
+		// boss (Overlord Agmar for Horde gates, Halford Wyrmbane
+		// for Alliance gates) at BG_IC_NpcSpawnlocs, when no
+		// creature is currently registered in that slot. The
+		// portcullis DoorOpen + keep-banner NOT_SELECTABLE clear
+		// (:809-819) stay out: Go has no gameobject lookup by
+		// entry to resolve the portcullis/banner GUIDs.
+		if gateID <= ICHordeEastGate {
+			if s.getICBGCreature(ic, icNPCSlotOverlordAgmar) == nil {
+				s.addICBGCreature(context.Background(), ic, icNPCSlotOverlordAgmar, ICCreatureOverlordAgmar, icBossSpawnPositions[0], ICTeamHorde)
+			}
+		} else {
+			if s.getICBGCreature(ic, icNPCSlotHalfordWyrmbane) == nil {
+				s.addICBGCreature(context.Background(), ic, icNPCSlotHalfordWyrmbane, ICCreatureHalfordWyrmbane, icBossSpawnPositions[1], ICTeamAlliance)
+			}
+		}
 	}
 }
 
@@ -999,6 +1433,12 @@ func (s *Server) TickICResources(ic *icBattlegroundState, elapsedMs int64) {
 	if ic.Winner >= 0 {
 		return
 	}
+
+	// BattlegroundIC::PostUpdateImpl (BattlegroundIC.cpp:110-166):
+	// the docks/workshop 180s vehicle respawn sweep runs on the
+	// same 1s cadence as this tick, ahead of the 45s resource
+	// tick below — it must not wait for a resource boundary.
+	s.tickICVehicleTimers(context.Background(), ic, elapsedMs)
 
 	tickMs := int64(ic.ResourceTickDuration / time.Millisecond)
 	if tickMs <= 0 {
