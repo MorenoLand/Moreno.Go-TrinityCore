@@ -2047,6 +2047,84 @@ func (s *Server) threatVehicleBaseGUID(sess *session, vm *creatureMotion) (base 
 	return 0, false
 }
 
+// transferPassengerThreatToVehicleBase ports the threat-transfer leg of
+// VehicleJoinEvent::Execute (Vehicle.cpp:895-896): every creature the
+// passenger threatens gains the vehicle base on its threat list with the
+// passenger's current threat value, via ThreatManager::AddThreat with
+// spell nil and ignoreModifiers / ignoreRedirects
+// (ThreatManager.cpp:308, :344-373 skipped). The scan is the
+// _threatenedByMe reverse-list twin: Go keeps no reverse index, so it
+// rebuilds the list from the forward lists the way debugThreatenedByMe
+// does (commands_debug.go:1390) — the amount is
+// ThreatReference::GetThreat (ThreatManager.h:260), the base plus temp
+// modifier floored at zero, which DebugEntries reports as
+// effectiveThreatLocked. The add runs through
+// creatureAddThreatWithRedirect with ignoreRedirects=true, so the
+// vehicle-base leg (ThreatManager.cpp:319-325) still applies when the
+// base itself rides a vehicle. An owner that IS the base takes nothing:
+// C++ drops the add at the SetInCombatWith(self) gate
+// (CombatManager::CanBeginCombat a==b, CombatManager.cpp:34-36) —
+// except the nested-vehicle recursion for that owner, which this skip
+// also drops (the base's vehicle never gains the amount from its own
+// list; vanishingly rare, nested base threatening its own passenger).
+// Runs before the AI PassengerBoarded / OnAddPassenger hooks at every
+// board site, matching the C++ order (:895-896 before :898-905); a seat
+// switch re-runs it through the new JoinEvent C++ schedules
+// (Unit::ChangeSeat, Unit.cpp:13133-13170), so the base gains the
+// amount a second time there, as in C++.
+func (s *Server) transferPassengerThreatToVehicleBase(mapID, instanceID uint32, passengerGUID, baseGUID uint64) {
+	if s == nil || passengerGUID == 0 || baseGUID == 0 || passengerGUID == baseGUID {
+		return
+	}
+	type threatenedBy struct {
+		ownerGUID uint64
+		mapID     uint32
+		instance  uint32
+		threat    float32
+	}
+	var owners []threatenedBy
+	s.motionMu.Lock()
+	for key, motions := range s.instanceCreatureMotion {
+		for _, m := range motions {
+			if m == nil || m.ThreatMgr == nil || m.GUID == baseGUID {
+				continue
+			}
+			for _, e := range m.ThreatMgr.DebugEntries() {
+				if e.victimGUID == passengerGUID {
+					owners = append(owners, threatenedBy{m.GUID, key.MapID, key.InstanceID, e.threat})
+					break
+				}
+			}
+		}
+	}
+	s.motionMu.Unlock()
+	if len(owners) == 0 {
+		return
+	}
+	// Resolve the base once: a player base rides its session, a creature
+	// base its motion — the vehicle-base leg's victim state.
+	var baseSess *session
+	var baseMotion *creatureMotion
+	if bs := s.findSessionByGUID(baseGUID); bs != nil && bs.player != nil {
+		baseSess = bs
+	} else {
+		baseMotion = s.findCreatureMotion(mapID, instanceID, baseGUID)
+	}
+	for _, o := range owners {
+		owner := s.findCreatureMotion(o.mapID, o.instance, o.ownerGUID)
+		if owner == nil {
+			continue
+		}
+		inMelee := false
+		if baseSess != nil && baseSess.player != nil {
+			inMelee = inMeleeThreatRange(owner.CombatReach, baseSess.player.CombatReach, distance3D(owner.X, owner.Y, owner.Z, baseSess.player.X, baseSess.player.Y, baseSess.player.Z))
+		} else if baseMotion != nil {
+			inMelee = inMeleeThreatRange(owner.CombatReach, baseMotion.CombatReach, distance3D(owner.X, owner.Y, owner.Z, baseMotion.X, baseMotion.Y, baseMotion.Z))
+		}
+		s.creatureAddThreatWithRedirect(owner, baseGUID, o.threat, inMelee, baseSess, baseMotion, true)
+	}
+}
+
 // splitCreatureThreatRedirects mirrors the redirect leg of
 // ThreatManager::AddThreat (ThreatManager.cpp:344-373) for threat a
 // creature attacker generates on motion's list — the creature twin of

@@ -210,6 +210,12 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	if motion == nil {
 		return
 	}
+
+	// VehicleJoinEvent::Execute (Vehicle.cpp:808-813): a passenger
+	// that died before the board aborts instead of seating.
+	if motion.Health <= 0 {
+		return
+	}
 	if motion.VehicleGUID != 0 && motion.VehicleGUID != ref.baseGUID {
 		s.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s, mapID: effMap, instanceID: effInstance, baseGUID: motion.VehicleGUID}, passengerGUID)
 	}
@@ -224,6 +230,13 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	wasUnselectable := motion.UnitFlags&0x02000000 != 0
 	assigned, _, ok := kit.AddPassenger(passengerGUID, seat, wasUnselectable)
 	if !ok {
+		// VehicleJoinEvent::Abort (Vehicle.cpp:937, :943-944): a
+		// failed board strips the control-vehicle aura from the
+		// base and despawns an in-world accessory passenger.
+		s.removeVehicleControlAuraFromBase(effMap, effInstance, ref.baseGUID, passengerGUID)
+		if motion.VehicleAccessoryMinion {
+			s.expireTempSummonGuardian(ctx, motion)
+		}
 		return
 	}
 	s.motionMu.Lock()
@@ -234,6 +247,15 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): boarding the
 	// last usable seat clears the base's spell-click flag.
 	s.syncVehicleBaseNPCFlag(effMap, effInstance, ref.baseGUID)
+	// VehicleJoinEvent::Execute (Vehicle.cpp:895-896): every creature
+	// the passenger threatens gains the vehicle base on its threat list
+	// with the passenger's threat value, ahead of the AI PassengerBoarded
+	// / OnAddPassenger hooks below. Runs for a player base too — C++
+	// transfers to Target->GetBase() regardless of its type.
+	// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board breaks
+	// the passenger's target for everyone in range.
+	s.sendPassengerClearTarget(effMap, effInstance, passengerGUID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+	s.transferPassengerThreatToVehicleBase(effMap, effInstance, passengerGUID, ref.baseGUID)
 	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil {
 		// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the AI
 		// PassengerBoarded(true) call precedes the OnAddPassenger

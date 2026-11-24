@@ -912,7 +912,14 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
 		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
 		if !ok {
-			s.expireTempSummonGuardian(ctx, summoned)
+			// VehicleJoinEvent::Abort (Vehicle.cpp:943-944)
+			// despawns only UNIT_MASK_ACCESSORY passengers —
+			// InstallAccessory sets the mask for minions only
+			// (Vehicle.cpp:403-404), so a non-minion accessory
+			// that fails to board stays summoned.
+			if acc.IsMinion {
+				s.expireTempSummonGuardian(ctx, summoned)
+			}
 			continue
 		}
 		s.motionMu.Lock()
@@ -924,6 +931,14 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 		kit.mu.Lock()
 		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
 		kit.mu.Unlock()
+		// VehicleJoinEvent::Execute (Vehicle.cpp:895-896): every
+		// creature the passenger threatens gains the vehicle base on
+		// its threat list with the passenger's threat value, ahead
+		// of the AI PassengerBoarded / OnAddPassenger hooks below.
+		// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board
+		// breaks the passenger's target for everyone in range.
+		s.sendPassengerClearTarget(origin.Map, origin.InstanceID, summoned.GUID, summoned.X, summoned.Y, summoned.Z, summoned.PhaseMask)
+		s.transferPassengerThreatToVehicleBase(origin.Map, origin.InstanceID, summoned.GUID, baseGUID)
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
 			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the
 			// AI PassengerBoarded(true) call precedes the
@@ -1336,7 +1351,14 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
 		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
 		if !ok {
-			s.expireTempSummonGuardian(ctx, summoned)
+			// VehicleJoinEvent::Abort (Vehicle.cpp:943-944)
+			// despawns only UNIT_MASK_ACCESSORY passengers —
+			// InstallAccessory sets the mask for minions only
+			// (Vehicle.cpp:403-404), so a non-minion accessory
+			// that fails to board stays summoned.
+			if acc.IsMinion {
+				s.expireTempSummonGuardian(ctx, summoned)
+			}
 			continue
 		}
 		s.motionMu.Lock()
@@ -1354,6 +1376,14 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 		// for minions (Vehicle.cpp:404). The player-base install path
 		// shares this body, so the base-motion gate keeps it silent
 		// there, matching the C++ TYPEID_UNIT gate.
+		// VehicleJoinEvent::Execute (Vehicle.cpp:895-896): every
+		// creature the passenger threatens gains the vehicle base on
+		// its threat list with the passenger's threat value, ahead
+		// of the AI PassengerBoarded / OnAddPassenger hooks below.
+		// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board
+		// breaks the passenger's target for everyone in range.
+		s.sendPassengerClearTarget(origin.Map, origin.InstanceID, summoned.GUID, summoned.X, summoned.Y, summoned.Z, summoned.PhaseMask)
+		s.transferPassengerThreatToVehicleBase(origin.Map, origin.InstanceID, summoned.GUID, baseGUID)
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
 			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the
 			// AI PassengerBoarded(true) call precedes the
@@ -1527,7 +1557,14 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
 		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
 		if !ok {
-			s.expireTempSummonGuardian(ctx, summoned)
+			// VehicleJoinEvent::Abort (Vehicle.cpp:943-944)
+			// despawns only UNIT_MASK_ACCESSORY passengers —
+			// InstallAccessory sets the mask for minions only
+			// (Vehicle.cpp:403-404), so a non-minion accessory
+			// that fails to board stays summoned.
+			if acc.IsMinion {
+				s.expireTempSummonGuardian(ctx, summoned)
+			}
 			continue
 		}
 		s.motionMu.Lock()
@@ -1539,6 +1576,14 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		kit.mu.Lock()
 		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
 		kit.mu.Unlock()
+		// VehicleJoinEvent::Execute (Vehicle.cpp:895-896): every
+		// creature the passenger threatens gains the vehicle base on
+		// its threat list with the passenger's threat value, ahead
+		// of the AI PassengerBoarded / OnAddPassenger hooks below.
+		// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board
+		// breaks the passenger's target for everyone in range.
+		s.sendPassengerClearTarget(origin.Map, origin.InstanceID, summoned.GUID, summoned.X, summoned.Y, summoned.Z, summoned.PhaseMask)
+		s.transferPassengerThreatToVehicleBase(origin.Map, origin.InstanceID, summoned.GUID, baseGUID)
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
 			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the
 			// AI PassengerBoarded(true) call precedes the
@@ -2576,10 +2621,68 @@ func (s *session) dropBattlegroundFlagIfCarried() {
 	}
 }
 
+// sendPassengerClearTarget ports Unit::SendClearTarget
+// (Unit.cpp:13574-13579) for a boarded passenger
+// (VehicleJoinEvent::Execute, Vehicle.cpp:883): SMSG_BREAK_TARGET with
+// the passenger's packed GUID, broadcast to every session in range on
+// the passenger's map/instance — SendMessageToSet, not the hostile-only
+// ForceDeselect fan-out. A 0 phase reads as PHASEMASK_NORMAL.
+func (s *Server) sendPassengerClearTarget(mapID, instanceID uint32, passengerGUID uint64, x, y, z float32, phase uint32) {
+	if s == nil || passengerGUID == 0 {
+		return
+	}
+	if phase == 0 {
+		phase = 1
+	}
+	breakPkt := protocol.NewBuffer(9)
+	breakPkt.WritePackedGUID(passengerGUID)
+	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
+	for target := range s.sessions {
+		if target == nil || !target.authed || !target.worldReady.Load() || target.player == nil ||
+			target.player.Map != mapID || target.player.InstanceID != instanceID {
+			continue
+		}
+		if distance3D(target.player.X, target.player.Y, target.player.Z, x, y, z) > 100.0 {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		if phase&target.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		_ = target.write(uint16(protocol.OpcodeSMSG_BREAK_TARGET), breakPkt.Bytes(), true)
+	}
+}
+
+// removeVehicleControlAuraFromBase strips SPELL_AURA_CONTROL_VEHICLE
+// auras cast by the passenger from a vehicle base — the
+// VehicleJoinEvent::Abort leg (Vehicle.cpp:937) for a failed board. A
+// player base holds the aura on its session, a creature base on its
+// aura key.
+func (s *Server) removeVehicleControlAuraFromBase(mapID, instanceID uint32, baseGUID, casterGUID uint64) {
+	if s == nil || baseGUID == 0 {
+		return
+	}
+	if bs := s.findSessionByGUID(baseGUID); bs != nil && bs.player != nil {
+		bs.removeAurasByTypeFromCaster(spellAuraControlVehicle, casterGUID)
+		return
+	}
+	s.removeCreatureAurasByTypeFromCaster(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: baseGUID}, spellAuraControlVehicle, casterGUID)
+}
+
 // enterVehicle places the session's player into the specified vehicle and seat.
 // Reference: Unit::_EnterVehicle (Unit.cpp:8320) & VehicleJoinEvent::Execute (Vehicle.cpp:790-910).
 func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID int8) {
 	if s == nil || s.player == nil {
+		return
+	}
+
+	// VehicleJoinEvent::Execute (Vehicle.cpp:808-813): a passenger
+	// that died before the board aborts instead of seating.
+	if s.player.Health == 0 {
 		return
 	}
 
@@ -2617,6 +2720,9 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 			wasUnselectable := s.player.UnitFlags&0x02000000 != 0 // UNIT_FLAG_NOT_SELECTABLE
 			assigned, si, ok := kit.AddPassenger(s.playerGUID, seatID, wasUnselectable)
 			if !ok {
+				// VehicleJoinEvent::Abort (Vehicle.cpp:937): a failed
+				// board strips the control-vehicle aura from the base.
+				s.server.removeVehicleControlAuraFromBase(s.player.Map, s.player.InstanceID, vehicleGUID, s.playerGUID)
 				return
 			}
 			actualSeat = assigned
@@ -2634,6 +2740,16 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 					s.player.UnitFlags |= 0x02000000 // UNIT_FLAG_NOT_SELECTABLE
 				}
 			}
+			// VehicleJoinEvent::Execute (Vehicle.cpp:895-896): every
+			// creature the passenger threatens gains the vehicle base
+			// on its threat list with the passenger's threat value,
+			// ahead of the AI PassengerBoarded / OnAddPassenger hooks
+			// below. Runs for a player base too — C++ transfers to
+			// Target->GetBase() regardless of its type.
+			// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board
+			// breaks the passenger's target for everyone in range.
+			s.server.sendPassengerClearTarget(s.player.Map, s.player.InstanceID, s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.currentPlayerPhaseMask())
+			s.server.transferPassengerThreatToVehicleBase(s.player.Map, s.player.InstanceID, s.playerGUID, vehicleGUID)
 			// Vehicle::AddPassenger (Vehicle.cpp:899-902) fires
 			// OnAddPassenger for creature bases only; player bases
 			// (mount kits) stay silent per the C++ TYPEID_UNIT gate.
@@ -2677,6 +2793,9 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 
 	s.player.VehicleGUID = vehicleGUID
 	s.player.VehicleSeat = actualSeat
+	// VehicleJoinEvent::Execute (Vehicle.cpp:881): the board roots the
+	// passenger (SetControlled(true, UNIT_STATE_ROOT), SMSG_FORCE_ROOT).
+	s.setRooted(true)
 	if playerVehicleID != 0 {
 		s.sendPlayerVehicleData(playerVehicleID)
 	}
@@ -3046,6 +3165,9 @@ func (s *session) exitVehicle(ctx context.Context) {
 
 	s.player.VehicleGUID = 0
 	s.player.VehicleSeat = 0
+	// VehicleJoinEvent::Execute (Vehicle.cpp:881) roots the passenger on
+	// board; the exit clears it.
+	s.setRooted(false)
 	if playerVehicleID != 0 {
 		s.sendPlayerVehicleData(0)
 	}
@@ -3256,6 +3378,15 @@ func (s *session) fireVehicleSeatSwitch(ctx context.Context, kit *VehicleKit, ol
 	}
 	s.server.smartPassengerBoarded(ctx, base, s.playerGUID, oldSeat, false)
 	s.server.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.server.luaMotionCreature(base), s.luaPlayer())
+	// VehicleJoinEvent::Execute (Vehicle.cpp:895-896): the seat change
+	// re-boards through a new JoinEvent (Unit::ChangeSeat,
+	// Unit.cpp:13133-13170), so the threat transfer runs again ahead of
+	// the AI PassengerBoarded / OnAddPassenger hooks — the base gains
+	// the passenger's threat value a second time, as in C++.
+	// VehicleJoinEvent::Execute (Vehicle.cpp:883): the re-board breaks
+	// the passenger's target for everyone in range.
+	s.server.sendPassengerClearTarget(s.player.Map, s.player.InstanceID, s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.currentPlayerPhaseMask())
+	s.server.transferPassengerThreatToVehicleBase(s.player.Map, s.player.InstanceID, s.playerGUID, s.player.VehicleGUID)
 	s.server.smartPassengerBoarded(ctx, base, s.playerGUID, newSeat, true)
 	s.server.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.server.luaMotionCreature(base), s.luaPlayer(), newSeat)
 }

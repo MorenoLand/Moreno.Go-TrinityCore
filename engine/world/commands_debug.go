@@ -2147,6 +2147,20 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 	if kit == nil {
 		return false
 	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:808-813): a passenger
+	// that died before the board aborts instead of seating.
+	if passenger.Health <= 0 {
+		return false
+	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:815-818): a passenger
+	// already on a vehicle exits it first — the Lua path's unseat
+	// twin, so the old kit drops the stale seat and fires ev6.
+	// (A player old-base keeps its seat: luaVehicleRemovePassenger
+	// only unseats creature bases; a creature seated on a mount kit
+	// is the narrow leftover here.)
+	if passenger.VehicleGUID != 0 && passenger.VehicleGUID != vehicleGUID {
+		s.server.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s.server, mapID: s.player.Map, instanceID: s.player.InstanceID, baseGUID: passenger.VehicleGUID}, passenger.GUID)
+	}
 	// Vehicle::AddPassenger (Vehicle.cpp:471-478): boarding a specific
 	// occupied seat ejects its current occupant first; skipped when the
 	// passenger is already seated on this base (the board no-ops into
@@ -2161,6 +2175,14 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 		passenger.VehicleSeat = assigned
 		passenger.Moving = false
 		s.server.motionMu.Unlock()
+		// VehicleJoinEvent::Execute (Vehicle.cpp:895-896): every
+		// creature the passenger threatens gains the vehicle base on
+		// its threat list with the passenger's threat value, ahead
+		// of the AI PassengerBoarded / OnAddPassenger hooks below.
+		// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board
+		// breaks the passenger's target for everyone in range.
+		s.server.sendPassengerClearTarget(s.player.Map, s.player.InstanceID, passenger.GUID, passenger.X, passenger.Y, passenger.Z, passenger.PhaseMask)
+		s.server.transferPassengerThreatToVehicleBase(s.player.Map, s.player.InstanceID, passenger.GUID, vehicleGUID)
 		if base := s.findCreatureMotion(vehicleGUID); base != nil {
 			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the AI
 			// PassengerBoarded(true) call precedes the OnAddPassenger
@@ -2172,8 +2194,10 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 		// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): boarding the
 		// last usable seat clears the base's spell-click flag.
 		s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, vehicleGUID)
+		s.sendSysMessage(fmt.Sprintf("Unit %d entered vehicle %d", entry, seatID))
+	} else {
+		s.sendSysMessage(fmt.Sprintf("Unit %d could not enter vehicle %d", entry, seatID))
 	}
-	s.sendSysMessage(fmt.Sprintf("Unit %d entered vehicle %d", entry, seatID))
 	return true
 }
 
