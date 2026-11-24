@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -2135,7 +2136,14 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 		return false
 	}
 	if entry == 0 {
-		s.enterVehicle(ctx, vehicleGUID, seatID)
+		// Unit::EnterVehicle (Unit.cpp:13073-13078): the debug board
+		// casts the ride spell (46598) triggered with bp0 = seatId+1,
+		// whose apply leg boards at amount-1; the direct enterVehicle
+		// call skipped the ride aura the board rides on. The creature
+		// branch keeps the hand-rolled JoinEvent twin: a ride cast
+		// there would route through luaVehicleAddPassenger and drop
+		// its root+spline and interrupt legs.
+		s.castSpellDirectWithBasePoints(ctx, wotlk.VehicleSpellRideHardcoded, vehicleGUID, []int32{int32(seatID) + 1})
 		s.sendSysMessage(fmt.Sprintf("Unit %d entered vehicle %d", entry, seatID))
 		return true
 	}

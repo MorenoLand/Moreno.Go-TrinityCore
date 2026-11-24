@@ -2896,6 +2896,22 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 		s.exitVehicle(ctx)
 	}
 
+	// Unit::_EnterVehicle (Unit.cpp:13103-13107): a player boarding a
+	// player-base vehicle while in combat never boards — the ride aura is
+	// stripped from the base and the board aborts. Same-seat re-entry
+	// returns before the gate (Unit.cpp:13095-13096), so the gate only
+	// runs when the board would actually move the passenger; a
+	// different-vehicle or different-seat board already exited above,
+	// matching the C++ order where the exit precedes the gate.
+	if !(s.player.VehicleGUID == vehicleGUID && seatID >= 0 && seatID == s.player.VehicleSeat) {
+		if s.server != nil {
+			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID); kit != nil && kit.IsPlayer && s.isInCombat() {
+				s.server.removeVehicleControlAuraFromBase(s.player.Map, s.player.InstanceID, vehicleGUID, s.playerGUID)
+				return
+			}
+		}
+	}
+
 	s.dropBattlegroundFlagIfCarried()
 	s.player.MountDisplayID = 0
 
@@ -3303,6 +3319,10 @@ func (s *session) exitVehicle(ctx context.Context) {
 				s.player.TransportSeat = 0
 			}
 		}
+		// Vehicle::RemovePassenger (Vehicle.cpp:533): a flying
+		// passenger is handed the parachute spell as a triggered
+		// cast from the base.
+		s.castVehicleExitParachute(ctx, oldVehGUID)
 	}
 
 	// Unit::_ExitVehicle (Unit.cpp:13199-13200): a player leaving a vehicle
@@ -3574,6 +3594,34 @@ func (s *session) applyVehicleExitPosition(vehicleGUID uint64, addon *VehicleSea
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = baseX, baseY, baseZ, o
 }
 
+// castVehicleExitParachute mirrors the flyable-vehicle leg of
+// Vehicle::RemovePassenger (Vehicle.cpp:533): a flying passenger is handed
+// the parachute spell (VEHICLE_SPELL_PARACHUTE, 45472) as a triggered cast
+// from the vehicle base. The flying check is Unit::IsFlying (Unit.h:1644) —
+// FLYING or DISABLE_GRAVITY on the passenger's movement info, the same
+// predicate player:IsFlying reads. The cast rides the triggered funnel, so
+// it lands as the slow-fall aura (SPELL_AURA_FEATHER_FALL) once the 45472
+// row is seeded; the seed DBC carries no 45472 row today, so the funnel
+// fails closed until the seed axis resumes.
+func (s *session) castVehicleExitParachute(ctx context.Context, baseGUID uint64) {
+	if s == nil || s.player == nil || s.server == nil || baseGUID == 0 {
+		return
+	}
+	mi, ok := s.lastMovementInfoSnapshot()
+	if !ok || mi.Flags&(movementFlying|movementDisableGravity) == 0 {
+		return
+	}
+	if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, baseGUID); motion != nil {
+		s.server.castCreatureSpellTriggered(ctx, motion, wotlk.VehicleSpellParachute, s.playerGUID)
+		return
+	}
+	if baseSess := s.server.findSessionByGUID(baseGUID); baseSess != nil && baseSess.player != nil {
+		baseSess.castSpellDirect(ctx, wotlk.VehicleSpellParachute, s.playerGUID)
+		return
+	}
+	s.castSpellDirect(ctx, wotlk.VehicleSpellParachute, s.playerGUID)
+}
+
 // applyControlVehicleSeatChange runs the literal C++ ChangeAmount seat
 // switch (AuraEffect::ChangeAmount, SpellAuraEffects.cpp:662-683) for a
 // SPELL_AURA_CONTROL_VEHICLE re-cast merge: the unapply leg removes the
@@ -3611,6 +3659,10 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 	if !removed {
 		return
 	}
+	// Vehicle::RemovePassenger (Vehicle.cpp:533): the unapply leg hands
+	// a flying passenger the parachute spell before the remove hooks
+	// below, as in C++.
+	s.castVehicleExitParachute(ctx, baseGUID)
 	s.fireVehicleSeatRemove(ctx, kit, oldSeat)
 	if newSeat >= 0 {
 		s.server.ejectVehicleSeatOccupant(ctx, s.player.Map, s.player.InstanceID, kit, baseGUID, newSeat, s.playerGUID)
@@ -3779,6 +3831,27 @@ func (s *session) fireVehicleSeatSwitch(ctx context.Context, kit *VehicleKit, ol
 	s.fireVehicleSeatAdd(ctx, kit, newSeat)
 }
 
+// sendVehicleSeatControlChange runs the charm half of a CMSG seat switch:
+// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the ride aura, whose
+// ChangeAmount unapply leg drops the charm when the old seat could control
+// (Vehicle::RemovePassenger, Vehicle.cpp:517-518) and whose re-board
+// re-charms only on a control seat (VehicleJoinEvent::Execute,
+// Vehicle.cpp:871-876). A switch onto a control seat grants control; a
+// switch off one releases it and clears the vehicle action bar.
+func (s *session) sendVehicleSeatControlChange(ctx context.Context, kit *VehicleKit, oldSeatInfo, newSeatInfo *wotlk.VehicleSeatEntry) {
+	if s == nil || kit == nil {
+		return
+	}
+	if newSeatInfo != nil && newSeatInfo.CanControl() {
+		s.sendClientControl(kit.VehicleGUID, true)
+		spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
+		s.sendVehiclePetSpells(kit.VehicleGUID, spells)
+	} else if oldSeatInfo != nil && oldSeatInfo.CanControl() {
+		s.sendClientControl(kit.VehicleGUID, false)
+		s.sendVehiclePetSpells(0, nil)
+	}
+}
+
 // fireCreatureVehicleSeatRemove is the creature-passenger twin of
 // fireVehicleSeatRemove: the Vehicle::RemovePassenger hook half of a
 // creature seat switch (Vehicle.cpp:536-539). A player base stays silent
@@ -3897,15 +3970,16 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 	next := seatID > 0
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+			_, oldSeatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
 			if nextSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, next); ok {
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, nextSeat); switched {
 					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
-					if seatInfo != nil && seatInfo.CanControl() {
-						s.sendClientControl(kit.VehicleGUID, true)
-						spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
-						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
-					}
+					s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
+					// Vehicle::RemovePassenger (Vehicle.cpp:533): the
+					// ChangeAmount unapply behind the switch hands a
+					// flying passenger the parachute spell.
+					s.castVehicleExitParachute(ctx, kit.VehicleGUID)
 					s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
 					s.sendPlayerUpdate()
 					// A switch across the CanEnterOrExit boundary moves
@@ -4088,7 +4162,12 @@ func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) 
 	if kit == nil || !kit.IsPlayer {
 		return true
 	}
-	s.enterVehicle(ctx, vehGUID, -1)
+	// Unit::EnterVehicle (Unit.cpp:13073-13078): boarding a player
+	// vehicle casts the ride spell (VEHICLE_SPELL_RIDE_HARDCODED,
+	// 46598) triggered with bp0 = seatId+1 = 0, whose apply leg boards
+	// at amount-1 = -1; the direct enterVehicle call skipped the ride
+	// aura the board rides on.
+	s.castSpellDirect(ctx, wotlk.VehicleSpellRideHardcoded, vehGUID)
 	return true
 }
 
@@ -4129,15 +4208,16 @@ func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []by
 	}
 	if s.server != nil && s.player.VehicleGUID != 0 {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+			_, oldSeatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
 			if nextSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, true); ok {
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, nextSeat); switched {
 					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
-					if seatInfo != nil && seatInfo.CanControl() {
-						s.sendClientControl(kit.VehicleGUID, true)
-						spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
-						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
-					}
+					s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
+					// Vehicle::RemovePassenger (Vehicle.cpp:533): the
+					// ChangeAmount unapply behind the switch hands a
+					// flying passenger the parachute spell.
+					s.castVehicleExitParachute(ctx, kit.VehicleGUID)
 					s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
 					s.sendPlayerUpdate()
 					// A switch across the CanEnterOrExit boundary moves
@@ -4162,15 +4242,16 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 	}
 	if s.server != nil && s.player.VehicleGUID != 0 {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+			_, oldSeatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
 			if prevSeat, ok := kit.GetNextEmptySeat(s.player.VehicleSeat, false); ok {
 				if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, prevSeat); switched {
 					oldSeat := s.player.VehicleSeat
 					s.player.VehicleSeat = assigned
-					if seatInfo != nil && seatInfo.CanControl() {
-						s.sendClientControl(kit.VehicleGUID, true)
-						spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
-						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
-					}
+					s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
+					// Vehicle::RemovePassenger (Vehicle.cpp:533): the
+					// ChangeAmount unapply behind the switch hands a
+					// flying passenger the parachute spell.
+					s.castVehicleExitParachute(ctx, kit.VehicleGUID)
 					s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
 					s.sendPlayerUpdate()
 					// A switch across the CanEnterOrExit boundary moves
@@ -4233,14 +4314,15 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+			_, oldSeatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
 			if assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, seat); switched {
 				oldSeat := s.player.VehicleSeat
 				s.player.VehicleSeat = assigned
-				if seatInfo != nil && seatInfo.CanControl() {
-					s.sendClientControl(kit.VehicleGUID, true)
-					spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
-					s.sendVehiclePetSpells(kit.VehicleGUID, spells)
-				}
+				s.sendVehicleSeatControlChange(ctx, kit, oldSeatInfo, seatInfo)
+				// Vehicle::RemovePassenger (Vehicle.cpp:533): the
+				// ChangeAmount unapply behind the switch hands a
+				// flying passenger the parachute spell.
+				s.castVehicleExitParachute(ctx, kit.VehicleGUID)
 				s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
 				s.sendPlayerUpdate()
 				// A switch across the CanEnterOrExit boundary moves
