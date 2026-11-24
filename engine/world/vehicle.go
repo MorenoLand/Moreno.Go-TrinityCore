@@ -1746,6 +1746,18 @@ func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceI
 				s.broadcastCreatureTeleportMovement(exitMapID, exitInstanceID, passengerGUID, exitX, exitY, exitZ, nearby, exitPhase)
 			}
 		}
+		// Unit::_ExitVehicle tail (Unit.cpp:13254-13256): a minion
+		// vehicle base owned by the exiting passenger despawns 1ms
+		// after the exit. The Lua ExitVehicle arm and the session
+		// exitVehicle run this leg through exitVehicleTail; this
+		// server-side unseat is the third _ExitVehicle caller and
+		// carried only the accessory half below.
+		if exitMotion != nil && tailBase != nil && tailBase.IsMinion && tailBase.OwnerGUID == passengerGUID {
+			bmap, binst, bguid := tailBase.Map, tailBase.InstanceID, tailBase.GUID
+			time.AfterFunc(time.Millisecond, func() {
+				s.despawnCreatureMotion(context.Background(), bmap, binst, bguid)
+			})
+		}
 		if exitMotion != nil && exitMotion.VehicleAccessoryMinion {
 			// Unit::_ExitVehicle tail (Unit.cpp:13258-13266): a minion
 			// accessory unsummons (UnSummon(2000)) when the base is
@@ -2834,6 +2846,23 @@ func (s *Server) removeVehicleControlAuraFromBase(mapID, instanceID uint32, base
 	s.removeCreatureAurasByTypeFromCaster(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: baseGUID}, spellAuraControlVehicle, casterGUID)
 }
 
+// removeVehicleControlAuraFromBaseExcept strips SPELL_AURA_CONTROL_VEHICLE
+// auras cast by the passenger from a vehicle base except the named spell —
+// the Unit::_EnterVehicle seat-change arm (Unit.cpp:13100), which clears
+// the rider's older ride auras when a new one boards, sparing the aura
+// being applied. A player base holds the aura on its session, a creature
+// base on its aura key.
+func (s *Server) removeVehicleControlAuraFromBaseExcept(mapID, instanceID uint32, baseGUID, casterGUID uint64, exceptSpellID uint32) {
+	if s == nil || baseGUID == 0 {
+		return
+	}
+	if bs := s.findSessionByGUID(baseGUID); bs != nil && bs.player != nil {
+		bs.removeAurasByTypeFromCasterExcept(spellAuraControlVehicle, casterGUID, exceptSpellID)
+		return
+	}
+	s.removeCreatureAurasByTypeFromCasterExcept(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: baseGUID}, spellAuraControlVehicle, casterGUID, exceptSpellID)
+}
+
 // enterVehicle places the session's player into the specified vehicle and seat.
 // Reference: Unit::_EnterVehicle (Unit.cpp:8320) & VehicleJoinEvent::Execute (Vehicle.cpp:790-910).
 func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID int8) {
@@ -3543,6 +3572,42 @@ func (s *session) applyVehicleExitPosition(vehicleGUID uint64, addon *VehicleSea
 	o := s.player.Orientation
 	baseX, baseY, baseZ, o = applyVehicleSeatExitAddon(baseX, baseY, baseZ, o, addon)
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = baseX, baseY, baseZ, o
+}
+
+// applyControlVehicleSeatChange runs the Unit::ChangeSeat seat switch
+// (Unit.cpp:13133-13170) for a SPELL_AURA_CONTROL_VEHICLE re-cast merge:
+// the ride aura's amount already refreshed to the new seat, and the
+// CHANGE_AMOUNT handlers move the passenger without _ExitVehicle
+// (SpellAuraEffects.cpp:3002) — the kit SwitchSeat plus the
+// fireVehicleSeatSwitch hook pair, the same twin the CMSG seat-change
+// handler rides. Same-seat and unseated casters are no-ops
+// (Unit.cpp:13095-13096); an occupied or missing dest seat refuses,
+// as in C++ (Unit.cpp:13144-13146).
+func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID uint64, newSeat int8) {
+	if s == nil || s.server == nil || s.player == nil || baseGUID == 0 || newSeat < 0 {
+		return
+	}
+	if s.player.VehicleGUID != baseGUID || s.player.VehicleSeat == newSeat {
+		return
+	}
+	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, baseGUID)
+	if kit == nil {
+		return
+	}
+	oldSeat := s.player.VehicleSeat
+	assigned, seatInfo, switched := kit.SwitchSeat(s.playerGUID, newSeat)
+	if !switched {
+		return
+	}
+	s.player.VehicleSeat = assigned
+	if seatInfo != nil && seatInfo.CanControl() {
+		s.sendClientControl(kit.VehicleGUID, true)
+		spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
+		s.sendVehiclePetSpells(kit.VehicleGUID, spells)
+	}
+	s.fireVehicleSeatSwitch(ctx, kit, oldSeat, assigned)
+	s.sendPlayerUpdate()
+	s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
 }
 
 // fireVehicleSeatSwitch fires the Vehicle::RemovePassenger /
