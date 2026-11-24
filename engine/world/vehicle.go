@@ -910,7 +910,7 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 		// leg), as in C++.
 		s.ejectVehicleSeatOccupant(ctx, motion.Map, motion.InstanceID, kit, baseGUID, acc.SeatID, summoned.GUID)
 		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
-		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
+		assigned, seatInfo, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
 		if !ok {
 			// VehicleJoinEvent::Abort (Vehicle.cpp:943-944)
 			// despawns only UNIT_MASK_ACCESSORY passengers —
@@ -937,7 +937,17 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 		// of the AI PassengerBoarded / OnAddPassenger hooks below.
 		// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board
 		// breaks the passenger's target for everyone in range.
+		// VehicleJoinEvent::Execute (Vehicle.cpp:836-837): the board
+		// interrupts the passenger's non-melee casts and strips its
+		// mount aura, ahead of the clear-target below.
+		s.interruptBoardingCreaturePassenger(summoned)
 		s.sendPassengerClearTarget(origin.Map, origin.InstanceID, summoned.GUID, summoned.X, summoned.Y, summoned.Z, summoned.PhaseMask)
+		// VehicleJoinEvent::Execute (Vehicle.cpp:884, :887-892): the
+		// board roots the passenger and runs the seat-offset spline
+		// with the transport-enter flag, ahead of the threat
+		// transfer below.
+		_, _, seatAddon := kit.GetSeatForPassenger(summoned.GUID)
+		s.rootAndSplineBoardingCreaturePassenger(summoned, baseGUID, seatInfo, seatAddon, motion.X, motion.Y, motion.Z, motion.Orientation, true)
 		s.transferPassengerThreatToVehicleBase(origin.Map, origin.InstanceID, summoned.GUID, baseGUID)
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
 			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the
@@ -1349,7 +1359,7 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 		// so the eject no-ops there.
 		s.ejectVehicleSeatOccupant(ctx, origin.Map, origin.InstanceID, kit, baseGUID, acc.SeatID, summoned.GUID)
 		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
-		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
+		assigned, seatInfo, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
 		if !ok {
 			// VehicleJoinEvent::Abort (Vehicle.cpp:943-944)
 			// despawns only UNIT_MASK_ACCESSORY passengers —
@@ -1382,7 +1392,17 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 		// of the AI PassengerBoarded / OnAddPassenger hooks below.
 		// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board
 		// breaks the passenger's target for everyone in range.
+		// VehicleJoinEvent::Execute (Vehicle.cpp:836-837): the board
+		// interrupts the passenger's non-melee casts and strips its
+		// mount aura, ahead of the clear-target below.
+		s.interruptBoardingCreaturePassenger(summoned)
 		s.sendPassengerClearTarget(origin.Map, origin.InstanceID, summoned.GUID, summoned.X, summoned.Y, summoned.Z, summoned.PhaseMask)
+		// VehicleJoinEvent::Execute (Vehicle.cpp:884, :887-892): the
+		// board roots the passenger and runs the seat-offset spline
+		// with the transport-enter flag, ahead of the threat
+		// transfer below.
+		_, _, seatAddon := kit.GetSeatForPassenger(summoned.GUID)
+		s.rootAndSplineBoardingCreaturePassenger(summoned, baseGUID, seatInfo, seatAddon, x, y, z, o, true)
 		s.transferPassengerThreatToVehicleBase(origin.Map, origin.InstanceID, summoned.GUID, baseGUID)
 		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
 			// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the
@@ -1696,6 +1716,12 @@ func (s *Server) removeCreatureVehicleSeat(ctx context.Context, mapID, instanceI
 			motion.Moving = false
 			s.motionMu.Unlock()
 		}
+		// Unit::_ExitVehicle (Unit.cpp:13202-13210): the seat freed
+		// above, the board root clears unless a MOD_ROOT aura or the
+		// movement template holds it, and a non-stunned passenger
+		// sends SMSG_SPLINE_MOVE_UNROOT — ahead of the exit-position
+		// relocate below, as in C++.
+		s.unrootExitingCreaturePassenger(exitMotion)
 		if exitMotion != nil {
 			// Unit::_ExitVehicle (Unit.cpp:13215-13249): the dying
 			// passenger relocates to the exit position (base position
@@ -1960,6 +1986,12 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 			s.smartPassengerBoarded(context.Background(), baseMotion, guid, seatID, false)
 			s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, vehicleObj, s.luaMotionCreature(motion))
 		}
+		// Unit::_ExitVehicle (Unit.cpp:13202-13210): the seat freed
+		// above, the board root clears unless a MOD_ROOT aura or the
+		// movement template holds it, and a non-stunned passenger
+		// sends SMSG_SPLINE_MOVE_UNROOT — ahead of the exit-position
+		// relocate below, as in C++.
+		s.unrootExitingCreaturePassenger(motion)
 		// The exit position lands here, before the tail below, so the
 		// fall spline launches from it (Unit.cpp:13238-13249) and the
 		// corpse of a just-died accessory rests at it (:13261-13262).
@@ -2657,6 +2689,133 @@ func (s *Server) sendPassengerClearTarget(mapID, instanceID uint32, passengerGUI
 	}
 }
 
+// sendCreatureSplineMoveRoot broadcasts SMSG_SPLINE_MOVE_ROOT for a
+// creature passenger — the Unit::SetRooted(true) sender (Unit.cpp:11649-
+// 11680: a creature roots with SMSG_SPLINE_MOVE_ROOT, a player with
+// SMSG_FORCE_MOVE_ROOT), the packet half of the
+// VehicleJoinEvent::Execute board root (Vehicle.cpp:884).
+func (s *Server) sendCreatureSplineMoveRoot(mapID, instanceID uint32, guid uint64, x, y, z float32, phase uint32) {
+	if s == nil || guid == 0 {
+		return
+	}
+	if phase == 0 {
+		phase = 1
+	}
+	pkt := protocol.NewBuffer(9)
+	pkt.WritePackedGUID(guid)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPLINE_MOVE_ROOT), pkt.Bytes(), mapID, instanceID, x, y, z, phase)
+}
+
+// sendCreatureSplineMoveUnroot broadcasts SMSG_SPLINE_MOVE_UNROOT for a
+// creature passenger — the Unit::SetRooted(false) sender (Unit.cpp:11649-
+// 11680), the packet half of the Unit::_ExitVehicle unroot leg
+// (Unit.cpp:13202-13210).
+func (s *Server) sendCreatureSplineMoveUnroot(mapID, instanceID uint32, guid uint64, x, y, z float32, phase uint32) {
+	if s == nil || guid == 0 {
+		return
+	}
+	if phase == 0 {
+		phase = 1
+	}
+	pkt := protocol.NewBuffer(9)
+	pkt.WritePackedGUID(guid)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPLINE_MOVE_UNROOT), pkt.Bytes(), mapID, instanceID, x, y, z, phase)
+}
+
+// interruptBoardingCreaturePassenger runs the VehicleJoinEvent::Execute
+// interrupt legs (Vehicle.cpp:836-837) for a creature passenger that just
+// seated: InterruptNonMeleeSpells(false) plus the SPELL_AURA_MOUNTED
+// strip. The interrupt twin runs under motionMu (the SetStunned twin's
+// contract in lua_creature_events.go); its packets go out after the
+// unlock, as there.
+func (s *Server) interruptBoardingCreaturePassenger(motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	interrupted := s.interruptCreatureNonMeleeCasts(motion)
+	s.motionMu.Unlock()
+	for _, arm := range interrupted {
+		s.sendCreatureInterruptPackets(motion, arm)
+	}
+	s.removeCreatureAurasByType(creatureAuraKeyForMotion(motion), spellAuraMounted)
+}
+
+// rootAndSplineBoardingCreaturePassenger runs the VehicleJoinEvent::Execute
+// root and board-spline legs (Vehicle.cpp:884, :887-892) for a creature
+// passenger that just seated, after the clear-target (:883) and before the
+// threat transfer (:895-896): SetControlled(true, UNIT_STATE_ROOT) —
+// ScriptRooted plus SMSG_SPLINE_MOVE_ROOT (Unit::SetRooted,
+// Unit.cpp:11649-11680) — then the MoveTo spline to the seat-offset
+// position with the transport-enter flag, SMSG_MONSTER_MOVE_TRANSPORT
+// via the base GUID as the packet's transport arg. The server snaps the
+// passenger to the seat position at launch (the atomic-spline model, as
+// in the home leg); the following relocate's MonsterMoveStop is the
+// spline's terminator. A base whose position cannot be resolved skips
+// the spline but still roots: the root has no position dependency.
+func (s *Server) rootAndSplineBoardingCreaturePassenger(motion *creatureMotion, baseGUID uint64, seatInfo *wotlk.VehicleSeatEntry, addon *VehicleSeatAddon, baseX, baseY, baseZ, baseO float32, hasBase bool) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	motion.ScriptRooted = true
+	mapID, instanceID := motion.Map, motion.InstanceID
+	startX, startY, startZ, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+	s.motionMu.Unlock()
+	s.sendCreatureSplineMoveRoot(mapID, instanceID, motion.GUID, startX, startY, startZ, phase)
+	if !hasBase || seatInfo == nil {
+		return
+	}
+	attO := float32(0)
+	if addon != nil {
+		attO = addon.SeatOrientationOffset
+	}
+	destX, destY, destZ, destO := CalculatePassengerPosition(baseX, baseY, baseZ, baseO, seatInfo.AttachmentOffsetX, seatInfo.AttachmentOffsetY, seatInfo.AttachmentOffsetZ, attO)
+	if speed := creatureSplineVelocityExplicit(motion, false); speed >= 0.001 {
+		duration := splineDurationMs(float64(distance3D(startX, startY, startZ, destX, destY, destZ)), speed)
+		s.broadcastMonsterMoveInInstance(mapID, instanceID, motion.GUID, startX, startY, startZ, destX, destY, destZ, duration, false, destO, true, phase, baseGUID)
+	}
+	s.motionMu.Lock()
+	motion.X, motion.Y, motion.Z, motion.Orientation = destX, destY, destZ, destO
+	s.motionMu.Unlock()
+}
+
+// unrootExitingCreaturePassenger runs the Unit::_ExitVehicle unroot leg
+// (Unit.cpp:13202-13210) for a creature passenger leaving a vehicle:
+// SetControlled(false, UNIT_STATE_ROOT) clears the board root unless a
+// SPELL_AURA_MOD_ROOT aura holds it or the movement template roots the
+// creature (Unit.cpp:11532-11535), and the exit then sends
+// SMSG_SPLINE_MOVE_UNROOT whenever the root flag survives SetRooted —
+// SetRooted(false) sends it and clears the flag for a non-stunned
+// creature (Unit.cpp:11649-11680), while a stunned creature keeps the
+// flag and the _ExitVehicle arm sends it instead, so exactly one packet
+// goes out either way. The board leg
+// (rootAndSplineBoardingCreaturePassenger, Vehicle.cpp:884) is its pair;
+// a passenger that never took the board root clears nothing and sends
+// nothing. Callers run it after the seat frees, as _ExitVehicle does.
+func (s *Server) unrootExitingCreaturePassenger(motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	wasRooted := motion.ScriptRooted
+	moveRooted := motion.MoveRooted
+	mapID, instanceID := motion.Map, motion.InstanceID
+	x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+	key := creatureAuraKeyForMotion(motion)
+	s.motionMu.Unlock()
+	if !wasRooted || moveRooted {
+		return
+	}
+	if s.creatureHasAuraType(key, spellAuraModRoot) {
+		return
+	}
+	s.motionMu.Lock()
+	motion.ScriptRooted = false
+	s.motionMu.Unlock()
+	s.sendCreatureSplineMoveUnroot(mapID, instanceID, motion.GUID, x, y, z, phase)
+}
+
 // removeVehicleControlAuraFromBase strips SPELL_AURA_CONTROL_VEHICLE
 // auras cast by the passenger from a vehicle base — the
 // VehicleJoinEvent::Abort leg (Vehicle.cpp:937) for a failed board. A
@@ -2693,9 +2852,16 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 		}
 	}
 
-	// Unit::_EnterVehicle (Unit.cpp:13088-13099): boarding a different
-	// vehicle exits the current one first; same-vehicle re-entry keeps it.
+	// Unit::_EnterVehicle (Unit.cpp:13088-13100): boarding a different
+	// vehicle exits the current one first; a same-vehicle re-entry on a
+	// different seat exits first too (the seatId arm removes the ride
+	// aura, whose remove leg runs _ExitVehicle, then re-boards on the
+	// new seat — VehicleJoinEvent::Execute, Vehicle.cpp:813-815, exits
+	// any seated passenger before seating). Same-seat re-entry keeps
+	// the seat (Unit.cpp:13095-13096).
 	if s.player.VehicleGUID != 0 && s.player.VehicleGUID != vehicleGUID {
+		s.exitVehicle(ctx)
+	} else if s.player.VehicleGUID == vehicleGUID && seatID >= 0 && seatID != s.player.VehicleSeat {
 		s.exitVehicle(ctx)
 	}
 
@@ -2705,6 +2871,7 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 	actualSeat := seatID
 	playerVehicleID := uint32(0)
 	var seatInfo *wotlk.VehicleSeatEntry
+	var seatAddon *VehicleSeatAddon
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID); kit != nil {
 			// Vehicle::AddPassenger (Vehicle.cpp:471-478): boarding a
@@ -2727,6 +2894,7 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 			}
 			actualSeat = assigned
 			seatInfo = si
+			_, _, seatAddon = kit.GetSeatForPassenger(s.playerGUID)
 			if kit.IsPlayer {
 				playerVehicleID = kit.VehicleID
 			}
@@ -2793,6 +2961,23 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 
 	s.player.VehicleGUID = vehicleGUID
 	s.player.VehicleSeat = actualSeat
+	// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the board stamps
+	// the passenger's movement info with the transport seat offsets
+	// (time 0, the assigned seat, the base GUID). The create block
+	// carries it (movementInfoForCreate, movement.go:1482-1493:
+	// MOVEMENTFLAG_ONTRANSPORT plus the GUID, offsets and seat), and
+	// the exit leg resets it (the inherit-or-reset arm in exitVehicle)
+	// or the next client movement ack overwrites it
+	// (movement.go:964-985).
+	if seatInfo != nil {
+		s.player.TransportGUID = vehicleGUID
+		s.player.TransportX, s.player.TransportY, s.player.TransportZ = seatInfo.AttachmentOffsetX, seatInfo.AttachmentOffsetY, seatInfo.AttachmentOffsetZ
+		s.player.TransportO = 0
+		if seatAddon != nil {
+			s.player.TransportO = seatAddon.SeatOrientationOffset
+		}
+		s.player.TransportSeat = actualSeat
+	}
 	// VehicleJoinEvent::Execute (Vehicle.cpp:881): the board roots the
 	// passenger (SetControlled(true, UNIT_STATE_ROOT), SMSG_FORCE_ROOT).
 	s.setRooted(true)

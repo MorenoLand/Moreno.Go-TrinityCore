@@ -228,7 +228,7 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 		s.ejectVehicleSeatOccupant(ctx, effMap, effInstance, kit, ref.baseGUID, seat, passengerGUID)
 	}
 	wasUnselectable := motion.UnitFlags&0x02000000 != 0
-	assigned, _, ok := kit.AddPassenger(passengerGUID, seat, wasUnselectable)
+	assigned, seatInfo, ok := kit.AddPassenger(passengerGUID, seat, wasUnselectable)
 	if !ok {
 		// VehicleJoinEvent::Abort (Vehicle.cpp:937, :943-944): a
 		// failed board strips the control-vehicle aura from the
@@ -254,7 +254,24 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	// transfers to Target->GetBase() regardless of its type.
 	// VehicleJoinEvent::Execute (Vehicle.cpp:883): the board breaks
 	// the passenger's target for everyone in range.
+	// VehicleJoinEvent::Execute (Vehicle.cpp:836-837): the board
+	// interrupts the passenger's non-melee casts and strips its
+	// mount aura, ahead of the clear-target below.
+	s.interruptBoardingCreaturePassenger(motion)
 	s.sendPassengerClearTarget(effMap, effInstance, passengerGUID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+	// VehicleJoinEvent::Execute (Vehicle.cpp:884, :887-892): the
+	// board roots the passenger and runs the seat-offset spline
+	// with the transport-enter flag, ahead of the threat transfer
+	// below; a base that never resolves still roots (the root has
+	// no position dependency) and skips the spline.
+	_, _, seatAddon := kit.GetSeatForPassenger(passengerGUID)
+	baseX, baseY, baseZ, baseO, hasBase := float32(0), float32(0), float32(0), float32(0), false
+	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil {
+		baseX, baseY, baseZ, baseO, hasBase = base.X, base.Y, base.Z, base.Orientation, true
+	} else if baseSess := s.findSessionByGUID(ref.baseGUID); baseSess != nil && baseSess.player != nil {
+		baseX, baseY, baseZ, baseO, hasBase = baseSess.player.X, baseSess.player.Y, baseSess.player.Z, baseSess.player.Orientation, true
+	}
+	s.rootAndSplineBoardingCreaturePassenger(motion, ref.baseGUID, seatInfo, seatAddon, baseX, baseY, baseZ, baseO, hasBase)
 	s.transferPassengerThreatToVehicleBase(effMap, effInstance, passengerGUID, ref.baseGUID)
 	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil {
 		// VehicleJoinEvent::Execute (Vehicle.cpp:900-902): the AI
@@ -317,4 +334,11 @@ func (s *Server) luaVehicleRemovePassenger(ctx context.Context, ref *luaVehicleR
 		s.smartPassengerBoarded(ctx, base, passengerGUID, seatID, false)
 		s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion))
 	}
+	// Unit::_ExitVehicle (Unit.cpp:13202-13210): the seat freed
+	// above, the board root clears unless a MOD_ROOT aura or the
+	// movement template holds it, and a non-stunned passenger sends
+	// SMSG_SPLINE_MOVE_UNROOT. The eject path shares this body
+	// (ejectVehicleSeatOccupant delegates here), so the install
+	// eject loop gets the leg too.
+	s.unrootExitingCreaturePassenger(motion)
 }
