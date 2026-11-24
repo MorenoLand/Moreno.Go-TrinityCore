@@ -222,6 +222,9 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	motion.VehicleSeat = assigned
 	motion.Moving = false
 	s.motionMu.Unlock()
+	// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): boarding the
+	// last usable seat clears the base's spell-click flag.
+	s.syncVehicleBaseNPCFlag(effMap, effInstance, ref.baseGUID)
 	if base := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); base != nil {
 		s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion), assigned)
 		s.smartPassengerBoarded(ctx, base, passengerGUID, assigned, true)
@@ -261,6 +264,9 @@ func (s *Server) luaVehicleRemovePassenger(ctx context.Context, ref *luaVehicleR
 	if kit != nil {
 		seatID, _, _, _ = kit.RemovePassenger(passengerGUID)
 	}
+	// Vehicle::RemovePassenger (Vehicle.cpp:508-509): freeing a usable
+	// seat restores the base's spell-click flag.
+	s.syncVehicleBaseNPCFlag(effMap, effInstance, ref.baseGUID)
 	s.motionMu.Lock()
 	motion.VehicleGUID = 0
 	motion.VehicleSeat = 0

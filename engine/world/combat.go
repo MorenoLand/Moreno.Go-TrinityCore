@@ -3404,7 +3404,9 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 		// Vehicle.dbc entry like Unit::CreateVehicleKit.
 		if st.VehicleID != 0 && s.Data != nil {
 			if _, ok, err := s.Data.Vehicle(st.VehicleID); err == nil && ok {
-				s.createVehicleKit(target.Map, instanceID, target.GUID, st.VehicleID, uint32(entry), false)
+				if kit := s.createVehicleKit(target.Map, instanceID, target.GUID, st.VehicleID, uint32(entry), false); kit != nil {
+					s.applyVehicleCtorNPCFlag(motion, kit)
+				}
 			}
 		}
 		freshMotion = motion

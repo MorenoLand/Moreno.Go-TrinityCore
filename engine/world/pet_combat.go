@@ -1144,6 +1144,10 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 					s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(base), s.luaMotionCreature(motion))
 					s.smartPassengerBoarded(ctx, base, guid, seatID, false)
 				}
+				// Vehicle::RemovePassenger (Vehicle.cpp:508-509):
+				// freeing a usable seat restores the base's
+				// spell-click flag.
+				s.syncVehicleBaseNPCFlag(mapID, instanceID, vehicleGUID)
 			}
 		}
 	}

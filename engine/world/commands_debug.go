@@ -2152,6 +2152,9 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 		if base := s.findCreatureMotion(vehicleGUID); base != nil {
 			s.server.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.server.luaMotionCreature(base), s.server.luaMotionCreature(passenger), assigned)
 		}
+		// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): boarding the
+		// last usable seat clears the base's spell-click flag.
+		s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, vehicleGUID)
 	}
 	s.sendSysMessage(fmt.Sprintf("Unit %d entered vehicle %d", entry, seatID))
 	return true

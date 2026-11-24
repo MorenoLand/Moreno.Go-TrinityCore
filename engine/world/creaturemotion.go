@@ -2815,7 +2815,9 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 		// (combat.go) still bypasses this funnel.
 		if st.VehicleID != 0 && s.Data != nil {
 			if _, ok, err := s.Data.Vehicle(st.VehicleID); err == nil && ok {
-				s.createVehicleKit(mapID, instanceID, motion.GUID, st.VehicleID, entry, false)
+				if kit := s.createVehicleKit(mapID, instanceID, motion.GUID, st.VehicleID, entry, false); kit != nil {
+					s.applyVehicleCtorNPCFlag(motion, kit)
+				}
 			}
 		}
 	}
@@ -3040,7 +3042,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			// gated on a Vehicle.dbc entry like Unit::CreateVehicleKit.
 			if st.VehicleID != 0 && s.Data != nil {
 				if _, ok, err := s.Data.Vehicle(st.VehicleID); err == nil && ok {
-					s.createVehicleKit(motion.Map, instanceID, creatureGUID, st.VehicleID, entry, false)
+					if kit := s.createVehicleKit(motion.Map, instanceID, creatureGUID, st.VehicleID, entry, false); kit != nil {
+						s.applyVehicleCtorNPCFlag(motion, kit)
+					}
 				}
 			}
 		}

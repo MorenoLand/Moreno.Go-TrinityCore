@@ -400,6 +400,21 @@ func (v *VehicleKit) SwitchSeat(passengerGUID uint64, newSeatID int8) (assignedS
 		return currSeatID, currSeat.SeatInfo, false
 	}
 
+	// Unit::ChangeSeat (Unit.cpp:13133-13170) re-applies the ride aura on
+	// the new seat, which runs RemovePassenger + AddPassenger — so the
+	// usable-seat count moves when the switch crosses the
+	// CanEnterOrExit boundary: leaving a usable seat frees one,
+	// taking a usable seat consumes one.
+	if currSeat.SeatInfo != nil && destSeat.SeatInfo != nil {
+		if currSeat.SeatInfo.CanEnterOrExit() && !destSeat.SeatInfo.CanEnterOrExit() {
+			v.UsableSeatNum++
+		} else if !currSeat.SeatInfo.CanEnterOrExit() && destSeat.SeatInfo.CanEnterOrExit() {
+			if v.UsableSeatNum > 0 {
+				v.UsableSeatNum--
+			}
+		}
+	}
+
 	destSeat.Passenger = currSeat.Passenger
 	currSeat.Passenger.Reset()
 
@@ -703,6 +718,30 @@ func (s *Server) syncVehicleBaseNPCFlag(mapID, instanceID uint32, baseGUID uint6
 	}
 }
 
+// applyVehicleCtorNPCFlag mirrors the Vehicle ctor flag arm
+// (Vehicle.cpp:52-55) for a base whose kit was just created at spawn:
+// the base carries UNIT_NPC_FLAG_SPELLCLICK exactly while a usable
+// (CanEnterOrExit) seat is free, overwriting the template value. The
+// spawn materialization callers hold motionMu, so the flag is set
+// directly on the fresh motion instead of through
+// syncVehicleBaseNPCFlag; the spawn create-block is built from these
+// fields afterwards. NPCFlagsKnown latches the ctor value the way the
+// sync helper latches the live one.
+func (s *Server) applyVehicleCtorNPCFlag(motion *creatureMotion, kit *VehicleKit) {
+	if motion == nil || kit == nil {
+		return
+	}
+	kit.mu.RLock()
+	usable := kit.UsableSeatNum > 0
+	kit.mu.RUnlock()
+	if usable {
+		motion.NPCFlags |= unitNPCFlagSpellclick
+	} else {
+		motion.NPCFlags &^= unitNPCFlagSpellclick
+	}
+	motion.NPCFlagsKnown = true
+}
+
 // applyVehicleImmunities mirrors Vehicle::ApplyAllImmunities
 // (Vehicle.cpp:160-223): the immunity + root arms of Vehicle::Reset.
 // Every vehicle base is immune to the knockback effects; a mechanical
@@ -912,6 +951,11 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 			}
 		}
 	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): installing the
+	// accessories may take the last usable seat — the base's
+	// spell-click flag follows the final count, not the template.
+	// A player base no-ops in the helper (no creature motion).
+	s.syncVehicleBaseNPCFlag(origin.Map, origin.InstanceID, baseGUID)
 }
 
 func (s *Server) removeVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) {
@@ -1321,6 +1365,11 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 			}
 		}
 	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): installing the
+	// accessories may take the last usable seat — the base's
+	// spell-click flag follows the final count, not the template.
+	// A player base no-ops in the helper (no creature motion).
+	s.syncVehicleBaseNPCFlag(origin.Map, origin.InstanceID, baseGUID)
 }
 
 // installPlayerVehicleAccessories bridges Vehicle::InstallAllAccessories
@@ -1490,6 +1539,11 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 			}
 		}
 	}
+	// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): installing the
+	// accessories may take the last usable seat — the base's
+	// spell-click flag follows the final count, not the template.
+	// A player base no-ops in the helper (no creature motion).
+	s.syncVehicleBaseNPCFlag(origin.Map, origin.InstanceID, baseGUID)
 }
 
 func (s *Server) installPlayerVehicleAccessories(ctx context.Context, sess *session, kit *VehicleKit) {
@@ -2556,6 +2610,11 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 					s.server.smartPassengerBoarded(ctx, base, s.playerGUID, assigned, true)
 				}
 			}
+			// VehicleJoinEvent::Execute (Vehicle.cpp:825-832): boarding
+			// the last usable seat clears the base's spell-click flag;
+			// the helper no-ops for a player base (no creature motion,
+			// no UNIT_NPC_FLAGS field in Go).
+			s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, vehicleGUID)
 		}
 	}
 
@@ -2714,6 +2773,9 @@ func (s *session) exitVehicle(ctx context.Context) {
 				seatID, seatInfo, wasUnselectable = removedSeat, si, wu
 			}
 		}
+		// Vehicle::RemovePassenger (Vehicle.cpp:508-509): freeing a
+		// usable seat restores the base's spell-click flag.
+		s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, oldVehGUID)
 		// Vehicle::RemovePassenger (Vehicle.cpp:538-539) fires
 		// OnRemovePassenger for creature bases only; seatInfo is set
 		// exactly when the primary-kit removal succeeded.
@@ -2966,6 +3028,11 @@ func (s *session) releaseVehicleStateAtLogout(ctx context.Context) {
 					s.server.smartPassengerBoarded(ctx, base, s.playerGUID, seatID, false)
 					vehicleFired = true
 				}
+				// Vehicle::RemovePassenger (Vehicle.cpp:508-509):
+				// freeing a usable seat restores the base's
+				// spell-click flag; the helper resolves a kit
+				// keyed on another map.
+				s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, vehGUID)
 			}
 		}
 		if len(kits) > 0 {
@@ -3117,6 +3184,10 @@ func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payl
 						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
 					}
 					s.sendPlayerUpdate()
+					// A switch across the CanEnterOrExit boundary moves
+					// UsableSeatNum (see SwitchSeat); the base's
+					// spell-click flag follows it.
+					s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
 				}
 			}
 			return true
@@ -3343,6 +3414,10 @@ func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []by
 						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
 					}
 					s.sendPlayerUpdate()
+					// A switch across the CanEnterOrExit boundary moves
+					// UsableSeatNum (see SwitchSeat); the base's
+					// spell-click flag follows it.
+					s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
 				}
 			}
 			return true
@@ -3370,6 +3445,10 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 						s.sendVehiclePetSpells(kit.VehicleGUID, spells)
 					}
 					s.sendPlayerUpdate()
+					// A switch across the CanEnterOrExit boundary moves
+					// UsableSeatNum (see SwitchSeat); the base's
+					// spell-click flag follows it.
+					s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
 				}
 			}
 			return true
@@ -3434,6 +3513,10 @@ func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []
 					s.sendVehiclePetSpells(kit.VehicleGUID, spells)
 				}
 				s.sendPlayerUpdate()
+				// A switch across the CanEnterOrExit boundary moves
+				// UsableSeatNum (see SwitchSeat); the base's
+				// spell-click flag follows it.
+				s.server.syncVehicleBaseNPCFlag(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
 			}
 			return true
 		}
