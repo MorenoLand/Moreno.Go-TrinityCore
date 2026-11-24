@@ -871,17 +871,13 @@ func (s *Server) resetVehicleKitOnReachHome(ctx context.Context, motion *creatur
 // the non-minion rows. Per minion row (Vehicle.cpp:386-412): TempSummon
 // at the base position, UNIT_MASK_ACCESSORY, then the HandleSpellClick
 // twin boards it — and Vehicle::AddPassenger (Vehicle.cpp:471-478) ejects
-// the seat's current occupant first when the seat is occupied, so a
-// still-seated minion is ejected and unsummons 2s later (Unit::_ExitVehicle
-// Unit.cpp:13258-13265: the AddPassenger seat-eject runs _ExitVehicle, and a
-// UNIT_MASK_ACCESSORY minion exits with UnSummon(2000) while the base is
-// alive) and the fresh summon boards in its place. A
-// player seated on a minion seat stays out: C++ would eject the player,
-// but Go's player exit needs the session's exit leg (duel forfeit,
-// control packets) and minion seats are not player-enterable in
-// practice, so the row is skipped instead of summoning a duplicate the
-// board would refuse. A missing seat aborts the board like the spawn
-// install (the VehicleJoinEvent::Abort twin despawns the fresh summon).
+// the seat's current occupant first when the seat is occupied, through
+// the full _ExitVehicle twin (exit position, fall, tail: a
+// UNIT_MASK_ACCESSORY minion unsummons 2s later while the base is alive,
+// Unit.cpp:13258-13265), and the fresh summon boards in its place. A
+// player seated on a minion seat is ejected through the session
+// exitVehicle leg, as in C++. A missing seat aborts the board like the
+// spawn install (the VehicleJoinEvent::Abort twin despawns the fresh summon).
 func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *creatureMotion, kit *VehicleKit) {
 	if s == nil || motion == nil || kit == nil {
 		return
@@ -905,29 +901,14 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 			continue
 		}
 		// Vehicle::AddPassenger (Vehicle.cpp:471-478) kicks the occupant
-		// off an occupied target seat before the new passenger boards.
-		if occupant := kit.GetPassenger(acc.SeatID); occupant != 0 {
-			if s.findSessionByGUID(occupant) != nil {
-				s.expireTempSummonGuardian(ctx, summoned)
-				continue
-			}
-			if occupantMotion := s.findCreatureMotion(motion.Map, motion.InstanceID, occupant); occupantMotion != nil {
-				wasAccessoryMinion := occupantMotion.VehicleAccessoryMinion
-				seatID, _, _, _ := kit.RemovePassenger(occupant)
-				s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(motion), s.luaMotionCreature(occupantMotion))
-				s.smartPassengerBoarded(ctx, motion, occupant, seatID, false)
-				s.motionMu.Lock()
-				occupantMotion.VehicleGUID = 0
-				occupantMotion.VehicleSeat = 0
-				occupantMotion.VehicleAccessoryMinion = false
-				occupantMotion.Moving = false
-				s.motionMu.Unlock()
-				s.unsummonEjectedVehicleAccessory(occupantMotion, wasAccessoryMinion)
-			} else {
-				seatID, _, _, _ := kit.RemovePassenger(occupant)
-				s.smartPassengerBoarded(ctx, motion, occupant, seatID, false)
-			}
-		}
+		// off an occupied target seat before the new passenger boards,
+		// via the full _ExitVehicle twin: the bare kit.RemovePassenger
+		// this replaces bypassed the relocate/fall legs
+		// (Unit.cpp:13215-13249) and the tail, leaving the ejected
+		// minion at its stale seat-offset position in the air. A player
+		// on a minion seat is ejected the same way (the session exit
+		// leg), as in C++.
+		s.ejectVehicleSeatOccupant(ctx, motion.Map, motion.InstanceID, kit, baseGUID, acc.SeatID, summoned.GUID)
 		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
 		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
 		if !ok {
@@ -1437,10 +1418,11 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		return
 	}
 	kit.mu.Lock()
-	if len(kit.Accessories) == 0 {
-		kit.mu.Unlock()
-		return
-	}
+	// No early return on an empty accessory list: InstallAllAccessories
+	// (Vehicle.cpp:86-87) removes all passengers on every respawn
+	// regardless of whether any rows install after — the eject below is
+	// the RemoveAllPassengers half, and the reinstall loop no-ops on an
+	// empty list.
 	accessories := append([]VehicleAccessory(nil), kit.Accessories...)
 	kit.AccessoriesInstalled = true
 	kit.mu.Unlock()
@@ -2572,14 +2554,15 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 	var seatInfo *wotlk.VehicleSeatEntry
 	if s.server != nil {
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID); kit != nil {
-			// Vehicle::AddPassenger (Vehicle.cpp:465-478): boarding a
-			// specific occupied seat ejects its current occupant first.
-			if seatID >= 0 && !kit.HasEmptySeat(seatID) {
-				if occGUID := kit.GetPassenger(seatID); occGUID != 0 && occGUID != s.playerGUID {
-					if occSess := s.server.findSessionByGUID(occGUID); occSess != nil {
-						occSess.exitVehicle(ctx)
-					}
-				}
+			// Vehicle::AddPassenger (Vehicle.cpp:471-478): boarding a
+			// specific occupied seat ejects its current occupant first,
+			// of either kind — a creature occupant blocks the board
+			// outright without the eject, the same leg the Lua
+			// AddPassenger and debug boards ride. Skipped on a
+			// same-vehicle re-entry: the board no-ops into the
+			// current seat, so there is no seat to take.
+			if seatID >= 0 && s.player.VehicleGUID != vehicleGUID {
+				s.server.ejectVehicleSeatOccupant(ctx, s.player.Map, s.player.InstanceID, kit, vehicleGUID, seatID, s.playerGUID)
 			}
 			wasUnselectable := s.player.UnitFlags&0x02000000 != 0 // UNIT_FLAG_NOT_SELECTABLE
 			assigned, si, ok := kit.AddPassenger(s.playerGUID, seatID, wasUnselectable)
@@ -2709,6 +2692,88 @@ func (s *Server) exitVehicleTail(ctx context.Context, mapID, instanceID uint32, 
 		// shared with the evade-reinstall and respawn eject paths.
 		s.unsummonEjectedVehicleAccessory(passenger, true)
 	}
+}
+
+// ejectVehicleSeatOccupant ejects the occupant of one specific seat via
+// the full Unit::_ExitVehicle twin (Unit.cpp:13191-13266), shared by
+// every AddPassenger caller that boards a specific seat:
+// Vehicle::AddPassenger (Vehicle.cpp:471-478) ejects the seat's current
+// occupant first — passenger->ExitVehicle() — before the new passenger
+// boards, for a passenger of EITHER kind. The kit allocator cannot do
+// it (no server handle), so the eject lives here and the callers run it
+// before kit.AddPassenger, the same order as C++ (eject at AddPassenger
+// time, the VehicleJoinEvent boards after). A player occupant exits
+// through the session exitVehicle (duel forfeit, control release, exit
+// position, tail); a creature occupant exits through the Lua ExitVehicle
+// no-arg twin (lua_creature_events.go): exit position captured BEFORE
+// the seat frees (Unit.cpp:13193), kit removal with ev6, fall-or-
+// teleport, then exitVehicleTail. A stale seat — a GUID with neither
+// session nor motion — frees the seat with the SmartAI
+// passenger-removed event only, the reinstall twin (C++ would ASSERT on
+// the missing unit; Go degrades to the seat free). Callers skip the
+// call when the incoming passenger is already seated on this base: the
+// board no-ops into its current seat, so there is no seat to take.
+// exceptGUID is the incoming passenger; re-boarding its own seat is
+// not an eject.
+func (s *Server) ejectVehicleSeatOccupant(ctx context.Context, mapID, instanceID uint32, kit *VehicleKit, baseGUID uint64, seatID int8, exceptGUID uint64) {
+	if s == nil || kit == nil || baseGUID == 0 || seatID < 0 {
+		return
+	}
+	occupant := kit.GetPassenger(seatID)
+	if occupant == 0 || occupant == exceptGUID {
+		return
+	}
+	if occSess := s.findSessionByGUID(occupant); occSess != nil {
+		occSess.exitVehicle(ctx)
+		return
+	}
+	occMotion := s.findCreatureMotion(mapID, instanceID, occupant)
+	if occMotion == nil {
+		freedSeat, _, _, _ := kit.RemovePassenger(occupant)
+		if base := s.findCreatureMotion(mapID, instanceID, baseGUID); base != nil {
+			s.smartPassengerBoarded(ctx, base, occupant, freedSeat, false)
+		}
+		return
+	}
+	// Unit::_ExitVehicle (Unit.cpp:13215-13234): the exit position is
+	// the vehicle base position with the passenger's orientation, then
+	// the ModifyVehiclePassengerExitPos override, then the seat addon's
+	// Offset/Dest transform — captured BEFORE the seat frees below
+	// (Unit.cpp:13193), via the creatureVehicleExitPosition twin.
+	baseMotion := s.findCreatureMotion(mapID, instanceID, baseGUID)
+	exitX, exitY, exitZ, exitO := s.creatureVehicleExitPosition(baseGUID, occMotion, baseMotion)
+	phase := uint32(0)
+	s.motionMu.Lock()
+	phase = occMotion.PhaseMask
+	s.motionMu.Unlock()
+	s.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s, mapID: mapID, instanceID: instanceID, baseGUID: baseGUID}, occupant)
+	s.motionMu.Lock()
+	m2, m2ok := s.motionMapLocked(mapID, instanceID)[occupant]
+	canFly := false
+	if m2ok {
+		m2.X, m2.Y, m2.Z, m2.Orientation = exitX, exitY, exitZ, exitO
+		m2.Moving = false
+		canFly = m2.CanFly || m2.Flying
+	}
+	s.motionMu.Unlock()
+	// Unit::_ExitVehicle (Unit.cpp:13238-13249): the fall-or-teleport
+	// twin from the Lua ExitVehicle arm (lua_creature_events.go).
+	falling := false
+	if m2ok && !canFly {
+		height := exitZ + s.vehicleBaseCollisionHeight(mapID, instanceID, baseGUID)
+		level, ground := s.mapWaterOrGroundLevel(mapID, exitX, exitY, height, terrainDefaultCollisionHeight)
+		if level > terrainInvalidHeight && height > level {
+			falling = s.launchCreatureFallSpline(m2, exitX, exitY, ground, movementInformVehicleExit)
+		}
+	}
+	if !falling {
+		_, nearby := buildTeleportMovementPackets(occupant, movementInfo{Time: s.gameTimeMilliseconds(), X: exitX, Y: exitY, Z: exitZ, Orientation: exitO})
+		s.broadcastCreatureTeleportMovement(mapID, instanceID, occupant, exitX, exitY, exitZ, nearby, phase)
+	}
+	s.syncCreatureVehiclePassengers(occMotion)
+	// Unit::_ExitVehicle tail (Unit.cpp:13251-13266), shared with the
+	// player path via exitVehicleTail.
+	s.exitVehicleTail(ctx, mapID, instanceID, baseGUID, occupant)
 }
 
 // exitVehicle removes the session's player from their current vehicle.

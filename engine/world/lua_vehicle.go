@@ -183,7 +183,8 @@ func (s *Server) vehicleCarriesPassenger(mapID, instanceID uint32, baseGUID, pas
 // looks the kit up on the passenger's own map/instance, so a passenger
 // on another map than the kit is a no-op rather than a cross-map board.
 // Creature passengers go through the kit call directly (the accessory
-// install twin): an occupied specific seat fails instead of ejecting,
+// install twin): an occupied specific seat ejects its occupant first
+// (Vehicle.cpp:471-478, the ejectVehicleSeatOccupant twin),
 // an already-seated passenger keeps its seat, and a passenger seated on
 // another vehicle is unseated from it first (the _EnterVehicle
 // exit-first arm), with ev6 on the old creature base and ev5 on the new
@@ -211,6 +212,14 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	}
 	if motion.VehicleGUID != 0 && motion.VehicleGUID != ref.baseGUID {
 		s.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s, mapID: effMap, instanceID: effInstance, baseGUID: motion.VehicleGUID}, passengerGUID)
+	}
+	// Vehicle::AddPassenger (Vehicle.cpp:471-478): boarding a specific
+	// occupied seat ejects its current occupant first, of either kind;
+	// the kit allocator fails on an occupied seat without the eject.
+	// Skipped when already seated on this base: the board no-ops into
+	// the current seat, so there is no seat to take.
+	if seat >= 0 && motion.VehicleGUID != ref.baseGUID {
+		s.ejectVehicleSeatOccupant(ctx, effMap, effInstance, kit, ref.baseGUID, seat, passengerGUID)
 	}
 	wasUnselectable := motion.UnitFlags&0x02000000 != 0
 	assigned, _, ok := kit.AddPassenger(passengerGUID, seat, wasUnselectable)

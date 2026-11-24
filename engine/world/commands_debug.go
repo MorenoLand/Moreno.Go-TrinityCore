@@ -2080,6 +2080,11 @@ func (s *session) handleDebugSpawnVehicle(ctx context.Context, args []string) bo
 	}
 	if hasVehicleID {
 		s.server.createVehicleKit(summoned.Map, summoned.InstanceID, summoned.GUID, vehicleID, entry, false)
+		// Vehicle ctor (Vehicle.cpp:52-55): the fresh kit's usable seats
+		// set the base's spell-click flag, overwriting the template
+		// value — the spawn sites ride applyVehicleCtorNPCFlag under
+		// motionMu; this command holds no lock, so the sync helper.
+		s.server.syncVehicleBaseNPCFlag(summoned.Map, summoned.InstanceID, summoned.GUID)
 	}
 	return true
 }
@@ -2141,6 +2146,13 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID)
 	if kit == nil {
 		return false
+	}
+	// Vehicle::AddPassenger (Vehicle.cpp:471-478): boarding a specific
+	// occupied seat ejects its current occupant first; skipped when the
+	// passenger is already seated on this base (the board no-ops into
+	// its current seat).
+	if seatID >= 0 && passenger.VehicleGUID != vehicleGUID {
+		s.server.ejectVehicleSeatOccupant(ctx, s.player.Map, s.player.InstanceID, kit, vehicleGUID, seatID, passenger.GUID)
 	}
 	assigned, _, ok := kit.AddPassenger(passenger.GUID, seatID, passenger.UnitFlags&0x02000000 != 0)
 	if ok {
