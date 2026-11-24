@@ -2160,6 +2160,21 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 	if passenger.Health <= 0 {
 		return false
 	}
+	// Unit::_EnterVehicle (Unit.cpp:13089): a passenger that IS the
+	// vehicle base or whose vehicle the base already rides never
+	// boards. The self leg is explicit in the C++ command too
+	// (cs_debug.cpp:966-967, passenger == target fails); the cycle
+	// leg needs the passenger's own kit (IsOnVehicle, Unit.cpp:12074-12077).
+	if passenger.GUID == vehicleGUID {
+		return false
+	}
+	if ownKit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, passenger.GUID); ownKit != nil {
+		if baseMotion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, vehicleGUID); baseMotion != nil && baseMotion.VehicleGUID == passenger.GUID {
+			return false
+		} else if baseSess := s.server.findSessionByGUID(vehicleGUID); baseSess != nil && baseSess.player != nil && baseSess.player.VehicleGUID == passenger.GUID {
+			return false
+		}
+	}
 	// VehicleJoinEvent::Execute (Vehicle.cpp:815-818): a passenger
 	// already on a vehicle exits it first — the Lua path's unseat
 	// twin, so the old kit drops the stale seat and fires ev6.

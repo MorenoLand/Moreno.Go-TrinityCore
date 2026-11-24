@@ -216,6 +216,22 @@ func (s *Server) luaVehicleAddPassenger(ctx context.Context, ref *luaVehicleRef,
 	if motion.Health <= 0 {
 		return
 	}
+	// Unit::_EnterVehicle (Unit.cpp:13089): a passenger that IS the
+	// vehicle base — the base kit resolved above, so a passenger whose
+	// GUID is the base GUID is its own kit — or whose vehicle the base
+	// already rides never boards. The cycle leg needs the passenger's
+	// own kit (vehicle->GetBase()->IsOnVehicle(this), Unit.cpp:12074-12077):
+	// the base seated in it, of either kind.
+	if ref.baseGUID == passengerGUID {
+		return
+	}
+	if ownKit := s.getVehicleKit(effMap, effInstance, passengerGUID); ownKit != nil {
+		if baseMotion := s.findCreatureMotion(effMap, effInstance, ref.baseGUID); baseMotion != nil && baseMotion.VehicleGUID == passengerGUID {
+			return
+		} else if baseSess := s.findSessionByGUID(ref.baseGUID); baseSess != nil && baseSess.player != nil && baseSess.player.VehicleGUID == passengerGUID {
+			return
+		}
+	}
 	if motion.VehicleGUID != 0 && motion.VehicleGUID != ref.baseGUID {
 		s.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s, mapID: effMap, instanceID: effInstance, baseGUID: motion.VehicleGUID}, passengerGUID)
 	}

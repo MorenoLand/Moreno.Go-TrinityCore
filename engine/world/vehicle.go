@@ -2876,6 +2876,25 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 		return
 	}
 
+	// Unit::_EnterVehicle (Unit.cpp:13089): a passenger that IS the
+	// vehicle base — its own kit is the target vehicle — or whose
+	// vehicle the base already rides never boards. GetVehicleKit()
+	// is null for a non-base, so both legs need the passenger's own
+	// kit; vehicle->GetBase()->IsOnVehicle(this) (Unit.cpp:12074-12077)
+	// is the base seated in that kit, of either kind.
+	if s.server != nil {
+		if ownKit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID); ownKit != nil {
+			if vehicleGUID == s.playerGUID {
+				return
+			}
+			if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, vehicleGUID); motion != nil && motion.VehicleGUID == s.playerGUID {
+				return
+			} else if baseSess := s.server.findSessionByGUID(vehicleGUID); baseSess != nil && baseSess.player != nil && baseSess.player.VehicleGUID == s.playerGUID {
+				return
+			}
+		}
+	}
+
 	// Arena check: players cannot board player vehicles in arena
 	if s.server != nil && IsArenaMap(s.player.Map) {
 		if targetSess := s.server.findSessionByGUID(vehicleGUID); targetSess != nil {
@@ -2946,7 +2965,10 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 				playerVehicleID = kit.VehicleID
 			}
 			if seatInfo != nil {
-				if seatInfo.CanControl() {
+				// VehicleJoinEvent::Execute (Vehicle.cpp:871-876): the
+				// board charms only on a creature base — a player
+				// kit never charms its passenger.
+				if seatInfo.CanControl() && !kit.IsPlayer {
 					s.sendClientControl(vehicleGUID, true)
 					spells := s.server.loadCreatureSpells(context.Background(), kit.CreatureEntry)
 					s.sendVehiclePetSpells(vehicleGUID, spells)
@@ -3271,7 +3293,10 @@ func (s *session) exitVehicle(ctx context.Context) {
 			}
 		}
 		if seatInfo != nil {
-			if seatInfo.CanControl() {
+			// Vehicle::RemovePassenger (Vehicle.cpp:517-518): the
+			// charm drops only off a creature base — a player kit
+			// never charmed, so there is nothing to release.
+			if seatInfo.CanControl() && primary != nil && !primary.IsPlayer {
 				s.sendClientControl(oldVehGUID, false)
 				s.sendVehiclePetSpells(0, nil)
 			}
@@ -3704,11 +3729,14 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 		return
 	}
 	s.player.VehicleSeat = assigned
-	if seatInfo != nil && seatInfo.CanControl() {
+	// Vehicle::RemovePassenger (Vehicle.cpp:517-518) and
+	// VehicleJoinEvent::Execute (Vehicle.cpp:871-876): the charm legs
+	// fire only on a creature base — a player kit never charms.
+	if seatInfo != nil && !kit.IsPlayer && seatInfo.CanControl() {
 		s.sendClientControl(kit.VehicleGUID, true)
 		spells := s.server.loadCreatureSpells(ctx, kit.CreatureEntry)
 		s.sendVehiclePetSpells(kit.VehicleGUID, spells)
-	} else if oldSeatInfo != nil && oldSeatInfo.CanControl() {
+	} else if oldSeatInfo != nil && !kit.IsPlayer && oldSeatInfo.CanControl() {
 		// Vehicle::RemovePassenger (Vehicle.cpp:517-518) drops the
 		// charm when the old seat could control and the new seat
 		// cannot; the JoinEvent re-charms only on a control seat.
@@ -3837,9 +3865,14 @@ func (s *session) fireVehicleSeatSwitch(ctx context.Context, kit *VehicleKit, ol
 // (Vehicle::RemovePassenger, Vehicle.cpp:517-518) and whose re-board
 // re-charms only on a control seat (VehicleJoinEvent::Execute,
 // Vehicle.cpp:871-876). A switch onto a control seat grants control; a
-// switch off one releases it and clears the vehicle action bar.
+// switch off one releases it and clears the vehicle action bar. Both
+// C++ legs gate the charm on the base being a creature (TYPEID_UNIT)
+// with a player passenger on a CAN_CONTROL seat — a player base never
+// charms (Vehicle.cpp:517-518, :871-876) — so a player kit stays silent
+// here; the session passenger is a player by construction and
+// CanControl is checked per leg below.
 func (s *session) sendVehicleSeatControlChange(ctx context.Context, kit *VehicleKit, oldSeatInfo, newSeatInfo *wotlk.VehicleSeatEntry) {
-	if s == nil || kit == nil {
+	if s == nil || kit == nil || kit.IsPlayer {
 		return
 	}
 	if newSeatInfo != nil && newSeatInfo.CanControl() {
@@ -4132,6 +4165,15 @@ func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []
 			}
 		}
 	}
+	// Unit::ExitVehicle (Unit.cpp:13165-13182): the exit strips the
+	// ride aura from the base, whose unapply runs _ExitVehicle. The
+	// strip runs first so the aura is gone when the passenger leaves;
+	// the direct exit below is the aura-less-board fallback — a
+	// passenger seated without a ride aura (Lua AddPassenger) still
+	// exits, and a second exitVehicle no-ops on the cleared VehicleGUID.
+	if s.server != nil && s.player.VehicleGUID != 0 {
+		s.server.removeVehicleControlAuraFromBase(s.player.Map, s.player.InstanceID, s.player.VehicleGUID, s.playerGUID)
+	}
 	s.exitVehicle(ctx)
 	return true
 }
@@ -4195,6 +4237,15 @@ func (s *session) handleRequestVehicleExit(ctx context.Context, payload []byte) 
 				return true
 			}
 		}
+	}
+	// Unit::ExitVehicle (Unit.cpp:13165-13182): the exit strips the
+	// ride aura from the base, whose unapply runs _ExitVehicle. The
+	// strip runs first so the aura is gone when the passenger leaves;
+	// the direct exit below is the aura-less-board fallback — a
+	// passenger seated without a ride aura (Lua AddPassenger) still
+	// exits, and a second exitVehicle no-ops on the cleared VehicleGUID.
+	if s.server != nil && s.player.VehicleGUID != 0 {
+		s.server.removeVehicleControlAuraFromBase(s.player.Map, s.player.InstanceID, s.player.VehicleGUID, s.playerGUID)
 	}
 	s.exitVehicle(ctx)
 	return true

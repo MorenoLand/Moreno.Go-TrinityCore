@@ -3904,14 +3904,21 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.server.luaVehicleObject(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)}, nil
 	}
-	// ExitVehicle is Unit::ExitVehicle (UnitMethods.h) = Unit::_ExitVehicle
-	// (Unit.cpp:13193): the session exitVehicle leg (vehicle.go) — seat
-	// removal, control release, and the OnRemovePassenger vehicle event
-	// for creature bases — plus the _ExitVehicle tail (Unit.cpp:13251-13266):
-	// the temporarily-unsummoned pet resummon and the minion-base 1ms
-	// despawn ride exitVehicleTail there. A player who rides nothing
-	// no-ops there, like C++.
+	// ExitVehicle is Unit::ExitVehicle (UnitMethods.h): the
+	// Unit::ExitVehicle aura-strip leg (Unit.cpp:13165-13182) runs
+	// first — the ride aura leaves the base, whose unapply runs
+	// _ExitVehicle — and the session exitVehicle leg (vehicle.go)
+	// below is the aura-less-board fallback, so a passenger seated
+	// without a ride aura still exits. The _ExitVehicle body
+	// (Unit.cpp:13184-13266) — seat removal, control release, and the
+	// OnRemovePassenger vehicle event for creature bases, plus the
+	// tail (Unit.cpp:13251-13266): the temporarily-unsummoned pet
+	// resummon and the minion-base 1ms despawn ride exitVehicleTail
+	// there. A player who rides nothing no-ops there, like C++.
 	methods["ExitVehicle"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if s != nil && s.server != nil && s.player != nil && s.player.VehicleGUID != 0 {
+			s.server.removeVehicleControlAuraFromBase(s.player.Map, s.player.InstanceID, s.player.VehicleGUID, s.playerGUID)
+		}
 		s.exitVehicle(ctx)
 		return nil, nil
 	}

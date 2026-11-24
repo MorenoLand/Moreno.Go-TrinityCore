@@ -14157,6 +14157,11 @@ func (s *Server) checkEffectTargetCharmForMotion(spell wotlk.Spell, eff wotlk.Sp
 	if target == nil {
 		return true
 	}
+	// Spell::CheckEffectTarget (Spell.cpp:7403): a charm-family effect
+	// refuses a target whose own kit is a controllable vehicle.
+	if kit := s.getVehicleKit(target.Map, target.InstanceID, target.GUID); kit != nil && kit.IsControllable() {
+		return false
+	}
 	if target.UnitFlags&unitFlagMount != 0 {
 		return false
 	}

@@ -7318,6 +7318,13 @@ func (s *session) checkEffectTargetCharm(spell wotlk.Spell, eff wotlk.SpellEffec
 		return true
 	}
 	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		// Spell::CheckEffectTarget (Spell.cpp:7403): a charm-family
+		// effect refuses a target whose own kit is a controllable
+		// vehicle — the charm would fight the vehicle charm for the
+		// client's control.
+		if kit := s.server.getVehicleKit(ts.player.Map, ts.player.InstanceID, targetGUID); kit != nil && kit.IsControllable() {
+			return false
+		}
 		if ts.isPlayerMounted() {
 			return false
 		}
@@ -7334,6 +7341,11 @@ func (s *session) checkEffectTargetCharm(spell wotlk.Spell, eff wotlk.SpellEffec
 	tm := s.findCreatureMotion(targetGUID)
 	if tm == nil {
 		return true
+	}
+	// Spell::CheckEffectTarget (Spell.cpp:7403): a charm-family effect
+	// refuses a target whose own kit is a controllable vehicle.
+	if kit := s.server.getVehicleKit(tm.Map, tm.InstanceID, targetGUID); kit != nil && kit.IsControllable() {
+		return false
 	}
 	if tm.UnitFlags&unitFlagMount != 0 {
 		return false
