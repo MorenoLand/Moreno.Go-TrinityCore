@@ -3897,6 +3897,21 @@ func (s *session) applyControlVehicleSeatChange(ctx context.Context, baseGUID ui
 		return
 	}
 	s.player.VehicleSeat = assigned
+	// VehicleJoinEvent::Execute (Vehicle.cpp:865-869): the re-board is a
+	// new JoinEvent (Unit::ChangeSeat, Unit.cpp:13133-13170), so the
+	// transport re-stamps with the new seat's offsets — without this the
+	// merge arm leaves TransportSeat (and the offsets) on the old seat.
+	// The creature twin (applyCreatureControlVehicleSeatChange) already
+	// re-stamps; this is the same stamp as the enterVehicle board leg.
+	if _, newSeatInfo, newSeatAddon := kit.GetSeatForPassenger(s.playerGUID); newSeatInfo != nil {
+		s.player.TransportGUID = baseGUID
+		s.player.TransportX, s.player.TransportY, s.player.TransportZ = newSeatInfo.AttachmentOffsetX, newSeatInfo.AttachmentOffsetY, newSeatInfo.AttachmentOffsetZ
+		s.player.TransportO = 0
+		if newSeatAddon != nil {
+			s.player.TransportO = newSeatAddon.SeatOrientationOffset
+		}
+		s.player.TransportSeat = assigned
+	}
 	// Vehicle::RemovePassenger (Vehicle.cpp:517-518) and
 	// VehicleJoinEvent::Execute (Vehicle.cpp:871-876): the charm legs
 	// fire only on a creature base — a player kit never charms.

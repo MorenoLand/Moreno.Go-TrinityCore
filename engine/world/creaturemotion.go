@@ -2661,6 +2661,11 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID u
 	// vehicle kit's Reset() arms ApplyAllImmunities before the create
 	// events fire — same order here (Reset before instance-create/OnAdd).
 	if created {
+		// Creature::SearchFormation (Creature.cpp:340-351), called from
+		// Creature::AddToWorld (:295) before AIM_Initialize and the
+		// vehicle kit install: a (re)spawned creature with a DB spawn id
+		// re-joins its formation group; temp summons are skipped.
+		s.searchFormation(ctx, motion)
 		s.applyVehicleImmunities(motion)
 	}
 	// Eluna INSTANCE_EVENT_ON_CREATURE_CREATE (5) fires from

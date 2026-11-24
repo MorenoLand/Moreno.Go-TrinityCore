@@ -99,6 +99,95 @@ func (s *Server) addFormationRow(memberLow uint32, row formationRow) {
 	s.formationLeaders[row.leaderGUID] = append(s.formationLeaders[row.leaderGUID], memberLow)
 }
 
+// loadFormationRow restores one creature_formations row by member spawn id
+// (FormationMgr::LoadCreatureFormations, CreatureGroups.cpp:101-135, single-row
+// form): the DB row is the authority C++'s FormationMgr info map keeps for the
+// process lifetime — RemoveMember never touches it — so a boarded-out member
+// (strip 56) re-adds from the DB on respawn instead of staying formation-less
+// for the rest of the process. Stored verbatim like ensureFormationsLoaded,
+// with the same narrow-table fallback when point_1/point_2 are absent.
+func (s *Server) loadFormationRow(ctx context.Context, memberLow uint32) (formationRow, bool) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return formationRow{}, false
+	}
+	var leaderGUID, groupAI, point1, point2 uint64
+	var dist, angle float64
+	err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT leaderGUID, dist, angle, groupAI, point_1, point_2 FROM creature_formations WHERE memberGUID = ?", memberLow).Scan(&leaderGUID, &dist, &angle, &groupAI, &point1, &point2)
+	if err != nil {
+		err = s.WorldStore.DB.QueryRowContext(ctx, "SELECT leaderGUID, dist, angle, groupAI FROM creature_formations WHERE memberGUID = ?", memberLow).Scan(&leaderGUID, &dist, &angle, &groupAI)
+		if err != nil {
+			return formationRow{}, false
+		}
+	}
+	return formationRow{leaderGUID: uint32(leaderGUID), dist: float32(dist), angle: float32(angle), groupAI: uint32(groupAI), point1: uint32(point1), point2: uint32(point2)}, true
+}
+
+// searchFormation mirrors Creature::SearchFormation (Creature.cpp:340-351),
+// called from Creature::AddToWorld (:295): a creature with a DB spawn id
+// re-joins its formation group on (re)spawn. The join is
+// FormationMgr::AddCreatureToGroup (CreatureGroups.cpp:41-83): the row's
+// leader group gains the member, or a new group forms. Temp summons never
+// carry a spawn id (IsSummon gate, :341-342): the flag is stamped only after
+// motionFor returns (lua_creature_events.go:179), so the dynamic-low floor
+// is the operative guard here — summon lows start at 2000000
+// (totems.go nextDynamicCreatureLowGUID), below which DB spawn ids live
+// (creaturemotion.go:8772 states the same split). A roster listing already
+// present (dynamic-spawn dedup, CreatureGroups.cpp:52-64) is not duplicated,
+// and no per-motion state is set: the member only moves when the leader
+// pulls it (LeaderStartedMoving).
+func (s *Server) searchFormation(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || motion.IsTempSummon {
+		return
+	}
+	memberLow := uint32(motion.GUID & 0x00FFFFFF)
+	if memberLow == 0 || memberLow >= 2000000 {
+		return
+	}
+	s.ensureFormationsLoaded(ctx)
+	row, ok := s.formationRowFor(memberLow)
+	if !ok {
+		var loaded bool
+		row, loaded = s.loadFormationRow(ctx, memberLow)
+		if !loaded {
+			return
+		}
+	}
+	s.formationMu.Lock()
+	defer s.formationMu.Unlock()
+	if _, ok := s.formationRows[memberLow]; !ok {
+		s.formationRows[memberLow] = row
+	}
+	members := s.formationLeaders[row.leaderGUID]
+	for _, low := range members {
+		if low == memberLow {
+			return
+		}
+	}
+	s.formationLeaders[row.leaderGUID] = append(members, memberLow)
+}
+
+// isLiveFormationLeader reports whether the spawn low still belongs to a
+// formation as its leader: the info row exists, names this low as leader,
+// and the live roster still lists it. C++'s m_formation pointer plus
+// CreatureGroup::IsLeader (Creature.cpp:354-359, :361-369) in one test; a
+// leader boarded out of its group (strip 56 removeFormationMember) fails the
+// roster leg even though its cached info row survives (and U4 restores it on
+// respawn, when membership legitimately returns).
+func (s *Server) isLiveFormationLeader(leaderLow uint32) bool {
+	row, ok := s.formationRowFor(leaderLow)
+	if !ok || row.leaderGUID != leaderLow {
+		return false
+	}
+	s.formationMu.RLock()
+	defer s.formationMu.RUnlock()
+	for _, low := range s.formationLeaders[leaderLow] {
+		if low == leaderLow {
+			return true
+		}
+	}
+	return false
+}
+
 // removeFormationMember mirrors CreatureGroup::RemoveMember
 // (CreatureGroups.cpp:217-223), reached from Unit::_EnterVehicle
 // (Unit.cpp:13109-13115): a player boarding a creature-base vehicle
@@ -269,6 +358,16 @@ func (s *Server) memberEngagingTarget(ctx context.Context, motion *creatureMotio
 func (s *Server) canFormationLeaderStartMoving(ctx context.Context, motion *creatureMotion) bool {
 	s.ensureFormationsLoaded(ctx)
 	leaderLow := uint32(motion.GUID & 0x00FFFFFF)
+	// WaypointMovementGenerator::StartMove (WaypointMovementGenerator.cpp:273):
+	// the move-allowed gate is consulted only for a formation leader
+	// (owner->IsFormationLeader() && !owner->IsFormationLeaderMoveAllowed());
+	// a creature with no formation — or a leader boarded out of its group
+	// (strip 56 removeFormationMember clears m_formation) — moves freely.
+	// The stale roster still lists the other members, so without this guard
+	// a removed leader's waypoint leg stays blocked by ex-members.
+	if !s.isLiveFormationLeader(leaderLow) {
+		return true
+	}
 	s.formationMu.RLock()
 	memberLows := append([]uint32(nil), s.formationLeaders[leaderLow]...)
 	s.formationMu.RUnlock()
@@ -298,12 +397,23 @@ func (s *Server) canFormationLeaderStartMoving(ctx context.Context, motion *crea
 // (FollowAngle + pi) per the C++ comment.
 func (s *Server) formationLeaderStartedMoving(ctx context.Context, motion *creatureMotion, now time.Time) {
 	s.ensureFormationsLoaded(ctx)
+	// Creature::SignalFormationMovement (Creature.cpp:361-369): the pull
+	// fires only when the mover still belongs to a formation AND is its
+	// leader — the m_formation and IsLeader early returns. A leader
+	// boarded out of its group (strip 56 removeFormationMember) pulls
+	// nobody: the cached info row alone does not prove membership (C++'s
+	// FormationMgr info map is never mutated by RemoveMember), so the
+	// live roster must still list the leader low under its own leader id.
+	leaderLow := uint32(motion.GUID & 0x00FFFFFF)
+	if !s.isLiveFormationLeader(leaderLow) {
+		return
+	}
 	s.formationMu.RLock()
-	memberLows := append([]uint32(nil), s.formationLeaders[uint32(motion.GUID&0x00FFFFFF)]...)
+	memberLows := append([]uint32(nil), s.formationLeaders[leaderLow]...)
 	rows := make(map[uint32]formationRow, len(memberLows))
 	for _, low := range memberLows {
-		if row, ok := s.formationRows[low]; ok {
-			rows[low] = row
+		if r, ok := s.formationRows[low]; ok {
+			rows[low] = r
 		}
 	}
 	s.formationMu.RUnlock()
