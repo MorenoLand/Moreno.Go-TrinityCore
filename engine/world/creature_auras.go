@@ -1663,9 +1663,10 @@ func (s *Server) creatureAuraSpellHitSum(key creatureAuraKey) int32 {
 }
 
 // creatureHasAuraType reports whether the creature carries a live (unstopped)
-// aura whose stored AuraType matches, mirroring Unit::HasAuraType for the
-// byte-flag folds in the creature update builder (the C++ remove legs gate
-// on HasAuraType; a live fold over the same set is the equivalent check).
+// aura with an applied effect of the given type, mirroring Unit::HasAuraType
+// (m_modAuras holds every applied effect, not just the first). The per-effect
+// DBC scan is EffectMask-gated; the stored AuraType is the fallback when no
+// DBC spell is available.
 func (s *Server) creatureHasAuraType(key creatureAuraKey, auraType uint32) bool {
 	if s == nil || key.GUID == 0 {
 		return false
@@ -1675,6 +1676,19 @@ func (s *Server) creatureHasAuraType(key creatureAuraKey, auraType uint32) bool 
 	for _, aura := range s.activeCreatureAuras[key] {
 		if aura == nil || aura.Stopped {
 			continue
+		}
+		if s.Data != nil {
+			if spell, found, err := s.Data.Spell(aura.SpellID); err == nil && found {
+				for index, effect := range spell.Effects {
+					if aura.EffectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if effect.Aura == auraType {
+						return true
+					}
+				}
+				continue
+			}
 		}
 		if aura.AuraType == auraType {
 			return true

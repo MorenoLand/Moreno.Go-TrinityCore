@@ -14892,8 +14892,11 @@ func (s *Server) creatureCasterAurasMechanic(m *creatureMotion, spell wotlk.Spel
 
 // creatureHasAuraMechanic mirrors Unit::HasAuraWithMechanic (Unit.cpp)
 // for a creature caster: true when any of the creature's live auras
-// carries one of the mechanics in mask. Feeds the immune-shield arm of
-// CheckCasterAuras (Spell.cpp:6327-6329).
+// carries one of the mechanics in mask. The spell-level leg is checked
+// outright (Unit.cpp:4734-4735); only the per-effect leg is
+// HasEffect-gated (Unit.cpp:4736-4739), so a mechanic sitting on an
+// unapplied effect of the same spell does not match. Feeds the
+// immune-shield arm of CheckCasterAuras (Spell.cpp:6327-6329).
 func (s *Server) creatureHasAuraMechanic(m *creatureMotion, mask uint32) bool {
 	if s == nil || s.Data == nil || m == nil {
 		return false
@@ -14905,8 +14908,20 @@ func (s *Server) creatureHasAuraMechanic(m *creatureMotion, mask uint32) bool {
 		if aura == nil || aura.Stopped {
 			continue
 		}
-		if sp, found, err := s.Data.Spell(id); err == nil && found && spellMechanicMask(sp)&mask != 0 {
+		sp, found, err := s.Data.Spell(id)
+		if err != nil || !found {
+			continue
+		}
+		if sp.Mechanic != 0 && mask&(1<<sp.Mechanic) != 0 {
 			return true
+		}
+		for i, eff := range sp.Effects {
+			if i >= 8 || aura.EffectMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			if eff.Effect != 0 && eff.Mechanic != 0 && mask&(1<<eff.Mechanic) != 0 {
+				return true
+			}
 		}
 	}
 	return false

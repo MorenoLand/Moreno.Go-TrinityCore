@@ -3070,7 +3070,24 @@ func (s *session) hasAuraType(auraType uint32) bool {
 	}
 	s.castMu.Lock()
 	for _, aura := range s.activeAuras {
-		if aura != nil && aura.AuraType == auraType {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if s.server != nil && s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
+				for index, effect := range spell.Effects {
+					if aura.EffectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					if effect.Aura == auraType {
+						s.castMu.Unlock()
+						return true
+					}
+				}
+				continue
+			}
+		}
+		if aura.AuraType == auraType {
 			s.castMu.Unlock()
 			return true
 		}
