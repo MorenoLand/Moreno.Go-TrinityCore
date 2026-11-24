@@ -3341,8 +3341,9 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// mustBeDead no UNIT_STATE_DIED (Go: the feign-death flag twin).
 	// UNIT_STATE_UNATTACKABLE has no Go model, so that arm is vacuous here.
 	// NOT_SELECTABLE (0x02000000) is modeled live (vehicle.go:818 sets it on
-	// players; creaturemotion.go:4031 consults creature unitFlags), but this
-	// binding reads NON_ATTACKABLE only.
+	// players; creaturemotion.go:4031 consults creature unitFlags) and
+	// read here, the Unit::isTargetableForAttack twin
+	// (Unit.cpp:8504-8516).
 	methods["IsTargetableForAttack"] = func(_ context.Context, args []any) ([]any, error) {
 		mustBeDead := false
 		if len(args) > 0 {
@@ -3354,7 +3355,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if motion == nil || motion.Health == 0 {
 			return []any{false}, nil
 		}
-		if motion.UnitFlags&unitFlagNonAttackable != 0 {
+		if motion.UnitFlags&(unitFlagNonAttackable|unitFlagNotSelectable) != 0 {
 			return []any{false}, nil
 		}
 		if mustBeDead && motion.UnitFlags2&unitFlag2FeignDeath != 0 {

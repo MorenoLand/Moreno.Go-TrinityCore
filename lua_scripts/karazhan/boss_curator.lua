@@ -141,7 +141,8 @@ local function onAstralFlare(creature, guid)
     local drain = math.floor(maxMana / 10)
     if drain ~= 0 then
         creature:CastSpell(creature, SPELL_SUMMON_ASTRAL_FLARE[math.random(#SPELL_SUMMON_ASTRAL_FLARE)], true)
-        local newMana = creature:ModifyPower(0, -drain)
+        creature:ModifyPower(0, -drain)
+        local newMana = creature:GetPower(0)
         if math.floor(newMana * 100 / maxMana) < 10 then
             creature:Talk(SAY_EVOCATE)
             creature:InterruptNonMeleeSpells(false)

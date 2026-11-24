@@ -333,7 +333,7 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 		ts.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, health-1)
 		return
 	}
-	if damage > 0 && health > 0 && damage+1 >= health {
+	if damage > 0 && health > 0 && damage >= health {
 		ts.player.Health = 0
 		ts.sendPlayerUpdate()
 		ts.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, health)

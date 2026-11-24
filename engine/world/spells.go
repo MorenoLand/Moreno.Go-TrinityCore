@@ -26304,7 +26304,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// at 1 HP.
 			if duelDefeatOnDamage(playerSess, s.playerGUID, damage, victimHealth) {
 				playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
-			} else if damage > 0 && victimHealth > 0 && damage+1 >= victimHealth {
+			} else if damage > 0 && victimHealth > 0 && damage >= victimHealth {
 				playerSess.player.Health = 0
 				playerSess.sendPlayerUpdate()
 				// Unit::DealDamage (Unit.cpp:887-890): TOTAL_DAMAGE_RECEIVED

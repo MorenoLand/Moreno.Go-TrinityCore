@@ -1650,7 +1650,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				// leaves the loser at 1 HP.
 				if duelDefeatOnDamage(playerSess, s.playerGUID, damage, victimHealth) {
 					playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
-				} else if victimHealth > 0 && damage+1 >= victimHealth {
+				} else if victimHealth > 0 && damage >= victimHealth {
 					playerSess.player.Health = 0
 					playerSess.sendPlayerUpdate()
 					playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth)
@@ -2503,7 +2503,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				// leaves the loser at 1 HP.
 				if duelDefeatOnDamage(vicSess, s.playerGUID, damage, victimHealth) {
 					vicSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, victimHealth-1)
-				} else if victimHealth > 0 && damage+1 >= victimHealth {
+				} else if victimHealth > 0 && damage >= victimHealth {
 					// Arena killing blows are credited by the killPlayer
 					// tail below (creditArenaKillingBlow), not here: an
 					// inline credit would double-count now that melee,

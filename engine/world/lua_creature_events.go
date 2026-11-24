@@ -3847,9 +3847,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{maxPower}, nil
 	}
-	// ModifyPower is Unit::ModifyPower (Unit.cpp:7439): the signed delta is
-	// added to the current power, floored at 0, then SetPower clamps to the
-	// type's max. Returns the new power, matching the C++ int32 return.
+	// ModifyPower is Unit::ModifyPower (Unit.cpp:8577-8607): the signed delta
+	// is added to the current power, floored at 0, then SetPower clamps to
+	// the type's max. Returns the signed gain actually applied (negative
+	// on a drain), NOT the new power: the floor arm returns -curPower,
+	// the cap arm maxPower-curPower, the normal arm the delta.
 	methods["ModifyPower"] = func(_ context.Context, args []any) ([]any, error) {
 		powerType, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -3863,18 +3865,23 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, err
 		}
 		s.motionMu.Lock()
-		next := int64(motion.Powers[powerType]) + delta
+		curPower := int64(motion.Powers[powerType])
+		next := curPower + delta
+		var gain int64
 		if next < 0 {
 			next = 0
-		}
-		if next > int64(motion.MaxPowers[powerType]) {
+			gain = -curPower
+		} else if next > int64(motion.MaxPowers[powerType]) {
 			next = int64(motion.MaxPowers[powerType])
+			gain = next - curPower
+		} else {
+			gain = delta
 		}
 		motion.Powers[powerType] = uint32(next)
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldPower1 + int(powerType): uint32(next)})
-		return []any{uint32(next)}, nil
+		return []any{gain}, nil
 	}
 	// SetMaxPower is Unit::SetMaxPower (Unit.cpp): writes
 	// UNIT_FIELD_MAXPOWER1+type and broadcasts the update field. The current
