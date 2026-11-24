@@ -38658,6 +38658,20 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 			}
 		}
 	}
+	// Unit::_CreateAuraApplication ghost check (Unit.cpp:3447-3450): a dead
+	// target takes no aura unless the spell is death-persistent, outside
+	// player loading (ghost-mode applies at load are cleaned up after).
+	// This is the second dead gate after Unit::AddAura (Unit.cpp:12274):
+	// passive and CAN_TARGET_DEAD spells pass that gate but still stop
+	// here. A missing DBC row fails open — 27827 (Spirit of Redemption)
+	// and 8326 (Ghost) are applied to dead players through this funnel
+	// and neither row ships in the seed DBC, so a missing row must not
+	// newly block them.
+	if s != nil && s.player != nil && s.player.Health == 0 && !s.playerLoading && s.server != nil && s.server.Data != nil {
+		if _, found, _ := s.server.Data.Spell(spellID); found && !spellDeathPersistent(s.server.Data, spellID) {
+			return
+		}
+	}
 	// DynObjAura primary-first (dynamic_spells.go: dynobjPrimaryEffect),
 	// the serverApplyAuraToCreatureTarget twin: the record's single
 	// AuraType/amount follow the first periodic effect, not the
@@ -39091,6 +39105,22 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		}
 	}
 	s.castMu.Unlock()
+	// Unit::_ApplyAura (Unit.cpp:3505-3506): an aura flagged
+	// AURA_INTERRUPT_FLAG_NOT_SEATED sits its target down on apply
+	// (food/drink). A target already in a sit state stays put
+	// (Unit::IsSitState; the movement.go stand-state predicate). The
+	// SMSG_STANDSTATE_UPDATE send mirrors Unit::SetStandState
+	// (Unit.cpp:10564-10568).
+	if auraInterruptFlags&auraInterruptFlagNotSeated != 0 && s.player != nil {
+		st := s.player.StandState
+		if st != 1 && st != 2 && !(st >= 4 && st <= 6) {
+			s.player.StandState = 1 // UNIT_STAND_STATE_SIT
+			standBuf := protocol.NewBuffer(1)
+			standBuf.WriteU8(1)
+			_ = s.write(uint16(protocol.OpcodeSMSG_STANDSTATE_UPDATE), standBuf.Bytes(), true)
+			s.sendPlayerUpdate()
+		}
+	}
 	// No-stack purge on apply (Unit::_RemoveNoStackAurasDueToAura,
 	// Unit.cpp:3666): AURA_REMOVE_BY_DEFAULT, not BY_EXPIRE.
 	for _, purgeID := range purgeIDs {
@@ -41478,6 +41508,16 @@ const (
 	dispelDisease                                = 3   // DISPEL_DISEASE (SharedDefines.h:1407), matched by Unit::GetDiseasesByCaster
 )
 
+// isPassiveStackableWithRanks mirrors SpellInfo::IsPassiveStackableWithRanks
+// (SpellInfo.cpp:1143-1146): passive and with no SPELL_EFFECT_APPLY_AURA
+// effect. Only such spells skip the no-stack purge
+// (Unit::_RemoveNoStackAurasDueToAura, Unit.cpp:3643-3644); a passive spell
+// that does apply an aura still purges — Aura::CanStackWith
+// (SpellAuras.cpp:1897-1899) drops same-caster rank peers for passive auras.
+func isPassiveStackableWithRanks(spell wotlk.Spell) bool {
+	return spell.Attributes&spellAttributePassive != 0 && !spellHasEffect(spell, spellEffectApplyAura)
+}
+
 // rankChainNoStackPurge mirrors the rank-chain term of
 // Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3640-3671) via
 // Aura::CanStackWith (SpellAuras.cpp:1880-2007): a fresh aura application
@@ -41492,9 +41532,11 @@ const (
 // Honored in both directions: the trigger-spell mutual exclusion
 // (SpellAuras.cpp:1901-1906), the spell-family gate (SpellAuras.cpp:1934),
 // and the enchant-proc item edge (SpellAuras.cpp:1998-2000, degrade-open
-// without the CU attr). Passive new spells skip the purge (the
-// IsPassiveStackableWithRanks early-out shape, Unit.cpp:3643; Go holds no
-// passive aura instances). IsMultiSlotAura (SpellAuras.cpp:1148) and
+// without the CU attr). Passive spells with no APPLY_AURA effect skip the
+// purge (SpellInfo::IsPassiveStackableWithRanks, SpellInfo.cpp:1143-1146,
+// via Unit.cpp:3643); a passive aura spell still purges
+// (Aura::CanStackWith, SpellAuras.cpp:1897-1899). IsMultiSlotAura
+// (SpellAuras.cpp:1148) and
 // CONTROL_VEHICLE are vacuous in Go. Spell-group stack rules are handled by
 // the companion spellGroupNoStackPurge (rules EXCLUSIVE and
 // EXCLUSIVE_FROM_SAME_CASTER) and exclusiveHighestVerdict (rule
@@ -41504,7 +41546,7 @@ func (s *Server) rankChainNoStackPurge(newSpell wotlk.Spell, newCasterGUID, newI
 	if s == nil || s.Data == nil {
 		return nil
 	}
-	if newSpell.Attributes&spellAttributePassive != 0 {
+	if isPassiveStackableWithRanks(newSpell) {
 		return nil
 	}
 	newFirst := s.spellFirstRank(newSpell.ID)
@@ -41872,7 +41914,7 @@ func (s *Server) spellGroupNoStackPurge(newSpell wotlk.Spell, newCasterGUID uint
 	if s == nil || s.Data == nil {
 		return nil
 	}
-	if newSpell.Attributes&spellAttributePassive != 0 {
+	if isPassiveStackableWithRanks(newSpell) {
 		return nil
 	}
 	newFirst := s.spellFirstRank(newSpell.ID)
@@ -42236,15 +42278,16 @@ func isAuraExclusiveBySpecificPerCasterWith(spec1, spec2 uint8) bool {
 // AllowTrackBothResources is set (C++ CONFIG_ALLOW_TRACK_BOTH_RESOURCES,
 // worldserver.conf default false); otherwise the existing tracking aura is
 // purged. The trigger-spell mutual exclusion (SpellAuras.cpp:1901-1906) is
-// honored like the companion purge functions. Passive new spells skip the
-// purge (the IsPassiveStackableWithRanks early-out shape, Unit.cpp:3643; Go
-// holds no passive aura instances). Returns the auras to remove; the caller
-// removes them after unlocking.
+// honored like the companion purge functions. Passive spells with no
+// APPLY_AURA effect skip the purge (SpellInfo::IsPassiveStackableWithRanks,
+// SpellInfo.cpp:1143-1146, via Unit.cpp:3643); a passive aura spell still
+// purges (Aura::CanStackWith, SpellAuras.cpp:1897-1899). Returns the auras
+// to remove; the caller removes them after unlocking.
 func (s *Server) spellSpecificNoStackPurge(newSpell wotlk.Spell, newCasterGUID uint64, existing map[uint32]*activeAura) []rankPurgeTarget {
 	if s == nil || s.Data == nil {
 		return nil
 	}
-	if newSpell.Attributes&spellAttributePassive != 0 {
+	if isPassiveStackableWithRanks(newSpell) {
 		return nil
 	}
 	var purge []rankPurgeTarget
@@ -42370,7 +42413,11 @@ func (s *Server) exclusiveHighestVerdict(newSpell wotlk.Spell, eff wotlk.SpellEf
 	if s == nil || s.Data == nil {
 		return out
 	}
-	if newSpell.Attributes&spellAttributePassive != 0 {
+	// Unit::_RemoveNoStackAurasDueToAura (Unit.cpp:3643-3644): only a
+	// passive spell with no APPLY_AURA effect skips the verdict on the
+	// direct-cast leg; the dynobj leg (SpellAuras.cpp:696) carries no
+	// passive gate, so it always runs.
+	if !dynobj && isPassiveStackableWithRanks(newSpell) {
 		return out
 	}
 	newFirst := s.spellFirstRank(newSpell.ID)
@@ -42874,6 +42921,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// ATTR2_CAN_TARGET_DEAD.
 		if targetSess.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 			return
+		}
+		// Unit::_CreateAuraApplication ghost check (Unit.cpp:3447-3450):
+		// the AddAura gate above lets passive and CAN_TARGET_DEAD spells
+		// through on a dead target, but the application still stops here
+		// unless the spell is death-persistent or the target is loading.
+		// A missing DBC row fails open, like the self-cast funnel.
+		if targetSess.player.Health == 0 && !targetSess.playerLoading && s.server != nil && s.server.Data != nil {
+			if _, found, _ := s.server.Data.Spell(spell.ID); found && !spellDeathPersistent(s.server.Data, spell.ID) {
+				return
+			}
 		}
 		if targetSess.isImmuneToSpell(spell, s) {
 			return
@@ -43504,6 +43561,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 		purgeIDs = append(purgeIDs, highest.purge...)
 		targetSess.castMu.Unlock()
+		// Unit::_ApplyAura (Unit.cpp:3505-3506): a NOT_SEATED aura sits its
+		// target down on apply — the target-session twin of the self-cast
+		// funnel's leg.
+		if spell.AuraInterruptFlags&auraInterruptFlagNotSeated != 0 && targetSess.player != nil {
+			st := targetSess.player.StandState
+			if st != 1 && st != 2 && !(st >= 4 && st <= 6) {
+				targetSess.player.StandState = 1 // UNIT_STAND_STATE_SIT
+				standBuf := protocol.NewBuffer(1)
+				standBuf.WriteU8(1)
+				_ = targetSess.write(uint16(protocol.OpcodeSMSG_STANDSTATE_UPDATE), standBuf.Bytes(), true)
+				targetSess.sendPlayerUpdate()
+			}
+		}
 		// Aura::_ApplyForTarget (SpellAuras.cpp:579-584): a player caster
 		// whose aura spell starts its cooldown on event parks an infinity
 		// (onHold) cooldown entry that blocks recast while the aura is
