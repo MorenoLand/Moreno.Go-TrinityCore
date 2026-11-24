@@ -1304,6 +1304,15 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 		s.applyAuraWithDuration(spiritOfRedemptionSpellID, spiritOfRedemptionDurationMs)
 	} else {
 		s.clearDeathAuras()
+		// Unit::setDeathState (Unit.cpp:8921) runs RemoveAllAurasOnDeath,
+		// which strips the SPELL_AURA_CONTROL_VEHICLE auras the
+		// passengers cast on the dying base (Vehicle.cpp:256-257) and
+		// ejects them (SpellAuraEffects.cpp:2987-3008) — but Go models no
+		// ride aura for creature passengers and a player passenger may
+		// board aura-less through Lua, so the dying base's kit is swept
+		// explicitly. The strip above already exited aura-carrying
+		// player passengers; the sweep is a no-op for them.
+		s.server.exitDeadPlayerBasePassengers(ctx, s.player.Map, s.player.InstanceID, s.playerGUID)
 		// Unit::setDeathState(JUST_DIED) (Unit.cpp): SetHealth(0) then
 		// SetPower(GetPowerType(), 0) — the current power type is zeroed
 		// with health; health is already 0 (killPlayer early-returns above
@@ -1463,6 +1472,10 @@ func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
 	// (Unit::RemoveAllAurasOnDeath), and the current power type zeroes with
 	// health (Unit::setDeathState, Unit.cpp).
 	s.clearDeathAuras()
+	// The dying player base's kit sweep, deferred with the rest of the
+	// cascade: the passengers stay seated through the spirit form and
+	// eject only at the real death, like the immediate-death arm above.
+	s.server.exitDeadPlayerBasePassengers(ctx, s.player.Map, s.player.InstanceID, s.playerGUID)
 	if pt := playerPowerType(s.player); int(pt) < len(s.player.Powers) {
 		s.player.Powers[pt] = 0
 	}

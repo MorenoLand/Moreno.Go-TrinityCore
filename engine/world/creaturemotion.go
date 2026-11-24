@@ -2320,6 +2320,9 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 	x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
 	powerType, maxHealth, level := motion.PowerType, motion.MaxHealth, motion.Level
 	victim := motion.TargetGUID
+	// Captured before the non-alive arm below zeroes it: the dying
+	// unit's own seat on its base, released by the ExitVehicle leg.
+	passengerBaseGUID := motion.VehicleGUID
 	var interrupted []interruptedCreatureCast
 	values := map[int]uint32{}
 	stopMotion := false
@@ -2402,6 +2405,27 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 		motion.DeathState = creatureDeathAlive
 	}
 	s.motionMu.Unlock()
+	// Unit::setDeathState (Unit.cpp:8915-8921): ExitVehicle runs before
+	// RemoveAllAurasOnDeath — the dying unit leaves its own base's kit
+	// (Vehicle::RemovePassenger, Vehicle.cpp:498-543) and the aura strip
+	// then ejects the dying base's passengers, whose SPELL_AURA_CONTROL_
+	// VEHICLE auras are stripped (Unit.cpp:4353-4372) and whose remove
+	// leg runs caster->_ExitVehicle() (SpellAuraEffects.cpp:2987-3008).
+	// The kill funnel reaches the same eject through
+	// clearCreatureAurasOnDeath, but the scripted paths (Lua
+	// setDeathState, the accessory death arm) call this twin directly
+	// with no aura strip, so a passenger riding a dying base kept a
+	// stale seat and a dying passenger kept its own. The sweep is a
+	// no-op on a live or respawned unit: C++ runs neither leg for
+	// ALIVE or JUST_RESPAWNED.
+	if state != creatureDeathAlive && state != creatureDeathJustRespawned {
+		if passengerBaseGUID != 0 {
+			s.removeCreatureVehicleSeat(ctx, mapID, instanceID, guid, passengerBaseGUID)
+		}
+		if kit := s.getVehicleKit(mapID, instanceID, guid); kit != nil {
+			s.exitCreatureVehiclePassengers(mapID, instanceID, kit, state == creatureDeathJustDied)
+		}
+	}
 	// SmartAI::JustDied (SmartAI.cpp:570-575) runs
 	// ProcessEventsFor(SMART_EVENT_DEATH, killer); the SmartAI engine
 	// (smart_ai.go) dispatches it here, after the motion lock. The killer

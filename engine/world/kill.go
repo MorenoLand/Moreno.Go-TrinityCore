@@ -1914,6 +1914,16 @@ func (s *Server) clearCreatureDeathState(dead *creatureMotion) {
 	if s == nil || dead == nil {
 		return
 	}
+	// Unit::setDeathState (Unit.cpp:8915): ExitVehicle — a dying
+	// passenger leaves its base's kit (Vehicle::RemovePassenger,
+	// Vehicle.cpp:498-543). The funnel's aura strip only ejects the
+	// dying base's passengers (clearCreatureAurasOnDeath); a creature
+	// passenger has no ride aura in Go, so without this leg its seat
+	// stayed listed on the base after death. All callers run after the
+	// motion lock is released, matching the helper's lock order.
+	if dead.VehicleGUID != 0 {
+		s.removeCreatureVehicleSeat(context.Background(), dead.Map, dead.InstanceID, dead.GUID, dead.VehicleGUID)
+	}
 	s.clearCreatureVisualTarget(dead)
 	s.clearComboPointHolders(dead.GUID)
 	// Creature::setDeathState(JUST_DIED) (Creature.cpp:2100):
