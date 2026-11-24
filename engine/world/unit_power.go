@@ -42,12 +42,15 @@ func creatureSetHealthGuard(deathState uint8, val uint32) uint32 {
 
 // playerSetHealthGuard is the death-state arm of Unit::SetHealth
 // (Unit.cpp:9556-9562) for players: a DEAD player (ghost) is forced to
-// 1, a JUST_DIED/CORPSE player (health 0, no ghost flag) to 0.
+// 1, a JUST_DIED/CORPSE player (health 0, no ghost flag) to 0. The Go
+// model carries no player death-state field, so the ghost flag is the
+// DEAD discriminator: ghosts carry Health=1 (death.go:1930), so a
+// health==0 check alone would miss the DEAD leg entirely.
 func playerSetHealthGuard(health uint32, ghost bool, val uint32) uint32 {
+	if ghost {
+		return 1
+	}
 	if health == 0 {
-		if ghost {
-			return 1
-		}
 		return 0
 	}
 	return val

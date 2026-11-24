@@ -2119,7 +2119,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// RUNIC 1000, RUNE 0; MANA
 	// keeps its banked spawn mana, Creature::UpdateMaxPower's
 	// modifier legs unmodeled), and the current-power legs (RAGE
-	// resets to 0, FOCUS fills to its max of 0, others keep their
+	// resets to 0, FOCUS fills to max, others keep their
 	// own stored value) all mirror the handler twin.
 	methods["SetPowerType"] = func(_ context.Context, args []any) ([]any, error) {
 		powerType, err := luaUint32Arg(args, 0)
