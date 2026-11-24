@@ -838,9 +838,13 @@ func (s *session) debugBroadcastPlayerMovement(target *session, opcode protocol.
 // (SetWalk/SetSwim/SetCanFly/SetHover/SetWaterWalk/SetDisableGravity plus
 // the new SetFeatherFall twin), the root leg latches ScriptRooted, a
 // cleared spline-enabled bit stops the motion, and the unhandled bits of
-// the final word land in MoveFlagsRaw. Gravity/hover flips fold the
-// animation tier via creatureFoldAnimationTier (Creature.cpp:3030-3037
-// /:3110-3117; cs_debug.cpp:1271/:1276 call the setters). The heartbeat leg
+// the final word land in MoveFlagsRaw. The hover flip runs the
+// hover-height Z fold via creatureHoverHeightFold, and FALLING follows
+// the final word (the setters' clear plus the wholesale overwrite both
+// land there, Unit.cpp:13720/:13748; cs_debug.cpp:1281-1286).
+// Gravity/hover flips fold the animation tier via
+// creatureFoldAnimationTier (Creature.cpp:3030-3037 /:3110-3117;
+// cs_debug.cpp:1271/:1276 call the setters). The heartbeat leg
 // (SendMovementFlagUpdate) has no creature carrier in Go — handled
 // changes already went out on the spline packets, unhandled and extra
 // bits are stored but not broadcast.
@@ -891,14 +895,27 @@ func (s *session) debugSetCreatureMoveflags(motion *creatureMotion, moveFlags ui
 		protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER, protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_HOVER,
 		func(v bool) { motion.Hovering = v })
 	tierFold := motion.GravityDisabled != gravityBefore || motion.Hovering != hoverBefore
+	// FALLING is the one unhandled bit with a live bool: the display
+	// leg ORs motion.Falling back in, so the final word drives it —
+	// the gravity/fly enable clear and the wholesale overwrite both
+	// land here (Unit.cpp:13720/:13748; cs_debug.cpp:1281-1286).
+	motion.Falling = newFlags&debugMoveFlagFalling != 0
 	motion.MoveFlagsRaw = newFlags &^ debugMoveFlagsWithHandlers
 	if moveFlagsExtra != nil {
 		motion.MoveFlagsExtra = *moveFlagsExtra
 	}
 	mapID, instanceID, x, y, z, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID
 	phase := motion.PhaseMask
+	hoverEnable := newFlags&debugMoveFlagHover != 0
+	hoverChanged := hoverBefore != hoverEnable
+	hoverHeight, hoverAlive, hoverO := motion.HoverHeight, motion.Health > 0, motion.Orientation
 	stopSpline := hadSpline && newFlags&debugMoveFlagSplineEnabled == 0
 	s.server.motionMu.Unlock()
+	if hoverChanged {
+		// C++ folds the hover height inside SetHover (Unit.cpp:13779),
+		// ahead of the tier fold and the spline packet below.
+		s.server.creatureHoverHeightFold(motion, hoverEnable, mapID, instanceID, x, y, z, hoverO, guid, hoverHeight, hoverAlive)
+	}
 	if tierFold {
 		// C++ folds the tier inside each setter call (cs_debug.cpp:1271
 		// /:1276), ahead of the spline packets below.
@@ -916,11 +933,14 @@ func (s *session) debugSetCreatureMoveflags(motion *creatureMotion, moveFlags ui
 // status-opcode flags send their SMSG_MOVE_* packet to the player plus
 // the MSG_MOVE_* broadcast (Player::Set* overrides, Player.cpp:26840-
 // 26925) on change, walking and swimming flip the stored flags with no
-// self packet (Unit::SetWalk/SetSwim send none), root sends
-// SMSG_FORCE_MOVE_ROOT, and the final flag word plus extra flags are
-// banked on the last movement info. The heartbeat leg
-// (SendMovementFlagUpdate) goes out when extra flags were passed or any
-// unhandled bit changed.
+// self packet (Unit::SetWalk/SetSwim send none), root latches s.rooted
+// via setRooted (SMSG_FORCE_MOVE_ROOT), the hover and water-walk flips
+// latch the script slots (playerState.Hovering/WaterWalking, so the
+// sanitize gate keeps the flag on the next client packet) with the
+// hover-height Z fold via playerHoverHeightFold, and the final flag
+// word plus extra flags are banked on the last movement info. The
+// heartbeat leg (SendMovementFlagUpdate) goes out when extra flags were
+// passed or any unhandled bit changed.
 func (s *session) debugSetPlayerMoveflags(target *session, moveFlags uint32, moveFlagsExtra *uint32) {
 	current, currentExtra := s.debugPlayerMovementFlags(target)
 	unhandled := ((moveFlags ^ current) &^ debugMoveFlagsWithHandlers) != 0
@@ -930,7 +950,11 @@ func (s *session) debugSetPlayerMoveflags(target *session, moveFlags uint32, mov
 	}
 	if newFlags&debugMoveFlagRoot != 0 {
 		if current&debugMoveFlagRoot == 0 {
-			target.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
+			// SetControlled(true, UNIT_STATE_ROOT) latches the root
+			// state (cs_debug.cpp:1289); setRooted sends the same
+			// packet and latches s.rooted, the UNIT_STATE_ROOT
+			// mirror the movement-info builder and spell gates read.
+			target.setRooted(true)
 		}
 		newFlags &^= debugMoveFlagMaskMoving
 	}
@@ -958,6 +982,9 @@ func (s *session) debugSetPlayerMoveflags(target *session, moveFlags uint32, mov
 		statusChanged = true
 	}
 	if current&debugMoveFlagWaterWalking != newFlags&debugMoveFlagWaterWalking {
+		if target.player != nil {
+			target.player.WaterWalking = newFlags&debugMoveFlagWaterWalking != 0
+		}
 		if newFlags&debugMoveFlagWaterWalking != 0 {
 			target.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
 		} else {
@@ -976,6 +1003,13 @@ func (s *session) debugSetPlayerMoveflags(target *session, moveFlags uint32, mov
 		statusChanged = true
 	}
 	if current&debugMoveFlagHover != newFlags&debugMoveFlagHover {
+		if target.player != nil {
+			target.player.Hovering = newFlags&debugMoveFlagHover != 0
+		}
+		// The Z fold runs ahead of the packets below: the broadcast
+		// banks the folded Z into the movement info (Unit::SetHover,
+		// Unit.cpp:13779-13803; Player.cpp:26874-26891).
+		target.playerHoverHeightFold(newFlags&debugMoveFlagHover != 0)
 		if newFlags&debugMoveFlagHover != 0 {
 			target.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_SET_HOVER))
 		} else {

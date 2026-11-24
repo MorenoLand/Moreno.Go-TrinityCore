@@ -739,12 +739,20 @@ func (s *session) sendRuntimeFlightState() {
 	packet := protocol.NewBuffer(packedGUIDSize(s.playerGUID) + 4)
 	packet.WritePackedGUID(s.playerGUID)
 	packet.WriteU32(0)
+	// Player::SetCanFly (Player.cpp:26852-26872) sends the
+	// SET/UNSET_CAN_FLY packet to self on every call, but the
+	// MSG_MOVE_UPDATE_CAN_FLY broadcast to the set only when
+	// Unit::SetCanFly actually flips the flag (Unit.cpp:13740-13753).
 	if canFly {
 		_ = s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), packet.Bytes(), true)
-		s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0x01000000)
+		if canFly != wasFlying {
+			s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0x01000000)
+		}
 	} else {
 		_ = s.write(uint16(protocol.OpcodeSMSG_MOVE_UNSET_CAN_FLY), packet.Bytes(), true)
-		s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0)
+		if canFly != wasFlying {
+			s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0)
+		}
 		// SpellAuraEffects.cpp:2636-2645, :3040-3047 (fly-aura remove
 		// legs): SetCanFly(false) starts a fall unless gravity is
 		// disabled — the true→false transition only, not every

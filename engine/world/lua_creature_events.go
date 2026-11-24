@@ -4302,15 +4302,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// _ExitVehicle twin) for creatures: with an explicit position it
 	// unseats the passenger at those coordinates (the Kologarn
 	// stone-grip leg passes the scripted exit position); with no
-	// arguments it unseats at the passenger's current position — the
-	// base-relocated position, the C++ default (base position with the
-	// passenger's orientation). The kit removal rides
-	// luaVehicleRemovePassenger (ev6 on a creature base, the
-	// Vehicle::RemovePassenger twin); the position write rides the
-	// Teleport broadcast above, so nearby clients see the exit at
-	// once. RemovePendingEventsForPassenger has no Go model (vehicle
-	// events are synchronous). A creature that is not seated is a
-	// no-op, matching C++'s early return on a missing vehicle.
+	// arguments it unseats at the vehicle BASE position with the
+	// passenger's orientation, then the seat addon's Offset/Dest
+	// transform (Unit.cpp:13229-13234). The sScriptMgr->
+	// ModifyVehiclePassengerExitPos hook has no Go model. The kit
+	// removal rides luaVehicleRemovePassenger (ev6 on a creature
+	// base, the Vehicle::RemovePassenger twin); the position write
+	// rides the Teleport broadcast above, so nearby clients see the
+	// exit at once. RemovePendingEventsForPassenger has no Go model
+	// (vehicle events are synchronous). A creature that is not seated
+	// is a no-op, matching C++'s early return on a missing vehicle.
 	methods["ExitVehicle"] = func(ctx context.Context, args []any) ([]any, error) {
 		if motion == nil || motion.VehicleGUID == 0 {
 			return nil, nil
@@ -4358,6 +4359,25 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
 		phase := m.PhaseMask
 		s.motionMu.Unlock()
+		if len(args) == 0 {
+			// Unit::_ExitVehicle (Unit.cpp:13215-13234): the no-explicit-
+			// position exit is the vehicle BASE position with the
+			// passenger's orientation, then the seat addon's Offset/Dest
+			// transform. The addon is captured BEFORE the removal below
+			// (Unit.cpp:13193): after it the seat is empty and the lookup
+			// finds nothing. A base that does not resolve on the
+			// passenger's map/instance keeps the passenger's own position,
+			// which the passenger sync keeps at the base while seated.
+			if base := s.findCreatureMotion(mapID, instanceID, baseGUID); base != nil {
+				s.motionMu.Lock()
+				bx, by, bz := base.X, base.Y, base.Z
+				s.motionMu.Unlock()
+				x, y, z = bx, by, bz
+			} else if baseSess := s.findSessionByGUID(baseGUID); baseSess != nil && baseSess.player != nil {
+				x, y, z = baseSess.player.X, baseSess.player.Y, baseSess.player.Z
+			}
+			x, y, z, o = applyVehicleSeatExitAddon(x, y, z, o, s.vehicleSeatAddonForPassenger(baseGUID, guid))
+		}
 		s.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s, mapID: mapID, instanceID: instanceID, baseGUID: baseGUID}, guid)
 		s.motionMu.Lock()
 		m2, m2ok := s.motionMapLocked(mapID, instanceID)[guid]
@@ -4717,18 +4737,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// MOVEMENTFLAG_HOVER with the C++ no-op-on-unchanged early-out, then
 	// broadcasts SMSG_SPLINE_MOVE_SET_HOVER/UNSET_HOVER (packed GUID only,
 	// Creature.cpp:3121-3126). The hover-height Z fold (Unit::SetHover,
-	// Unit.cpp:13789-13803) rides along: on enable the Z rises by
-	// UNIT_FIELD_HOVERHEIGHT when it sits less than that height above the
-	// floor; on disable it drops by the same height, floored at the floor,
-	// then clamped through the UpdateAllowedPositionZ twin. Both legs are
-	// server-side only (Unit::UpdateHeight, Unit.cpp:13442-13447, does not
-	// broadcast to client), so the spline hover packet above is the whole
-	// movement broadcast — no MSG_MOVE_TELEPORT goes out. The
-	// animation-tier fold (Creature.cpp:3110-3117) rides along via
-	// creatureFoldAnimationTier (creatures.go). DELTAS: the disable leg's
-	// !isDying() reads motion.Health > 0 (the per-tick hover leg's alive
-	// gate); Go models no JUST_DIED state, so a corpse skips the drop
-	// where C++ would still drop it once out of JUST_DIED.
+	// Unit.cpp:13789-13803) rides along via creatureHoverHeightFold
+	// (creatures.go). The animation-tier fold (Creature.cpp:3110-3117) rides
+	// along via creatureFoldAnimationTier (creatures.go).
 	methods["SetHover"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("SetHover requires a bool, got no args")
@@ -4748,53 +4759,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		hoverHeight := motion.HoverHeight
 		alive := motion.Health > 0
 		s.motionMu.Unlock()
-		if hoverHeight != 0 {
-			if enable {
-				// Unit::SetHover enable leg (Unit.cpp:13789-13792): no
-				// need to check height on ascent — raise only when
-				// the current Z sits less than hoverHeight above the
-				// floor (the GetFloorZ twin: mapStaticFloorZ first,
-				// mapHeight fallback, the strip-33 per-tick leg's
-				// pattern). A failed floor lookup skips the raise,
-				// matching C++ where an INVALID floor leaves Z - floorZ
-				// above the height.
-				floorZ, ok := s.mapStaticFloorZ(mapID, x, y, z)
-				if !ok {
-					floorZ, ok = s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
-				}
-				if ok && z-floorZ < hoverHeight {
-					newZ := z + hoverHeight
-					s.motionMu.Lock()
-					motion.Z = newZ
-					s.motionMu.Unlock()
-					// Unit::UpdateHeight relocates vehicle passengers
-					// (Unit.cpp:13442-13447); no kit is a no-op.
-					s.relocatePassengers(mapID, instanceID, guid, x, y, newZ, o)
-				}
-			} else if alive {
-				// Unit::SetHover disable leg (Unit.cpp:13795-13802):
-				// drop by hoverHeight, floored at the floor, then the
-				// UpdateAllowedPositionZ twin — which reads the
-				// already cleared HOVER flag, so its hover offset is 0,
-				// as in C++ (flag cleared at :13795, clamp at :13800).
-				// A failed floor lookup leaves newZ at Z - hoverHeight
-				// and the clamp no-ops, matching C++ with an INVALID
-				// floor.
-				newZ := z - hoverHeight
-				floorZ, ok := s.mapStaticFloorZ(mapID, x, y, z)
-				if !ok {
-					floorZ, ok = s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
-				}
-				if ok && floorZ > newZ {
-					newZ = floorZ
-				}
-				newZ, _ = s.updateAllowedPositionZForMotion(motion, x, y, newZ)
-				s.motionMu.Lock()
-				motion.Z = newZ
-				s.motionMu.Unlock()
-				s.relocatePassengers(mapID, instanceID, guid, x, y, newZ, o)
-			}
-		}
+		s.creatureHoverHeightFold(motion, enable, mapID, instanceID, x, y, z, o, guid, hoverHeight, alive)
 		// Creature::SetHover folds the animation tier before the
 		// packet (Creature.cpp:3110-3117, then :3121-3126).
 		s.creatureFoldAnimationTier(motion)

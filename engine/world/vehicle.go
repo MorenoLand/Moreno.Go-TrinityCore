@@ -209,6 +209,27 @@ func (v *VehicleKit) GetSeatAddonForSeatOfPassenger(passengerGUID uint64) *Vehic
 	return nil
 }
 
+// vehicleSeatAddonForPassenger returns the seat addon for a passenger seated on
+// the given vehicle base, across every kit registered under the base GUID. A
+// passenger seated in a seat with no addon row reads nil, the ExitParamNone
+// equivalent. The caller captures this BEFORE RemovePassenger: after removal the
+// seat is empty and the lookup finds nothing.
+// Reference: Unit::_ExitVehicle (Unit.cpp:13193) + Vehicle::GetSeatAddonForSeatOfPassenger (Vehicle.cpp:360-367).
+func (s *Server) vehicleSeatAddonForPassenger(vehicleGUID, passengerGUID uint64) *VehicleSeatAddon {
+	if s == nil || vehicleGUID == 0 || passengerGUID == 0 {
+		return nil
+	}
+	for _, loc := range s.findVehicleKits(vehicleGUID) {
+		if loc.kit == nil {
+			continue
+		}
+		if _, seatInfo, addon := loc.kit.GetSeatForPassenger(passengerGUID); seatInfo != nil {
+			return addon
+		}
+	}
+	return nil
+}
+
 // GetAvailableSeatCount returns the number of vacant seats usable by players.
 // Reference: Vehicle::GetAvailableSeatCount (Vehicle.cpp:689-698).
 func (v *VehicleKit) GetAvailableSeatCount() uint8 {
@@ -2381,6 +2402,30 @@ func (s *session) releaseVehicleStateAtLogout(ctx context.Context) {
 	}
 }
 
+// applyVehicleSeatExitAddon applies a seat addon's exit parameters to an exit
+// position whose orientation is the passenger's: Offset rotates the addon XYZO
+// by that orientation (Position::RelocateOffset, Position.cpp:36-42), Dest
+// replaces the position outright, None leaves it alone.
+// Reference: Unit::_ExitVehicle (Unit.cpp:13229-13234).
+func applyVehicleSeatExitAddon(x, y, z, o float32, addon *VehicleSeatAddon) (float32, float32, float32, float32) {
+	if addon == nil {
+		return x, y, z, o
+	}
+	switch addon.ExitParameter {
+	case wotlk.VehicleExitParamOffset:
+		// Position::RelocateOffset (Position.cpp:36-42): sin(O+PI) is -sin(O).
+		cosO := float32(math.Cos(float64(o)))
+		sinO := float32(math.Sin(float64(o)))
+		x += addon.ExitParamX*cosO - addon.ExitParamY*sinO
+		y += addon.ExitParamY*cosO + addon.ExitParamX*sinO
+		z += addon.ExitParamZ
+		o = normalizeOrientation(o + addon.ExitParamO)
+	case wotlk.VehicleExitParamDest:
+		x, y, z, o = addon.ExitParamX, addon.ExitParamY, addon.ExitParamZ, addon.ExitParamO
+	}
+	return x, y, z, o
+}
+
 // applyVehicleExitPosition resolves the passenger's exit coordinates.
 // Reference: Unit::_ExitVehicle (Unit.cpp:13215-13234).
 func (s *session) applyVehicleExitPosition(vehicleGUID uint64, addon *VehicleSeatAddon) {
@@ -2394,20 +2439,7 @@ func (s *session) applyVehicleExitPosition(vehicleGUID uint64, addon *VehicleSea
 		}
 	}
 	o := s.player.Orientation
-	if addon != nil {
-		switch addon.ExitParameter {
-		case wotlk.VehicleExitParamOffset:
-			// Position::RelocateOffset (Position.cpp:36-42).
-			cosO := float32(math.Cos(float64(o)))
-			sinO := float32(math.Sin(float64(o)))
-			baseX += addon.ExitParamX*cosO - addon.ExitParamY*sinO
-			baseY += addon.ExitParamY*cosO + addon.ExitParamX*sinO
-			baseZ += addon.ExitParamZ
-			o = normalizeOrientation(o + addon.ExitParamO)
-		case wotlk.VehicleExitParamDest:
-			baseX, baseY, baseZ, o = addon.ExitParamX, addon.ExitParamY, addon.ExitParamZ, addon.ExitParamO
-		}
-	}
+	baseX, baseY, baseZ, o = applyVehicleSeatExitAddon(baseX, baseY, baseZ, o, addon)
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = baseX, baseY, baseZ, o
 }
 

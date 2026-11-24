@@ -1520,6 +1520,69 @@ func (s *Server) creatureFoldAnimationTier(motion *creatureMotion) {
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldBytes1: full})
 }
 
+// creatureHoverHeightFold applies the Unit::SetHover hover-height Z fold
+// (Unit.cpp:13789-13803) for a creature whose HOVER flag already flipped:
+// on enable the Z rises by hoverHeight when it sits less than that height
+// above the floor; on disable it drops by the same height, floored at the
+// floor, then clamped through the UpdateAllowedPositionZ twin. The
+// coordinates are the flip-time snapshot; the floor lookups run without
+// motionMu and the Z write retakes it, the bridge's lock pattern. The
+// disable leg's !isDying() reads alive (motion.Health > 0, the per-tick
+// hover leg's alive gate); Go models no JUST_DIED state, so a corpse
+// skips the drop where C++ would still drop it once out of JUST_DIED.
+// Both legs are server-side only (Unit::UpdateHeight, Unit.cpp:13442-13447,
+// does not broadcast to client), so the spline hover packet is the whole
+// movement broadcast — no MSG_MOVE_TELEPORT goes out. Callers fold the
+// animation tier after the fold, ahead of the spline packet.
+func (s *Server) creatureHoverHeightFold(motion *creatureMotion, enable bool, mapID, instanceID uint32, x, y, z, o float32, guid uint64, hoverHeight float32, alive bool) {
+	if hoverHeight == 0 {
+		return
+	}
+	if enable {
+		// Unit::SetHover enable leg (Unit.cpp:13789-13792): no need to
+		// check height on ascent — raise only when the current Z sits
+		// less than hoverHeight above the floor (the GetFloorZ twin:
+		// mapStaticFloorZ first, mapHeight fallback, the strip-33
+		// per-tick leg's pattern). A failed floor lookup skips the
+		// raise, matching C++ where an INVALID floor leaves Z - floorZ
+		// above the height.
+		floorZ, ok := s.mapStaticFloorZ(mapID, x, y, z)
+		if !ok {
+			floorZ, ok = s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+		}
+		if ok && z-floorZ < hoverHeight {
+			newZ := z + hoverHeight
+			s.motionMu.Lock()
+			motion.Z = newZ
+			s.motionMu.Unlock()
+			// Unit::UpdateHeight relocates vehicle passengers
+			// (Unit.cpp:13442-13447); no kit is a no-op.
+			s.relocatePassengers(mapID, instanceID, guid, x, y, newZ, o)
+		}
+	} else if alive {
+		// Unit::SetHover disable leg (Unit.cpp:13795-13802): drop by
+		// hoverHeight, floored at the floor, then the
+		// UpdateAllowedPositionZ twin — which reads the already
+		// cleared HOVER flag, so its hover offset is 0, as in C++
+		// (flag cleared at :13795, clamp at :13800). A failed floor
+		// lookup leaves newZ at Z - hoverHeight and the clamp
+		// no-ops, matching C++ with an INVALID floor.
+		newZ := z - hoverHeight
+		floorZ, ok := s.mapStaticFloorZ(mapID, x, y, z)
+		if !ok {
+			floorZ, ok = s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+		}
+		if ok && floorZ > newZ {
+			newZ = floorZ
+		}
+		newZ, _ = s.updateAllowedPositionZForMotion(motion, x, y, newZ)
+		s.motionMu.Lock()
+		motion.Z = newZ
+		s.motionMu.Unlock()
+		s.relocatePassengers(mapID, instanceID, guid, x, y, newZ, o)
+	}
+}
+
 func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint32, guid uint64, fields map[int]uint32) {
 	if stored, ok := fields[unitFieldDynamicFlags]; ok {
 		s.fanOutCreatureDynamicFlagsUpdate(mapID, instanceID, guid, fields, stored)
