@@ -296,6 +296,53 @@ func (s *Server) broadcastCreatureSplineMove(mapID, instanceID uint32, x, y floa
 	}
 }
 
+// broadcastFlightSplineSync pushes a SMSG_FLIGHT_SPLINE_SYNC packet
+// (Unit::UpdateSplineMovement, Unit.cpp:515-524: WriteSplineSync float +
+// packed GUID) to every session whose player shares the creature's
+// map/instance and stands within visibility distance of the creature.
+// Same targeting loop as broadcastCreatureSplineMove (phase mask, seer
+// distance leg); only cyclic splines send it, on the 5s spline-sync
+// timer, so the client stays in step with a spline that never lands.
+func (s *Server) broadcastFlightSplineSync(mapID, instanceID uint32, x, y float32, guid uint64, fraction float32, phase uint32) {
+	if s == nil || s.Config.VisibilityDistanceContinents <= 0 {
+		return
+	}
+	payload := buildFlightSplineSync(guid, fraction)
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
+	for target := range s.sessions {
+		if !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != mapID || target.player.InstanceID != instanceID {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	if phase == 0 {
+		phase = 1
+	}
+	for _, target := range targets {
+		if target.player == nil {
+			continue
+		}
+		if phase&target.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		rx, ry := target.player.X, target.player.Y
+		if target.player.FarsightGUID != 0 {
+			if vx, vy, _, ok := s.seerDeliveryPosition(mapID, instanceID, target.player.GUID, target.player.FarsightGUID); ok {
+				rx, ry = vx, vy
+			}
+		}
+		if math.Hypot(float64(rx-x), float64(ry-y)) > distance {
+			continue
+		}
+		if err := target.write(uint16(protocol.OpcodeSMSG_FLIGHT_SPLINE_SYNC), payload, true); err != nil {
+			target.debug("flight spline-sync broadcast failed", "account", target.accountName, "guid", guid, "opcode", uint32(protocol.OpcodeSMSG_FLIGHT_SPLINE_SYNC), "error", err)
+		}
+	}
+}
+
 // nearTeleportMove performs a server-initiated same-map near teleport: it
 // stages the destination for the client's MSG_MOVE_TELEPORT ack (which
 // applies the position, mirroring handleMoveTeleportAck) and pushes the

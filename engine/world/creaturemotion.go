@@ -311,6 +311,16 @@ type creatureMotion struct {
 	ScriptMoveDestX   float32
 	ScriptMoveDestY   float32
 	ScriptMoveDestZ   float32
+	// ScriptMoveAnimTier is the MoveSpline animation tier stamped by a
+	// script Move* launch (MoveSplineFlag::Animation, MoveSplineInit
+	// SetAnimation): animTierGround/animTierHover/animTierFly, or
+	// animTierNone when the spline carries no animation leg. Unit::
+	// UpdateSplineMovement (Unit.cpp:526-533) applies it at arrival via
+	// SetAnimationTier when the spline HasAnimation; a cyclic spline
+	// never finalizes, so a chain link landing never applies it (the
+	// landing gate skips chain splines). Stamped at launch, consumed
+	// (cleared) at landing.
+	ScriptMoveAnimTier int
 	// ScriptMoveFinalOrient is PointMovementGenerator::_finalOrient
 	// (PointMovementGenerator.cpp:33, :71-72): the landing-facing
 	// applied at spline end (MoveSpline.cpp:46-50 final angle), never
@@ -4135,10 +4145,20 @@ func (s *Server) selectAIThreatTarget(motion *creatureMotion, targetType uint32,
 			continue
 		}
 		d := float32(distance3D(motion.X, motion.Y, motion.Z, vx, vy, vz))
-		if dist > 0 && d > dist {
+		// CreatureMethods::GetAITarget (CreatureMethods.h:706-799) filters
+		// on IsWithinDist (Object.cpp:1233-1236, Position.h:146-148):
+		// strict < on the squared distance. IsWithinDist DOES add
+		// both combat reaches (_IsWithinDist, Object.cpp:1147-1160,
+		// incOwnRadius/incTargetRadius default true) — the same reach
+		// leg Unit::IsWithinCombatRange (Unit.cpp:583-597) carries —
+		// so Go's raw-d comparison still omits the +reaches leg
+		// (pre-existing delta); only the boundary operators are
+		// fixed here. Positive dist keeps d < dist, negative dist
+		// keeps d >= -dist (skip iff within -dist).
+		if dist > 0 && d >= dist {
 			continue
 		}
-		if dist < 0 && d <= -dist {
+		if dist < 0 && d < -dist {
 			continue
 		}
 		candidates = append(candidates, aiThreatCandidate{guid: entry.VictimGUID, dist: d})
@@ -6561,6 +6581,13 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 			if s.launchCreaturePolySpline(motion, points, walk, moveType, facing, hasFacing, speed, now, explicit) {
 				s.motionMu.Lock()
 				motion.ScriptMovePointID = pointID
+				// The poly launch stamps no animation tier (its
+				// broadcast carries animTierNone), so the caller's
+				// tier is re-stamped here: a MoveLand/MoveTakeoff
+				// leg pathed through CalculatePath keeps the tier
+				// Unit::UpdateSplineMovement applies at arrival
+				// (Unit.cpp:526-533).
+				motion.ScriptMoveAnimTier = animTier
 				if moveType == movementGeneratorPoint {
 					motion.ScriptMoveFinalOrient = finalOrient
 					motion.ScriptMoveFinalOrientKnown = hasFinalOrient
@@ -6582,6 +6609,12 @@ func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, 
 	motion.ScriptMoveFalling = false
 	motion.ScriptMoveType = moveType
 	motion.ScriptMovePointID = pointID
+	// Unit::UpdateSplineMovement (Unit.cpp:526-533): the spline's stored
+	// animation tier, applied at arrival via SetAnimationTier when the
+	// spline HasAnimation. Only the MoveLand/MoveTakeoff (and circle
+	// chain) launches pass a tier; every other launch stamps
+	// animTierNone.
+	motion.ScriptMoveAnimTier = animTier
 	// PointMovementGenerator::_finalOrient (PointMovementGenerator.cpp:71-72):
 	// stamped at launch, applied at landing — never as the launch facing
 	// (launchCreaturePolySpline's hasFacing sets Orientation at launch).
@@ -6806,6 +6839,11 @@ func (s *Server) launchCreaturePolySpline(motion *creatureMotion, points []pathV
 	motion.ScriptMoveFalling = false
 	motion.ScriptMoveType = moveType
 	motion.ScriptMovePointID = 0
+	// A poly spline carries no animation leg (both broadcasts pass
+	// animTierNone), so a direct poly launch clears any tier stamped by
+	// an earlier spline; the script launcher re-stamps its own tier
+	// after this call returns.
+	motion.ScriptMoveAnimTier = animTierNone
 	motion.ScriptMoveDestX = end.X
 	motion.ScriptMoveDestY = end.Y
 	motion.ScriptMoveDestZ = end.Z
@@ -10698,6 +10736,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if motion.SplineChain != nil {
 				s.advanceSplineChain(ctx, motion, now)
 			}
+			// Unit::UpdateSplineMovement (Unit.cpp:505-535): the
+			// cyclic-spline 5s SMSG_FLIGHT_SPLINE_SYNC arm rides
+			// this same mid-flight branch (no-op for non-cyclic
+			// runs and while nothing is in flight).
+			s.sendCyclicSplineSync(motion, now)
 			// SPEED_UPDATE_PENDING mid-flight re-path (see
 			// repathCreatureSpeedPendingIfDue): a speed change arms
 			// the flag on the live generator in
@@ -10758,6 +10801,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// out-of-range finalize inform (see the cases above).
 		scriptSpline := motion.ScriptMoveType != 0
 		chainSpline := motion.ScriptMoveType == movementGeneratorSplineChain
+		// Unit::UpdateSplineMovement (Unit.cpp:526-533): a landed spline
+		// with an animation leg applies its stored tier via
+		// SetAnimationTier, ahead of the MovementInform/ReachHome
+		// finalize arms below. Chain links never apply it: a cyclic
+		// spline never finalizes in C++, and a DB chain link carries
+		// no animation leg (animTierNone).
+		if !chainSpline && motion.ScriptMoveAnimTier != animTierNone {
+			s.creatureSetAnimationTier(motion, motion.ScriptMoveAnimTier)
+		}
 		switch motion.ScriptMoveType {
 		case movementGeneratorSplineChain:
 			s.landSplineChainLink(ctx, motion, now)
@@ -10832,6 +10884,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.ScriptMoveType = 0
 			motion.ScriptMoveExplicitSpeed = 0
 			motion.ScriptMovePointID = 0
+			motion.ScriptMoveAnimTier = animTierNone
 			motion.ScriptMoveFinalOrient = 0
 			motion.ScriptMoveFinalOrientKnown = false
 			motion.ScriptMoveDestX = 0

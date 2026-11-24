@@ -915,6 +915,19 @@ const (
 	animTierNone                      = -1
 )
 
+// buildFlightSplineSync is Movement::PacketBuilder::WriteSplineSync
+// (MovementPacketBuilder.cpp:187-190) as sent by Unit::UpdateSplineMovement
+// (Unit.cpp:515-524): one float32, timePassed()/Duration() of the running
+// spline, followed by the mover's packed GUID (the WorldPacket is sized
+// 4 + GetPackGUID().size(), the float written first, the GUID appended
+// after). Only cyclic splines ever send it, on the 5s m_splineSyncTimer.
+func buildFlightSplineSync(rawGUID uint64, fraction float32) []byte {
+	packet := protocol.NewBuffer(4 + packedGUIDSize(rawGUID))
+	packet.WriteF32(fraction)
+	packet.WritePackedGUID(rawGUID)
+	return packet.Bytes()
+}
+
 func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, facing float32, hasFacing bool, transportGUID uint64, flying bool, animTier int) []byte {
 	packet := protocol.NewBuffer(64)
 	packet.WritePackedGUID(rawGUID)
@@ -1515,6 +1528,42 @@ func (s *Server) creatureFoldAnimationTier(motion *creatureMotion) {
 	} else if motion.Hovering {
 		tier = animTierHover
 	}
+	if !motion.bytes1CacheKnown {
+		s.motionMu.Unlock()
+		cache := s.creatureTemplateBytes1(uint32(motion.GUID & 0xFFFFFF))
+		s.motionMu.Lock()
+		if !motion.bytes1CacheKnown {
+			motion.bytes1Cache, motion.bytes1CacheKnown = cache, true
+		}
+	}
+	if uint8(motion.bytes1Cache>>24) == uint8(tier) {
+		s.motionMu.Unlock()
+		return
+	}
+	motion.bytes1Cache = motion.bytes1Cache&0x00FFFFFF | uint32(tier)<<24
+	full := motion.bytes1Cache & 0xFFFFFF00
+	if motion.StandStateKnown {
+		full |= uint32(motion.StandState)
+	} else {
+		full |= motion.bytes1Cache & 0xFF
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldBytes1: full})
+}
+
+// creatureSetAnimationTier is Unit::SetAnimationTier (Unit.cpp:10585-10590):
+// creatures only, SetByteValue(UNIT_FIELD_BYTES_1, UNIT_BYTES_1_OFFSET_ANIM_TIER,
+// tier). The UpdateSplineMovement arrival arm (Unit.cpp:526-533) applies the
+// spline's stored tier through it. Unlike creatureFoldAnimationTier it takes
+// the tier as given instead of deriving it from the gravity/hover flags,
+// and it carries none of the fold's root/dead guards — C++ sets the byte
+// unconditionally. The bytes1-cache + values-update tail mirrors the fold.
+func (s *Server) creatureSetAnimationTier(motion *creatureMotion, tier int) {
+	if s == nil || motion == nil || tier < 0 {
+		return
+	}
+	s.motionMu.Lock()
 	if !motion.bytes1CacheKnown {
 		s.motionMu.Unlock()
 		cache := s.creatureTemplateBytes1(uint32(motion.GUID & 0xFFFFFF))

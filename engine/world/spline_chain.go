@@ -75,7 +75,15 @@ type splineChainRun struct {
 	EnteredCycle   bool
 	LinkLaunchedAt time.Time
 	LinkActualMs   uint32 // summed leg durations of the current link
-	WaitUntil      time.Time
+	// SplineSyncDue is Unit::UpdateSplineMovement's m_splineSyncTimer
+	// (Unit.cpp:515-524) for a cyclic run: SMSG_FLIGHT_SPLINE_SYNC
+	// goes out every 5s while the cyclic spline runs. The C++
+	// TimeTracker defaults to expiry 0 (Timer.h:118), so the first
+	// sync fires on the first tick after the spline starts — the zero
+	// value here is already due, matching that. Non-cyclic runs never
+	// read it.
+	SplineSyncDue time.Time
+	WaitUntil     time.Time
 	// WaitArmed says WaitUntil belongs to the next link and has not
 	// been consumed yet: advanceSplineChain must only fire on an
 	// armed wait. A fresh run's WaitUntil is zero-valued (already
@@ -653,6 +661,7 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 		motion.ScriptMoveType = 0
 		motion.ScriptMoveExplicitSpeed = 0
 		motion.ScriptMovePointID = 0
+		motion.ScriptMoveAnimTier = animTierNone
 		motion.ScriptMoveDestX = 0
 		motion.ScriptMoveDestY = 0
 		motion.ScriptMoveDestZ = 0
@@ -704,6 +713,7 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 		motion.ScriptMoveType = 0
 		motion.ScriptMoveExplicitSpeed = 0
 		motion.ScriptMovePointID = 0
+		motion.ScriptMoveAnimTier = animTierNone
 		motion.ScriptMoveDestX = 0
 		motion.ScriptMoveDestY = 0
 		motion.ScriptMoveDestZ = 0
@@ -725,6 +735,7 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 	motion.ScriptMoveType = 0
 	motion.ScriptMoveExplicitSpeed = 0
 	motion.ScriptMovePointID = 0
+	motion.ScriptMoveAnimTier = animTierNone
 	motion.ScriptMoveDestX = 0
 	motion.ScriptMoveDestY = 0
 	motion.ScriptMoveDestZ = 0
@@ -772,4 +783,46 @@ func (s *Server) advanceSplineChain(ctx context.Context, motion *creatureMotion,
 	}
 	s.motionMu.Unlock()
 	s.sendSplineChainLink(ctx, motion, now)
+}
+
+// sendCyclicSplineSync is the cyclic arm of Unit::UpdateSplineMovement
+// (Unit.cpp:505-535): while a cyclic spline runs, m_splineSyncTimer fires
+// every 5s and SMSG_FLIGHT_SPLINE_SYNC (WriteSplineSync: timePassed /
+// Duration, MovementPacketBuilder.cpp:187-190) goes to the set. Go has no
+// per-tick spline update — the client interpolates and the server snaps at
+// landing — so the sync rides the step tick's mid-flight branch, next to
+// advanceSplineChain. Only cyclic runs send (MoveCirclePath is the only
+// cyclic spline in Go); the fraction is the in-flight link's progress,
+// derived from the stamped endpoints and velocity exactly like
+// creatureSplinePosition's u. The timer starts due (TimeTracker default
+// expiry 0, Timer.h:118), so the first sync fires on the first tick after
+// the run starts, then every 5s.
+func (s *Server) sendCyclicSplineSync(motion *creatureMotion, now time.Time) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	run := motion.SplineChain
+	if run == nil || !run.Cyclic || !motion.Moving || now.Before(run.SplineSyncDue) {
+		s.motionMu.Unlock()
+		return
+	}
+	fraction := float32(0)
+	totalDist := distance3D(motion.ScriptMoveFromX, motion.ScriptMoveFromY, motion.ScriptMoveFromZ, motion.ScriptMoveDestX, motion.ScriptMoveDestY, motion.ScriptMoveDestZ)
+	if totalDist > 0 && motion.MoveVelocity > 0 {
+		totalDur := totalDist / float64(motion.MoveVelocity)
+		remaining := float64(motion.MoveEnds.Sub(now)) / float64(time.Second)
+		fraction = float32(1 - remaining/totalDur)
+		if fraction < 0 {
+			fraction = 0
+		}
+		if fraction > 1 {
+			fraction = 1
+		}
+	}
+	run.SplineSyncDue = now.Add(5 * time.Second)
+	mapID, instanceID, guid, phase := motion.Map, motion.InstanceID, motion.GUID, motion.PhaseMask
+	x, y := motion.X, motion.Y
+	s.motionMu.Unlock()
+	s.broadcastFlightSplineSync(mapID, instanceID, x, y, guid, fraction, phase)
 }
