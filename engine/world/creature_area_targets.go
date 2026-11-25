@@ -1879,6 +1879,19 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 	if damageImmune {
 		damage = 0
 	}
+	// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404) via
+	// Spell::DoEffectOnLaunchTarget (Spell.cpp:7759): an
+	// area-targeting damage effect's launch damage scales by the
+	// victim's AOE-avoidance product — the 229 arm always, plus the
+	// 310 creature-caster arm, since the caster here is a creature.
+	// Skipped for FIXED_DAMAGE spells and unresolvable spells.
+	if inlineSpellKnown && damage > 0 && spellHasAreaDamageEffect(inlineSpell) && inlineSpell.AttributesEx4&spellAttr4FixedDamage == 0 {
+		if p.Sess != nil && p.Sess.player != nil {
+			if avoid := periodicTickAoeAvoidanceMultiplier(p.Sess.auraTypeModifiersByMiscMask(spellAuraModAoeDamageAvoidance, uint32(schoolMask)), p.Sess.auraTypeModifiersByMiscMask(spellAuraModCreatureAoeDamageAvoidance, uint32(schoolMask)), true); avoid != 1 {
+				damage = uint32(float64(damage) * avoid)
+			}
+		}
+	}
 	var absorbed, resisted, blocked uint32
 	fullBlock := false
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:987-1132) arm order on the
@@ -3103,8 +3116,9 @@ func (s *Server) serverCreatureSpellMissVerdict(ctx context.Context, m *creature
 // attacker level/position and creature aura sums instead of the session
 // player's. Single roll MISS > (RESIST unbridged) > DEFLECT (ranged) /
 // DODGE > PARRY > BLOCK (melee), in C++ order. Deltas vs C++: the mechanic
-// resist roll has no Go model; GetSpellModOwner is nil for a creature
-// caster, so no SPELLMOD_RESIST_MISS_CHANCE fold; m_modMelee/RangedHitChance
+// resist roll has no Go model; GetSpellModOwner resolves the owner player
+// for a pet/totem caster (Object.cpp:2246), so the SPELLMOD_RESIST_MISS_CHANCE
+// fold below runs for them; m_modMelee/RangedHitChance
 // has no creature model; GetUnitMissChance's player-defense and
 // creature-defense arms have no model (session twin precedent); the ranged
 // deflect leg uses the single cumulative roll, where the session ranged
@@ -3155,7 +3169,13 @@ func (s *Server) serverCreatureMeleeMissVerdict(ctx context.Context, m *creature
 	casterKey := creatureAuraKeyForMotion(m)
 	var missChance int32
 	if isPlayerVictim {
+		// Unit::GetUnitMissChance (Unit.cpp:2762-2766): a player victim
+		// adds GetMissPercentageFromDefense to the 5% base, same term
+		// the white-swing path carries (combat.go).
 		missChance = 500
+		if victimSess != nil {
+			missChance += victimSess.missPercentageFromDefenseBP()
+		}
 		if skillDiff > 0 {
 			missChance += skillDiff * 4
 		} else {
@@ -3184,6 +3204,18 @@ func (s *Server) serverCreatureMeleeMissVerdict(ctx context.Context, m *creature
 			missChance -= s.creatureAuraTypeSum(victimKey, spellAuraModAttackerRangedHitChance) * 100
 		} else {
 			missChance -= s.creatureAuraTypeSum(victimKey, spellAuraModAttackerMeleeHitChance) * 100
+		}
+	}
+	// Spellmod from SPELLMOD_RESIST_MISS_CHANCE (Unit.cpp:12440-12447):
+	// GetSpellModOwner (Object.cpp:2246) returns the owner player for a
+	// pet/totem caster, so the fold runs for them too — the old "nil for
+	// a creature caster" note was wrong for pets and totems. Gated on
+	// spellId like C++ and the session twin.
+	if spell.ID != 0 {
+		if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
+			if folded := modOwner.applySpellModFloat(spell, spellModResistMissChance, 100.0); folded != 100.0 {
+				missChance -= int32(math.Round((folded - 100.0) * 100))
+			}
 		}
 	}
 	if missChance < 0 {

@@ -33405,27 +33405,10 @@ func (s *session) valueMultiplierForAura(spellID uint32, auraType uint32) float3
 // returns 0 for non-players, and Go's creature motions carry no combat
 // ratings, so the term only fires on player targets.
 func drainManaResilienceReduction(target *session, amount uint32) uint32 {
-	if target == nil || target.player == nil || amount == 0 {
-		return 0
-	}
-	if int(CombatRatingCritTakenSpell) >= len(target.player.CombatRatings) {
-		return 0
-	}
-	rating := target.player.CombatRatings[CombatRatingCritTakenSpell]
-	if rating == 0 || target.player.Level == 0 {
-		return 0
-	}
-	_, critDmgRed, _ := getResilienceStats(target.player.Level, rating)
-	if critDmgRed <= 0 {
-		return 0
-	}
-	// Unit::GetCombatRatingDamageReduction = CalculatePct(damage, pct),
-	// which truncates for uint32.
-	reduction := uint32(float64(amount) * float64(critDmgRed) / 100.0)
-	if reduction >= amount {
-		return amount
-	}
-	return reduction
+	// Unit::GetSpellCritDamageReduction (Unit.h:972) via
+	// combatRatingDamageReduction (Unit.cpp:12558-12563); the (2.2, 33)
+	// pair is fixed by the wrapper, the pct by the target's ratings.
+	return target.spellCritDamageReductionAmount(amount)
 }
 
 // spellPowerBurnGatesPass mirrors the unit-target gates shared by
@@ -37091,8 +37074,13 @@ func (s *session) meleeSpellHitResult(ctx context.Context, targetGUID uint64, ta
 	if isPlayerVictim {
 		// Unit::GetUnitMissChance 5% base (Unit.cpp:2762) + skill arm
 		// (Unit.cpp:12433-12436): diff>0 adds diff*0.04%, else diff*0.02%
-		// (percent) = 4/2 basis points per skill point.
+		// (percent) = 4/2 basis points per skill point. A player victim
+		// adds GetMissPercentageFromDefense (Unit.cpp:2765), the term
+		// the white-swing path carries (combat.go).
 		missChance = 500
+		if targetSess != nil {
+			missChance += targetSess.missPercentageFromDefenseBP()
+		}
 		if skillDiff > 0 {
 			missChance += skillDiff * 4
 		} else {
@@ -47255,15 +47243,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		// SpellAuraEffects.cpp:5483-5484 — resilience cuts mana drains at the
 		// spell-crit-damage reduction rate (added in 2.4), via
-		// GetSpellCritDamageReduction = CalculatePct(damage, min(resilience% *
-		// 2.2, 33)).
-		if powerType == 0 && int(CombatRatingCritTakenSpell) < len(ts.player.CombatRatings) {
-			if rating := ts.player.CombatRatings[CombatRatingCritTakenSpell]; rating != 0 {
-				_, critDmgRed, _ := getResilienceStats(ts.player.Level, rating)
-				if critDmgRed > 0 {
-					drain -= uint32(float64(drain) * float64(critDmgRed) / 100.0)
-				}
-			}
+		// GetSpellCritDamageReduction (Unit.h:972).
+		if powerType == 0 {
+			drain -= ts.spellCritDamageReductionAmount(drain)
 		}
 		// int32 drainedAmount = -target->ModifyPower(powerType, -drainAmount).
 		oldPower := ts.player.Powers[powerType]
@@ -49527,11 +49509,9 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// C++ gates: caster and target alive, target power type matches.
 		// Target liveness is checked at the top of this function; the power
 		// type gate has no Go creature model (the drain below no-ops when
-		// MaxPowers[powerType] is 0). Creature victims have no resilience
-		// model (consistent with the damage ticks). The
-		// persistent-area-aura per-tick SpellHitResult gate
-		// (SpellAuraEffects.cpp:5454-5456) rides persistentAreaTickMissed
-		// at the top of this case.
+		// MaxPowers[powerType] is 0). The persistent-area-aura per-tick
+		// SpellHitResult gate (SpellAuraEffects.cpp:5454-5456) rides
+		// persistentAreaTickMissed at the top of this case.
 		// UNIT_STATE_ISOLATED has no Go model.
 		if leechCaster == nil && leechCasterMotion == nil {
 			return true
@@ -49580,6 +49560,17 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			drain = uint32(float64(targetMaxPower) * float64(drain) / 100.0)
 			if drain > maxDrain {
 				drain = maxDrain
+			}
+		}
+		// SpellAuraEffects.cpp:5483-5484 — resilience cuts mana drains at the
+		// spell-crit-damage reduction rate, via GetSpellCritDamageReduction
+		// (Unit.h:972): a player-owned pet victim takes its owner's
+		// reduction (Unit::GetCombatRatingReduction pet arm, Unit.cpp:12548-12553).
+		if powerType == 0 && s.server != nil {
+			if vm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); vm != nil {
+				if ownerSess := s.server.ownerPlayerSessionOfMotion(vm); ownerSess != nil {
+					drain -= ownerSess.spellCritDamageReductionAmount(drain)
+				}
 			}
 		}
 		// int32 drainedAmount = -target->ModifyPower(powerType, -drainAmount).

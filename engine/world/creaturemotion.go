@@ -8997,36 +8997,11 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
 	}
-	var players []playerPos
-	s.sessionsMu.RLock()
-	for sess := range s.sessions {
-		if sess.worldReady.Load() && sess.player != nil {
-			isGM := (sess.player.ExtraFlags&playerExtraGMOn != 0) || (sess.player.PlayerFlags&playerFlagGM != 0)
-			// Phase-anywhere rides on GM_ON; serverside-hidden visibility
-			// rides on the GM visibility detect (see creatures.go) — a GM
-			// after `.gm visible on` keeps phase-anywhere but loses hidden.
-			seesHidden := sess.gmVisibilityDetect != 0
-			isDead := (sess.player.Health == 0 && sess.player.MaxHealth > 0) || sess.player.PlayerFlags&playerFlagGhost != 0
-			players = append(players, playerPos{
-				Map:             sess.player.Map,
-				InstanceID:      sess.player.InstanceID,
-				X:               sess.player.X,
-				Y:               sess.player.Y,
-				Z:               sess.player.Z,
-				GUID:            sess.playerGUID,
-				Race:            sess.player.Race,
-				Class:           sess.player.Class,
-				Level:           sess.player.Level,
-				IsGM:            isGM,
-				SeesHidden:      seesHidden,
-				IsDead:          isDead,
-				FactionTemplate: sess.effectiveFactionTemplate(sess.player.Race),
-				Reputations:     playerReputationMap(sess.player.Reputations),
-				Sess:            sess,
-			})
-		}
-	}
-	s.sessionsMu.RUnlock()
+	// Unit::UpdateObjectVisibility's deferred marks (Unit.cpp:12500) are
+	// consumed here, on the world tick — the Go twin of the C++ grid-visit
+	// consumption of NOTIFY_VISIBILITY_CHANGED.
+	s.drainVisibilityDirty(ctx)
+	players := s.snapshotPlayerPositions()
 	if len(players) == 0 {
 		// No players: ordinary creatures freeze (their grids go idle),
 		// but active creatures keep stepping — see
@@ -10065,15 +10040,23 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	}
 	// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the
 	// victim-side 187/308 flats (pre-resilience) and 197 total
-	// (post-resilience). A non-pet creature attacker cannot apply
+	// (post-resilience). A wild creature attacker cannot apply
 	// resilience (Unit::CanApplyResilience, Unit.cpp:12333), so the
-	// reduction stays 0 here.
+	// reduction stays 0 for it — but a player-owned attacker can, and
+	// then the victim's (or its owner's) rating reduces the crit
+	// chance, per Unit::ApplyResilience (Unit.cpp:12342-12350).
 	var victimFlatCritTakenBP, victimSpellWeaponCritBP int32
+	var critReductionBP int32
 	var victimDefenseSkill, victimMissFromDefenseBP int32
 	if isPlayerVictim && target.Sess != nil && target.Sess.player != nil {
 		victimFlatCritTakenBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerMeleeCritChance))*100)) +
 			int32(math.Round(target.Sess.victimCritChanceForCaster(motion.GUID)*100))
 		victimSpellWeaponCritBP = int32(math.Round(float64(target.Sess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
+		if s.creatureCasterCanApplyResilience(motion) {
+			resilBaseBP := int32(500) + attackerCritAdjustBP + victimFlatCritTakenBP
+			target.Sess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &resilBaseBP)
+			critReductionBP = int32(500) + attackerCritAdjustBP + victimFlatCritTakenBP - resilBaseBP
+		}
 		// Unit::GetDefenseSkillValue (Unit.cpp:2638): the attacker is a
 		// creature (TYPEID_UNIT), so a player victim reads the CURRENT
 		// defense skill; the miss term reads
@@ -10085,6 +10068,18 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 		victimFlatCritTakenBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerMeleeCritChance)*100 +
 			int32(math.Round(creatureVictimCritChanceForCaster(s, victimKey, motion.GUID)*100))
 		victimSpellWeaponCritBP = creatureAuraModifierSum(s, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
+		// Unit::ApplyResilience (Unit.cpp:12342-12350): a player-owned
+		// pet victim takes the owner's crit-chance reduction when the
+		// attacker can apply resilience.
+		if s.creatureCasterCanApplyResilience(motion) {
+			if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && vm.OwnerGUID != 0 && s.creatureVictimTakesResilience(vm) {
+				if ownerSess := s.ownerPlayerSessionOfMotion(vm); ownerSess != nil {
+					resilBaseBP := int32(500) + attackerCritAdjustBP + victimFlatCritTakenBP
+					ownerSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &resilBaseBP)
+					critReductionBP = int32(500) + attackerCritAdjustBP + victimFlatCritTakenBP - resilBaseBP
+				}
+			}
+		}
 	}
 	// Unit::RollMeleeOutcomeAgainst (Unit.cpp:2307-2312): crushing
 	// requires !IsControlledByPlayer() — a player-charmed creature
@@ -10095,7 +10090,7 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// m_ControlledByPlayer with no flag (TempSummon::InitStats,
 	// TemporarySummon.cpp:190-198), so ControlledByPlayer joins the
 	// gate — the flag alone would let it crush.
-	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, motion.UnitFlags&unitFlagPlayerControlled == 0 && !motion.ControlledByPlayer, victimSitting, false, canBlock, canParry, canDodge, 0, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP, victimDefenseSkill, victimMissFromDefenseBP)
+	outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, motion.FlagsExtra&0x00000020 != 0, motion.UnitFlags&unitFlagPlayerControlled == 0 && !motion.ControlledByPlayer, victimSitting, false, canBlock, canParry, canDodge, critReductionBP, 0, 0, s.creatureExpertiseReductionBP(attackerKey), victimDodgeBP, s.creatureDodgeReductionBP(attackerKey)+s.creatureEnemyDodgeBP(attackerKey), s.creatureExpertiseReductionBP(attackerKey), victimParryBonusBP, victimBlockBonusBP, victimParryBP, victimBlockBP, victimDodgeBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, attackerCritAdjustBP, victimDefenseSkill, victimMissFromDefenseBP)
 	if isPlayerVictim && target.Sess != nil {
 		if target.Sess.isImmuneToDamage(1) {
 			outcome = protocol.MeleeHitImmune
@@ -10164,6 +10159,15 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// (Unit::CanApplyResilience, Unit.cpp:12333).
 	if isPlayerVictim && target.Sess != nil && s.creatureCasterCanApplyResilience(motion) {
 		target.Sess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+	} else if !isPlayerVictim && s.creatureCasterCanApplyResilience(motion) {
+		// Unit::ApplyResilience (Unit.cpp:12342-12350): a player-owned
+		// pet victim takes the owner's damage resilience too, ahead of
+		// absorbs; a non-player vehicle victim takes none.
+		if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && s.creatureVictimTakesResilience(vm) {
+			if ownerSess := s.ownerPlayerSessionOfMotion(vm); ownerSess != nil {
+				ownerSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+			}
+		}
 	}
 
 	// Handle player parry haste when player parries creature attack

@@ -2664,6 +2664,17 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		if isTargetPlayer && targetSess != nil && owner != nil {
 			targetSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
 		}
+		// Unit::ApplyResilience (Unit.cpp:12342-12350): a player-owned
+		// pet victim takes the owner's damage resilience too, behind the
+		// same caster gate (Unit.cpp:12333); a non-player vehicle victim
+		// takes none.
+		if !isTargetPlayer && s.creatureCasterCanApplyResilience(motion) {
+			if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); vm != nil && s.creatureVictimTakesResilience(vm) {
+				if ownerSess := s.ownerPlayerSessionOfMotion(vm); ownerSess != nil {
+					ownerSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+				}
+			}
+		}
 	}
 
 	overkill := uint32(0)

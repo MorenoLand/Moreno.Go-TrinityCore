@@ -1238,13 +1238,21 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880): the
 			// victim's SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE (187) total
 			// and caster-matched SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308)
-			// total are pre-resilience; C++ ApplyResilience no-ops for a
-			// creature victim without a player owner, so no resilience here;
-			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
-			// applies after resilience.
+			// total are pre-resilience; SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// applies after resilience. Unit::ApplyResilience
+			// (Unit.cpp:12342-12350) no-ops for a creature victim without
+			// a player owner, but a player-owned pet victim takes the
+			// owner's crit-chance reduction.
 			victimFlatCritTakenBP = creatureAuraModifierSum(s.server, victimKey, spellAuraModAttackerMeleeCritChance)*100 +
 				int32(math.Round(creatureVictimCritChanceForCaster(s.server, victimKey, s.playerGUID)*100))
 			victimSpellWeaponCritBP = creatureAuraModifierSum(s.server, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
+			if tm.OwnerGUID != 0 && s.server.creatureVictimTakesResilience(tm) {
+				if ownerSess := s.server.ownerPlayerSessionOfMotion(tm); ownerSess != nil {
+					resilBaseBP := int32(500) + critBonusBP + victimFlatCritTakenBP
+					ownerSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &resilBaseBP)
+					critReductionBP = int32(500) + critBonusBP + victimFlatCritTakenBP - resilBaseBP
+				}
+			}
 			// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the victim's
 			// SPELL_AURA_MOD_DODGE_PERCENT (49) total adds to the 5% base for
 			// creature victims (totems gated above, like the parry arm).
@@ -1430,6 +1438,18 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 		}
 	} else if !isPlayerVictim && s.server != nil && (damage > 0 || damage2 > 0) {
+		// Unit::ApplyResilience (Unit.cpp:12342-12350): a creature victim
+		// owned by a player takes the owner's damage resilience ahead of
+		// absorbs, same as the player-victim arm above; a non-player
+		// vehicle victim takes none.
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && s.server.creatureVictimTakesResilience(tm) {
+			if ownerSess := s.server.ownerPlayerSessionOfMotion(tm); ownerSess != nil {
+				ownerSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+				if damage2 > 0 {
+					ownerSess.applyResilienceToDamage(true, &damage2, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+				}
+			}
+		}
 		// Unit::CalcAbsorbResist (Unit.cpp:1839-1857): the attacker's
 		// MOD_TARGET_ABSORB_SCHOOL (194) pct of damage bypasses absorbs.
 		// Per-component absorb on each component's school, same HitInfo
@@ -2213,14 +2233,22 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			// victim's SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_CHANCE (188)
 			// total and caster-matched
 			// SPELL_AURA_MOD_CRIT_CHANCE_FOR_CASTER (308) total are
-			// pre-resilience; C++ ApplyResilience no-ops for a creature
-			// victim without a player owner, so no resilience here;
-			// SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
-			// applies after resilience.
+			// pre-resilience; SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE (197)
+			// applies after resilience. Unit::ApplyResilience
+			// (Unit.cpp:12342-12350) no-ops for a creature victim without
+			// a player owner, but a player-owned pet victim takes the
+			// owner's crit-chance reduction.
 			victimKey := creatureAuraKeyForTarget(target)
 			victimFlatCritTakenBP = creatureAuraModifierSum(s.server, victimKey, spellAuraModAttackerRangedCritChance)*100 +
 				int32(math.Round(creatureVictimCritChanceForCaster(s.server, victimKey, s.playerGUID)*100))
 			victimSpellWeaponCritBP = creatureAuraModifierSum(s.server, victimKey, spellAuraModAttackerSpellAndWeaponCritChance) * 100
+			if tm.OwnerGUID != 0 && s.server.creatureVictimTakesResilience(tm) {
+				if ownerSess := s.server.ownerPlayerSessionOfMotion(tm); ownerSess != nil {
+					resilBaseBP := int32(500) + critBonusBP + victimFlatCritTakenBP
+					ownerSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenRanged, &resilBaseBP)
+					critReductionBP = int32(500) + critBonusBP + victimFlatCritTakenBP - resilBaseBP
+				}
+			}
 		}
 		// Unit::GetUnitDodgeChance (Unit.cpp:2676-2681): the whole creature
 		// arm is gated on !victim->IsTotem() — totems never dodge.
@@ -2416,6 +2444,16 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			vicSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenRanged)
 			vicSess.procReactiveVictimArms(outcome)
+		}
+	} else if !isPlayerVictim && s.server != nil && damage > 0 {
+		// Unit::ApplyResilience (Unit.cpp:12342-12350): a creature victim
+		// owned by a player takes the owner's damage resilience ahead of
+		// absorbs, same as the player-victim arm above; a non-player
+		// vehicle victim takes none.
+		if tm := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); tm != nil && s.server.creatureVictimTakesResilience(tm) {
+			if ownerSess := s.server.ownerPlayerSessionOfMotion(tm); ownerSess != nil {
+				ownerSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenRanged)
+			}
 		}
 	}
 

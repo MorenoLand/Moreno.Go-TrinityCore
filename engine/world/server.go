@@ -303,9 +303,16 @@ type Server struct {
 	// bgRaids mirrors Battleground::m_BgRaids (Battlegrounds/Battleground.h):
 	// per battleground-instance group IDs of the two per-team raids,
 	// index 0 = alliance, 1 = horde. Guarded by groupsMu with groups.
-	bgRaids                  map[uint32][2]uint64
-	motionMu                 sync.Mutex
-	instanceCreatureMotion   map[instanceAdmissionKey]map[uint64]*creatureMotion
+	bgRaids                map[uint32][2]uint64
+	motionMu               sync.Mutex
+	instanceCreatureMotion map[instanceAdmissionKey]map[uint64]*creatureMotion
+	// visibilityDirtyMu/visibilityDirty mirror Unit::UpdateObjectVisibility's
+	// AddToNotify(NOTIFY_VISIBILITY_CHANGED) deferred flag (Unit.cpp:12500):
+	// non-forced marks land here and are consumed by the next
+	// updateActiveCreatures pass (drainVisibilityDirty), which runs the
+	// forced fan-out for each. Guarded by visibilityDirtyMu.
+	visibilityDirtyMu        sync.Mutex
+	visibilityDirty          map[uint64]visibilityDirtyEntry
 	formationMu              sync.RWMutex
 	formationRows            map[uint32]formationRow // creature_formations by member low GUID (FormationMgr::_creatureGroupMap)
 	formationLeaders         map[uint32][]uint32     // leader low GUID -> member low GUIDs

@@ -6664,6 +6664,119 @@ func (s *Server) jumpToCreatureTargetDest(tm *creatureMotion, absoluteAngle floa
 	s.launchCreatureJumpSpline(tm, destX, destY, destZ, speedXY, speedZ, 1004)
 }
 
+// unitJumpTo is Unit::JumpTo(float, float, bool, Optional<Position>)
+// (Unit.cpp:12950-12972): forward => angle 0 else PI, plus the relative
+// angle to dest when given; creatures take the MoveJumpTo spline,
+// players the bare SMSG_MOVE_KNOCK_BACK packet. Exactly one of sess /
+// tm is non-nil; a nil pair no-ops.
+func (s *Server) unitJumpTo(sess *session, tm *creatureMotion, speedXY, speedZ float32, forward bool, destX, destY float32, hasDest bool) {
+	if s == nil {
+		return
+	}
+	if tm != nil {
+		if hasDest {
+			s.motionMu.Lock()
+			ox, oy := tm.X, tm.Y
+			s.motionMu.Unlock()
+			abs := math.Atan2(float64(destY-oy), float64(destX-ox))
+			if !forward {
+				abs += math.Pi
+			}
+			s.jumpToCreatureTargetDest(tm, abs, speedXY, speedZ)
+		} else {
+			s.jumpToCreatureTarget(tm, forward, speedXY, speedZ)
+		}
+		return
+	}
+	if sess != nil && sess.player != nil {
+		if hasDest {
+			abs := math.Atan2(float64(destY-sess.player.Y), float64(destX-sess.player.X))
+			if !forward {
+				abs += math.Pi
+			}
+			s.sendJumpToKnockBackDest(sess, sess.playerGUID, abs, speedXY, speedZ)
+		} else {
+			s.sendJumpToKnockBack(sess, sess.playerGUID, sess.player.Orientation, forward, speedXY, speedZ)
+		}
+	}
+}
+
+// unitJumpToObject is Unit::JumpTo(WorldObject*) (Unit.cpp:12974-12980):
+// the contact point on the target (target reach + jumper reach + 0.5
+// along the target-to-jumper angle, z pinned to the target's z),
+// speedXY = dist2d*10/speedZ, then MoveJump at the absolute angle to
+// the target with EVENT_JUMP (1004). Unlike the float overload there is
+// no TYPEID branch — players jump through the same MoveJump spline.
+// Exactly one of sess / tm is the jumper; the target resolves by GUID
+// (player with reach 1.5, creature with its live reach, game object
+// with reach 0 per Object.h:313). withOrientation carries MoveJump's
+// SetFacing(o) leg: the jumper faces the target, applied at launch
+// since the parabolic core never turns. A zero speedZ never jumps (C++
+// divides by it; the launch gate would swallow the result anyway). No
+// live C++ caller exists; the entry point is ported for API completeness.
+func (s *Server) unitJumpToObject(sess *session, tm *creatureMotion, targetGUID uint64, targetMap, targetInstance uint32, speedZ float32, withOrientation bool) {
+	if s == nil || speedZ == 0 {
+		return
+	}
+	var jx, jy, jReach float32
+	var jumpPlayer *session
+	var jumpMotion *creatureMotion
+	if tm != nil {
+		jumpMotion = tm
+		s.motionMu.Lock()
+		jx, jy = tm.X, tm.Y
+		jReach = tm.combatReachOrDefault()
+		s.motionMu.Unlock()
+	} else if sess != nil && sess.player != nil {
+		jumpPlayer = sess
+		jx, jy = sess.player.X, sess.player.Y
+		jReach = 1.5
+	} else {
+		return
+	}
+	var tx, ty, tz, tReach float32
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		tx, ty, tz = ts.player.X, ts.player.Y, ts.player.Z
+		tReach = 1.5
+	} else if tmo := s.findCreatureMotion(targetMap, targetInstance, targetGUID); tmo != nil {
+		s.motionMu.Lock()
+		tx, ty, tz = tmo.X, tmo.Y, tmo.Z
+		tReach = tmo.combatReachOrDefault()
+		s.motionMu.Unlock()
+	} else if gx, gy, gz, _, ok := s.gameObjectPositionInInstance(targetMap, targetInstance, targetGUID); ok {
+		tx, ty, tz = gx, gy, gz
+		tReach = 0
+	} else {
+		return
+	}
+	// WorldObject::GetContactPoint (Object.cpp:3334-3338) + GetNearPoint2D
+	// (:3243-3270): the point at targetReach + jumperReach + 0.5 from the
+	// target along the target-to-jumper angle, z pinned to the target's z.
+	// The hover-offset correction stays out (both legs 0 on this path);
+	// the LoS sweep runs through sweepNearPointLOS, the smartContactPoint
+	// twin's convention.
+	angle := math.Atan2(float64(jy-ty), float64(jx-tx))
+	dist := tReach + jReach + 0.5
+	px, py := s.sweepNearPointLOS(targetMap, tx, ty, tz, dist, float32(angle))
+	// speedXY = GetExactDist2d(contact) * 10 / speedZ (Unit.cpp:12977).
+	speedXY := float32(math.Hypot(float64(px-jx), float64(py-jy))) * 10.0 / speedZ
+	// GetAbsoluteAngle(obj): the jumper's absolute angle to the target.
+	absAngle := math.Atan2(float64(ty-jy), float64(tx-jx))
+	if jumpMotion != nil {
+		if s.launchCreatureJumpSpline(jumpMotion, px, py, tz, speedXY, speedZ, 1004) && withOrientation {
+			s.motionMu.Lock()
+			jumpMotion.Orientation = float32(absAngle)
+			s.motionMu.Unlock()
+		}
+		return
+	}
+	if jumpPlayer != nil {
+		if jumpPlayer.launchPlayerJumpSpline(px, py, tz, speedXY, speedZ) && withOrientation {
+			jumpPlayer.player.Orientation = float32(absAngle)
+		}
+	}
+}
+
 // knockbackFirstCollisionDest mirrors the destination leg of
 // MotionMaster::MoveKnockbackFrom (MotionMaster.cpp:735-763): the
 // straight-line endpoint is shortened to the first collision along the
@@ -8546,9 +8659,7 @@ func (s *Server) creatureEffectJumpDest(ctx context.Context, m *creatureMotion, 
 
 // creatureEffectLeapBack mirrors Spell::EffectLeapBack
 // (SpellEffects.cpp:4593) for a creature caster: the LAUNCH_TARGET arm
-// jumping each hit target via Unit::JumpTo — player targets take the
-// SMSG_MOVE_KNOCK_BACK packet (sendJumpToKnockBack), creature targets
-// the MoveJumpTo spline (jumpToCreatureTarget). Speeds are MiscValue/10
+// jumping each hit target via Unit::JumpTo (unitJumpTo). Speeds are MiscValue/10
 // and the CalcValue/10, forward is SpellIconID != 1891 (Disengage jumps
 // backward). No root/stun gate, no boss gate and no interrupt leg —
 // EffectLeapBack has none, unlike EffectKnockBack. The caster
@@ -8573,13 +8684,14 @@ func (s *Server) creatureEffectLeapBack(ctx context.Context, m *creatureMotion, 
 			}
 			guid = m.GUID
 		}
-		if targetSess := s.findSessionByGUID(guid); targetSess != nil && targetSess.player != nil {
-			s.sendJumpToKnockBack(targetSess, guid, targetSess.player.Orientation, forward, speedXY, speedZ)
-			continue
+		var targetSess *session
+		var tm *creatureMotion
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			targetSess = ts
+		} else if cm := s.findCreatureMotion(m.Map, m.InstanceID, guid); cm != nil {
+			tm = cm
 		}
-		if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
-			s.jumpToCreatureTarget(tm, forward, speedXY, speedZ)
-		}
+		s.unitJumpTo(targetSess, tm, speedXY, speedZ, forward, 0, 0, false)
 	}
 }
 
@@ -11256,6 +11368,25 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 	}
 }
 
+// spellHasAreaDamageEffect mirrors the Spell.cpp:7759 gate for the
+// creature direct-damage paths, where damage is aggregated over the
+// spell's damage effects instead of computed per effect: true when any
+// SchoolDMG-family effect (2/9/17/31/58/121, the creatureSpellDamage
+// grouping) targets an area or is an area aura. A persistent-area-aura
+// (27) spell's damage rides its aura ticks, already covered by the
+// periodic twin, so 27 itself is not a damage effect here.
+func spellHasAreaDamageEffect(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		switch eff.Effect {
+		case spellEffectSchoolDamage, spellEffectHealthLeech, spellEffectWeaponDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectNormalizedWeaponDmg:
+			if spellEffectTargetsArea(eff) || spellEffectIsAreaAura(eff.Effect) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // creatureEffectSpellDamage mirrors Spell::EffectSchoolDMG
 // (SpellEffects.cpp:322) + EffectWeaponDmg (SpellEffects.cpp:3171) for a
 // creature caster: the damage arms, player hit targets only. The base
@@ -11339,6 +11470,18 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 		}
 		if damageImmune {
 			damage = 0
+		}
+		// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404) via
+		// Spell::DoEffectOnLaunchTarget (Spell.cpp:7759): an
+		// area-targeting damage effect's launch damage scales by the
+		// victim's AOE-avoidance product — the 229 arm always, plus the
+		// 310 creature-caster arm, since the caster here is a creature.
+		// Skipped for FIXED_DAMAGE spells. The periodic-tick twin
+		// already carries both arms.
+		if damage > 0 && spellHasAreaDamageEffect(spell) && spell.AttributesEx4&spellAttr4FixedDamage == 0 {
+			if avoid := periodicTickAoeAvoidanceMultiplier(vs.auraTypeModifiersByMiscMask(spellAuraModAoeDamageAvoidance, uint32(schoolMask)), vs.auraTypeModifiersByMiscMask(spellAuraModCreatureAoeDamageAvoidance, uint32(schoolMask)), true); avoid != 1 {
+				damage = uint32(float64(damage) * avoid)
+			}
 		}
 		var absorbed, resisted, blocked uint32
 		fullBlock := false
@@ -11614,6 +11757,15 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		damage := targetBase
 		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(attackerLevel), m.X, m.Y, victim.X, victim.Y, victimHealth, victim.MaxHealth, m.MaxHealth, damage, m.GUID, guid, m.Map, m.InstanceID, false, casterAP); ok {
 			damage = rewritten
+		}
+		// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404) via
+		// Spell::DoEffectOnLaunchTarget (Spell.cpp:7759): the 229 arm
+		// plus the 310 creature-caster arm on the victim's aura
+		// product, same leg as the player-victim twin above.
+		if damage > 0 && spellHasAreaDamageEffect(spell) && spell.AttributesEx4&spellAttr4FixedDamage == 0 {
+			if avoid := periodicTickAoeAvoidanceMultiplier(creatureAuraModifiersByMiscMask(s, victimKey, spellAuraModAoeDamageAvoidance, uint32(schoolMask)), creatureAuraModifiersByMiscMask(s, victimKey, spellAuraModCreatureAoeDamageAvoidance, uint32(schoolMask)), true); avoid != 1 {
+				damage = uint32(float64(damage) * avoid)
+			}
 		}
 		var absorbed, resisted, blocked uint32
 		fullBlock := false

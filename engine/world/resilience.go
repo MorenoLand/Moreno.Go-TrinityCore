@@ -69,6 +69,86 @@ func getResilienceStats(level uint8, rating uint32) (critChanceReduction float32
 	return critChanceReduction, critDamageReduction, damageReduction
 }
 
+// getCombatRatingReduction mirrors Unit::GetCombatRatingReduction
+// (Unit.cpp:12546-12557): a player reads its own rating bonus
+// (Player::GetRatingBonusValue, Player.cpp:5535-5538). Like the other
+// rating readers it is DBC-backed (gtCombatRatings.dbc +
+// gtOCTClassCombatRatingScalar.dbc) and reads 0 while those DBCs do not
+// ship; the ApplyResilience arms below deliberately keep the DBC-free
+// getResilienceStats source instead.
+func (s *session) getCombatRatingReduction(cr uint8) float64 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	return s.ratingBonusValue(cr)
+}
+
+// getCombatRatingReductionForCreature mirrors the pet arm of
+// Unit::GetCombatRatingReduction (Unit.cpp:12548-12553): a creature
+// owned by a player reads its owner's rating bonus (charm resolves to
+// the pre-charm owner, the UNIT_FIELD_SUMMONEDBY convention used by
+// ownerPlayerSessionOfMotion); a wild creature reads 0.
+func (s *session) getCombatRatingReductionForCreature(guid uint64, cr uint8) float64 {
+	if owner := s.playerOwnerSessionOfCreature(guid); owner != nil {
+		return owner.ratingBonusValue(cr)
+	}
+	return 0
+}
+
+// combatRatingDamageReduction mirrors Unit::GetCombatRatingDamageReduction
+// (Unit.cpp:12558-12563): min(reduction*rate, cap), then CalculatePct
+// (truncating for uint32). reduction is the Unit::GetCombatRatingReduction
+// value (a percent); the Unit.h wrappers (965-977) fix the pairs:
+// crit-damage (2.2, 33), flat damage (2.0, 100).
+func combatRatingDamageReduction(reduction float64, rate, cap float32, damage uint32) uint32 {
+	if damage == 0 {
+		return 0
+	}
+	pct := float32(reduction) * rate
+	if pct > cap {
+		pct = cap
+	}
+	if pct <= 0 {
+		return 0
+	}
+	return uint32(float64(damage) * float64(pct) / 100.0)
+}
+
+// getCombatRatingDamageReduction mirrors Unit::GetCombatRatingDamageReduction
+// (Unit.cpp:12558-12563) for this session: min(GetCombatRatingReduction(cr)
+// * rate, cap), then CalculatePct via combatRatingDamageReduction. The
+// Unit.h:965-977 wrappers fix the pairs: crit-damage (2.2, 33), flat
+// damage (2.0, 100). The reduction is sourced from getResilienceStats,
+// the DBC-free resilience curve — it deliberately does NOT call
+// getCombatRatingReduction above, which is DBC-backed and reads 0 while
+// gtCombatRatings.dbc does not ship; routing the live mana-drain legs
+// through it would silently zero them. The two sources converge once the
+// DBC ships (see the getResilienceStats note).
+func (s *session) getCombatRatingDamageReduction(cr uint8, rate, cap float32, damage uint32) uint32 {
+	if s == nil || s.player == nil || damage == 0 {
+		return 0
+	}
+	if int(cr) >= len(s.player.CombatRatings) {
+		return 0
+	}
+	rating := s.player.CombatRatings[cr]
+	if rating == 0 || s.player.Level == 0 {
+		return 0
+	}
+	reduction, _, _ := getResilienceStats(s.player.Level, rating)
+	return combatRatingDamageReduction(float64(reduction), rate, cap, damage)
+}
+
+// spellCritDamageReductionAmount mirrors Unit::GetSpellCritDamageReduction
+// (Unit.h:972) — GetCombatRatingDamageReduction(CR_CRIT_TAKEN_SPELL, 2.2,
+// 33, damage) — for this session's ratings, sourced from
+// getResilienceStats (the DBC-free resilience curve) so mana drains keep
+// their reduction while gtCombatRatings.dbc does not ship; the
+// ratingBonusValue twin above reads 0 without it.
+func (s *session) spellCritDamageReductionAmount(damage uint32) uint32 {
+	return s.getCombatRatingDamageReduction(CombatRatingCritTakenSpell, 2.2, 33, damage)
+}
+
 // applyResilienceToMeleeCritChance reduces melee/ranged crit chance against this session (in basis points, 100 bp = 1.0%).
 // Reference: TrinityCore Unit::ApplyResilience (Unit.cpp:12361 / 12372).
 func (s *session) applyResilienceToMeleeCritChance(attackerIsPlayer bool, cr uint8, critChanceBP *int32) {
