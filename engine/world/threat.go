@@ -3852,8 +3852,8 @@ func (s *Server) forwardPetAssistThreat(caster *creatureMotion, targetGUID uint6
 // is the session running the cast (owner for true pets, charmer for
 // possessed wild, matching GetCharmerOrOwnerPlayerOrPlayerItself). The
 // guard-relocation notifier has no Go twin (contested-guard hostility reads
-// contestedPvPActive live), and SetPvP's controlled-unit fan-out is the
-// player flag alone (characters.go:1608 precedent). The caster==target gate
+// contestedPvPActive live), and SetPvP's controlled-unit fan-out runs
+// through setPvPFlag (Player::SetPvP, Player.cpp:22189-22194). The caster==target gate
 // is the PreprocessSpellHit outer gate (Spell.cpp:2737): it drops self-hits
 // and landed-reflect retargets (Spell.cpp:2350) alike, matching the 2761
 // forward's gate above — the pet loop routes reflected targets to the pet
@@ -3894,7 +3894,7 @@ func (s *Server) flagPetAssistContestedPvP(owner *session, caster *creatureMotio
 	changed := owner.player.PlayerFlags&playerFlagContestedPVP == 0 || owner.player.PVPFlags&pvpFlagPvP == 0
 	owner.player.PlayerFlags |= playerFlagContestedPVP
 	owner.contestedPVPEnd = now.Add(30 * time.Second)
-	owner.player.PVPFlags |= pvpFlagPvP
+	owner.setPvPFlag(true)
 	owner.pvpEnd = now
 	if changed {
 		owner.sendPlayerUpdate()

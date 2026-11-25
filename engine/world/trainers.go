@@ -24,6 +24,33 @@ type trainerSpellRecord struct {
 
 const unitNPCFlagTrainer uint32 = 0x00000010 // C++ UNIT_NPC_FLAG_TRAINER (UnitDefines.h:190); HandleTrainerListOpcode/HandleTrainerBuySpellOpcode pass exactly this mask, not the 0x20/0x40 class/profession variants
 
+// SpellVisualKit food/drink kits (SharedDefines.h:379-382).
+const (
+	spellVisualKitFood  uint32 = 406 // SPELL_VISUAL_KIT_FOOD
+	spellVisualKitDrink uint32 = 438 // SPELL_VISUAL_KIT_DRINK
+)
+
+// buildPlaySpellVisualPacket / buildPlaySpellImpactPacket are the
+// Unit::SendPlaySpellVisual / SendPlaySpellImpact packet twins
+// (Unit.cpp:12317-12333): the unit GUID plus the SpellVisualKit.dbc
+// index. The visual goes to the unit's visible set including self
+// (SendMessageToSet true); the impact to the set without self
+// (SendMessageToSet false) — the callers choose the set, the builders
+// only lay out the 12 bytes.
+func buildPlaySpellVisualPacket(guid uint64, visualKit uint32) []byte {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU64(guid)
+	buf.WriteU32(visualKit)
+	return buf.Bytes()
+}
+
+func buildPlaySpellImpactPacket(guid uint64, visualKit uint32) []byte {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU64(guid)
+	buf.WriteU32(visualKit)
+	return buf.Bytes()
+}
+
 func (s *session) handleTrainerList(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -315,21 +342,17 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
 	// 7. Play visual on trainer NPC (TC: npc->SendPlaySpellVisual(179))
-	visualBuf := protocol.NewBuffer(12)
-	visualBuf.WriteU64(trainerGUID)
-	visualBuf.WriteU32(179) // SpellVisualKit 179: Trainer Teach
-	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf.Bytes(), true)
+	visualBuf := buildPlaySpellVisualPacket(trainerGUID, 179) // SpellVisualKit 179: Trainer Teach
+	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf, true)
 	if s.server != nil {
-		s.server.broadcastToVisibleSetForCreatureSession(s, uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf.Bytes(), trainerGUID)
+		s.server.broadcastToVisibleSetForCreatureSession(s, uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf, trainerGUID)
 	}
 
 	// 8. Play impact on player with sound chime (TC: npc->SendPlaySpellImpact(player->GetGUID(), 362))
-	impactBuf := protocol.NewBuffer(12)
-	impactBuf.WriteU64(s.playerGUID)
-	impactBuf.WriteU32(362) // SpellVisualKit 362: Spell Learn Chime & Impact
-	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), true)
+	impactBuf := buildPlaySpellImpactPacket(s.playerGUID, 362) // SpellVisualKit 362: Spell Learn Chime & Impact
+	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf, true)
 	if s.server != nil {
-		s.server.broadcastToVisibleSetForCreatureSession(s, uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), trainerGUID)
+		s.server.broadcastToVisibleSetForCreatureSession(s, uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf, trainerGUID)
 	}
 
 	// 9. Check if trainerSpell is castable (C++ Trainer::Spell::IsCastable =

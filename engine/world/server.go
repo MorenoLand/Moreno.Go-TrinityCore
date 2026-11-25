@@ -843,6 +843,7 @@ type session struct {
 	fatigueTimer              int32
 	lastFatigueTick           time.Time
 	lastRegenTick             time.Time
+	lastFoodEmote             time.Time // Player::RegenerateAll food-emote timer (Player.cpp:2086-2111): the 5s visual check, advanced on the 2s regen tick like m_foodEmoteTimerCount += m_regenTimer
 	lastRestBonusUpdate       time.Time
 	innTriggerID              uint32
 	lastCastTime              time.Time
@@ -2181,6 +2182,17 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		p := sess.player
 		if p == nil {
 			continue
+		}
+
+		// Player::RegenerateAll food emote (Player.cpp:2086-2111): every
+		// 5s of regen ticks a live seated-regen aura plays its visual.
+		// The timer advances whether or not an aura matches, like the
+		// C++ counter (m_foodEmoteTimerCount -= 5000 unconditionally).
+		if sess.lastFoodEmote.IsZero() {
+			sess.lastFoodEmote = now
+		} else if now.Sub(sess.lastFoodEmote) >= 5*time.Second {
+			sess.lastFoodEmote = now
+			sess.sendFoodEmoteVisual()
 		}
 
 		inCombat := sess.attackTarget != 0 || (p.UnitFlags&unitFlagInCombat != 0)

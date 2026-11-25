@@ -1661,7 +1661,7 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	// (Player::UpdatePvPFlag, Player.cpp:20768; the creaturemotion expiry
 	// tick), which is what the pvpEnd countdown below models.
 	if state.PlayerFlags&playerFlagInPVP != 0 || (hostile && state.PlayerFlags&playerFlagGM == 0) {
-		state.PVPFlags |= 0x01
+		s.setPvPFlag(true)
 	}
 	s.pvpHostile = hostile
 	// Player::UpdatePvPState (Player.cpp:22153): hostile areas force PvP on
@@ -1672,7 +1672,7 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	// (MiscHandler.cpp:491, Player.cpp:20779) and is never touched here.
 	if hostile {
 		if state.PVPFlags&0x01 == 0 || !s.pvpEnd.IsZero() {
-			state.PVPFlags |= 0x01
+			s.setPvPFlag(true)
 			s.pvpEnd = time.Time{}
 		}
 	} else if state.PVPFlags&0x01 != 0 && state.PlayerFlags&playerFlagInPVP == 0 && s.pvpEnd.IsZero() {
@@ -1688,16 +1688,36 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	return state.PVPFlags != oldFlags || state.PlayerFlags != oldPlayerFlags
 }
 
+// setPvPFlag ports the Unit::SetPvP leg of Player::SetPvP
+// (Player.cpp:22189-22194): the player's own PvP byte flips and the
+// same state fans out to controlled units (charmed + minions, the
+// fanOutBytes2FlagToControlled enumeration). C++ fans out on every
+// SetPvP call, so the fan-out runs even when the player's own bit is
+// already in the target state. The player update itself stays with
+// the caller.
+func (s *session) setPvPFlag(apply bool) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if apply {
+		s.player.PVPFlags |= pvpFlagPvP
+	} else {
+		s.player.PVPFlags &^= pvpFlagPvP
+	}
+	if s.server != nil {
+		s.server.fanOutPvPFlagToControlled(s.player.Map, s.player.InstanceID, s.playerGUID, apply)
+	}
+}
+
 // clearPvPState ports Player::UpdatePvP(false,false) (Player.cpp:22196-22200):
 // the PvP flag clears immediately and the toggle-off countdown
 // (pvpInfo.EndTimer, s.pvpEnd) is cancelled. C++ fans the clear out through
-// Player::SetPvP to controlled units; Go models no per-unit PvP flag on
-// pets, so the player flag is the whole model.
+// Player::SetPvP to controlled units (setPvPFlag above).
 func (s *session) clearPvPState() {
 	if s == nil || s.player == nil {
 		return
 	}
-	s.player.PVPFlags &^= 0x01
+	s.setPvPFlag(false)
 	s.pvpEnd = time.Time{}
 	s.sendPlayerUpdate()
 }

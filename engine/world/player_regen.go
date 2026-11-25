@@ -1,6 +1,10 @@
 package world
 
-import "math"
+import (
+	"math"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
 
 // octRegenHPPerSpiritFormula mirrors the formula of Player::OCTRegenHPPerSpirit
 // (Player.cpp:5562-5574): baseSpirit = min(spirit, 50), moreSpirit = spirit -
@@ -64,4 +68,39 @@ func octRegenLowLevelMultiplier(level uint8) float64 {
 // unmodeled bigger-unit slices.
 func (s *Server) manaRegenTickGain(classID uint32, level uint8, intellect, spirit uint32) uint32 {
 	return uint32(math.Sqrt(float64(intellect)) * s.octRegenMPPerSpt(classID, uint32(level), float64(spirit)) * octRegenLowLevelMultiplier(level) * 2.0)
+}
+
+// sendFoodEmoteVisual ports the food-emote arm of Player::RegenerateAll
+// (Player.cpp:2086-2111): a live SPELL_AURA_MOD_REGEN (84) aura whose
+// spell carries AURA_INTERRUPT_FLAG_NOT_SEATED plays the food visual
+// (406), else a live SPELL_AURA_MOD_POWER_REGEN (85) one plays the
+// drink visual (438); food wins when both are live. The visual is the
+// Unit::SendPlaySpellVisual twin (buildPlaySpellVisualPacket), sent to
+// self plus the visible set like the trainer leg.
+func (s *session) sendFoodEmoteVisual() {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	food, drink := false, false
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraInterruptFlags&auraInterruptFlagNotSeated == 0 {
+			continue
+		}
+		switch aura.AuraType {
+		case spellAuraModRegen:
+			food = true
+		case spellAuraModPowerRegen:
+			drink = true
+		}
+	}
+	if !food && !drink {
+		return
+	}
+	kit := spellVisualKitDrink
+	if food {
+		kit = spellVisualKitFood
+	}
+	buf := buildPlaySpellVisualPacket(s.playerGUID, kit)
+	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), buf, true)
+	s.server.broadcastToVisibleSetForCreatureSession(s, uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), buf, s.playerGUID)
 }

@@ -809,7 +809,7 @@ func (s *Server) creatureInGroupWith(m *creatureMotion, attacker *session, targe
 		if raid {
 			return u1Player.sameRaidGroupAs(u2Player)
 		}
-		return u1Player.sameGroupAs(u2Player, false)
+		return u1Player.sameSubGroupAs(u2Player)
 	}
 	if u1Player != nil && u2Motion != nil {
 		return u2Motion.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0

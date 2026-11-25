@@ -702,10 +702,10 @@ func (s *session) explicitTargetFactionBlocked(spell wotlk.Spell, mask uint32, e
 	}
 	if mask&targetFlagUnitParty != 0 {
 		if ownedCreature {
-			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) && (targetOwner == s || s.sameGroupAs(targetOwner, false)) {
+			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) && (targetOwner == s || s.sameSubGroupAs(targetOwner)) {
 				return false
 			}
-		} else if targetSess != nil && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, false) {
+		} else if targetSess != nil && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameSubGroupAs(targetSess) {
 			return false
 		} else if targetSess == nil && wildMotion != nil && wildMotion.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0 && s.explicitWildCreatureAssistPasses(spell, tgt, wildMotion, !hostile) {
 			return false
@@ -1054,6 +1054,31 @@ func (s *session) sameGroupAs(targetSess *session, raid bool) bool {
 	}
 	g := s.server.findGroupByID(s.groupID)
 	return g != nil && g.IsRaid == raid
+}
+
+// sameSubGroupAs is the player-player half of Unit::IsInPartyWith
+// (Unit.cpp:12126 -> Player::IsInSameGroupWith, Player.cpp:2536-2541):
+// the same group and the same subgroup, with no raid-flag check — a
+// raid member in the caster's subgroup IS in party, which
+// sameGroupAs(raid=false) missed: it required a non-raid group and
+// never compared subgroups.
+func (s *session) sameSubGroupAs(targetSess *session) bool {
+	if s == nil || targetSess == nil {
+		return false
+	}
+	if s == targetSess {
+		return true
+	}
+	if s.groupID == 0 || targetSess.groupID == 0 || s.groupID != targetSess.groupID {
+		return false
+	}
+	g := s.server.findGroupByID(s.groupID)
+	if g == nil {
+		return false
+	}
+	sg1, ok1 := g.memberSubGroup(s.playerGUID)
+	sg2, ok2 := g.memberSubGroup(targetSess.playerGUID)
+	return ok1 && ok2 && sg1 == sg2
 }
 
 // sameRaidGroupAs is the player-player half of Unit::IsInRaidWith

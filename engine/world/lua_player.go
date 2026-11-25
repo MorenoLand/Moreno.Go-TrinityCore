@@ -723,17 +723,15 @@ func (s *session) luaPlayer() *scripting.Object {
 	// SetPvP is UnitMethods::SetPvP (UnitMethods.h:1466-1474) for players
 	// as Units: Unit::SetPvP (Unit.cpp:12254) sets or clears only the
 	// PvP byte flag — no pvpEnd timer, no contested-flag change (those
-	// belong to Player::UpdatePvP, a separate path).
+	// belong to Player::UpdatePvP, a separate path) — and fans the state
+	// out to controlled units (Player::SetPvP, Player.cpp:22189-22194),
+	// which setPvPFlag does.
 	methods["SetPvP"] = func(_ context.Context, args []any) ([]any, error) {
 		apply, err := extraBool("SetPvP", args)
 		if err != nil {
 			return nil, err
 		}
-		if apply {
-			state.PVPFlags |= pvpFlagPvP
-		} else {
-			state.PVPFlags &^= pvpFlagPvP
-		}
+		s.setPvPFlag(apply)
 		s.sendPlayerUpdate()
 		return nil, nil
 	}

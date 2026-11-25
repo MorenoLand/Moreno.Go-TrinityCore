@@ -141,7 +141,7 @@ type creatureMotion struct {
 	bytes1CacheKnown      bool
 	SheathState           uint8 // UNIT_FIELD_BYTES_2 byte 0 live value: Lua CreatureMethods::SetSheath (Unit::SetSheath twin, Unit.h:903), init from template bytes2 at spawn
 	SheathStateKnown      bool
-	PVPFlags              uint8 // UNIT_FIELD_BYTES_2 byte 1 script override: Lua UnitMethods::SetSanctuary (SetByteFlag twin, UnitMethods.h:1898); folded over the template byte only while PVPFlagsKnown, so untouched creatures keep the DB value; only the sanctuary bit (0x08) is script-writable, the PvP/FFA bits are never set
+	PVPFlags              uint8 // UNIT_FIELD_BYTES_2 byte 1 script override: Lua UnitMethods::SetSanctuary (SetByteFlag twin, UnitMethods.h:1898); folded over the template byte only while PVPFlagsKnown, so untouched creatures keep the DB value; only the sanctuary bit (0x08) is script-writable, the PvP/FFA bits are never set by scripts (the engine PvP/FFA fan-outs set them)
 	PVPFlagsKnown         bool
 	DisplayID             uint32 // UNIT_FIELD_DISPLAYID live value: Lua CreatureMethods::SetDisplayId (Unit::SetDisplayId twin, Unit.cpp:10601), init from template model at spawn
 	DisplayIDKnown        bool   // set by the event-surface SetDisplayId bridge; gates the motion->spawn overlay so untouched creatures keep the DB/game-event value
@@ -2744,6 +2744,35 @@ func (s *Server) fanOutBytes2FlagToControlled(mapID, instanceID uint32, guid uin
 			motion.PVPFlags = flag
 		} else {
 			motion.PVPFlags &^= flag
+		}
+		motion.PVPFlagsKnown = true
+	}
+}
+
+// fanOutPvPFlagToControlled is the controlled-unit leg of
+// Player::SetPvP (Player.cpp:22189-22194): every unit the player
+// controls (the fanOutBytes2FlagToControlled enumeration) takes the
+// same PvP state. Unlike the FFA twin above, which overwrites the
+// whole bytes2 byte 1 (SetByteValue), SetPvP sets/clears only the PvP
+// bit (Unit::SetPvP, Unit.cpp:12254: SetByteFlag/RemoveByteFlag), so
+// the apply arm ORs and the clear arm clears just the bit — a
+// controlled creature keeps its FFA/sanctuary bits either way. The
+// fold into the creature update values rides
+// applyCreatureMotionToSpawn (PVPFlagsKnown), as for FFA.
+func (s *Server) fanOutPvPFlagToControlled(mapID, instanceID uint32, guid uint64, apply bool) {
+	if s == nil || guid == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	for _, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion == nil || (motion.CharmerGUID != guid && motion.OwnerGUID != guid) {
+			continue
+		}
+		if apply {
+			motion.PVPFlags |= pvpFlagPvP
+		} else {
+			motion.PVPFlags &^= pvpFlagPvP
 		}
 		motion.PVPFlagsKnown = true
 	}
@@ -16661,7 +16690,7 @@ func (s *Server) updatePvPFlags(now time.Time) {
 		}
 		sess.pvpEnd = time.Time{}
 		sess.player.PlayerFlags &^= playerFlagPVPTimer
-		sess.player.PVPFlags &^= 0x01
+		sess.setPvPFlag(false)
 		sess.sendPlayerUpdate()
 	}
 }
