@@ -201,9 +201,18 @@ type Server struct {
 	// counter hands out consecutive item_instance guids, so concurrent item
 	// creates can never race on the same row guid the way per-create
 	// MAX(guid)+1 queries could.
-	itemGUIDMu                sync.Mutex
-	itemGUIDNext              uint32
-	itemGUIDReady             bool
+	itemGUIDMu    sync.Mutex
+	itemGUIDNext  uint32
+	itemGUIDReady bool
+	// petNumberMu/petNumberNext mirror ObjectMgr::_hiPetNumber
+	// (ObjectMgr.cpp:7376-7384, GeneratePetNumber): the in-memory
+	// counter hands out consecutive character_pet ids, seeded once
+	// from MAX(id)+1 at startup, so a deleted highest pet's number
+	// is never reused and concurrent tames can never race on the
+	// same row id the way per-tame MAX(id)+1 queries could.
+	petNumberMu               sync.Mutex
+	petNumberNext             uint32
+	petNumberReady            bool
 	instanceIDMu              sync.Mutex
 	reservedInstanceIDs       map[uint32]struct{}
 	instanceAdmissionMu       sync.Mutex
@@ -745,6 +754,16 @@ type session struct {
 	emoteState                uint32
 	playerLocked              bool
 	rooted                    bool
+	// rootTimes mirrors Unit::m_rootTimes (Unit.cpp:11582-11680): the
+	// root/unroot packet counter, incremented on apply only while
+	// already nonzero and on every unroot. Zero until the first
+	// unroot, so the first root after connect sends counter 0.
+	rootTimes uint32
+	// rootedByScript marks a root held by the Lua SetRooted leg
+	// (session.setRooted), so the stun-remove leg can tell a
+	// script-held root from a stun-held one when deciding whether
+	// to send the unroot packet (Unit::SetStunned, Unit.cpp:11617).
+	rootedByScript bool
 	// forcedSpeedChanges mirrors Player::m_forced_speed_changes (Player.h:2023):
 	// pending forced-speed-change ACKs per UnitMoveType, incremented for every
 	// real SMSG_FORCE_*_SPEED_CHANGE sent.
@@ -1219,6 +1238,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadSmartScripts(ctx)
 	s.initializeMailState(ctx)
 	s.seedItemGUID(ctx)
+	s.seedPetNumber(ctx)
 	s.loadStoredContainerLoot(ctx)
 	go s.runWorldTick(ctx)
 	go s.runMailSweepLoop(ctx)
@@ -1367,6 +1387,51 @@ func (s *Server) seedItemGUID(ctx context.Context) {
 		s.itemGUIDNext = 1
 	}
 	s.itemGUIDReady = true
+}
+
+// seedPetNumber loads the pet-number generator seed from the characters
+// database, mirroring ObjectMgr::SetHighestGuids (ObjectMgr.cpp:7293):
+// _hiPetNumber starts one past the highest character_pet id seen at
+// startup.
+func (s *Server) seedPetNumber(ctx context.Context) {
+	s.petNumberMu.Lock()
+	defer s.petNumberMu.Unlock()
+	if s.petNumberReady {
+		return
+	}
+	var highest uint32
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		_ = s.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM character_pet").Scan(&highest)
+	}
+	if highest >= s.petNumberNext {
+		s.petNumberNext = highest + 1
+	}
+	if s.petNumberNext == 0 {
+		s.petNumberNext = 1
+	}
+	s.petNumberReady = true
+}
+
+// generatePetNumber mirrors ObjectMgr::GeneratePetNumber
+// (ObjectMgr.cpp:7376-7384): the next character_pet id from the
+// in-memory counter. At 0xFFFFFFFE the C++ side logs an error and
+// shuts the server down; the Go side logs and returns 0.
+func (s *Server) generatePetNumber() uint32 {
+	s.petNumberMu.Lock()
+	defer s.petNumberMu.Unlock()
+	if !s.petNumberReady {
+		s.petNumberReady = true
+		s.petNumberNext = 1
+	}
+	if s.petNumberNext >= 0xFFFFFFFE {
+		if s.Logger != nil {
+			s.Logger.Error("pet: pet number overflow, cannot generate new pet numbers")
+		}
+		return 0
+	}
+	id := s.petNumberNext
+	s.petNumberNext++
+	return id
 }
 
 // generateItemGUID mirrors ObjectGuidGenerator<HighGuid::Item>::Generate

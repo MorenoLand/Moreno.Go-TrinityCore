@@ -2367,35 +2367,11 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil, nil
 	}
-	// setPlayerControlLeg is the shared player leg of Unit::SetConfused
-	// (Unit.cpp:11734) and Unit::SetFeared (Unit.cpp:11700): both
-	// clear the target on apply and, for a player, block/allow
-	// control to the real player via SetClientControl
-	// (Player.cpp:24256, SMSG_CLIENT_CONTROL_UPDATE) — the
-	// m_playerMovingMe arm, which runs whether or not the mover
-	// is alive. On clear the victim target is restored only
-	// while alive, per the C++ IsAlive gate. The confused/flee
-	// movement itself is NOT wired: players have no server
-	// spline model (movement.go: the SPLINE_ENABLED strip), so
-	// no wander/flee spline can be driven; only the control and
-	// target legs are faithful here.
-	setPlayerControlLeg := func(apply bool) {
-		if s == nil || s.player == nil {
-			return
-		}
-		if apply {
-			state.Selection = 0
-			s.sendClientControl(s.playerGUID, false)
-			return
-		}
-		s.sendClientControl(s.playerGUID, true)
-		if state.Health > 0 && s.attackTarget != 0 {
-			state.Selection = s.attackTarget
-		}
-	}
 	// SetConfused is Unit::SetConfused (UnitMethods.h, Unit.cpp:11734)
-	// on a player receiver: the control/target leg above; the
-	// MoveConfused spline leg is unmodeled (no player spline).
+	// on a player receiver, through the SetControlled dispatch
+	// (unit_control.go): CastStop, the stun gate, the attack-stop
+	// and the control/target leg; the MoveConfused spline leg is
+	// unmodeled (no player spline).
 	methods["SetConfused"] = func(_ context.Context, args []any) ([]any, error) {
 		apply := true
 		if len(args) >= 1 && args[0] != nil {
@@ -2405,12 +2381,14 @@ func (s *session) luaPlayer() *scripting.Object {
 			}
 			apply = b
 		}
-		setPlayerControlLeg(apply)
+		s.setControlledPlayer(apply, unitStateConfused)
 		return nil, nil
 	}
 	// SetFeared is Unit::SetFeared (UnitMethods.h, Unit.cpp:11700)
-	// on a player receiver: the control/target leg above; SetFeared
-	// itself launches no flee spline (the fear-aura caster else engaged
+	// on a player receiver, through the SetControlled dispatch
+	// (unit_control.go): CastStop, the stun/confuse gates, the
+	// attack-stop and the control/target leg. SetFeared itself
+	// launches no flee spline (the fear-aura caster else engaged
 	// victim, 7000ms else untimed leg) — scripts drive that leg via the
 	// MoveFleeing binding directly, and the non-player MoveTargetedHome
 	// clear leg does not apply to players.
@@ -2423,7 +2401,7 @@ func (s *session) luaPlayer() *scripting.Object {
 			}
 			apply = b
 		}
-		setPlayerControlLeg(apply)
+		s.setControlledPlayer(apply, unitStateFleeing)
 		return nil, nil
 	}
 	// AddThreat is Unit::AddThreat (UnitMethods.h:2934, TRINITY arm):

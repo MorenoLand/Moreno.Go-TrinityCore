@@ -70,6 +70,62 @@ func (s *Server) getEnchantProcAttr(enchantID uint32) (uint32, bool) {
 	return attr, ok
 }
 
+// selectNearbyTarget mirrors Unit::SelectNearbyTarget (Unit.cpp:10811-10840):
+// every alive unfriendly unit in range (neutrals count unfriendly,
+// AnyUnfriendlyUnitInObjectRangeCheck, GridNotifiers.h:916), minus the
+// current victim and the exclude, minus non-LoS targets, totems,
+// spirit services and critters; a uniform random pick of what
+// remains, or false when nothing qualifies. The range gate is the
+// shared in-range family (lua_worldobject_range.go: IsWithinDistInMap
+// 3D + both reaches, same map and phase overlap). Only callers in C++
+// are Blade Flurry (spell_rogue.cpp:79) and Sweeping Strikes
+// (spell_warrior.cpp:981); Sweeping Strikes already ports in Lua via
+// GetUnfriendlyUnitsInRange with the same filters.
+func (s *session) selectNearbyTarget(ctx context.Context, excludeGUID uint64, dist float32) (uint64, bool) {
+	if s == nil || s.player == nil || s.server == nil || dist < 0 {
+		return 0, false
+	}
+	origin := s.luaRangeOriginForPlayer()
+	if origin.srv == nil {
+		return 0, false
+	}
+	cands := s.server.luaRangeCollect(ctx, origin, []luaRangeKind{luaRangeKindPlayer, luaRangeKindCreature}, dist)
+	pool := make([]uint64, 0, len(cands))
+	for _, cand := range cands {
+		if _, ok := origin.passes(s.server, cand, float64(dist), 0, 0, 1, 0); !ok {
+			continue
+		}
+		// AnyUnfriendlyUnitInObjectRangeCheck is !IsFriendlyTo, so
+		// neutrals count: the hostile=1 gate reads IsHostileTo and
+		// drops them. The shared friendly twin decides instead.
+		if origin.unit == nil || s.server.luaRangeFriendlyTo(*origin.unit, cand) {
+			continue
+		}
+		if cand.guid == s.attackTarget || cand.guid == excludeGUID {
+			continue
+		}
+		if !s.server.hasLineOfSight(origin.mapID, origin.x, origin.y, origin.z, cand.x, cand.y, cand.z) {
+			continue
+		}
+		if s.server.isTotemGUID(cand.guid) {
+			continue
+		}
+		if cand.motion != nil {
+			if cand.motion.CreatureType == creatureTypeCritter {
+				continue
+			}
+			if cand.motion.NPCFlags&0x0000C000 != 0 { // UNIT_NPC_FLAG_SPIRITHEALER | UNIT_NPC_FLAG_SPIRITGUIDE
+				continue
+			}
+		}
+		pool = append(pool, cand.guid)
+	}
+	if len(pool) == 0 {
+		return 0, false
+	}
+	return pool[rand.Intn(len(pool))], true
+}
+
 // enchantProcWhiteHitOnly reports whether the enchant's spell_enchant_proc_data
 // row flags ENCHANT_PROC_ATTR_WHITE_HIT (SpellMgr.h:270). C++ applies the arm
 // only when a row exists (Player.cpp:8180: entry && ...), so a missing row

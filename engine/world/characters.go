@@ -991,6 +991,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.nearTeleportDest = nearTeleportDestination{}
 	s.clearLastMovementInfo()
 	s.rooted = false
+	s.rootTimes = 0
+	s.rootedByScript = false
 	s.playerLocked = false
 	s.inFlight = false
 	s.taxiFlight = nil
@@ -4398,15 +4400,11 @@ func (s *session) setRooted(root bool) {
 	if s.player == nil {
 		return
 	}
-	s.rooted = root
-	buf := protocol.NewBuffer(16)
-	buf.WritePackedGUID(s.playerGUID)
-	buf.WriteU32(0) // movement counter
-	if root {
-		_ = s.write(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), buf.Bytes(), true)
-	} else {
-		_ = s.write(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT), buf.Bytes(), true)
-	}
+	// The script/vehicle/sit entry owns the rootedByScript marker (see
+	// setRootedPlayer): a script-held root survives an aura unroot, and
+	// an aura unroot never clears a script-held root.
+	s.rootedByScript = root
+	s.setRootedPlayer(root)
 }
 
 func (s *session) canFreeMoveForLogout(ignoreLogoutLock bool) bool {

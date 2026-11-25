@@ -419,8 +419,10 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	}
 	// SetFeared is UnitMethods::SetFeared (UnitMethods.h:1964-1973) for
 	// creatures: Unit::SetControlled(apply, UNIT_STATE_FLEEING) (Unit.cpp:
-	// 11513-11560) via the setCreatureFeared engine leg. The player
-	// surface stays out (client control + no player flee spline).
+	// 11484-11564) via the dispatch (unit_control.go): the CastStop,
+	// melee-attack stop and stun/confuse gates on apply, the fear-aura
+	// re-check on clear. The player surface stays out (client control
+	// + no player flee spline).
 	methods["SetFeared"] = func(_ context.Context, args []any) ([]any, error) {
 		apply := true
 		if len(args) >= 1 {
@@ -431,7 +433,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			apply = b
 		}
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
-			s.server.setCreatureFeared(motion, apply)
+			s.server.setControlledCreature(motion, apply, unitStateFleeing)
 		}
 		return nil, nil
 	}
@@ -548,7 +550,11 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		return nil, nil
 	}
 	// SetConfused is UnitMethods::SetConfused (UnitMethods.h:1946-1958),
-	// the session-creature twin of the handler binding.
+	// the session-creature twin of the handler binding:
+	// Unit::SetControlled(apply, UNIT_STATE_CONFUSED) (Unit.cpp:11484-
+	// 11564) via the dispatch (unit_control.go): the CastStop,
+	// melee-attack stop and stun gate on apply, the confuse-aura
+	// re-check on clear.
 	methods["SetConfused"] = func(_ context.Context, args []any) ([]any, error) {
 		apply := true
 		if len(args) >= 1 {
@@ -559,7 +565,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			apply = b
 		}
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
-			s.server.setCreatureConfused(motion, apply)
+			s.server.setControlledCreature(motion, apply, unitStateConfused)
 		}
 		return nil, nil
 	}
@@ -1551,10 +1557,12 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.motionMu.Unlock()
 		return nil, nil
 	}
-	// SetRooted is Unit::SetControlled(state, UNIT_STATE_ROOT) over
-	// the live motion's ScriptRooted slot, the handler twin's write
-	// (same required-bool argument shape, same chase/waypoint gate
-	// effect, no broadcast).
+	// SetRooted is Unit::SetControlled(apply, UNIT_STATE_ROOT)
+	// (Unit.cpp:11484-11564) over the live motion, the handler twin's
+	// write through the SetRooted body (unit_control.go): the root
+	// packet and spline stop on apply, the stun-gated unroot on clear,
+	// and the aura / vehicle / movement-template re-checks on clear.
+	// The ROOT gate slot rides the dispatch (creatureUnitStateAdd).
 	methods["SetRooted"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("SetRooted requires a bool, got no args")
@@ -1567,15 +1575,16 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if motion == nil {
 			return nil, nil
 		}
-		s.server.motionMu.Lock()
-		motion.ScriptRooted = rooted
-		s.server.motionMu.Unlock()
+		s.server.setControlledCreature(motion, rooted, unitStateRoot)
 		return nil, nil
 	}
-	// SetStunned is Unit::SetControlled(state, UNIT_STATE_STUNNED)
-	// over the live motion's ScriptStunned slot, the handler twin's
-	// write (same required-bool argument shape, same NOT_MOVE gate
-	// effect, same CastStop-on-apply leg, no broadcast).
+	// SetStunned is Unit::SetControlled(apply, UNIT_STATE_STUNNED)
+	// (Unit.cpp:11484-11564) over the live motion, the handler twin's
+	// write through the SetStunned body (unit_control.go): the
+	// UNIT_FLAG_STUNNED write, target clear/restore, spline stop,
+	// SMSG_SPLINE_MOVE_ROOT/UNROOT, and the CastStop-on-apply leg.
+	// The STUNNED gate slot rides the dispatch
+	// (creatureUnitStateAdd).
 	methods["SetStunned"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("SetStunned requires a bool, got no args")
@@ -1588,21 +1597,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if motion == nil {
 			return nil, nil
 		}
-		s.server.motionMu.Lock()
-		wasStunned := motion.ScriptStunned
-		motion.ScriptStunned = stunned
-		var interrupted []interruptedCreatureCast
-		if stunned && !wasStunned {
-			interrupted = s.server.interruptCreatureNonMeleeCasts(motion)
-			if len(interrupted) == 0 {
-				motion.CastingUntil = time.Time{}
-				s.server.cancelPendingCreatureCast(motion)
-			}
-		}
-		s.server.motionMu.Unlock()
-		for _, arm := range interrupted {
-			s.server.sendCreatureInterruptPackets(motion, arm)
-		}
+		s.server.setControlledCreature(motion, stunned, unitStateStunned)
 		return nil, nil
 	}
 	// Mount/Dismount are Unit::Mount/Unit::Dismount (Unit.cpp:8310/

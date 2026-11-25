@@ -159,6 +159,7 @@ type creatureMotion struct {
 	ScriptScaleKnown      bool
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect
 	ScriptStunned         bool                // UNIT_STATE_STUNNED script override: Lua CreatureMethods::SetStunned (Unit::SetControlled twin, Unit.h:214; Unit::SetStunned, Unit.cpp:11582); honored by the same NOT_MOVE gates as ScriptRooted (chase-pause, waypoint-launch, knockback, MoveFall), so stun-control arms (volazj Reset) port with real effect; the swing also stops while stunned — AttackerStateUpdate's head gate (Unit.cpp:2133-2134) returns on UNIT_STATE_CANNOT_AUTOATTACK, which includes STUNNED (Unit.h:251/253), even though DoMeleeAttackIfReady itself gates CASTING only (UnitAI.cpp:61-63)
+	RootTimes             uint32              // Unit::m_rootTimes (Unit.cpp:11582-11680): the root/unroot packet counter, incremented on apply only while already nonzero; creatures send no counter in their spline root packets, but the counter is per-unit state C++ maintains regardless
 	ScriptUnitState       uint32              // Unit::m_state script half for the Eluna Has/Add/ClearUnitState trio (lua_unit_state.go): bits AddUnitState wrote for states with no live leg; read by HasUnitState, never by engine gates
 	NoCombatMovement      bool                // inverted _isCombatMovementAllowed: Lua CreatureMethods::SetCombatMovement (ScriptedAI::SetCombatMovement twin, ScriptedCreature.h:233); when true the AttackStart chase leg never launches, so ranged-AI bosses (alythess, murmur, kologarn, ...) stand and cast instead of chasing the victim to melee; zero value = chase allowed (C++ default true)
 	NoMeleeAttack         bool                // boss-class custom UpdateAIs that never call DoMeleeAttackIfReady (UnitAI.cpp:61-83): Lua CreatureMethods::SetMeleeAttack; when true the engine-driven combat-tick swing below is suppressed, so muru / the twins / gothik / novos / sara / voice-of-yogg / rimefang / krosh / flame-leviathan / kalecgos-kj cast-only like C++ (julianne excluded: she swings via boss_julianneAI::UpdateAI); zero value = swing allowed (ScriptedAI/BossAI/SmartAI/CombatAI default)
@@ -7263,7 +7264,6 @@ func (s *Server) setCreatureConfused(motion *creatureMotion, apply bool) {
 		s.motionMu.Lock()
 		already := motion.Confused
 		dead := motion.Health == 0
-		victim := motion.TargetGUID
 		s.motionMu.Unlock()
 		if already || dead || s.creatureHasAuraType(key, spellAuraModConfuse) {
 			return
@@ -7275,13 +7275,10 @@ func (s *Server) setCreatureConfused(motion *creatureMotion, apply bool) {
 		// (ConfusedMovementGenerator.cpp:56): the hop origin snapshot.
 		motion.ConfusedX, motion.ConfusedY, motion.ConfusedZ = motion.X, motion.Y, motion.Z
 		motion.ConfusedOriginKnown = true
-		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
-		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
 		s.motionMu.Unlock()
 		s.clearCreatureVisualTarget(motion)
-		if victim != 0 {
-			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(guid, victim, false), mapID, instanceID, x, y, z, phase)
-		}
+		// The SMSG_ATTACK_STOP rides the SetControlled dispatch
+		// (unit_control.go); C++ SetConfused sends none.
 		s.launchCreatureConfusedSpline(motion, time.Now())
 		return
 	}

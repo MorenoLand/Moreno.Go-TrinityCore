@@ -40144,10 +40144,15 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 		s.factionNativeAfterRemove = true
 	}
 	if wasMovementControl && !s.hasAuraType(spellAuraStun) && !s.hasAuraType(spellAuraRoot) {
-		s.rooted = false
-		if s.player != nil {
-			s.player.UnitFlags &^= unitFlagStunned
-			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
+		// The stun and root legs each own their half of the clear
+		// (Unit::SetStunned / Unit::SetRooted, unit_control.go): the
+		// stun leg restores the target and unroots only while no root
+		// holds the player; the root leg unroots only while not
+		// stunned. A script-held root survives either leg.
+		if removedAuraType == spellAuraStun {
+			s.setStunnedPlayer(false)
+		} else if removedAuraType == spellAuraRoot {
+			s.setRootedPlayer(false)
 		}
 	}
 	if wasConfused && !s.hasAuraType(spellAuraConfuse) && s.player != nil {
@@ -43917,20 +43922,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			targetSess.player.FakeInebriation += amount
 		}
 		if eff.Aura == spellAuraStun || eff.Aura == spellAuraRoot {
-			targetSess.rooted = true
+			// AuraEffect::HandleAuraModStun (SpellAuraEffects.cpp:2825)
+			// -> SetControlled(STUNNED) -> CastStop (Unit.cpp:11492) and
+			// SetStunned -> CastStop (Unit.cpp:11616): a fresh stun
+			// interrupts all three current-spell slots with
+			// withDelayed=false. Root (UNIT_STATE_ROOT) is not in
+			// UNIT_STATE_CONTROLLED, so the root arm stays cast-safe.
+			// Both arms run the SetStunned/SetRooted bodies
+			// (unit_control.go), including the counted root packet.
 			if eff.Aura == spellAuraStun {
-				targetSess.player.UnitFlags |= unitFlagStunned
-				// AuraEffect::HandleAuraModStun (SpellAuraEffects.cpp:2825)
-				// -> SetControlled(STUNNED) -> CastStop (Unit.cpp:11492) and
-				// SetStunned -> CastStop (Unit.cpp:11616): a fresh stun
-				// interrupts all three current-spell slots with
-				// withDelayed=false. Root (UNIT_STATE_ROOT) is not in
-				// UNIT_STATE_CONTROLLED, so the root arm stays cast-safe.
-				targetSess.interruptCurrentCast()
-				targetSess.interruptCurrentChannel()
-				targetSess.cancelAutoRepeatOnInterrupt()
+				targetSess.setStunnedPlayer(true)
+			} else {
+				targetSess.setRootedPlayer(true)
 			}
-			targetSess.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
 		}
 		if eff.Aura == spellAuraConfuse || eff.Aura == spellAuraFear {
 			targetSess.interruptCurrentCast()

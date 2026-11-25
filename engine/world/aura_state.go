@@ -29,14 +29,38 @@ func (s *session) startReactiveTimer(reactive int) {
 	s.reactiveUntil[reactive] = time.Now().Add(reactiveTimerStart)
 }
 
+// clearReactive mirrors Unit::ClearReactive (Unit.cpp:10729-10752): the
+// reactive's timer drops; DEFENSE drops AURA_STATE_DEFENSE and
+// HUNTER_PARRY drops AURA_STATE_HUNTER_PARRY for hunters (both bits are
+// timer-derived in unitAuraStateMask, so zeroing the timer is the
+// clear); OVERPOWER clears the warrior's combo points with no
+// TYPEID_PLAYER gate — C++ only gates the UpdateReactives expiry arm
+// that way, not this one. REACTIVE_WOLVERINE_BITE is an explicit
+// no-op in C++ (the //TODO at :10750), so it has no arm here either.
+// No core caller exists yet (the only in-tree caller is npcbot, out of
+// scope); the sweep below is the live consumer of the same arms.
+func (s *session) clearReactive(reactive int) {
+	if s == nil || s.player == nil || reactive < 0 || reactive >= len(s.reactiveUntil) {
+		return
+	}
+	s.reactiveUntil[reactive] = time.Time{}
+	if reactive == reactiveOverpower && s.player.Class == 1 { // CLASS_WARRIOR
+		s.clearSessionComboPoints()
+	}
+}
+
 // sweepReactiveTimers mirrors Unit::UpdateReactives (Unit.cpp:10769-10800):
 // expired reactives drop. REACTIVE_OVERPOWER expiry clears the warrior's
 // combo points (ClearReactive(REACTIVE_OVERPOWER) -> ClearComboPoints,
 // Unit.cpp:10743-10745, including the RETAIN_COMBO_POINTS aura strip that
 // ClearComboPoints performs, Unit.cpp:10674-10680); the defense and
-// hunter-parry arms only drop their aura-state bits, and REACTIVE_WOLVERINE_BITE
-// expiry is a silent no-op in C++ too. The npcbot attacker arms ride the
-// same timers; Go has no npcbot infrastructure (standing no-infra).
+// hunter-parry arms only drop their aura-state bits. REACTIVE_WOLVERINE_BITE
+// expiry clears a hunter pet's combo points (Unit.cpp:10794-10797) —
+// Go has no per-motion reactive timer to drive it, so that leg stays
+// unbridged (see clearHunterPetReactives); a player is never
+// IsHunterPet(), so the player sweep is exact without it. The npcbot
+// attacker arms ride the same timers; Go has no npcbot infrastructure
+// (standing no-infra).
 func (s *session) sweepReactiveTimers() {
 	if s == nil || s.player == nil {
 		return
@@ -58,9 +82,9 @@ func (s *session) sweepReactiveTimers() {
 // every reactive timer drops; the overpower arm keeps its combo-point
 // clearing for warriors. Called on JUST_DIED (Unit.cpp:8927) and from
 // Player::CleanupsBeforeDelete (Player.cpp:26311). The hunter-pet
-// combo-point arm (IsHunterPet -> ClearComboPoints) stays unbridged:
-// the packet leg is wired now (sendCreatureComboPointsUpdate,
-// boss_ai.go), but Go has no pet-reactive clear call site to hang it on.
+// combo-point arm (IsHunterPet -> ClearComboPoints, :10766-10767) rides
+// clearHunterPetReactives at the pet-death hook (kill.go), not here —
+// this session method only ever runs for the player.
 func (s *session) clearAllReactives() {
 	if s == nil || s.player == nil {
 		return
@@ -72,6 +96,20 @@ func (s *session) clearAllReactives() {
 		s.removeAurasByType(spellAuraRetainComboPoints)
 		s.clearSessionComboPoints()
 	}
+}
+
+// clearHunterPetReactives is the hunter-pet arm shared by
+// Unit::ClearAllReactives (Unit.cpp:10766-10767, IsHunterPet ->
+// ClearComboPoints) and the REACTIVE_WOLVERINE_BITE expiry arm of
+// Unit::UpdateReactives (Unit.cpp:10794-10797). Creature DEFENSE /
+// HUNTER_PARRY arms are vacuous — creatures carry no reactive timers
+// in Go — so only the combo-point clear is bridged, via the
+// clearCreatureComboPoints packet leg (boss_ai.go).
+func (s *Server) clearHunterPetReactives(m *creatureMotion) {
+	if s == nil || m == nil || m.PetType != petTypeHunter {
+		return
+	}
+	s.clearCreatureComboPoints(m)
 }
 
 // procReactiveVictimArms mirrors the victim half of
@@ -106,8 +144,10 @@ func (s *session) procReactiveVictimArms(outcome protocol.MeleeHitOutcome) {
 // Unit::ProcSkillsAndReactives (Unit.cpp:10326-10351): a warrior whose
 // swing is dodged banks a combo point on the dodger and opens the 4000ms
 // Overpower window. The hunter-pet crit arm (REACTIVE_WOLVERINE_BITE +
-// pet combo points) has no Go pet-combo-point model, so it stays
-// unbridged.
+// pet combo points, Unit.cpp:10345-10351) has no Go pet-reactive timer
+// model to arm, so it stays unbridged; its expiry leg is
+// clearHunterPetReactives, driven by the pet-death hook until a
+// per-motion timer exists.
 func (s *session) procReactiveAttackerArms(targetGUID uint64, outcome protocol.MeleeHitOutcome) {
 	if s == nil || s.player == nil || s.player.Class != 1 { // CLASS_WARRIOR
 		return

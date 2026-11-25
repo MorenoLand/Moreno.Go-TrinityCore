@@ -2361,9 +2361,13 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 		s.unsummonPet(ctx, petSaveNotInSlot)
 	}
 
-	var maxPetID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM character_pet").Scan(&maxPetID)
-	newPetID := uint32(maxPetID + 1)
+	if s.server == nil {
+		return 0
+	}
+	newPetID := s.server.generatePetNumber()
+	if newPetID == 0 {
+		return 0
+	}
 
 	petName = s.generatePetName(ctx, entry)
 	playerLevel := uint32(s.player.Level)
@@ -2794,12 +2798,13 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 // SetMinion). Shared by the wild-creature tame (effect 150) and the
 // MiscValue-entry pet creation (effect 153).
 func (s *session) createTamedPetFromEntry(ctx context.Context, cdb *sql.DB, spellID, creatureEntry, petLevel uint32) bool {
-	if cdb == nil {
+	if cdb == nil || s.server == nil {
 		return false
 	}
-	var maxPetID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM character_pet").Scan(&maxPetID)
-	newPetID := uint32(maxPetID + 1)
+	newPetID := s.server.generatePetNumber()
+	if newPetID == 0 {
+		return false
+	}
 
 	var modelID uint32
 	var cName string

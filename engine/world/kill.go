@@ -1495,6 +1495,10 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 				unitFieldPower1 + 4: happiness,
 				unitFieldFlags:      unitFlags,
 			})
+			// Unit::ClearAllReactives (Unit.cpp:10766-10767): a dying
+			// hunter pet clears its combo points (the JUST_DIED arm,
+			// Unit.cpp:8927).
+			s.server.clearHunterPetReactives(motion)
 		}
 	}
 

@@ -6066,16 +6066,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
-	// SetRooted is Unit::SetControlled(state, UNIT_STATE_ROOT): sets or
-	// clears the root leg of UNIT_STATE_NOT_MOVE (Unit.h:256) on the
-	// handler creature. The engine honors motion.ScriptRooted in the
-	// chase-pause gate (ChaseMovementGenerator.cpp:98-106) and the
-	// waypoint-launch gate (WaypointMovementGenerator.cpp:141), so
-	// feign-death / phase-change root arms (stalagg, feugen, thekal,
-	// kologarn) port with real effect; melee swings still fire while
-	// rooted (DoMeleeAttackIfReady gates UNIT_STATE_CASTING only,
-	// UnitAI.cpp:61-63). The STUNNED leg rides the SetStunned twin
-	// below (same slot/gate pattern).
+	// SetRooted is Unit::SetControlled(state, UNIT_STATE_ROOT)
+	// (Unit.cpp:11484-11564) on the handler creature, through the
+	// SetRooted body (unit_control.go): the root packet and spline
+	// stop on apply, the stun-gated unroot on clear, and the aura /
+	// vehicle / movement-template re-checks on clear. The engine
+	// honors motion.ScriptRooted in the chase-pause gate
+	// (ChaseMovementGenerator.cpp:98-106) and the waypoint-launch
+	// gate (WaypointMovementGenerator.cpp:141), so feign-death /
+	// phase-change root arms (stalagg, feugen, thekal, kologarn) port
+	// with real effect; melee swings still fire while rooted
+	// (DoMeleeAttackIfReady gates UNIT_STATE_CASTING only,
+	// UnitAI.cpp:61-63).
 	methods["SetRooted"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("SetRooted requires a bool, got no args")
@@ -6084,20 +6086,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if !ok {
 			return nil, fmt.Errorf("SetRooted requires a bool")
 		}
-		s.motionMu.Lock()
-		motion.ScriptRooted = rooted
-		s.motionMu.Unlock()
+		s.setControlledCreature(motion, rooted, unitStateRoot)
 		return nil, nil
 	}
 	// SetStunned is Unit::SetControlled(state, UNIT_STATE_STUNNED)
-	// (Unit.cpp:11484-11560): sets or clears the stun leg of
-	// UNIT_STATE_NOT_MOVE (Unit.h:256) on the handler creature, the
-	// SetRooted twin. Apply runs the CastStop leg (Unit.cpp:11492:
-	// SetControlled calls CastStop() when state & UNIT_STATE_CONTROLLED)
-	// via the InterruptNonMeleeSpells bridge pattern; the clear is a
-	// plain slot write — the HasUnitState live leg still reads true
-	// while a MOD_STUN aura holds the state, matching the C++ clear
-	// early-return (Unit.cpp:11532-11535). The engine honors
+	// (Unit.cpp:11484-11564) on the handler creature, through the
+	// SetStunned body (unit_control.go): the UNIT_FLAG_STUNNED write,
+	// target clear/restore, spline stop, SMSG_SPLINE_MOVE_ROOT/UNROOT,
+	// and the CastStop-on-apply leg. The engine honors
 	// motion.ScriptStunned in the chase-pause, waypoint-launch,
 	// knockback and MoveFall gates (the NOT_MOVE set); melee swings
 	// still fire while stunned (DoMeleeAttackIfReady gates
@@ -6113,21 +6109,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if !ok {
 			return nil, fmt.Errorf("SetStunned requires a bool")
 		}
-		s.motionMu.Lock()
-		wasStunned := motion.ScriptStunned
-		motion.ScriptStunned = stunned
-		var interrupted []interruptedCreatureCast
-		if stunned && !wasStunned {
-			interrupted = s.interruptCreatureNonMeleeCasts(motion)
-			if len(interrupted) == 0 {
-				motion.CastingUntil = time.Time{}
-				s.cancelPendingCreatureCast(motion)
-			}
-		}
-		s.motionMu.Unlock()
-		for _, arm := range interrupted {
-			s.sendCreatureInterruptPackets(motion, arm)
-		}
+		s.setControlledCreature(motion, stunned, unitStateStunned)
 		return nil, nil
 	}
 	// SetCombatMovement is ScriptedAI::SetCombatMovement
@@ -6609,8 +6591,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// SetFeared is UnitMethods::SetFeared (UnitMethods.h:1964-1973) for
 	// creatures: Unit::SetControlled(apply, UNIT_STATE_FLEEING) (Unit.cpp:
-	// 11513-11560) via the setCreatureFeared engine leg. The player
-	// surface stays out (client control + no player flee spline).
+	// 11484-11564) via the dispatch (unit_control.go): the CastStop,
+	// melee-attack stop and stun/confuse gates on apply, the fear-aura
+	// re-check on clear. The player surface stays out (client control
+	// + no player flee spline).
 	methods["SetFeared"] = func(_ context.Context, args []any) ([]any, error) {
 		apply := true
 		if len(args) >= 1 {
@@ -6620,7 +6604,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 			apply = b
 		}
-		s.setCreatureFeared(motion, apply)
+		s.setControlledCreature(motion, apply, unitStateFleeing)
 		return nil, nil
 	}
 	// MoveTo is UnitMethods::MoveTo (UnitMethods.h:2267-2283) =
@@ -7076,9 +7060,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// SetConfused is UnitMethods::SetConfused (UnitMethods.h:1946-1958)
 	// for creatures: Unit::SetControlled(apply, UNIT_STATE_CONFUSED)
-	// (Unit.cpp:11484-11560) via the setCreatureConfused engine leg.
-	// The player surface stays out (client control + no player
-	// confused spline).
+	// (Unit.cpp:11484-11564) via the dispatch (unit_control.go): the
+	// CastStop, melee-attack stop and stun gate on apply, the
+	// confuse-aura re-check on clear. The player surface stays out
+	// (client control + no player confused spline).
 	methods["SetConfused"] = func(_ context.Context, args []any) ([]any, error) {
 		apply := true
 		if len(args) >= 1 {
@@ -7088,7 +7073,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 			apply = b
 		}
-		s.setCreatureConfused(motion, apply)
+		s.setControlledCreature(motion, apply, unitStateConfused)
 		return nil, nil
 	}
 	// MoveChase is UnitMethods::MoveChase (UnitMethods.h:2230-2238) =
