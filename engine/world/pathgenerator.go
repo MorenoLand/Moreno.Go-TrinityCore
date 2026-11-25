@@ -225,8 +225,8 @@ func (s *pathSourceSnapshot) pathHoverOffset() float32 { return s.hoverOffset }
 // newCreaturePathSource snapshots a creatureMotion as a point read — the
 // way the cast arms read a selected motion (castCommandSelectedCreature);
 // callers already holding Server.motionMu get a consistent snapshot.
-// Collision height has no per-creature Go model: terrainDefaultCollisionHeight
-// is the C++ default (see the file header). Falling reads creatureIsFalling
+// Collision height resolves the DBC model data (Unit::GetCollisionHeight,
+// Unit.cpp:14122-14146) below; Falling reads creatureIsFalling
 // (Unit::IsFalling twin: the FALLING latch OR the MoveFall spline marker),
 // so the far-from-poly falling shortcut fires for falling creatures.
 func newCreaturePathSource(srv *Server, m *creatureMotion) pathGeneratorSource {
@@ -264,6 +264,28 @@ func newCreaturePathSource(srv *Server, m *creatureMotion) pathGeneratorSource {
 	// the live flag, motion.HoverHeight the template field value.
 	if m.Hovering {
 		snap.hoverOffset = m.HoverHeight
+	}
+	// Unit::GetCollisionHeight (Unit.cpp:14122-14146) resolves the
+	// mount/native DBC model data at the motion's live scale — script
+	// scale while known, else the template base, floored at 0.01 like
+	// the vehicle-base twin — with the mounted branch on UNIT_FLAG_MOUNT
+	// (the C++ IsMounted flag arm). The store read takes no aura lock,
+	// so it runs under the caller's motionMu; the aura-scale fold and
+	// the mount-aura leg of IsMounted stay out, both read the aura map
+	// under auraMu, which the MoveFall precedent keeps out from under
+	// motionMu — a scale- or mount-aura'd creature keeps its un-aura'd
+	// height here. A failed lookup keeps the default.
+	if srv != nil && srv.Data != nil {
+		scale := m.BaseScale
+		if m.ScriptScaleKnown {
+			scale = m.ScriptScale
+		}
+		if scale < 0.01 {
+			scale = 0.01
+		}
+		if h, found, err := srv.Data.CollisionHeight(m.Mount, m.NativeDisplayID, m.UnitFlags&0x08000000 != 0, scale); err == nil && found {
+			snap.collisionHeight = h
+		}
 	}
 	if srv != nil {
 		snap.inWater = srv.mapIsInWater(m.Map, m.X, m.Y, m.Z)

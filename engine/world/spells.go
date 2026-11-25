@@ -39162,8 +39162,10 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
 	// is never applied — the dynobj UpdateTargetMap leg (SpellAuras.cpp:696,
 	// addUnit=false) and the direct-cast leg (Unit::_RemoveNoStackAurasDueToAura,
-	// Unit.cpp:3648, aura->Remove()). Evaluated on the first surviving aura
-	// effect, the one whose amount this record carries. The strictly-higher
+	// Unit.cpp:3648, aura->Remove()). Evaluated on every surviving aura
+	// effect, the way C++ loops all of the aura's effects: a strictly-lower
+	// later effect suppresses the whole aura, and strictly-lower peers of
+	// every effect ride the purge list. The strictly-higher
 	// purges ride the no-stack purge below for direct casts; a persistent-area
 	// application purges them too — IsHighestExclusiveAura(this, true) at
 	// SpellAuras.cpp:696 removes strictly-lower peers immediately, and an
@@ -39178,10 +39180,8 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				if effectMask&(1<<uint(index)) == 0 || effect.Aura == 0 {
 					continue
 				}
-				if persistentAreaAura && primaryIndex >= 0 && index != primaryIndex {
-					continue
-				}
 				verdict := s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras, persistentAreaAura)
+				exclusivePurge = append(exclusivePurge, verdict.purge...)
 				if verdict.suppressed {
 					delete(s.auras, spellID)
 					if freshSlot {
@@ -39196,14 +39196,12 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 					// leg drops them instead (Unit.cpp:3648 returns
 					// before the purge loop).
 					if persistentAreaAura {
-						for _, purgeID := range verdict.purge {
+						for _, purgeID := range exclusivePurge {
 							s.removeAura(purgeID.spellID)
 						}
 					}
 					return
 				}
-				exclusivePurge = verdict.purge
-				break
 			}
 		}
 	}
