@@ -406,6 +406,18 @@ func unitIsStandState(st uint8) bool {
 	}
 }
 
+// unitIsSitState is Unit::IsSitState (Unit.cpp:10542-10549): SIT (1),
+// SIT_CHAIR (2), SIT_LOW_CHAIR (4), SIT_MEDIUM_CHAIR (5),
+// SIT_HIGH_CHAIR (6). SLEEP (3) is not a sit state.
+func unitIsSitState(st uint8) bool {
+	switch st {
+	case 1, 2, 4, 5, 6:
+		return true
+	default:
+		return false
+	}
+}
+
 // setMotionDisplayID is the shared Unit::SetDisplayId /
 // Creature::SetDisplayId fold behind the handler SetDisplayId bridge
 // and the DeMorph arms: UNIT_FIELD_DISPLAYID plus the
@@ -1806,6 +1818,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{unitIsStandState(st)}, nil
 	}
+	// IsSitState is Unit::IsSitState (Unit.cpp:10542-10549): the
+	// shared unitIsSitState predicate over the live stand state.
+	methods["IsSitState"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		st := motion.StandState
+		s.motionMu.Unlock()
+		return []any{unitIsSitState(st)}, nil
+	}
 	// IsRooted is Unit::IsRooted (UnitMethods.h, Trinity arm):
 	// UNIT_STATE_ROOT or MOVEMENTFLAG_ROOT. Go's twins are
 	// motion.ScriptRooted (SetRooted) and the SPELL_AURA_MOD_ROOT
@@ -2480,8 +2500,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
-	// IsPolymorphed is Unit::IsPolymorphed (Unit.cpp:10572): a live
-	// SPELL_AURA_TRANSFORM (56) aura, via the creatureIsPolymorphed twin.
+	// IsPolymorphed is Unit::IsPolymorphed (Unit.cpp:10572-10584): a
+	// live SPELL_AURA_TRANSFORM (56) aura whose spell is a mage
+	// polymorph, via the creatureIsPolymorphed twin.
 	methods["IsPolymorphed"] = func(_ context.Context, _ []any) ([]any, error) {
 		return []any{s.creatureIsPolymorphed(motion)}, nil
 	}
@@ -4172,7 +4193,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		phase := motion.PhaseMask
 		transportGUID := motion.TransportGUID
-		x, y, z := motion.X, motion.Y, motion.Z
+		// Unit::StopMoving (Unit.cpp:10508-10510): UpdateSplinePosition
+		// snaps the server position to the current interpolated point
+		// before MoveSplineInit::Stop sends MonsterMoveStop there —
+		// motion.X/Y/Z is the launch destination while a spline is in
+		// flight (creaturemotion.go:6708), so stopping there would jump
+		// the creature to the destination.
+		x, y, z := creatureSplinePosition(motion, time.Now())
+		motion.X, motion.Y, motion.Z = x, y, z
 		motion.Moving = false
 		s.motionMu.Unlock()
 		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z, phase, transportGUID)
@@ -4197,6 +4225,59 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	methods["MoveClear"] = methods["StopMoving"]
 	methods["MoveExpire"] = methods["StopMoving"]
 	methods["MoveIdle"] = methods["StopMoving"]
+	// PauseMovement is Unit::PauseMovement (Unit.cpp:10514-10524) with
+	// the Unit.h:1559 defaults (timer 0, slot 0, forced true), via the
+	// pauseCreatureMovement twin (creaturemotion.go). The player
+	// surface stays out: Go has no player movement-generator model.
+	methods["PauseMovement"] = func(_ context.Context, args []any) ([]any, error) {
+		timer := uint32(0)
+		slot := uint32(0)
+		forced := true
+		if len(args) > 0 {
+			v, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			timer = v
+		}
+		if len(args) > 1 {
+			v, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			slot = v
+		}
+		if len(args) > 2 {
+			if b, ok := args[2].(bool); ok {
+				forced = b
+			}
+		}
+		s.pauseCreatureMovement(motion, timer, uint8(slot), forced)
+		return nil, nil
+	}
+	// ResumeMovement is Unit::ResumeMovement (Unit.cpp:10526-10533)
+	// with the Unit.h:1560 defaults (timer 0, slot 0), via the
+	// resumeCreatureMovement twin (creaturemotion.go).
+	methods["ResumeMovement"] = func(_ context.Context, args []any) ([]any, error) {
+		timer := uint32(0)
+		slot := uint32(0)
+		if len(args) > 0 {
+			v, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			timer = v
+		}
+		if len(args) > 1 {
+			v, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			slot = v
+		}
+		s.resumeCreatureMovement(motion, timer, uint8(slot))
+		return nil, nil
+	}
 	// Despawn is Lua Creature::DespawnOrUnsummon() (Creature.cpp): the
 	// creature leaves the world immediately — motion removed, a
 	// SMSG_DESTROY_OBJECT broadcast (the despawnAtEvade precedent,
@@ -5923,10 +6004,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// KNEEL=8, SUBMERGED=9, SharedDefines.h); the player-only
 	// SMSG_STANDSTATE_UPDATE leg is N/A for creatures. The
 	// RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_SEATED) leg
-	// (state != STAND) stays out: it is vacuous for every current caller
-	// (feign arms RemoveAllAuras first; nefarius's barrier is stripped by
-	// his explicit RemoveAura) and wiring it would require unlocking
-	// motionMu around the aura-strip call.
+	// runs when the new state counts as standing (IsStandState), after
+	// the motionMu unlock — the strip takes auraMu itself
+	// (removeCreatureAurasWithInterruptFlags, cc_break.go).
 	// applyCreatureMotionToSpawn overlays motion.StandState onto the spawn
 	// record's Bytes1 byte 0 (creatures.go), so feign-death / intro /
 	// throne-sitting arms (stalagg, feugen, nefarius, ...) port with real
@@ -5943,6 +6023,24 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.StandState = uint8(st)
 		motion.StandStateKnown = true
 		s.motionMu.Unlock()
+		if unitIsStandState(uint8(st)) {
+			s.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagNotSeated)
+		}
+		return nil, nil
+	}
+	// SetAnimationTier is Unit::SetAnimationTier (Unit.cpp:10585-10590):
+	// creatures only, the UNIT_FIELD_BYTES_1 anim-tier byte, via the
+	// creatureSetAnimationTier twin (creatures.go). Ground 0, Swim 1,
+	// Hover 2, Fly 3, Submerged 4 (UnitDefines.h:81-88).
+	methods["SetAnimationTier"] = func(_ context.Context, args []any) ([]any, error) {
+		tier, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if tier > 4 {
+			return nil, fmt.Errorf("SetAnimationTier requires an AnimationTier 0-4, got %d", tier)
+		}
+		s.creatureSetAnimationTier(motion, int(tier))
 		return nil, nil
 	}
 	// SetSheath is Unit::SetSheath: SetByteValue(UNIT_FIELD_BYTES_2,

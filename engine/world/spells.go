@@ -8140,11 +8140,13 @@ func (s *session) removeFakeDeath() {
 }
 
 // clearSessionComboPoints mirrors Unit::ClearComboPoints
-// (Unit.cpp:10674-10687): the bank empties and the client is notified.
+// (Unit.cpp:10674-10687): the RETAIN_COMBO_POINTS auras go first,
+// then the bank empties and the client is notified.
 func (s *session) clearSessionComboPoints() {
 	if s == nil || s.player == nil || s.comboTargetGUID == 0 {
 		return
 	}
+	s.removeAurasByType(spellAuraRetainComboPoints)
 	s.comboPoints = 0
 	s.sendComboPointsUpdate()
 	s.comboTargetGUID = 0
@@ -8154,7 +8156,8 @@ func (s *session) clearSessionComboPoints() {
 // (Unit.cpp:10722-10726): every unit banking combo points on victimGUID
 // loses them — in C++ each holder's ClearComboPoints also drops the
 // holder from the victim's m_comboPointHolders list. Go keeps no reverse
-// index, so the sweep runs over the live sessions instead.
+// index, so the sweep runs over the live sessions and the live creature
+// motions instead.
 func (s *Server) clearComboPointHolders(victimGUID uint64) {
 	if s == nil || victimGUID == 0 {
 		return
@@ -8170,6 +8173,23 @@ func (s *Server) clearComboPointHolders(victimGUID uint64) {
 	s.sessionsMu.RUnlock()
 	for _, sess := range holders {
 		sess.clearSessionComboPoints()
+	}
+	// Creature holders (grantCreatureComboPoints banks, boss_ai.go)
+	// are invisible to the session sweep: snapshot under motionMu,
+	// then clear outside it — clearCreatureComboPoints takes
+	// motionMu itself.
+	s.motionMu.Lock()
+	var creatureHolders []*creatureMotion
+	for _, motions := range s.instanceCreatureMotion {
+		for _, m := range motions {
+			if m != nil && m.comboTarget == victimGUID {
+				creatureHolders = append(creatureHolders, m)
+			}
+		}
+	}
+	s.motionMu.Unlock()
+	for _, m := range creatureHolders {
+		s.clearCreatureComboPoints(m)
 	}
 }
 
@@ -51236,6 +51256,16 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	if auraWasPresent && !removeHookFiredEarly {
 		auraRef := &luaAuraRef{server: s, spellID: spellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID, snapshot: removedAura, removeMode: mode}
 		s.fireAuraRemove(context.Background(), spellID, auraRef.luaAuraObject(), s.luaUnitObjectForGUID(key.Map, key.InstanceID, key.GUID))
+	}
+	// Unit::RecalculateObjectScale (Unit.cpp:10593-10598) via
+	// HandleAuraModScale: dropping a MOD_SCALE/MOD_SCALE_2 aura
+	// pushes the recomputed object scale live.
+	if auraWasPresent && s.Data != nil {
+		if rspell, found, rerr := s.Data.Spell(spellID); rerr == nil && found && (spellHasAura(rspell, spellAuraModScale) || spellHasAura(rspell, spellAuraModScale2)) {
+			if m := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID); m != nil {
+				s.recalculateCreatureObjectScale(m)
+			}
+		}
 	}
 }
 

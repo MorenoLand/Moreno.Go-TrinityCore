@@ -58,8 +58,9 @@ func (s *session) sweepReactiveTimers() {
 // every reactive timer drops; the overpower arm keeps its combo-point
 // clearing for warriors. Called on JUST_DIED (Unit.cpp:8927) and from
 // Player::CleanupsBeforeDelete (Player.cpp:26311). The hunter-pet
-// combo-point arm has no Go pet-combo-point model (SMSG_PET_UPDATE_COMBO_POINTS
-// unwired), so it stays unbridged.
+// combo-point arm (IsHunterPet -> ClearComboPoints) stays unbridged:
+// the packet leg is wired now (sendCreatureComboPointsUpdate,
+// boss_ai.go), but Go has no pet-reactive clear call site to hang it on.
 func (s *session) clearAllReactives() {
 	if s == nil || s.player == nil {
 		return

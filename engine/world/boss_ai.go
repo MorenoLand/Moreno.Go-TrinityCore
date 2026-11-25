@@ -5356,44 +5356,70 @@ func (s *Server) creatureEffectAddComboPoints(ctx context.Context, m *creatureMo
 
 // grantCreatureComboPoints mirrors Unit::AddComboPoints (Unit.cpp:10655-10673)
 // for a creature caster: a new target resets the bank to count, the same
-// target adds clamped 0-5. No client packet rides it — Unit::SendComboPoints
-// (Unit.cpp:10689) sends SMSG_UPDATE_COMBO_POINTS to players only. The
-// holder reverse index stays out: Go keeps no creature holder registry
-// (the session sweep covers players only).
+// target adds clamped 0-5 — then the pet arm of Unit::SendComboPoints
+// (Unit.cpp:10702-10720) notifies the charmer/owner player. The holder
+// reverse index stays out: Go keeps no creature holder registry (the
+// clearComboPointHolders sweep covers creatures by bank scan).
 func (s *Server) grantCreatureComboPoints(m *creatureMotion, targetGUID uint64, count int8) {
 	if s == nil || m == nil || count == 0 {
 		return
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
 	if targetGUID != 0 && targetGUID != m.comboTarget {
 		m.comboTarget = targetGUID
 		m.comboPoints = count
+	} else {
+		total := int16(m.comboPoints) + int16(count)
+		if total > 5 {
+			total = 5
+		}
+		if total < 0 {
+			total = 0
+		}
+		m.comboPoints = int8(total)
+	}
+	petGUID, ownerGUID, target, points := m.GUID, creatureCharmerOrOwnerGUID(m), m.comboTarget, m.comboPoints
+	s.motionMu.Unlock()
+	s.sendCreatureComboPointsUpdate(petGUID, ownerGUID, target, points)
+}
+
+// sendCreatureComboPointsUpdate is the pet/owner arm of
+// Unit::SendComboPoints (Unit.cpp:10702-10720): SMSG_PET_UPDATE_COMBO_POINTS
+// carries the pet's packed GUID, the combo target's packed GUID, and the
+// point count, to the charmer/owner player (GetPlayerMovingMe's
+// possessed-controller leg stays out — Go has no possession-controller
+// mapping to address it to).
+func (s *Server) sendCreatureComboPointsUpdate(petGUID, ownerGUID, targetGUID uint64, points int8) {
+	if s == nil || petGUID == 0 || ownerGUID == 0 {
 		return
 	}
-	total := int16(m.comboPoints) + int16(count)
-	if total > 5 {
-		total = 5
+	owner := s.findSessionByGUID(ownerGUID)
+	if owner == nil {
+		return
 	}
-	if total < 0 {
-		total = 0
-	}
-	m.comboPoints = int8(total)
+	packet := protocol.NewBuffer(packedGUIDSize(petGUID) + packedGUIDSize(targetGUID) + 1)
+	packet.WritePackedGUID(petGUID)
+	packet.WritePackedGUID(targetGUID)
+	packet.WriteU8(uint8(points))
+	_ = owner.write(uint16(protocol.OpcodeSMSG_PET_UPDATE_COMBO_POINTS), packet.Bytes(), true)
 }
 
 // clearCreatureComboPoints mirrors Unit::ClearComboPoints (Unit.cpp:10674-10685)
 // for a creature caster, minus the holder removal (no creature holder
 // registry): the RETAIN_COMBO_POINTS auras go, then the bank and its
-// target both clear.
+// target both clear — the owner is notified first, while the packet is
+// still addressed to the old target (the C++ SendComboPoints order).
 func (s *Server) clearCreatureComboPoints(m *creatureMotion) {
 	if s == nil || m == nil || m.comboTarget == 0 {
 		return
 	}
 	s.removeCreatureAurasByType(creatureAuraKeyForMotion(m), spellAuraRetainComboPoints)
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
+	petGUID, ownerGUID, target := m.GUID, creatureCharmerOrOwnerGUID(m), m.comboTarget
 	m.comboPoints = 0
 	m.comboTarget = 0
+	s.motionMu.Unlock()
+	s.sendCreatureComboPointsUpdate(petGUID, ownerGUID, target, 0)
 }
 
 // finishCreatureComboPoints mirrors the combo-point legs of

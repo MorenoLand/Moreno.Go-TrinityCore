@@ -27,11 +27,11 @@ func (s *session) handleStandStateChange(ctx context.Context, payload []byte) bo
 		return true
 	}
 	s.player.StandState = uint8(state)
-	// Reference: Unit::SetStandState (Unit.cpp:10557-10569). Standing — the
-	// only one of the four client-sendable states that counts as a stand
-	// state (Unit::IsStandState, Unit.cpp:10551-10555) — breaks auras flagged
+	// Reference: Unit::SetStandState (Unit.cpp:10557-10569). A stand
+	// state (Unit::IsStandState, Unit.cpp:10551-10555 — of the four
+	// client-sendable states only STAND counts) breaks auras flagged
 	// AURA_INTERRUPT_FLAG_NOT_SEATED (food/drink).
-	if state == 0 { // UNIT_STAND_STATE_STAND
+	if unitIsStandState(uint8(state)) {
 		s.removeAurasWithInterruptFlags(auraInterruptFlagNotSeated)
 	}
 	// SetByteValue(UNIT_FIELD_BYTES_1, UNIT_BYTES_1_OFFSET_STAND_STATE, state)

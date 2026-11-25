@@ -1402,6 +1402,17 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return unitIsStandState(motion.StandState)
 	})
+	// IsSitState is Unit::IsSitState (Unit.cpp:10542-10549) over the
+	// live motion's StandState, the handler twin's predicate
+	// (lua_creature_events.go); a motion that no longer resolves
+	// reads the standing default.
+	methods["IsSitState"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return false
+		}
+		return unitIsSitState(motion.StandState)
+	})
 	// IsMounted is Unit::IsMounted (Unit.cpp): the UNIT_FLAG_MOUNT
 	// bit over the live motion flags, the handler twin's read; a
 	// motion that no longer resolves falls back to the template
@@ -1496,6 +1507,9 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		motion.StandState = uint8(st)
 		motion.StandStateKnown = true
 		s.server.motionMu.Unlock()
+		if unitIsStandState(uint8(st)) {
+			s.server.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagNotSeated)
+		}
 		return nil, nil
 	}
 	// SetSheath is Unit::SetSheath (Unit.h:903) over the live

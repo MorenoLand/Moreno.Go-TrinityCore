@@ -5359,7 +5359,8 @@ func (s *session) luaPlayer() *scripting.Object {
 	// SetStandState is Unit::SetStandState (Unit.cpp:10557-10569):
 	// SetByteValue(UNIT_FIELD_BYTES_1, stand-state byte) + the
 	// SMSG_STANDSTATE_UPDATE send to the player + values-update broadcast
-	// (emote.go handleStandStateChange twin); standing (0) breaks
+	// (emote.go handleStandStateChange twin); a stand state (IsStandState:
+	// not a sit state, SLEEP, or KNEEL — so STAND, DEAD, SUBMERGED) breaks
 	// NOT_SEATED-interrupt auras. Validated 0-9 like the creature twin
 	// (lua_creature_events.go:1621). Backs the frostblade-shrine sit arm
 	// (go_scripts.cpp:739-753).
@@ -5372,7 +5373,7 @@ func (s *session) luaPlayer() *scripting.Object {
 			return nil, fmt.Errorf("SetStandState requires a UNIT_STAND_STATE 0-9, got %d", st)
 		}
 		state.StandState = uint8(st)
-		if st == 0 {
+		if unitIsStandState(uint8(st)) {
 			s.removeAurasWithInterruptFlags(auraInterruptFlagNotSeated)
 		}
 		merged := uint32(st) | uint32(state.StandFlags)<<16
@@ -5388,6 +5389,12 @@ func (s *session) luaPlayer() *scripting.Object {
 	// IsStandState is Unit::IsStandState (Unit.cpp:10551-10555),
 	// shared predicate unitIsStandState (lua_creature_events.go).
 	methods["IsStandState"] = luaNoArgs(func() any { return unitIsStandState(state.StandState) })
+	// IsSitState is Unit::IsSitState (Unit.cpp:10542-10549),
+	// shared predicate unitIsSitState (lua_creature_events.go).
+	methods["IsSitState"] = luaNoArgs(func() any { return unitIsSitState(state.StandState) })
+	// IsPolymorphed is Unit::IsPolymorphed (Unit.cpp:10572-10584),
+	// the session isPolymorphed twin (shapeshift.go).
+	methods["IsPolymorphed"] = luaNoArgs(func() any { return s.isPolymorphed() })
 	// IsRooted is Unit::IsRooted (UnitMethods.h, Trinity arm):
 	// UNIT_STATE_ROOT or MOVEMENTFLAG_ROOT. Go's twin is the
 	// session rooted flag (setRooted + login root-aura scan,

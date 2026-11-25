@@ -3763,6 +3763,21 @@ func (s *session) sendPetActionBarTalkGrowl(petGUID uint64, motion *creatureMoti
 	}
 }
 
+// sendPetSelfEngageGrowl is the PetAI::DoAttack growl (PetAI.cpp:408-418):
+// an aggressive pet engaging on its own (not commanded) growls to its
+// owner — SMSG_AI_REACTION, pet GUID + AI_REACTION_HOSTILE (2),
+// owner-only (Unit::SendPetAIReaction, Unit.cpp:10475-10486).
+// Defensive engages stay silent (C++ requires REACT_AGGRESSIVE).
+func (s *session) sendPetSelfEngageGrowl(petGUID uint64) {
+	if s == nil || petGUID == 0 {
+		return
+	}
+	buf := protocol.NewBuffer(12)
+	buf.WriteU64(petGUID)
+	buf.WriteU32(aiReactionHostile)
+	_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), true)
+}
+
 // handlePetAction processes CMSG_PET_ACTION (0x175).
 // Reference: WorldSession::HandlePetAction (PetHandler.cpp:73-259).
 func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {

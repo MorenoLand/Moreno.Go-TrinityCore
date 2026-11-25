@@ -159,6 +159,36 @@ func (s *Server) creatureAuraScaleSum(key creatureAuraKey) int32 {
 	return sum
 }
 
+// recalculateCreatureObjectScale is Unit::RecalculateObjectScale
+// (Unit.cpp:10593-10598) for creatures: native scale + the live
+// MOD_SCALE/MOD_SCALE_2 aura sum as a percent, floored at 0.01,
+// pushed to clients via the object-scale field — the C++
+// HandleAuraModScale live push at aura apply/remove. The SetScale
+// bridge (lua_creature_events.go) shares the formula; this is the
+// aura-path twin.
+func (s *Server) recalculateCreatureObjectScale(motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	base := motion.BaseScale
+	if motion.ScriptScaleKnown {
+		base = motion.ScriptScale
+	}
+	if base <= 0 {
+		base = 1
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	key := creatureAuraKeyForMotion(motion)
+	s.motionMu.Unlock()
+	effective := float64(base) + float64(s.creatureAuraScaleSum(key))/100
+	if effective < 0.01 {
+		effective = 0.01
+	}
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+		map[int]uint32{objectFieldScale: math.Float32bits(float32(effective))})
+}
+
 // creatureCanInstantCast mirrors the >=1000 arm of
 // AuraEffect::HandleModCastingSpeed (SpellAuraEffects.cpp:3901-3922): a
 // live SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (65) effect with amount >=

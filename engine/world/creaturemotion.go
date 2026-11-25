@@ -742,7 +742,7 @@ type creatureMotion struct {
 
 	ThreatMgr    *ThreatManager
 	extraAttacks uint32 // Unit::m_extraAttacks (Unit.h:802) — banked SPELL_EFFECT_ADD_EXTRA_ATTACKS swings, the creature twin of session.extraAttacks
-	comboPoints  int8   // Unit::m_comboPoints (Unit.h:1580) — banked combo points from SPELL_EFFECT_ADD_COMBO_POINTS gains, the creature twin of session.comboPoints; no client packet rides it (Unit::SendComboPoints is player-only, Unit.cpp:10689)
+	comboPoints  int8   // Unit::m_comboPoints (Unit.h:1580) — banked combo points from SPELL_EFFECT_ADD_COMBO_POINTS gains, the creature twin of session.comboPoints; the owner is notified via SMSG_PET_UPDATE_COMBO_POINTS (Unit::SendComboPoints, Unit.cpp:10702)
 	comboTarget  uint64 // Unit::m_comboTarget — GUID the banked combo points sit on
 	BossAI       BossAI
 	ScriptName   string
@@ -779,6 +779,11 @@ type creatureMotion struct {
 	// ever assigned. PetReact mirrors the creature react-state
 	// numbering (creatureReact* / PetReact* both 0/1/2).
 	CharmOldReact uint8
+	// CharmWasWalking banks the pre-charm walk flag for the uncharm
+	// restore (Unit::SetCharm, Unit.cpp:6233-6237 / 6275-6279: a
+	// charmed unit that was walking runs instead, and uncharm
+	// restores the banked state with a movement-flag heartbeat).
+	CharmWasWalking bool
 	// CharmActionBar holds a player-rearranged action bar for a charmed
 	// wild creature (WorldSession::HandlePetSetAction, PetHandler.cpp:460-600:
 	// SetActionBar mutates the unit's CharmInfo in place). A pet persists
@@ -2113,6 +2118,97 @@ func (s *Server) refreshCreatureRunSpeed(key creatureAuraKey, guid uint64) {
 		return
 	}
 	s.refreshCreatureRunSpeedMotion(motion)
+}
+
+// pauseCreatureMovement is Unit::PauseMovement (Unit.cpp:10514-10524):
+// slot >= 2 is invalid and no-ops (IsInvalidMovementSlot); otherwise the
+// slot's generator pauses — timer > 0 until now+timer (TIMED_PAUSED),
+// timer 0 indefinitely (PAUSED) — and a forced pause stops the current
+// spline only when the paused slot is the current slot
+// (MotionMaster::GetCurrentSlot: ACTIVE while chase/follow/evade/flee/
+// confused or an in-flight script spline runs, else DEFAULT). Random
+// generators overwrite a running pause with the new timer
+// (RandomMovementGenerator::Pause); Waypoint generators no-op a timed
+// re-pause while PAUSED (WaypointMovementGenerator::Pause) — Go keeps no
+// per-generator model, so the Random overwrite is the shared behaviour.
+func (s *Server) pauseCreatureMovement(motion *creatureMotion, timer uint32, slot uint8, forced bool) {
+	if s == nil || motion == nil || slot >= 2 {
+		return
+	}
+	now := time.Now()
+	s.motionMu.Lock()
+	motion.MovementPausedSlot = slot
+	if timer == 0 {
+		motion.MovementPaused = true
+		motion.MovementPausedUntil = time.Time{}
+	} else {
+		motion.MovementPausedUntil = now.Add(time.Duration(timer) * time.Millisecond)
+		motion.MovementPaused = false
+	}
+	if forced {
+		active := motion.ScriptChaseTargetGUID != 0 || motion.ScriptFollowTargetGUID != 0 || motion.Evading || motion.Fleeing || motion.Confused || (motion.Moving && now.Before(motion.MoveEnds) && motion.ScriptMoveType != 0)
+		currentSlot := uint32(0)
+		if active {
+			currentSlot = 1
+		}
+		if uint32(slot) == currentSlot {
+			motion.Moving = false
+		}
+	}
+	s.motionMu.Unlock()
+}
+
+// resumeCreatureMovement is Unit::ResumeMovement (Unit.cpp:10526-10533)
+// over MovementGenerator::Resume (Random/Waypoint): slot >= 2 no-ops;
+// the PAUSED latch clears, and an override timer re-arms the timed pause
+// until now+timer — a timed pause with no override runs out on its own
+// clock, matching the C++ _timer/_nextMoveTime behaviour.
+func (s *Server) resumeCreatureMovement(motion *creatureMotion, timer uint32, slot uint8) {
+	if s == nil || motion == nil || slot >= 2 {
+		return
+	}
+	s.motionMu.Lock()
+	motion.MovementPaused = false
+	if timer > 0 {
+		motion.MovementPausedUntil = time.Now().Add(time.Duration(timer) * time.Millisecond)
+	}
+	s.motionMu.Unlock()
+}
+
+// sendMovementFlagUpdate is Unit::SendMovementFlagUpdate
+// (Unit.cpp:10535-10539): BuildHeartBeatMsg (Object.cpp:1801-1806) —
+// MSG_MOVE_HEARTBEAT, packed GUID, the BuildMovementPacket body
+// (writeMovementInfo) with game-time ms — fanned out via
+// broadcastToVisibleSetForCreature (SendMessageToSet twin); self=true
+// also writes the packet to the unit's own session, the charmed-player
+// arm (Unit.cpp:6279).
+func (s *Server) sendMovementFlagUpdate(motion *creatureMotion, self bool) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	flags, extra := debugCreatureMovementFlags(motion)
+	x, y, z, orientation := motion.X, motion.Y, motion.Z, motion.Orientation
+	s.motionMu.Unlock()
+	info := movementInfo{
+		GUID:        guid,
+		Flags:       flags,
+		Flags2:      uint16(extra),
+		Time:        s.gameTimeMilliseconds(),
+		X:           x,
+		Y:           y,
+		Z:           z,
+		Orientation: orientation,
+	}
+	packet := protocol.NewBuffer(112)
+	writeMovementInfo(packet, info)
+	s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeMSG_MOVE_HEARTBEAT), packet.Bytes(), mapID, instanceID, guid)
+	if self {
+		if sess := s.findSessionByGUID(guid); sess != nil {
+			_ = sess.write(uint16(protocol.OpcodeMSG_MOVE_HEARTBEAT), packet.Bytes(), true)
+		}
+	}
 }
 
 // refreshCreatureRunSpeedMotion is refreshCreatureRunSpeed for a motion
@@ -5359,6 +5455,7 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 		motion.CharmOwnerGUID = motion.OwnerGUID
 		motion.CharmFactionKnown = motion.FactionKnown
 		motion.CharmUnitFlagsKnown = motion.UnitFlagsKnown
+		motion.CharmWasWalking = motion.Walking
 		// CharmInfo ctor banks _oldReactState (Unit.cpp:9919-9934) for
 		// the DeleteCharmInfo restore below: the creature ReactState,
 		// falling back to PetReact only when no ReactState was ever
@@ -5410,6 +5507,14 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	motion.CannotReachTarget = false
 	motion.CannotReachSince = time.Time{}
 	motion.Moving = false
+	// Unit::SetCharm (Unit.cpp:6233-6237): a charmed unit that was
+	// walking runs instead — SetWalk(false) plus the movement-flag
+	// heartbeat (sent after the unlock below).
+	walkFlipped := false
+	if motion.Walking {
+		motion.Walking = false
+		walkFlipped = true
+	}
 	// Unit::SetCharmedBy (Unit.cpp:11798-11799) CastStops before
 	// CombatStop: a live generic/channel cast dies at charm time, so
 	// the deferred twin fire and the channel tick must not complete a
@@ -5471,6 +5576,11 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 		}
 	}
 	s.broadcastCreatureValuesUpdateInInstance(mapID, motion.InstanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+	// Unit::SetCharm (Unit.cpp:6233-6237): the walk flip above rides
+	// out on a movement-flag heartbeat.
+	if walkFlipped {
+		s.sendMovementFlagUpdate(motion, false)
+	}
 	// SmartAI::OnCharmed (SmartAI.cpp:672-705): a charmed escort ends its
 	// path (EndPath(true) fails the escort quest), then the CHARMED event
 	// fires with charmed = true. Only a first charm reaches here — a
@@ -5528,6 +5638,14 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.UnitFlagsKnown = motion.CharmUnitFlagsKnown || motion.UnitFlags != motion.CharmUnitFlags
 	motion.OwnerGUID = motion.CharmOwnerGUID
 	motion.PetCommand = PetCommandStay
+	// Unit::SetCharm (Unit.cpp:6275-6279) on uncharm restores the
+	// pre-charm walk state with a self-addressed movement-flag
+	// heartbeat when it differs (sent after the unlock below).
+	walkRestored := false
+	if motion.Walking != motion.CharmWasWalking {
+		motion.Walking = motion.CharmWasWalking
+		walkRestored = true
+	}
 	// DeleteCharmInfo (Unit.cpp:11926+) drops the stay position
 	// with the charm: the restored Stay carries no recorded
 	// point, so the stay branch must not return the wild
@@ -5558,6 +5676,7 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.CharmUnitFlags = 0
 	motion.CharmFaction = 0
 	motion.CharmOwnerGUID = 0
+	motion.CharmWasWalking = false
 	motion.CharmFactionKnown = false
 	motion.CharmUnitFlagsKnown = false
 	// Unit::RemoveCharmedBy ends charm with CombatStop() (Unit.cpp:11946-11947):
@@ -5598,6 +5717,9 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 		s.sendCreatureInterruptPackets(motion, arm)
 	}
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+	if walkRestored {
+		s.sendMovementFlagUpdate(motion, true)
+	}
 	s.removeThreatVictimFromAllLists(mapID, instanceID, rawGUID)
 	s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, rawGUID, phase)
 	// Unit::RemoveCharmedBy CHARM_TYPE_POSSESS (Unit.cpp:11979-11986):
@@ -9462,18 +9584,27 @@ func (s *Server) regenerateCreatureHealth(motion *creatureMotion) {
 	s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{unitFieldHealth: newHealth})
 }
 
-// creatureIsPolymorphed is the Unit::IsPolymorphed gate (Unit.cpp:10572): a
-// live SPELL_AURA_TRANSFORM (56) aura. Go records auras only for known spells,
-// subsuming the C++ GetSpellInfo null leg.
+// creatureIsPolymorphed is the Unit::IsPolymorphed gate
+// (Unit.cpp:10572-10584): a live SPELL_AURA_TRANSFORM (56) aura whose
+// spell's specific is SPELL_SPECIFIC_MAGE_POLYMORPH — any other
+// transform (disguises, Noggenfogger) is not a polymorph. Go records
+// auras only for known spells, subsuming the C++ GetSpellInfo null leg.
 func (s *Server) creatureIsPolymorphed(motion *creatureMotion) bool {
-	if s == nil || motion == nil {
+	if s == nil || motion == nil || s.Data == nil {
 		return false
 	}
 	key := creatureAuraKeyForMotion(motion)
 	s.auraMu.Lock()
 	defer s.auraMu.Unlock()
 	for _, aura := range s.activeCreatureAuras[key] {
-		if aura != nil && !aura.Stopped && aura.AuraType == spellAuraTransform {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraTransform {
+			continue
+		}
+		spell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if spellSpecific(spell, s.spellFirstRank) == spellSpecificMagePolymorph {
 			return true
 		}
 	}

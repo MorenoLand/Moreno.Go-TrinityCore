@@ -1330,6 +1330,9 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 				motion.TargetGUID = next
 				motion.InCombat = true
 				s.firePetEnterCombat(ctx, motion, next)
+				if motion.PetReact == PetReactAggressive && owner.Sess != nil {
+					owner.Sess.sendPetSelfEngageGrowl(motion.GUID)
+				}
 				s.petCombatPursuitAndAttack(ctx, motion, owner, now)
 			} else if next == 0 && motion.PetReact == PetReactAggressive && !motion.PetReturning {
 				if hostileGUID := s.findNearbyPetHostile(motion, players); hostileGUID != 0 && s.petStayCanEngage(motion, hostileGUID) {
@@ -1339,6 +1342,9 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 					motion.InCombat = true
 					motion.Moving = false
 					s.firePetEnterCombat(ctx, motion, hostileGUID)
+					if owner.Sess != nil {
+						owner.Sess.sendPetSelfEngageGrowl(motion.GUID)
+					}
 					s.petCombatPursuitAndAttack(ctx, motion, owner, now)
 				}
 			}
@@ -1371,6 +1377,9 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			// pet's auto-aggro engage (PetAI aggressive reaction arm).
 			// Tick path: motionMu is not held here.
 			s.firePetEnterCombat(ctx, motion, hostileGUID)
+			if owner.Sess != nil {
+				owner.Sess.sendPetSelfEngageGrowl(motion.GUID)
+			}
 			s.petCombatPursuitAndAttack(ctx, motion, owner, now)
 			return
 		}

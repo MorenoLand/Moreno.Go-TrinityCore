@@ -7984,8 +7984,8 @@ func (s *Server) smartActionSetCorpseDelay(ctx context.Context, motion *creature
 // chase/follow/point/home generators inherit the no-op Pause. A timer
 // pauses until now + timer and clears an indefinite pause; timer 0
 // pauses indefinitely (WaypointMovementGenerator::Pause), cleared by
-// evade (the MotionMaster::Clear twin) — Go has no non-escort
-// ResumeMovement bridge, and WP_RESUME is escort-only. The timer-0
+// evade (the MotionMaster::Clear twin) or the ResumeMovement bridge
+// (creaturemotion.go); WP_RESUME stays escort-only. The timer-0
 // latch is unreachable from live rows: the C++ loader rejects
 // pauseTimer 0 (SmartScriptMgr.cpp:1524), so the two live timer-0
 // rows (26811/26812) never execute in C++ either. The forced
@@ -8004,7 +8004,6 @@ func (s *Server) smartActionPauseMovement(ctx context.Context, motion *creatureM
 	}
 	timer := ev.row.actionParam2
 	force := ev.row.actionParam3 != 0
-	now := time.Now()
 	for _, tgt := range s.smartTargets(ctx, motion, st, ev, invokerGUID) {
 		if tgt.isPlayer {
 			continue
@@ -8013,30 +8012,7 @@ func (s *Server) smartActionPauseMovement(ctx context.Context, motion *creatureM
 		if tm == nil {
 			continue
 		}
-		s.motionMu.Lock()
-		tm.MovementPausedSlot = uint8(slot)
-		if timer == 0 {
-			tm.MovementPaused = true
-			tm.MovementPausedUntil = time.Time{}
-		} else {
-			tm.MovementPausedUntil = now.Add(time.Duration(timer) * time.Millisecond)
-			tm.MovementPaused = false
-		}
-		if force {
-			// MotionMaster::GetCurrentSlot (MotionMaster.cpp:176-185):
-			// ACTIVE while any active generator runs — a chase or
-			// follow slot, an in-flight script spline, fleeing, or
-			// confused — else DEFAULT.
-			active := tm.ScriptChaseTargetGUID != 0 || tm.ScriptFollowTargetGUID != 0 || tm.Evading || tm.Fleeing || tm.Confused || (tm.Moving && now.Before(tm.MoveEnds) && tm.ScriptMoveType != 0)
-			currentSlot := uint32(0)
-			if active {
-				currentSlot = 1
-			}
-			if slot == currentSlot {
-				tm.Moving = false
-			}
-		}
-		s.motionMu.Unlock()
+		s.pauseCreatureMovement(tm, timer, uint8(slot), force)
 	}
 }
 
