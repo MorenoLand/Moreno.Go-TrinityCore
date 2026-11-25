@@ -772,11 +772,12 @@ type creatureMotion struct {
 	CharmOwnerGUID      uint64
 	CharmFactionKnown   bool // pre-charm FactionKnown, restored on uncharm so a scripted faction survives the charm round-trip
 	CharmUnitFlagsKnown bool // pre-charm UnitFlagsKnown, restored on uncharm
-	// CharmOldReact saves the creature's PetReact at charm time so
+	// CharmOldReact saves the creature's ReactState at charm time so
 	// uncharm restores it (CharmInfo::RestoreState, Unit.cpp:9936-9940:
 	// the CharmInfo ctor banks _oldReactState and DeleteCharmInfo
-	// restores it). PetReact mirrors the creature react-state numbering
-	// (creatureReact* / PetReact* both 0/1/2).
+	// restores it), falling back to PetReact when no ReactState was
+	// ever assigned. PetReact mirrors the creature react-state
+	// numbering (creatureReact* / PetReact* both 0/1/2).
 	CharmOldReact uint8
 	// CharmActionBar holds a player-rearranged action bar for a charmed
 	// wild creature (WorldSession::HandlePetSetAction, PetHandler.cpp:460-600:
@@ -933,6 +934,12 @@ type creatureMotion struct {
 	PlayerDamageReq uint32
 	PetReact        uint8 // 0: passive, 1: defensive, 2: aggressive
 	AutocastSpells  []uint32
+	// ProcDeep is the creature-side Unit::m_procDeep (Unit.h:1729):
+	// elevated while the motion's auras are evaluated for a proc event
+	// (Unit::TriggerAurasProcOnEvent, Unit.cpp:10424-10448); a hit on a
+	// proc-deep unit cannot trigger further procs (Unit::CanProc,
+	// Unit.h:1609).
+	ProcDeep int
 
 	PathID  uint32
 	Points  []waypointPoint
@@ -5353,8 +5360,14 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 		motion.CharmFactionKnown = motion.FactionKnown
 		motion.CharmUnitFlagsKnown = motion.UnitFlagsKnown
 		// CharmInfo ctor banks _oldReactState (Unit.cpp:9919-9934) for
-		// the DeleteCharmInfo restore below.
-		motion.CharmOldReact = motion.PetReact
+		// the DeleteCharmInfo restore below: the creature ReactState,
+		// falling back to PetReact only when no ReactState was ever
+		// assigned (both number 0/1/2, so the bank restores either
+		// field — a Lua SetReactState change pre-charm survives).
+		motion.CharmOldReact = motion.ReactState
+		if !motion.ReactStateKnown {
+			motion.CharmOldReact = motion.PetReact
+		}
 	}
 	motion.CharmerGUID = charmerGUID
 	firstCharm := !motion.Charmed
@@ -5385,6 +5398,11 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	motion.PetStaySet = false
 	motion.PetAtStay = false
 	motion.PetReact = PetReactDefensive
+	// CharmInfo ctor forces REACT_PASSIVE (Unit.cpp:9931-9933), so
+	// SMSG_PET_SPELLS carries 0 for the react byte (Player.cpp:21258
+	// sends GetReactState()), not the pre-charm template value.
+	motion.ReactState = creatureReactPassive
+	motion.ReactStateKnown = true
 	motion.InCombat = false
 	motion.TargetGUID = 0
 	// CombatStop clears the motion master (chase Deactivate,
@@ -5526,6 +5544,17 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	// creature's spells, so a rearranged bar must not survive uncharm.
 	motion.CharmActionBar = [10]uint32{}
 	motion.CharmActionBarSet = false
+	// RemoveCharmedBy drops the CharmInfo for non-guardians
+	// (Unit.cpp:12012-12013: if (!IsGuardian()) DeleteCharmInfo()), so
+	// a toggled autocast dies with the charm too and a re-charm
+	// rebuilds the addlist from the creature's spells. Guardians keep
+	// their CharmInfo (and Pet::ToggleAutocast persists to pet_spell) —
+	// pets are guardians (Pet : Guardian, Pet.h:39) but so are
+	// spell-summon guardians (IsGuardian, PetID=0), so the gate is the
+	// conjunction, not the pet test alone.
+	if !motionIsPet(motion) && !motion.IsGuardian {
+		motion.AutocastSpells = nil
+	}
 	motion.CharmUnitFlags = 0
 	motion.CharmFaction = 0
 	motion.CharmOwnerGUID = 0
@@ -10000,6 +10029,18 @@ func (s *Server) executeCreatureMeleeSwing(ctx context.Context, motion *creature
 	// 4000ms window.
 	if isPlayerVictim && target.Sess != nil {
 		target.Sess.procReactiveVictimArms(outcome)
+	}
+
+	// Unit::ProcSkillsAndReactives skill arm (Unit.cpp:10260-10279): a
+	// player victim of a creature swing (not a pet, not a player-owned
+	// totem) raises defense on a normal, missed or fully-resisted swing
+	// (not from a critter), or on a dodged, parried or blocked swing.
+	if isPlayerVictim && target.Sess != nil && !motionIsPet(motion) && !(motion.IsTotem && motion.OwnerGUID != 0 && s.findSessionByGUID(motion.OwnerGUID) != nil) {
+		attType := protocol.BaseAttack
+		if offhand {
+			attType = protocol.OffAttack
+		}
+		target.Sess.procVictimSkillGain(ctx, uint32(motion.Level), attType, meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked), motion.CreatureType == creatureTypeCritter)
 	}
 
 	overkill := uint32(0)

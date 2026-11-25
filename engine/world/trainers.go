@@ -865,6 +865,25 @@ func (s *Server) getFirstSpellInChain(spellID uint32) uint32 {
 	return spellID
 }
 
+// spellIsHigherRank reports whether spellID is a higher rank of
+// oldSpellID (SpellInfo::IsHighRankOf, SpellInfo.cpp): walking the
+// prev-in-chain links from spellID reaches oldSpellID.
+func (s *Server) spellIsHigherRank(spellID, oldSpellID uint32) bool {
+	if s == nil || spellID == 0 || oldSpellID == 0 || spellID == oldSpellID {
+		return false
+	}
+	for i := 0; i < 20; i++ {
+		spellID = s.getPrevSpellInChain(spellID)
+		if spellID == 0 {
+			return false
+		}
+		if spellID == oldSpellID {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *session) isTrainerValidForPlayer(tType, requirement uint32) bool {
 	if s.player == nil {
 		return false

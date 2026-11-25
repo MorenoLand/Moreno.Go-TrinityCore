@@ -67,6 +67,13 @@ const (
 	petTameStartHappiness = 166500
 )
 
+// isPermanentPet mirrors Pet::IsPermanentPetFor (Pet.cpp:1832-1851):
+// hunter pets are permanent; summon pets only for a warlock's demon or
+// a death knight's undead.
+func isPermanentPet(petType int64, ownerClass uint8, creatureType uint32) bool {
+	return petType == int64(petTypeHunter) || petType == int64(petTypeSummon) && (ownerClass == 9 && creatureType == creatureTypeDemon || ownerClass == 6 && creatureType == creatureTypeUndead)
+}
+
 // petSpellActionType reports whether a bar slot type holds a spell action
 // (Unit.h:594-598: UnitActionBarEntry::IsActionBarForSpell), as opposed to a
 // command or reaction button.
@@ -83,10 +90,15 @@ func makePetActionSlot(actionType uint8, action uint32) uint32 {
 // loadPetActionBar reads the 10 packed action-bar slots from the pet's
 // character_pet.abdata row. The string form is the GenerateActionBarData
 // layout (Pet.cpp:485): "type action type action ..." with 20 tokens.
-func loadPetActionBar(ctx context.Context, cdb interface {
+// CharmInfo::LoadPetActionBar (Unit.cpp:10123-10152) starts from the
+// InitPetActionBar defaults and applies the row per slot, keeping the
+// default on a bad token instead of rejecting the whole bar; unknown
+// spells are cleared and non-autocastable spells forced ACT_PASSIVE
+// (Unit.cpp:10144-10150, via normalizePetActionBarSlot).
+func (s *session) loadPetActionBar(ctx context.Context, cdb interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, petID uint32, ownerGUID uint64) ([10]uint32, bool) {
-	var slots [10]uint32
+	slots := [10]uint32{0x07000002, 0x07000001, 0x07000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x06000002, 0x06000001, 0x06000000}
 	var abdata string
 	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(abdata, '') FROM character_pet WHERE id = ? AND owner = ?", petID, ownerGUID).Scan(&abdata); err != nil {
 		return slots, false
@@ -99,9 +111,12 @@ func loadPetActionBar(ctx context.Context, cdb interface {
 		t, tErr := strconv.ParseUint(tokens[i*2], 10, 8)
 		a, aErr := strconv.ParseUint(tokens[i*2+1], 10, 32)
 		if tErr != nil || aErr != nil {
-			return slots, false
+			continue
 		}
 		slots[i] = makePetActionSlot(uint8(t), uint32(a))
+	}
+	for i := range slots {
+		slots[i] = s.normalizePetActionBarSlot(slots[i])
 	}
 	return slots, true
 }
@@ -801,7 +816,7 @@ func (s *session) getPetAttributes(ctx context.Context, entry, level uint32, pet
 	return attributes
 }
 
-func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, attributes [5]uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, scale, x, y, z, o float32, apBase, apMods uint32, apMult, minDmg, maxDmg float32) []byte {
+func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, attributes [5]uint32, curHappiness uint32, ownerGUID uint64, faction uint32, petType uint8, createdBySpell, petExperience, petNextLevelXP uint32, boundingRadius, combatReach, scale, x, y, z, o float32, apBase, apMods uint32, apMult, minDmg, maxDmg float32, permanent bool) []byte {
 	values := make([]uint32, creatureValuesCount)
 	values[0] = uint32(petGUID)
 	values[1] = uint32(petGUID >> 32)
@@ -862,7 +877,14 @@ func buildPetUpdate(petGUID uint64, petNumber, entry uint32, level uint32, model
 		values[unitFieldMaxPower1+petPowerTypeEnergy] = petEnergyMax
 	}
 	values[unitFieldBytes0] = petClass<<8 | powerType<<24
-	values[unitFieldPetNumber] = petNumber
+	// CharmInfo::SetPetNumber (Unit.cpp:10114-10121): a temporary pet
+	// keeps its number in memory but sends UNIT_FIELD_PETNUMBER 0
+	// (Pet::IsPermanentPetFor, Pet.cpp:1832-1851).
+	displayNumber := petNumber
+	if !permanent {
+		displayNumber = 0
+	}
+	values[unitFieldPetNumber] = displayNumber
 	values[unitFieldPetNameTimestamp] = uint32(time.Now().Unix())
 	if petType == 1 {
 		values[unitFieldPetNextLevelExp] = petNextLevelXP
@@ -1300,7 +1322,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			}
 		}
 		s.server.motionMu.Unlock()
-		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, fieldStats, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO, apBase, apMods, apMult, minDmg, maxDmg)
+		updateBlock = buildPetUpdate(petGUID, petID, entry, level, modelID, curHealth, maxHealth, curMana, maxMana, fieldStats, uint32(petHappiness), s.playerGUID, faction, uint8(petType), uint32(createdBySpell), uint32(petExperience), petNextLevelXP, petBoundingRadius, petCombatReach, petScale, petX, petY, petZ, petO, apBase, apMods, apMult, minDmg, maxDmg, isPermanentPet(petType, s.player.Class, uint32(creatureType)))
 	}
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(updateBlock)
@@ -2016,7 +2038,32 @@ func (s *session) petActionBarSlots(ctx context.Context, petID uint32) [10]uint3
 				continue
 			}
 		}
+		// CharmInfo::AddSpellToActionBar (Unit.cpp:10053-10071): a new
+		// rank of a chain already on the bar swaps the action in place,
+		// keeping the slot type, instead of taking a second slot.
+		placed := false
+		if s.server != nil {
+			first := s.server.getFirstSpellInChain(uint32(spID))
+			if first != 0 {
+				for slot := 0; slot < 10; slot++ {
+					if !petSpellActionType(uint8(slots[slot] >> 24)) {
+						continue
+					}
+					if action := slots[slot] & 0x00FFFFFF; action != 0 && s.server.getFirstSpellInChain(action) == first {
+						slots[slot] = makePetActionSlot(uint8(slots[slot]>>24), uint32(spID))
+						placed = true
+						break
+					}
+				}
+			}
+		}
+		if placed {
+			continue
+		}
 		for slot := 3; slot < 7; slot++ {
+			if !petSpellActionType(uint8(slots[slot] >> 24)) {
+				continue
+			}
 			if slots[slot]&0x00FFFFFF == 0 {
 				slots[slot] = uint32(spID) | (uint32(act) << 24)
 				break
@@ -2060,7 +2107,7 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 	if uint32(creatureType) == creatureTypeCritter {
 		return
 	}
-	permanent := petType == int64(petTypeHunter) || petType == int64(petTypeSummon) && (s.player.Class == 9 && uint32(creatureType) == creatureTypeDemon || s.player.Class == 6 && uint32(creatureType) == creatureTypeUndead)
+	permanent := isPermanentPet(petType, s.player.Class, uint32(creatureType))
 	petGUID := s.petGUIDForNumber(petID)
 	if petGUID == 0 {
 		buf := protocol.NewBuffer(8)

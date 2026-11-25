@@ -793,7 +793,7 @@ func (s *session) updatePetLevelSpells(ctx context.Context, petID, entry, oldLev
 	// rank's action in abdata, so the client bar kept a spell the pet no
 	// longer knew.
 	if len(swaps) > 0 && s.server != nil {
-		if slots, ok := loadPetActionBar(ctx, cdb, petID, s.playerGUID); ok {
+		if slots, ok := s.loadPetActionBar(ctx, cdb, petID, s.playerGUID); ok {
 			changed := false
 			for _, swap := range swaps {
 				if swap.oldSpell == 0 || swap.newSpell == 0 {

@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math/rand/v2"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -115,6 +116,200 @@ func (s *session) procReactiveAttackerArms(targetGUID uint64, outcome protocol.M
 	}
 	s.addSessionComboPoints(targetGUID, 1)
 	s.startReactiveTimer(reactiveOverpower)
+}
+
+// Weapon skill ids (SharedDefines.h:2895-2990) for the UpdateCombatSkills
+// weapon-skill arm.
+const (
+	skillSwords        uint32 = 43  // SKILL_SWORDS
+	skillAxes          uint32 = 44  // SKILL_AXES
+	skillBows          uint32 = 45  // SKILL_BOWS
+	skillGuns          uint32 = 46  // SKILL_GUNS
+	skillMaces         uint32 = 54  // SKILL_MACES
+	skillTwoHandSwords uint32 = 55  // SKILL_2H_SWORDS
+	skillDefense       uint32 = 95  // SKILL_DEFENSE
+	skillStaves        uint32 = 136 // SKILL_STAVES
+	skillTwoHandMaces  uint32 = 160 // SKILL_2H_MACES
+	skillUnarmed       uint32 = 162 // SKILL_UNARMED
+	skillTwoHandAxes   uint32 = 172 // SKILL_2H_AXES
+	skillDaggers       uint32 = 173 // SKILL_DAGGERS
+	skillThrown        uint32 = 176 // SKILL_THROWN
+	skillCrossbows     uint32 = 226 // SKILL_CROSSBOWS
+	skillWands         uint32 = 228 // SKILL_WANDS
+	skillPolearms      uint32 = 229 // SKILL_POLEARMS
+	skillAssassination uint32 = 253 // SKILL_ASSASSINATION
+	skillFistWeapons   uint32 = 473 // SKILL_FIST_WEAPONS
+	// skillFishing (356) already lives in spells.go's skill-id block.
+)
+
+// creatureFlagExtraNoSkillgain mirrors CREATURE_FLAG_EXTRA_NO_SKILLGAIN
+// (CreatureData.h:55): the creature never raises weapon skills.
+const creatureFlagExtraNoSkillgain uint32 = 0x00040000
+
+// weaponSkillForSubClass mirrors ItemTemplate::GetSkill
+// (ItemTemplate.cpp:106-139): the weapon-skill id for an item subclass,
+// 0 when the subclass trains no skill.
+func weaponSkillForSubClass(subClass uint32) uint32 {
+	skills := [...]uint32{
+		skillAxes, skillTwoHandAxes, skillBows, skillGuns, skillMaces,
+		skillTwoHandMaces, skillPolearms, skillSwords, skillTwoHandSwords, 0,
+		skillStaves, 0, 0, skillFistWeapons, 0,
+		skillDaggers, skillThrown, skillAssassination, skillCrossbows, skillWands,
+		skillFishing,
+	}
+	if subClass >= uint32(len(skills)) {
+		return 0
+	}
+	return skills[subClass]
+}
+
+// weaponSkillIDsForAttack mirrors Player::GetBaseWeaponSkillValue +
+// UpdateWeaponSkill (Player.cpp:24187-24198, 5951-5988): the skill ids a
+// swing can raise for attType, first entry first for the chance roll.
+// An unarmed main-hand swing raises unarmed and fist weapons together; a
+// fist weapon raises unarmed, then its own skill (the fallthrough in
+// UpdateWeaponSkill) — the slice still leads with the weapon's own skill
+// because the chance roll reads GetBaseWeaponSkillValue, and the two +1
+// gains are independent, so their order is inert. Other weapons raise
+// only their own skill. A missing off-hand or ranged weapon raises
+// nothing (GetBaseWeaponSkillValue returns 0 and UpdateWeaponSkill finds
+// no item).
+func (s *session) weaponSkillIDsForAttack(ctx context.Context, attType protocol.WeaponAttackType) []uint32 {
+	if s == nil || s.server == nil {
+		return nil
+	}
+	slot := uint8(15) // EQUIPMENT_SLOT_MAINHAND
+	if attType == protocol.OffAttack {
+		slot = 16 // EQUIPMENT_SLOT_OFFHAND
+	} else if attType == protocol.RangedAttack {
+		slot = 17 // EQUIPMENT_SLOT_RANGED
+	}
+	_, entry := s.equippedWeaponInstance(ctx, slot)
+	if entry == 0 {
+		if attType == protocol.BaseAttack {
+			return []uint32{skillUnarmed, skillFistWeapons}
+		}
+		return nil
+	}
+	tmpl, ok := s.server.getItemStoreTemplateInfo(ctx, entry)
+	if !ok {
+		return nil
+	}
+	skillID := weaponSkillForSubClass(tmpl.SubClass)
+	if skillID == 0 {
+		return nil
+	}
+	if tmpl.SubClass == itemSubclassWeaponFist {
+		return []uint32{skillID, skillUnarmed}
+	}
+	return []uint32{skillID}
+}
+
+// updateCombatSkills mirrors Player::UpdateCombatSkills
+// (Player.cpp:5989-6022): the weapon-skill roll (defense=false) or the
+// defense roll (defense=true) after a melee/ranged swing against a
+// creature. victimLevel is the other unit's level for target
+// (GetLevelForTarget); attType selects the weapon skill. The caller
+// enforces the ProcSkillsAndReactives gates (player attacker/victim,
+// non-player target, not a pet or player-owned totem) and the hit-mask
+// arms. One roll gates all gains (UpdateWeaponSkill's gains are
+// unconditional once the roll passes); a skill already at max gains
+// nothing (Player::UpdateSkill, Player.cpp:5743-5758). GetBaseSkillValue
+// is the stored value — Go has no skill-bonus model.
+func (s *session) updateCombatSkills(ctx context.Context, victimLevel uint32, attType protocol.WeaponAttackType, defense bool) {
+	if s == nil || s.player == nil || s.player.Level == 0 {
+		return
+	}
+	plevel := uint32(s.player.Level)
+	greyLevel := grayLevel(plevel)
+	mobLevel := victimLevel
+	if mobLevel > plevel+5 {
+		mobLevel = plevel + 5
+	}
+	// C++ stores the difference in a uint8 (Player.cpp:6002-6004), so a
+	// victim below the grey level wraps (moblevel - greylevel mod 256)
+	// instead of clamping to a small difference.
+	lvlDif := int32(uint8(mobLevel - greyLevel))
+	if lvlDif < 3 {
+		lvlDif = 3
+	}
+	var skillIDs []uint32
+	if defense {
+		skillIDs = []uint32{skillDefense}
+	} else {
+		// UpdateWeaponSkill (Player.cpp:5951-5955): feral and tree
+		// forms never raise weapon skills.
+		if s.player.isInFeralForm() || s.player.ShapeshiftForm == 2 { // FORM_TREE
+			return
+		}
+		skillIDs = s.weaponSkillIDsForAttack(ctx, attType)
+	}
+	if len(skillIDs) == 0 {
+		return
+	}
+	baseSkill := s.getSkillValue(skillIDs[0])
+	skillDif := int32(5*plevel) - int32(baseSkill)
+	if skillDif <= 0 {
+		return
+	}
+	chance := float64(3*lvlDif*skillDif) / float64(plevel)
+	if !defense && (s.player.Class == 1 || s.player.Class == 4) { // CLASS_WARRIOR / CLASS_ROGUE
+		chance += chance * 0.02 * float64(s.player.Stats[3]) // STAT_INTELLECT
+	}
+	if chance < 1.0 {
+		chance = 1.0
+	}
+	if rand.IntN(1000)+1 > int(chance*10) {
+		return
+	}
+	for _, skillID := range skillIDs {
+		s.updateSkillPro(ctx, skillID, 1000, 1)
+	}
+}
+
+// procMeleeSkillGain applies the attacker-side skill arm of
+// Unit::ProcSkillsAndReactives (Unit.cpp:10260-10279) for a player melee
+// or ranged swing: hitMask NORMAL|MISS|FULL_RESIST, victim a creature
+// (not a pet, not a player-owned totem, not a critter, without
+// CREATURE_FLAG_EXTRA_NO_SKILLGAIN).
+func (s *session) procMeleeSkillGain(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType, hitMask uint32) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if hitMask&(procHitNormal|procHitMiss|procHitFullResist) == 0 {
+		return
+	}
+	motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID)
+	if motion == nil || motionIsPet(motion) || motion.CreatureType == creatureTypeCritter || motion.FlagsExtra&creatureFlagExtraNoSkillgain != 0 {
+		return
+	}
+	if motion.IsTotem && motion.OwnerGUID != 0 {
+		if owner := s.server.findSessionByGUID(motion.OwnerGUID); owner != nil {
+			return
+		}
+	}
+	s.updateCombatSkills(ctx, uint32(target.Level), attType, false)
+}
+
+// procVictimSkillGain applies the victim-side defense arm of
+// Unit::ProcSkillsAndReactives (Unit.cpp:10260-10279): a player victim of
+// a creature swing raises defense on a normal, missed or fully-resisted
+// swing (not from a critter — the inner gate covers the whole normal arm)
+// or on a dodged, parried or blocked swing (no critter gate on that arm).
+// attackerLevel is the attacker's level for target; attType is the swing's
+// attack type (ignored by the defense roll, as in C++).
+func (s *session) procVictimSkillGain(ctx context.Context, attackerLevel uint32, attType protocol.WeaponAttackType, hitMask uint32, attackerIsCritter bool) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if hitMask&(procHitNormal|procHitMiss|procHitFullResist) != 0 {
+		if attackerIsCritter {
+			return
+		}
+	} else if hitMask&(procHitDodge|procHitParry|procHitBlock) == 0 {
+		return
+	}
+	s.updateCombatSkills(ctx, attackerLevel, attType, true)
 }
 
 // AuraStateType values (SharedDefines.h:1320-1354).

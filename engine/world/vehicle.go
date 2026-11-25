@@ -2993,8 +2993,10 @@ const (
 // charmed-creature set-action seed: the default command/reaction bar with
 // the creature's own spells (MAX_SPELL_CHARM = 4) folded into the middle
 // spell slots via AddSpellToActionBar (Unit.cpp:10053). It returns the bar
-// and the _charmspells addlist (Player.cpp:21263-21271).
-func buildCharmActionBar(spells []uint32, spellFn func(uint32) (wotlk.Spell, bool)) ([10]uint32, []uint32) {
+// and the _charmspells addlist (Player.cpp:21263-21271). autocast holds
+// the motion's toggled-on autocast spells (CharmInfo::ToggleCreatureAutocast,
+// Unit.cpp:10104): their addlist entries stay ACT_ENABLED on re-send.
+func buildCharmActionBar(spells []uint32, spellFn func(uint32) (wotlk.Spell, bool), autocast map[uint32]bool) ([10]uint32, []uint32) {
 	bar := [10]uint32{0x07000002, 0x07000001, 0x07000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x06000002, 0x06000001, 0x06000000}
 	var charmSpells []uint32
 	n := len(spells)
@@ -3017,7 +3019,6 @@ func buildCharmActionBar(spells []uint32, spellFn func(uint32) (wotlk.Spell, boo
 			charmSpells = append(charmSpells, spellID|(uint32(charmActPassive)<<24))
 			continue
 		}
-		charmSpells = append(charmSpells, spellID|(uint32(charmActDisabled)<<24))
 		newState := charmActPassive
 		if spell.AttributesEx&spellAttr1UnautocastableByPet == 0 { // SpellInfo::IsAutocastable (SpellInfo.cpp:1101)
 			if spellNeedsExplicitUnitTarget(spell) {
@@ -3026,6 +3027,16 @@ func buildCharmActionBar(spells []uint32, spellFn func(uint32) (wotlk.Spell, boo
 				newState = charmActDisabled
 			}
 		}
+		// InitCharmCreateSpells flips the _charmspells addlist entry to
+		// ACT_ENABLED for autocastable + explicit-target spells
+		// (ToggleCreatureAutocast, Unit.cpp:10043), and a later toggle
+		// keeps it enabled (Unit.cpp:10104-10112); the bar slot itself
+		// carries newState.
+		addState := charmActDisabled
+		if newState == charmActEnabled || autocast[spellID] {
+			addState = charmActEnabled
+		}
+		charmSpells = append(charmSpells, spellID|(uint32(addState)<<24))
 		// AddSpellToActionBar: first empty spell-type slot (the middle four;
 		// IsActionBarForSpell admits ACT_DISABLED/ENABLED/PASSIVE, Unit.h:594).
 		for j := 3; j < 7; j++ {
@@ -3038,22 +3049,87 @@ func buildCharmActionBar(spells []uint32, spellFn func(uint32) (wotlk.Spell, boo
 	return bar, charmSpells
 }
 
+// charmAutocastSet indexes a motion's toggled-on autocast spells for
+// the _charmspells addlist rebuild (CharmInfo::ToggleCreatureAutocast,
+// Unit.cpp:10104).
+func charmAutocastSet(motion *creatureMotion) map[uint32]bool {
+	if motion == nil || len(motion.AutocastSpells) == 0 {
+		return nil
+	}
+	set := make(map[uint32]bool, len(motion.AutocastSpells))
+	for _, spellID := range motion.AutocastSpells {
+		set[spellID] = true
+	}
+	return set
+}
+
 // buildPossessActionBar is the CharmInfo::InitEmptyActionBar +
 // InitPossessCreateSpells fold (Unit.cpp:9967-10001): the attack command
 // at slot 0, then the creature's own spells (MAX_CREATURE_SPELLS = 8) as
 // ACT_PASSIVE — AddSpellToActionBar skips the COMMAND slot 0 and fills
-// the first empty spell-type slot, so spell i lands at slot i+1.
-func buildPossessActionBar(spells []uint32) [10]uint32 {
+// the first empty spell-type slot from preferredSlot = i % 10, so spell
+// i lands at slot i+1. Passive spells are cast at possess time, never
+// bar-added (Unit.cpp:9989-9991), and unknown spell ids are skipped
+// (Unit.cpp:9988). The five no-InitEmptyActionBar entries (23575
+// Mindless Abomination, 24783 Trained Rock Falcon, 27664/40281 Crashin'
+// Thrashin' Racer, 28511 Eye of Acherus — Unit.cpp:9976-9984) keep the
+// CharmInfo default bar (every slot ACT_DISABLED, action 0 —
+// UnitActionBarEntry default ctor, Unit.h:587), so their spells land
+// from slot 0 with no attack command.
+func buildPossessActionBar(entry uint32, spells []uint32, spellFn func(uint32) (wotlk.Spell, bool), firstChain func(uint32) uint32) [10]uint32 {
 	bar := [10]uint32{0x07000002, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000}
+	switch entry {
+	case 23575, 24783, 27664, 40281, 28511:
+		for i := range bar {
+			bar[i] = 0x81000000
+		}
+	}
 	n := len(spells)
 	if n > 8 {
 		n = 8
 	}
 	for x := 0; x < n; x++ {
-		if spells[x] == 0 {
+		spellID := spells[x]
+		if spellID == 0 {
 			continue
 		}
-		bar[1+x] = spells[x] | (uint32(charmActPassive) << 24)
+		spell, found := spellFn(spellID)
+		if !found {
+			continue
+		}
+		if spell.Attributes&spellAttributePassive != 0 {
+			continue
+		}
+		// AddSpellToActionBar (Unit.cpp:10053-10082): a new rank of a
+		// chain already on the bar swaps the action in place, keeping
+		// the slot type; else the first empty spell-type slot from
+		// preferredSlot = x % 10.
+		placed := false
+		if firstChain != nil {
+			first := firstChain(spellID)
+			if first != 0 {
+				for i := 0; i < 10; i++ {
+					if !petSpellActionType(uint8(bar[i] >> 24)) {
+						continue
+					}
+					if action := bar[i] & 0x00FFFFFF; action != 0 && firstChain(action) == first {
+						bar[i] = spellID | (bar[i] & 0xFF000000)
+						placed = true
+						break
+					}
+				}
+			}
+		}
+		if placed {
+			continue
+		}
+		for i := 0; i < 10; i++ {
+			j := (x + i) % 10
+			if bar[j]&0x00FFFFFF == 0 && petSpellActionType(uint8(bar[j]>>24)) {
+				bar[j] = spellID | (uint32(charmActPassive) << 24)
+				break
+			}
+		}
 	}
 	return bar
 }
@@ -3069,7 +3145,16 @@ func (s *Server) charmedActionBarSeed(motion *creatureMotion) [10]uint32 {
 		return motion.CharmActionBar
 	}
 	if motion.Possessed {
-		return buildPossessActionBar(motion.Spells)
+		return buildPossessActionBar(motion.Entry, motion.Spells, func(id uint32) (wotlk.Spell, bool) {
+			if s == nil || s.Data == nil {
+				return wotlk.Spell{}, false
+			}
+			spell, found, err := s.Data.Spell(id)
+			if err != nil {
+				return wotlk.Spell{}, false
+			}
+			return spell, found
+		}, s.getFirstSpellInChain)
 	}
 	bar, _ := buildCharmActionBar(motion.Spells, func(id uint32) (wotlk.Spell, bool) {
 		if s == nil || s.Data == nil {
@@ -3080,7 +3165,7 @@ func (s *Server) charmedActionBarSeed(motion *creatureMotion) [10]uint32 {
 			return wotlk.Spell{}, false
 		}
 		return spell, found
-	})
+	}, charmAutocastSet(motion))
 	return bar
 }
 
@@ -3149,7 +3234,7 @@ func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32, react
 			return wotlk.Spell{}, false
 		}
 		return spell, found
-	})
+	}, charmAutocastSet(s.findCreatureMotion(creatureGUID)))
 	// A player-rearranged bar (HandlePetSetAction SetActionBar on the
 	// CharmInfo) replaces the rebuilt bar wholesale; the addlist above
 	// still derives from the creature's spells, as C++ keeps _charmspells
@@ -3206,10 +3291,10 @@ func (s *session) sendCharmPetActionBar(ctx context.Context, creatureGUID uint64
 // (Unit.cpp:9967-10001): the attack command at slot 0, then the
 // creature's own spells (MAX_CREATURE_SPELLS = 8) as ACT_PASSIVE —
 // AddSpellToActionBar skips the COMMAND slot 0 and fills the first empty
-// spell-type slot, so spell i lands at slot i+1. The five
-// no-InitEmptyActionBar entries (23575/24783/27664/40281/28511) keep an
-// attack-free bar in C++; Go keeps the attack slot for all entries, the
-// same simplification the charm bar already makes.
+// spell-type slot from preferredSlot = i % 10. The five
+// no-InitEmptyActionBar entries (23575/24783/27664/40281/28511) keep the
+// CharmInfo default bar (all ACT_DISABLED) with spells from slot 0 and
+// no attack command (buildPossessActionBar).
 // sendPossessPetActionBar sends the possess bar for a PET target: C++
 // Unit::SetCharmedBy (Unit.cpp:11862-11868) skips InitPossessCreateSpells
 // for pets (their CharmInfo already exists), so Player::PossessSpellInitialize
@@ -3248,7 +3333,20 @@ func (s *session) sendPossessPetSpells(creatureGUID uint64, spells []uint32) {
 	buf.WriteU16(0)
 	buf.WriteU32(0)
 	buf.WriteU32(0)
-	bar := buildPossessActionBar(spells)
+	possessEntry := uint32(0)
+	if m := s.findCreatureMotion(creatureGUID); m != nil {
+		possessEntry = m.Entry
+	}
+	bar := buildPossessActionBar(possessEntry, spells, func(id uint32) (wotlk.Spell, bool) {
+		if s.server == nil || s.server.Data == nil {
+			return wotlk.Spell{}, false
+		}
+		spell, found, err := s.server.Data.Spell(id)
+		if err != nil {
+			return wotlk.Spell{}, false
+		}
+		return spell, found
+	}, s.server.getFirstSpellInChain)
 	// A player-rearranged bar replaces the rebuilt bar wholesale, as in
 	// the charm send above.
 	if m := s.findCreatureMotion(creatureGUID); m != nil && m.CharmActionBarSet {

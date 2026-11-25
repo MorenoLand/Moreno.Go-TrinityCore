@@ -12421,9 +12421,13 @@ func (s *Server) fireCreatureMeleeAuraProcs(ctx context.Context, m *creatureMoti
 // (GetSpellModOwner returns null for wild and charmed creatures; only
 // Pet objects carry UNIT_MASK_PET, Pet.cpp:49), and pet melee/kill
 // events carry no spell, so the arm's spell != nil gate keeps them out.
-// The SetCantProc evaluation window (Unit.cpp:10424-10428) has no
-// creature-side reader yet (no per-motion m_procDeep model); the _cast
-// proc leg carries no CanProc gate in C++, so the omission is inert there.
+// The SetCantProc evaluation window (Unit.cpp:10424-10428) runs on the
+// motion's ProcDeep (Unit::m_procDeep twin, creaturemotion.go): the whole
+// loop elevates it on a triggered event and each SPELL_ATTR3_DISABLE_PROC
+// aura brackets its own trigger (fireCreatureAuraProcLoop). A CanProc
+// reader for creature victims is still pending (pet_combat.go:9589); the
+// _cast proc leg carries no CanProc gate in C++, so the omission is inert
+// there.
 // retaliationCreatureProcAllowed mirrors
 // spell_warr_retaliation::CheckProc (spell_warrior.cpp:821-826) on the
 // creature side: the attack must come from the holder's front
@@ -12518,6 +12522,14 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		return
 	}
 	key := creatureAuraKeyForMotion(m)
+	// Unit::TriggerAurasProcOnEvent (Unit.cpp:10424-10428): when the
+	// triggering spell disallows proc events, the evaluated unit cannot
+	// proc again for the whole evaluation (Unit::CanProc, Unit.h:1609)
+	// — the session loop's procDeep twin (procs.go:3778-3787).
+	if ev.triggered {
+		m.ProcDeep++
+		defer func() { m.ProcDeep-- }()
+	}
 	s.auraMu.Lock()
 	auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
 	for _, aura := range s.activeCreatureAuras[key] {
@@ -12617,6 +12629,14 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 			s.auraMu.Lock()
 			aura.ProcCooldownUntil = time.Now().Add(time.Duration(entry.CooldownMs) * time.Millisecond)
 			s.auraMu.Unlock()
+		}
+		// Unit::TriggerAurasProcOnEvent (Unit.cpp:10433-10440): an aura
+		// carrying SPELL_ATTR3_DISABLE_PROC elevates the no-proc guard
+		// around its own trigger — the session loop's twin
+		// (procs.go:4026-4032, 5705).
+		disableProc := auraSpell.AttributesEx3&spellAttr3DisableProc != 0
+		if disableProc {
+			m.ProcDeep++
 		}
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
@@ -13339,6 +13359,9 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 			// m_caster->CastSpell(unit, triggeredSpell->Id, true): the
 			// triggered cast by the creature on the trigger target.
 			s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, triggerTargetGUID, true)
+		}
+		if disableProc {
+			m.ProcDeep--
 		}
 		// Aura::TriggerProcOnEvent (SpellAuras.cpp:2209-2211): remove only
 		// after all proc effects complete.

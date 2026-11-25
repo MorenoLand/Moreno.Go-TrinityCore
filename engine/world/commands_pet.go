@@ -307,8 +307,77 @@ func (s *session) handlePetLearnCommand(ctx context.Context, args []string) bool
 	if db == nil {
 		return true
 	}
-	if _, err := db.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petID, spellID); err != nil {
-		return true
+	// Pet::addSpell (Pet.cpp:1429-1447): a new higher rank replaces the
+	// known lower rank (inheriting its active state) and a new lesser
+	// rank is ignored (addSpell returns false; the handler still prints
+	// the learned line, as C++ does). A fresh learn stores the ACT_DECIDE
+	// state (petLearnActiveState, Pet.cpp:1404-1411): autocastable spells
+	// store ACT_DISABLED, everything else ACT_PASSIVE.
+	learnActive := int64(ts.petLearnActiveState(spellID))
+	lesserRank := false
+	replacedOld := uint32(0)
+	replacedOldActive := int64(0)
+	if ts.server != nil {
+		first := ts.server.getFirstSpellInChain(spellID)
+		if rows, err := db.QueryContext(ctx, "SELECT spell, active FROM pet_spell WHERE guid = ?", petID); err == nil {
+			for rows.Next() {
+				var knownSpell uint32
+				var knownActive int64
+				if rows.Scan(&knownSpell, &knownActive) != nil || knownSpell == 0 || knownSpell == spellID {
+					continue
+				}
+				if first == 0 || ts.server.getFirstSpellInChain(knownSpell) != first {
+					continue
+				}
+				if ts.server.spellIsHigherRank(spellID, knownSpell) {
+					learnActive = knownActive
+					replacedOld = knownSpell
+					replacedOldActive = knownActive
+					_, _ = db.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petID, knownSpell)
+				} else if ts.server.spellIsHigherRank(knownSpell, spellID) {
+					lesserRank = true
+				}
+			}
+			_ = rows.Close()
+		}
+	}
+	if !lesserRank {
+		if _, err := db.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petID, spellID, learnActive); err != nil {
+			return true
+		}
+	}
+	if replacedOld != 0 && motion != nil && ts.server != nil {
+		// Pet::addSpell unlearns the old rank (Pet::unlearnSpell):
+		// its aura drops and its autocast flips off before the new
+		// rank inherits the active state.
+		if replacedOldActive == int64(petActionEnabled) {
+			ts.server.onPetToggleAutocast(motion.Map, motion.InstanceID, motion.GUID, replacedOld, false)
+		}
+		ts.server.removeCreatureAura(creatureAuraKeyForMotion(motion), replacedOld)
+	}
+	if motion != nil && ts.server != nil && !lesserRank {
+		ts.server.motionMu.Lock()
+		spells := motion.Spells[:0]
+		for _, known := range motion.Spells {
+			if known != replacedOld {
+				spells = append(spells, known)
+			}
+		}
+		known := false
+		for _, knownSpell := range spells {
+			if knownSpell == spellID {
+				known = true
+				break
+			}
+		}
+		if !known {
+			spells = append(spells, spellID)
+		}
+		motion.Spells = spells
+		ts.server.motionMu.Unlock()
+		if learnActive == int64(petActionEnabled) {
+			ts.server.onPetToggleAutocast(motion.Map, motion.InstanceID, motion.GUID, spellID, true)
+		}
 	}
 	learnBuf := protocol.NewBuffer(4)
 	learnBuf.WriteU32(spellID)
@@ -355,7 +424,7 @@ func (s *session) handlePetUnlearnCommand(ctx context.Context, args []string) bo
 	// spell was the last rank (clear_ab=true, no rank re-learn), so the
 	// first bar slot holding any rank of its chain is cleared in place.
 	if ts.server != nil {
-		if slots, ok := loadPetActionBar(ctx, db, petID, ts.playerGUID); ok {
+		if slots, ok := ts.loadPetActionBar(ctx, db, petID, ts.playerGUID); ok {
 			first := ts.server.getFirstSpellInChain(spellID)
 			for i, slot := range slots {
 				if !petSpellActionType(uint8(slot >> 24)) {

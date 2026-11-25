@@ -1595,6 +1595,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 	s.procReactiveAttackerArms(target.GUID, outcome)
 
+	// Unit::ProcSkillsAndReactives skill arm (Unit.cpp:10260-10279): a
+	// player swinging at a creature raises the weapon skill on a normal,
+	// missed or fully-resisted swing.
+	s.procMeleeSkillGain(ctx, target, attType, meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked))
+
 	if s.server != nil {
 		s.server.triggerPetDefensive(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, target.GUID, scripting.CreatureEventOnOwnerAttacked)
 	}
@@ -2458,6 +2463,17 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// auto-shot/wand arm of Spell::prepareDataForTriggerSystem,
 	// Spell.cpp:2018-2034); the trigger spell targets the victim.
 	s.procRangedAutoAttackAuraTriggers(ctx, target.GUID, spellID, outcome, absorbed, blocked, damage)
+
+	// Unit::ProcSkillsAndReactives skill arm (Unit.cpp:10260-10279):
+	// a player ranged swing at a creature raises the ranged weapon
+	// skill on a normal, missed or fully-resisted shot. A fully
+	// absorbed shot suppresses the NORMAL bit (createProcHitMask's
+	// damageNullified leg, Unit.cpp:10234-10243).
+	skillHitInfo := uint32(0)
+	if damage == 0 && absorbed > 0 {
+		skillHitInfo = uint32(protocol.HitInfoFullAbsorb)
+	}
+	s.procMeleeSkillGain(ctx, target, protocol.RangedAttack, rangedAutoProcHitMask(outcome, skillHitInfo, protocol.VictimStateHit, blocked))
 
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
