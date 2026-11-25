@@ -976,7 +976,8 @@ func (s *Server) announceABVictory(mapID uint32, winningTeam uint32) {
 	s.rewardBGEndHonor(mapID, winningTeam, 1)
 	s.rewardBGEndHonor(mapID, 0, 1)
 	s.rewardBGEndHonor(mapID, 1, 1)
-	s.creditBattlegroundWin(mapID, winningTeam)
+	bgStatsID := s.creditBattlegroundWin(mapID, winningTeam)
+	s.endBattlegroundRoster(mapID, 3, bgStatsID, winningTeam)
 }
 
 // abPrematureWinner is the node-count leg of BattlegroundAB::GetPrematureWinner

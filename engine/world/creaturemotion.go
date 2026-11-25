@@ -14686,15 +14686,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 		motion.Moving = false
-		// ChaseMovementGenerator.cpp:140,152: SetInFront(target) on arrival —
+		// ChaseMovementGenerator.cpp:135,149: SetInFront(target) on arrival —
 		// the range-check inform path and the spline-finalized path both snap
 		// orientation to the target's current bearing. The swing arm below
 		// faces only when a swing fires, so a victim that sidestepped during
 		// the spline would otherwise stay stale until then. The
-		// UNIT_STATE_CANNOT_TURN gate rides the swing arm's Possessed +
-		// DisableTurn precedent (Unit.cpp:13663-13667); LOST_CONTROL /
-		// ROTATING / FOCUSING have no Go model.
-		if target != nil && motion.UnitFlags&unitFlagPossessed == 0 && motion.UnitFlags2&unitFlag2DisableTurn == 0 {
+		// UNIT_STATE_CANNOT_TURN gate is creatureCannotTurn (Unit::SetInFront,
+		// Unit.cpp:13663-13667, unitStateCannotTurn) — the Possessed +
+		// DisableTurn test was its subset precedent.
+		if target != nil && !s.creatureCannotTurn(motion) {
 			faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
 			if faceAngle < 0 {
 				faceAngle += 2 * math.Pi
@@ -14714,14 +14714,22 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// the Go swing gate fire it once per arrival instead of every
 		// in-range tick (C++ never re-faces a standing pursuer until
 		// it re-paths); a standing in-range engage faces on the first
-		// swing-gate tick. The CANNOT_TURN gate has no Go model.
+		// swing-gate tick. The CANNOT_TURN gate is creatureCannotTurn,
+		// applied to the facing write above.
 		if !motion.ChaseArrived {
 			motion.ChaseArrived = true
-			faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
-			if faceAngle < 0 {
-				faceAngle += 2 * math.Pi
+			// The arrival facing is the ChaseMovementGenerator SetInFront
+			// twin (Unit::SetInFront, Unit.cpp:13663-13667): the
+			// CANNOT_TURN gate suppresses the turn only — the latch and
+			// the MovementInform below still fire, as in C++ where
+			// DoMovementInform runs regardless of the gate.
+			if !s.creatureCannotTurn(motion) {
+				faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
+				if faceAngle < 0 {
+					faceAngle += 2 * math.Pi
+				}
+				motion.Orientation = faceAngle
 			}
-			motion.Orientation = faceAngle
 			// ChaseMovementGenerator.cpp:128-136: the range-check
 			// arm informs once per chase (INFORM_ENABLED clears)
 			// when the creature is in range on the check timer —

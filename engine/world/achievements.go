@@ -1998,11 +1998,13 @@ func (s *session) loadExploredZones(ctx context.Context) {
 // win/complete credit while crediting on-map bystanders. The audience is
 // bgRewardTargets (entered InProgress or WaitLeave slots): every end arm
 // flips slots to WaitLeave before crediting.
-func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) {
+func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) uint64 {
 	// The battleground statistics row lands first, as in C++ (the
 	// EndBattleground insert runs ahead of the player loop); WSG ties
 	// arrive here as team 2 and record a neutral row, as in C++.
-	s.recordBattlegroundStats(mapID, winningTeam)
+	// Returns the statistics row id for the per-player rows
+	// (recordBattlegroundPlayerStats), 0 when it did not land.
+	bgStatsID := s.recordBattlegroundStats(mapID, winningTeam)
 	var allParticipants, winners []*session
 	for _, sess := range s.bgRewardTargets(mapID) {
 		allParticipants = append(allParticipants, sess)
@@ -2016,6 +2018,7 @@ func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) {
 	for _, sess := range winners {
 		sess.updateAchievementCriteria(criteriaTypeWinBG, mapID, 1)
 	}
+	return bgStatsID
 }
 
 // creditArenaParticipants mirrors PLAY_ARENA / WIN_ARENA / WIN_RATED_ARENA

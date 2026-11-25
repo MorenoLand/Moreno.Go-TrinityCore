@@ -1068,7 +1068,8 @@ func (s *Server) announceEOTSVictory(mapID uint32, winningTeam uint32) {
 	s.rewardBGEndHonor(mapID, winningTeam, 1)
 	s.rewardBGEndHonor(mapID, 0, 1)
 	s.rewardBGEndHonor(mapID, 1, 1)
-	s.creditBattlegroundWin(mapID, winningTeam)
+	bgStatsID := s.creditBattlegroundWin(mapID, winningTeam)
+	s.endBattlegroundRoster(mapID, 7, bgStatsID, winningTeam)
 }
 
 func (s *Server) getEOTSFlagCarriers(mapID uint32) []*session {

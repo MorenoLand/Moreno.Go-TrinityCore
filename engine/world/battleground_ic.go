@@ -1612,10 +1612,13 @@ func (s *Server) endIC(ic *icBattlegroundState, winner int8) {
 		s.broadcastBattlegroundMessage(ic.MapID, fmt.Sprintf("The %s has won the battle for Isle of Conquest!", winnerTeam))
 	}
 	// Reference: Battleground::EndBattleground (Battleground.cpp:775-800): the
-	// WIN_BG / COMPLETE_BATTLEGROUND criteria arms are unconditional (unlike the
-	// IsRandom/Weekend-gated winner/loser honor arms, which have no reachable
-	// model in Go); AB and EotS victories already credit through this helper.
-	s.creditBattlegroundWin(ic.MapID, uint32(winner))
+	// WIN_BG / COMPLETE_BATTLEGROUND criteria arms are unconditional; the
+	// IsRandom/Weekend-gated winner/loser honor arms run in
+	// endBattlegroundRoster on the random half only (Go has no BG-weekend
+	// model), as do the per-player physical arms. AB and EotS victories
+	// already credit through this helper.
+	bgStatsID := s.creditBattlegroundWin(ic.MapID, uint32(winner))
+	s.endBattlegroundRoster(ic.MapID, 30, bgStatsID, uint32(winner))
 	s.triggerBGEvent(ic.MapID, scripting.BGEventOnEnd, winner)
 }
 

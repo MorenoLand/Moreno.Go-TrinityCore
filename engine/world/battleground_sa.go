@@ -826,16 +826,20 @@ func (s *Server) endSA(sa *saBattlegroundState, winner int8) {
 	// completion honor GetBonusHonorFromKill(2), ahead of Battleground::EndBattleground.
 	// The WIN_BG / COMPLETE_BATTLEGROUND criteria arms of the base-class
 	// EndBattleground are covered by creditBattlegroundWin (same pattern as the
-	// AB/EotS/IoC victories). On a draw there is no winning team to credit:
-	// C++'s draw path calls EndBattleground(0), which collides with TEAM_ALLIANCE=0
-	// and grants Alliance the winner honor and the Alliance-wins announcement as
-	// an upstream quirk; Go keeps the draw a true draw instead of replicating it.
+	// AB/EotS/IoC victories). On a draw there is no winning team for the
+	// winner honor or WIN_BG: C++'s draw path calls EndBattleground(0),
+	// which collides with TEAM_ALLIANCE=0 and grants Alliance the winner
+	// honor and the Alliance-wins announcement as an upstream quirk; Go
+	// keeps the draw a true draw instead of replicating it. The COMPLETE
+	// credit is unconditional in C++ (:802), so it runs on draws too, via
+	// creditBattlegroundWin with team 2 (which matches no race team).
+	bgStatsID := s.creditBattlegroundWin(sa.MapID, uint32(winner))
 	if winner == 0 || winner == 1 {
-		s.creditBattlegroundWin(sa.MapID, uint32(winner))
 		s.rewardBGEndHonor(sa.MapID, uint32(winner), 1)
 	}
 	s.rewardBGEndHonor(sa.MapID, 0, 2)
 	s.rewardBGEndHonor(sa.MapID, 1, 2)
+	s.endBattlegroundRoster(sa.MapID, 9, bgStatsID, uint32(winner))
 	s.triggerBGEvent(sa.MapID, scripting.BGEventOnEnd, winner)
 }
 

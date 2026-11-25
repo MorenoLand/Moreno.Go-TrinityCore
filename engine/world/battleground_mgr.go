@@ -415,9 +415,11 @@ func arenaMaxPlayersPerTeam(arenaType uint8) uint32 {
 // bgInstanceIsRandom is the Go form of the random-flag arm of
 // BattlegroundMgr::CreateNewBattleground (BattlegroundMgr.cpp:415): a new
 // instance is random when the resolved type differs from the queued
-// (original) type and the BG is not an arena.
+// (original) type and the BG is not an arena. A zero resolved type means
+// the queue was never resolved (non-random queues leave it 0), which is
+// not random — the bare resolved != original test would misread it.
 func bgInstanceIsRandom(resolvedBgTypeID, originalBgTypeID uint32, isArena bool) bool {
-	return resolvedBgTypeID != originalBgTypeID && !isArena
+	return resolvedBgTypeID != 0 && resolvedBgTypeID != originalBgTypeID && !isArena
 }
 
 // weightedRandomIndex is the Go form of the selection kernel behind

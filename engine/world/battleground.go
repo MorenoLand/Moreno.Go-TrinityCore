@@ -2828,6 +2828,167 @@ func (s *Server) rewardBGEndReputation(mapID, team uint32, factionID uint32, rep
 	}
 }
 
+// bgSlotIndexForMap returns the index of sess's entered (InProgress or
+// WaitLeave) non-arena slot for mapID, or -1: the Go form of
+// Player::GetBattlegroundQueueIndex (Battleground.cpp:800) for the
+// EndBattleground status packet.
+func bgSlotIndexForMap(sess *session, mapID uint32) int {
+	if sess == nil {
+		return -1
+	}
+	for i := range sess.bgQueues {
+		if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave) {
+			return i
+		}
+	}
+	return -1
+}
+
+// bgSlotIsRandom reports whether sess's entered slot for mapID came from a
+// random-BG queue: Battleground::IsRandom (Battleground.h:291, m_IsRandom,
+// set at CreateNewBattleground, BattlegroundMgr.cpp:415) via
+// bgInstanceIsRandom. A non-random queue leaves ResolvedBgTypeID 0, which
+// the bare resolved != original test would misread as random, so the
+// resolved value must be set.
+func bgSlotIsRandom(sess *session, mapID uint32) bool {
+	if sess == nil {
+		return false
+	}
+	for i := range sess.bgQueues {
+		if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave) {
+			return e.ResolvedBgTypeID != 0 && bgInstanceIsRandom(e.ResolvedBgTypeID, e.BgTypeID, false)
+		}
+	}
+	return false
+}
+
+// endBattlegroundPlayers ports the shared per-player arms of
+// Battleground::EndBattleground (Battleground.cpp:724-802) for one roster:
+// the spirit-of-redemption strip (:733-734, the linked MOD_SHAPESHIFT
+// auras), resurrect-the-dead plus corpse bones (:738-739; the living
+// CombatStop arm at :743 is subsumed by the CombatStopWithPets call
+// below, which includes CombatStop), ResetAllPowers (:792),
+// CombatStopWithPets(true) (:793), BlockMovement (:795, SetClientControl
+// false), the MSG_PVP_LOG_DATA send (:797) and the battlefield-status
+// packet (:800, STATUS_IN_PROGRESS with the auto-remove countdown —
+// sendBattlefieldStatus serializes a non-arena WaitLeave slot that way).
+// The honor, statistics and criteria arms are not here: the honor arms
+// are random/weekend-gated and the statistics/criteria arms run ahead of
+// the loop in C++, so the battleground wrapper below owns them and the
+// arena path (never random, no arena weekend) skips them. statusSlot
+// maps a roster member to its status slot, or -1 to send no packet.
+func (s *Server) endBattlegroundPlayers(roster []*session, logData []byte, statusSlot func(*session) int) {
+	if s == nil {
+		return
+	}
+	ctx := context.Background()
+	for _, sess := range roster {
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		if sess.hasAuraType(spellAuraSpiritOfRedemption) {
+			sess.removeTargetAurasByType(ctx, sess.playerGUID, spellAuraModShapeshift)
+		}
+		if sess.player.Health == 0 {
+			sess.resurrectPlayer(ctx, 1.0)
+			sess.spawnCorpseBones(ctx)
+		}
+		s.resetPlayerPowers(sess)
+		sess.combatStopWithPets(ctx, true)
+		sess.sendClientControl(sess.playerGUID, false)
+		if len(logData) != 0 {
+			_ = sess.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), logData, true)
+		}
+		if statusSlot != nil {
+			if idx := statusSlot(sess); idx >= 0 {
+				sess.sendBattlefieldStatus(uint8(idx))
+			}
+		}
+	}
+}
+
+// endBattlegroundRoster runs the Battleground::EndBattleground per-player
+// arms over a non-arena map's roster (bgRewardTargets, the m_Players
+// proxy): the shared physical arms above plus the loop arms that need the
+// battleground context. The log packet is built before any honor lands,
+// and the per-player statistics rows land before the base honor arms, so
+// the stored bonus honor excludes the end honor, as in C++
+// (BuildPvPLogDataPacket at :720, the player insert at :751-766, the
+// honor arms at :768-789). The base honor arms are gated on the
+// instance being random: IsRandom() || BattlegroundMgr::IsBGWeekend
+// (Battleground.cpp:768-789); Go has no BG-weekend model (established
+// convention), so the random half is the whole gate, read per session
+// from its entered slot. Winner kills follow GetRandomWinner
+// (CONFIG_BG_REWARD_WINNER_HONOR_FIRST/LAST, loser FIRST/LAST), and a
+// winner who had not won a random BG yet takes the
+// SetRandomWinner(true) flag plus its character_battleground_random row
+// (Player.cpp:26705). The arena-points leg (ModifyArenaPoints,
+// :778-779) has no Go twin and stays open. The WIN_BG / COMPLETE
+// criteria arms (:784, :802) already ran in creditBattlegroundWin, which
+// also recorded the battleground statistics row whose id the per-player
+// rows share. End arms call this after their subclass honor (WS/AV/SA
+// RewardHonorToTeam arms run ahead of the base call in C++), with the
+// winner already set on the state so the log packet's ended block reads.
+func (s *Server) endBattlegroundRoster(mapID, bgTypeID uint32, bgStatsID uint64, winnerTeam uint32) {
+	if s == nil {
+		return
+	}
+	roster := s.bgRewardTargets(mapID)
+	var instanceID uint32
+	for _, sess := range roster {
+		if sess != nil && sess.bgData.InstanceID != 0 {
+			instanceID = sess.bgData.InstanceID
+			break
+		}
+	}
+	logData := s.buildNonArenaPvPLogDataPacket(mapID, instanceID, bgTypeID)
+	s.recordBattlegroundPlayerStats(mapID, instanceID, bgTypeID, bgStatsID, winnerTeam, roster)
+	cfg := &s.Config
+	for _, sess := range roster {
+		if sess == nil || sess.player == nil || !bgSlotIsRandom(sess, mapID) {
+			continue
+		}
+		maxLevel := uint32(min(bgMaxLevelForMap(s, mapID), 80))
+		if teamForRace(sess.player.Race) == winnerTeam {
+			kills := cfg.BGRewardWinnerHonorFirst
+			if sess.randomBGWinner {
+				kills = cfg.BGRewardWinnerHonorLast
+			}
+			if honor := uint32(math.Ceil(float64(maxLevel) * 1.55 * float64(kills))); honor != 0 {
+				sess.rewardHonorPoints(context.Background(), honor)
+			}
+			if !sess.randomBGWinner {
+				s.setRandomBGWinner(sess)
+			}
+		} else {
+			kills := cfg.BGRewardLoserHonorFirst
+			if sess.randomBGWinner {
+				kills = cfg.BGRewardLoserHonorLast
+			}
+			if honor := uint32(math.Ceil(float64(maxLevel) * 1.55 * float64(kills))); honor != 0 {
+				sess.rewardHonorPoints(context.Background(), honor)
+			}
+		}
+	}
+	s.endBattlegroundPlayers(roster, logData, func(sess *session) int { return bgSlotIndexForMap(sess, mapID) })
+}
+
+// setRandomBGWinner mirrors Player::SetRandomWinner(true)
+// (Player.cpp:26705-26715): the in-memory GetRandomWinner flag plus the
+// character_battleground_random row (CHAR_INS_BATTLEGROUND_RANDOM), read
+// back at login by loadRandomBGStatus. Best-effort: a missing store
+// keeps the in-memory flag only.
+func (s *Server) setRandomBGWinner(sess *session) {
+	if s == nil || sess == nil {
+		return
+	}
+	sess.randomBGWinner = true
+	if s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	_, _ = s.CharactersStore.DB.ExecContext(context.Background(), "INSERT INTO character_battleground_random (guid) VALUES (?)", sess.playerGUID)
+}
+
 // handleBfEntryInviteResponse processes CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE (0x4DF).
 // Reference: WorldSession::HandleBfEntryInviteResponse (BattlefieldHandler.cpp:143).
 func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byte) bool {
@@ -4048,6 +4209,12 @@ func (s *Server) finishABPremature(ab *abBattlegroundState, winner int8) {
 		s.broadcastBattlegroundMessage(ab.MapID, "The battle ended in a draw!")
 		s.rewardBGEndHonor(ab.MapID, 0, 1)
 		s.rewardBGEndHonor(ab.MapID, 1, 1)
+		// The COMPLETE credit is unconditional in C++ (Battleground.cpp:802),
+		// so it runs on draws too, via creditBattlegroundWin with team 2
+		// (which matches no race team for WIN_BG) — same as the WSG tie —
+		// and the per-player arms follow.
+		bgStatsID := s.creditBattlegroundWin(ab.MapID, 2)
+		s.endBattlegroundRoster(ab.MapID, 3, bgStatsID, 2)
 		s.triggerBGEvent(ab.MapID, scripting.BGEventOnEnd, 2)
 		return
 	}
@@ -4087,6 +4254,12 @@ func (s *Server) finishEOTSPremature(eots *eotsBattlegroundState, winner int8) {
 		s.broadcastBattlegroundMessage(eots.MapID, "The battle ended in a draw!")
 		s.rewardBGEndHonor(eots.MapID, 0, 1)
 		s.rewardBGEndHonor(eots.MapID, 1, 1)
+		// The COMPLETE credit is unconditional in C++ (Battleground.cpp:802),
+		// so it runs on draws too, via creditBattlegroundWin with team 2
+		// (which matches no race team for WIN_BG) — same as the WSG tie —
+		// and the per-player arms follow.
+		bgStatsID := s.creditBattlegroundWin(eots.MapID, 2)
+		s.endBattlegroundRoster(eots.MapID, 7, bgStatsID, 2)
 		s.triggerBGEvent(eots.MapID, scripting.BGEventOnEnd, 2)
 		return
 	}

@@ -303,8 +303,7 @@ func newCreaturePathSource(srv *Server, m *creatureMotion) pathGeneratorSource {
 }
 
 // newPlayerPathSource snapshots a player session: players always walk,
-// swim per the Unit::CanSwim flag chain (Unit.cpp:13318-13326,
-// PLAYER_CONTROLLED leg, CANNOT_SWIM denying first), fly only while
+// swim per the full Unit::CanSwim flag chain (Unit.cpp:13318-13330), fly only while
 // the session reports flight, and fall per the session falling flags
 // (lua_player.go:949). Collision height resolves the race display
 // lookup (sendPlayerCollisionHeight) with the default fallback.
@@ -320,7 +319,7 @@ func newPlayerPathSource(sess *session) pathGeneratorSource {
 		creature:        false,
 		walk:            true,
 		swim:            true,
-		unitSwim:        playerCanSwim(p.UnitFlags),
+		unitSwim:        playerCanSwim(p.UnitFlags, p.UnitFlags2),
 		fly:             sess.inFlight,
 		inCombat:        sess.isInCombat(),
 		falling:         sess.isFalling || sess.isFallingFar,

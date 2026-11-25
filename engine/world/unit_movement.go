@@ -269,10 +269,12 @@ func (s *Server) creatureSetFacingToObject(motion *creatureMotion, tx, ty float3
 // unitCanSwimMotion is Unit::CanSwim (Unit.cpp:13318-13330) for a creature
 // motion: CANNOT_SWIM denies, PLAYER_CONTROLLED allows, the raw
 // UNIT_FIELD_FLAGS_2 0x1000000 bit denies, a pet in combat allows, else the
-// RENAME|SWIMMING flags decide. IsPet() reads OwnerGUID != 0 (the
-// creatureCanSwimMotion precedent). This is the Unit-level flag chain, not
-// Creature::CanSwim (Creature.h:105, template-based) — the two answer
-// different questions and must not be conflated.
+// RENAME|SWIMMING flags decide. IsPet() is the UNIT_MASK_PET type test
+// (Unit.h:839), whose Go twin is motionIsPet (PetID != 0, set only for Pet
+// objects) — charmed creatures and guardians/temp summons carry an owner
+// but are not pets and must not take the pet leg. This is the Unit-level
+// flag chain, not Creature::CanSwim (Creature.h:105, template-based) — the
+// two answer different questions and must not be conflated.
 func unitCanSwimMotion(motion *creatureMotion) bool {
 	if motion == nil {
 		return false
@@ -286,18 +288,30 @@ func unitCanSwimMotion(motion *creatureMotion) bool {
 	if motion.UnitFlags2&unitFlag2SwimDeny != 0 {
 		return false
 	}
-	if motion.OwnerGUID != 0 && motion.UnitFlags&unitFlagPetInCombat != 0 {
+	if motionIsPet(motion) && motion.UnitFlags&unitFlagPetInCombat != 0 {
 		return true
 	}
 	return motion.UnitFlags&(unitFlagRename|unitFlagSwimming) != 0
 }
 
 // playerCanSwim is Unit::CanSwim (Unit.cpp:13318-13330) for a player: the
-// PLAYER_CONTROLLED arm always allows, so only the preceding CANNOT_SWIM
-// check can deny (the FLAGS_2 leg is unreachable past the player arm).
-// The unit flags are the live UNIT_FIELD_FLAGS words on the player state.
-func playerCanSwim(unitFlags uint32) bool {
-	return unitFlags&unitFlagCannotSwim == 0
+// PLAYER_CONTROLLED arm always allows, but a MOD_FACTION aura can clear
+// PLAYER_CONTROLLED on a player (SpellAuraEffects.cpp:4815-4819, applied
+// in player_auras.go), after which the chain continues — the FLAGS_2 leg
+// can deny, and the RENAME|SWIMMING flags decide (a player is never a
+// pet, so the IsPet leg is vacuous here). The unit flags are the live
+// UNIT_FIELD_FLAGS words on the player state.
+func playerCanSwim(unitFlags, unitFlags2 uint32) bool {
+	if unitFlags&unitFlagCannotSwim != 0 {
+		return false
+	}
+	if unitFlags&unitFlagPlayerControlled != 0 {
+		return true
+	}
+	if unitFlags2&unitFlag2SwimDeny != 0 {
+		return false
+	}
+	return unitFlags&(unitFlagRename|unitFlagSwimming) != 0
 }
 
 // creatureSendClearTarget is Unit::SendClearTarget (Unit.cpp:13574-13579)

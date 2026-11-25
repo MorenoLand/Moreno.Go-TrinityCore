@@ -1411,10 +1411,11 @@ func (s *Server) endAV(av *avBattlegroundState, winner int8) {
 			s.rewardBGEndHonor(av.MapID, team, kills[team])
 		}
 	}
-	// AV ends without the shared creditBattlegroundWin call, so the
-	// statistics row is recorded here (Battleground::EndBattleground insert
-	// arm); the WIN_BG criteria credit gap stays open.
-	s.recordBattlegroundStats(av.MapID, uint32(winner))
+	// AV ends with the shared WIN_BG / COMPLETE criteria credit plus the
+	// statistics row (Battleground::EndBattleground :694-710, :784, :802);
+	// the per-player arms follow in endBattlegroundRoster.
+	bgStatsID := s.creditBattlegroundWin(av.MapID, uint32(winner))
+	s.endBattlegroundRoster(av.MapID, 1, bgStatsID, uint32(winner))
 	s.triggerBGEvent(av.MapID, scripting.BGEventOnEnd, winner)
 }
 

@@ -1234,31 +1234,16 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 
 	// Build and dispatch MSG_PVP_LOG_DATA to all players in the match
 	logData := s.buildArenaPvPLogDataPacket(arena)
-	ctx := context.Background()
 	// EndBattleground iterates m_Players (Battleground.cpp:724), the roster,
 	// not the map: a sim-accepted player holds no arena map yet.
-	for _, sess := range s.arenaRosterSessions(arena) {
-		// Battleground::EndBattleground per-player arms (Battleground.cpp:728-802):
-		// remove spirit of redemption (the reference removes the linked
-		// SPELL_AURA_MOD_SHAPESHIFT auras, Battleground.cpp:732-734).
-		if sess.hasAuraType(spellAuraSpiritOfRedemption) {
-			sess.removeTargetAurasByType(ctx, sess.playerGUID, spellAuraModShapeshift)
+	roster := s.arenaRosterSessions(arena)
+	for _, sess := range roster {
+		// Update queue entry on this arena's own slot (arenaMatchQueueSlot),
+		// not the first active arena slot, which may belong to another
+		// arena type the player also holds.
+		if idx := arenaMatchQueueSlot(sess, arena); idx >= 0 {
+			sess.bgQueues[idx].Status = BGStatusWaitLeave
 		}
-		// ResurrectPlayer(1.0f) + SpawnCorpseBones for the dead
-		// (Battleground.cpp:736-739); the living CombatStop() arm
-		// (Battleground.cpp:739-740) is subsumed by the
-		// CombatStopWithPets(true) call below, which includes CombatStop.
-		if sess.player.Health == 0 {
-			sess.resurrectPlayer(ctx, 1.0)
-			sess.spawnCorpseBones(ctx)
-		}
-		s.resetPlayerPowers(sess) // ResetAllPowers (Battleground.cpp:791)
-		// CombatStopWithPets(true) (Battleground.cpp:793): interrupt casts,
-		// drop the attack and the in-combat flag, and stop the pet's attack.
-		// Runs for every roster member, dead or alive — the dead were just
-		// resurrected above, but a dead owner's pet may still be fighting.
-		sess.combatStopWithPets(ctx, true)
-		sess.sendClientControl(sess.playerGUID, false) // BlockMovement (Battleground.cpp:808-812)
 		// The honor-bonus / arena-point reward arms (Battleground.cpp:742-786)
 		// are gated by IsRandom() || BattlegroundMgr::IsBGWeekend(GetTypeID());
 		// arenas are never random and no arena type is a BG weekend, so the
@@ -1269,17 +1254,11 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 			sess.updateAchievementCriteria(criteriaTypeWinBG, mapID, 1) // ACHIEVEMENT_CRITERIA_TYPE_WIN_BG (Battleground.cpp:788)
 		}
 		sess.updateAchievementCriteria(criteriaTypeCompleteBattleground, mapID, 1) // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND (Battleground.cpp:802)
-
-		_ = sess.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), logData, true)
-
-		// Update queue entry on this arena's own slot (arenaMatchQueueSlot),
-		// not the first active arena slot, which may belong to another
-		// arena type the player also holds.
-		if idx := arenaMatchQueueSlot(sess, arena); idx >= 0 {
-			sess.bgQueues[idx].Status = BGStatusWaitLeave
-			sess.sendBattlefieldStatus(uint8(idx))
-		}
 	}
+	// The per-player physical arms (Battleground.cpp:728-802: spirit
+	// strip, resurrect, ResetAllPowers, CombatStopWithPets, BlockMovement,
+	// log data, status packet) run through the shared helper.
+	s.endBattlegroundPlayers(roster, logData, func(sess *session) int { return arenaMatchQueueSlot(sess, arena) })
 
 	// The Winner != None gate above makes this the single end transition.
 	// Winner maps to the C++ TeamId convention (Gold = Alliance 0, Green
