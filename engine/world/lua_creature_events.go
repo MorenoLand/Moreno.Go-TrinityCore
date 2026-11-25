@@ -4942,27 +4942,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if !ok {
 			return nil, fmt.Errorf("SetDisableGravity requires a bool")
 		}
-		s.motionMu.Lock()
-		if motion.GravityDisabled == disable {
-			s.motionMu.Unlock()
-			return nil, nil
-		}
-		motion.GravityDisabled = disable
-		if disable {
-			// Unit::SetDisableGravity(true) clears FALLING (Unit.cpp:13720).
-			motion.Falling = false
-		}
-		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
-		phase := motion.PhaseMask
-		s.motionMu.Unlock()
-		// Creature::SetDisableGravity folds the animation tier before
-		// the packet (Creature.cpp:3030-3037, then :3040-3045).
-		s.creatureFoldAnimationTier(motion)
-		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_ENABLE
-		if disable {
-			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_DISABLE
-		}
-		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		s.creatureSetDisableGravity(motion, disable)
 		return nil, nil
 	}
 	// GetZoneId/GetAreaId are Unit::GetZoneId()/GetAreaId() via
@@ -5106,24 +5086,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if !ok {
 			return nil, fmt.Errorf("SetCanFly requires a bool")
 		}
-		s.motionMu.Lock()
-		if motion.Flying == enable {
-			s.motionMu.Unlock()
-			return nil, nil
-		}
-		motion.Flying = enable
-		if enable {
-			// Unit::SetCanFly(true) clears FALLING (Unit.cpp:13748).
-			motion.Falling = false
-		}
-		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
-		phase := motion.PhaseMask
-		s.motionMu.Unlock()
-		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_FLYING
-		if enable {
-			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_FLYING
-		}
-		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		s.creatureSetCanFly(motion, enable)
 		return nil, nil
 	}
 
@@ -5143,20 +5106,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 			enable = b
 		}
-		s.motionMu.Lock()
-		if motion.Walking == enable {
-			s.motionMu.Unlock()
-			return nil, nil
-		}
-		motion.Walking = enable
-		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
-		phase := motion.PhaseMask
-		s.motionMu.Unlock()
-		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
-		if enable {
-			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
-		}
-		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		s.creatureSetWalk(motion, enable)
 		return nil, nil
 	}
 	// SetSwim is Unit::SetSwim (Unit.cpp:13728): flips
@@ -5174,20 +5124,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if !ok {
 			return nil, fmt.Errorf("SetSwim requires a bool")
 		}
-		s.motionMu.Lock()
-		if motion.Swimming == enable {
-			s.motionMu.Unlock()
-			return nil, nil
-		}
-		motion.Swimming = enable
-		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
-		phase := motion.PhaseMask
-		s.motionMu.Unlock()
-		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_STOP_SWIM
-		if enable {
-			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_START_SWIM
-		}
-		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		s.creatureSetSwim(motion, enable)
 		return nil, nil
 	}
 	// SetWaterWalk is Unit::SetWaterWalk (UnitMethods.h:1822,
@@ -6452,10 +6389,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// turn when the unit is moving (the IsStopped gate); the Go twin
 	// documents that instead of gating: a mid-spline call sets the logical
 	// orientation but the client turn packet can race the spline.
-	// SetFacingToObject(obj) has no direct bridge — Lua ports compute the
-	// facing with math.atan2 from creature:GetX()/GetY() and the target's
-	// coordinates (the Unit::GetAbsoluteAngle twin, atan2 normalized to
-	// [0, 2pi) per creaturemotion.go:2430), then call this bridge.
+	// SetFacingToObject(obj) rides the SetFacingToObject bridge below
+	// (the Unit::GetAbsoluteAngle twin, atan2 normalized to [0, 2pi)).
 	// SetOrientation is WorldObject::SetOrientation (Object.h, via
 	// Position::SetOrientation, Position.h:72-75): the raw orientation
 	// slot write, normalized to [0, 2pi), with no client packet — the
@@ -6477,14 +6412,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		s.motionMu.Lock()
-		motion.Orientation = ori
-		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
-		phase := motion.PhaseMask
-		transportGUID := motion.TransportGUID
-		x, y, z := motion.X, motion.Y, motion.Z
-		s.motionMu.Unlock()
-		s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true, phase, transportGUID)
+		s.creatureSetFacingTo(motion, ori, false)
 		return nil, nil
 	}
 	// SetFacing is UnitMethods::SetFacing (UnitMethods.h:1766-1771):
@@ -6497,14 +6425,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		s.motionMu.Lock()
-		motion.Orientation = ori
-		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
-		phase := motion.PhaseMask
-		transportGUID := motion.TransportGUID
-		x, y, z := motion.X, motion.Y, motion.Z
-		s.motionMu.Unlock()
-		s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true, phase, transportGUID)
+		s.creatureSetFacingTo(motion, ori, false)
 		return nil, nil
 	}
 	// SetFacingToObject is UnitMethods::SetFacingToObject
@@ -6532,18 +6453,53 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if !ok {
 			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target with a position")
 		}
-		s.motionMu.Lock()
-		angle := float32(math.Atan2(float64(ty-motion.Y), float64(tx-motion.X)))
-		if angle < 0 {
-			angle += 2 * math.Pi
+		s.creatureSetFacingToObject(motion, tx, ty, false)
+		return nil, nil
+	}
+	// SetInFront is Unit::SetInFront (Unit.cpp:13663-13667): face the
+	// target's absolute angle with a raw orientation-slot write — no
+	// packet, no spline. The UNIT_STATE_CANNOT_TURN gate has no Go model,
+	// so it is not gated here.
+	methods["SetInFront"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("SetInFront requires a WorldObject target")
 		}
-		motion.Orientation = angle
-		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
-		phase := motion.PhaseMask
-		transportGUID := motion.TransportGUID
-		x, y, z := motion.X, motion.Y, motion.Z
-		s.motionMu.Unlock()
-		s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, angle, true, phase, transportGUID)
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("SetInFront requires a WorldObject target")
+		}
+		tx, ok := objectFloat32Field(target, "X")
+		if !ok {
+			return nil, fmt.Errorf("SetInFront requires a WorldObject target with a position")
+		}
+		ty, ok := objectFloat32Field(target, "Y")
+		if !ok {
+			return nil, fmt.Errorf("SetInFront requires a WorldObject target with a position")
+		}
+		s.creatureSetInFront(motion, tx, ty)
+		return nil, nil
+	}
+	// SetFeatherFall is Unit::SetFeatherFall (Unit.cpp:13767-13777) as
+	// overridden by Creature::SetFeatherFall (Creature.cpp:3099-3110):
+	// the shared helper flips MOVEMENTFLAG_FALLING_SLOW with the C++
+	// no-op-on-unchanged early-out and broadcasts
+	// SMSG_SPLINE_MOVE_FEATHER_FALL / SMSG_SPLINE_MOVE_NORMAL_FALL.
+	methods["SetFeatherFall"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetFeatherFall requires a bool, got no args")
+		}
+		enable, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetFeatherFall requires a bool")
+		}
+		s.creatureSetFeatherFall(motion, enable)
+		return nil, nil
+	}
+	// SendClearTarget is Unit::SendClearTarget (Unit.cpp:13574-13579):
+	// SMSG_BREAK_TARGET with the unit's own packed GUID, broadcast to
+	// the visibility set.
+	methods["SendClearTarget"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.creatureSendClearTarget(motion)
 		return nil, nil
 	}
 	// IsDying is UnitMethods::IsDying (UnitMethods.h:316-324): Unit::isDying

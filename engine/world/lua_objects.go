@@ -1657,14 +1657,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if motion == nil {
 			return nil, nil
 		}
-		s.server.motionMu.Lock()
-		motion.Orientation = ori
-		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
-		phase := motion.PhaseMask
-		transportGUID := motion.TransportGUID
-		x, y, z := motion.X, motion.Y, motion.Z
-		s.server.motionMu.Unlock()
-		s.server.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true, phase, transportGUID)
+		s.server.creatureSetFacingTo(motion, ori, false)
 		return nil, nil
 	}
 	methods["SetFacing"] = methods["SetFacingTo"]
@@ -1688,18 +1681,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if motion == nil {
 			return nil, nil
 		}
-		s.server.motionMu.Lock()
-		angle := float32(math.Atan2(float64(ty-motion.Y), float64(tx-motion.X)))
-		if angle < 0 {
-			angle += 2 * math.Pi
-		}
-		motion.Orientation = angle
-		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
-		phase := motion.PhaseMask
-		transportGUID := motion.TransportGUID
-		x, y, z := motion.X, motion.Y, motion.Z
-		s.server.motionMu.Unlock()
-		s.server.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, angle, true, phase, transportGUID)
+		s.server.creatureSetFacingToObject(motion, tx, ty, false)
 		return nil, nil
 	}
 	// SetSpeed/SetSpeedRate are the session-creature twins of the
@@ -4069,20 +4051,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if motion == nil {
 			return nil, nil
 		}
-		s.server.motionMu.Lock()
-		if motion.Walking == enable {
-			s.server.motionMu.Unlock()
-			return nil, nil
-		}
-		motion.Walking = enable
-		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
-		phase := motion.PhaseMask
-		s.server.motionMu.Unlock()
-		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
-		if enable {
-			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
-		}
-		s.server.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		s.server.creatureSetWalk(motion, enable)
 		return nil, nil
 	}
 	// SetFFA is UnitMethods::SetFFA (UnitMethods.h:1851-1890, TRINITY

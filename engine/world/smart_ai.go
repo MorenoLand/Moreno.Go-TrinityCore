@@ -4886,13 +4886,16 @@ func (s *Server) smartSetRun(motion *creatureMotion, st *smartScriptState, run b
 		return
 	}
 	s.motionMu.Lock()
-	motion.Walking = !run
 	if motion.PathID == st.escortPathID {
 		for i := range motion.Points {
 			motion.Points[i].MoveType = moveType
 		}
 	}
 	s.motionMu.Unlock()
+	// SmartAI::SetRun ends in me->SetWalk(!run) (SmartAI.cpp:730-736,
+	// Creature::SetWalk twin): the persistent Walking flip plus the
+	// walk/run-mode broadcast, via the shared helper.
+	s.creatureSetWalk(motion, !run)
 }
 
 // smartSetDespawnTime is SmartAI::SetDespawnTime (SmartAI.h:205-209):
@@ -5723,28 +5726,7 @@ func (s *Server) smartActionInstallAITemplate(ctx context.Context, motion *creat
 // all SELF, param 0/1.
 func (s *Server) smartActionSetDisableGravity(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	disable := ev.row.actionParam1 != 0
-	s.motionMu.Lock()
-	if motion.GravityDisabled == disable {
-		s.motionMu.Unlock()
-		return
-	}
-	motion.GravityDisabled = disable
-	if disable {
-		// Unit::SetDisableGravity(true) clears FALLING (Unit.cpp:13720).
-		motion.Falling = false
-	}
-	mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
-	phase := motion.PhaseMask
-	s.motionMu.Unlock()
-	// SmartAI::SetDisableGravity -> Creature::SetDisableGravity folds
-	// the animation tier before the packet (Creature.cpp:3030-3037,
-	// then :3040-3045; SmartAI.cpp:738-740, SmartScript.cpp:1356).
-	s.creatureFoldAnimationTier(motion)
-	opcode := protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_ENABLE
-	if disable {
-		opcode = protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_DISABLE
-	}
-	s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+	s.creatureSetDisableGravity(motion, disable)
 }
 
 // smartActionSetSwim is SMART_ACTION_SET_SWIM (SmartScript.cpp:1375-1382):
@@ -5753,20 +5735,7 @@ func (s *Server) smartActionSetDisableGravity(ctx context.Context, motion *creat
 // latch, SMSG_SPLINE_MOVE_START/STOP_SWIM broadcast). TDB 26091: 0 rows.
 func (s *Server) smartActionSetSwim(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	enable := ev.row.actionParam1 != 0
-	s.motionMu.Lock()
-	if motion.Swimming == enable {
-		s.motionMu.Unlock()
-		return
-	}
-	motion.Swimming = enable
-	mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
-	phase := motion.PhaseMask
-	s.motionMu.Unlock()
-	opcode := protocol.OpcodeSMSG_SPLINE_MOVE_STOP_SWIM
-	if enable {
-		opcode = protocol.OpcodeSMSG_SPLINE_MOVE_START_SWIM
-	}
-	s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+	s.creatureSetSwim(motion, enable)
 }
 
 // smartActionSetCanFly is SMART_ACTION_SET_CAN_FLY
@@ -5776,24 +5745,7 @@ func (s *Server) smartActionSetSwim(ctx context.Context, motion *creatureMotion,
 // latch, SMSG_SPLINE_MOVE_SET/UNSET_FLYING broadcast). TDB 26091: 0 rows.
 func (s *Server) smartActionSetCanFly(ctx context.Context, motion *creatureMotion, st *smartScriptState, ev *smartScriptEvent, invokerGUID uint64) {
 	enable := ev.row.actionParam1 != 0
-	s.motionMu.Lock()
-	if motion.Flying == enable {
-		s.motionMu.Unlock()
-		return
-	}
-	motion.Flying = enable
-	if enable {
-		// Unit::SetCanFly(true) clears FALLING (Unit.cpp:13748).
-		motion.Falling = false
-	}
-	mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
-	phase := motion.PhaseMask
-	s.motionMu.Unlock()
-	opcode := protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_FLYING
-	if enable {
-		opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_FLYING
-	}
-	s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+	s.creatureSetCanFly(motion, enable)
 }
 
 // smartTeleportCreature is Unit::NearTeleportTo (Unit.cpp:13332-13346)
@@ -5914,14 +5866,7 @@ func (s *Server) smartSetFacing(motion *creatureMotion, ori float32) {
 	if motion == nil {
 		return
 	}
-	s.motionMu.Lock()
-	motion.Orientation = ori
-	guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
-	phase := motion.PhaseMask
-	transportGUID := motion.TransportGUID
-	x, y, z := motion.X, motion.Y, motion.Z
-	s.motionMu.Unlock()
-	s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true, phase, transportGUID)
+	s.creatureSetFacingTo(motion, ori, false)
 }
 
 // smartContactPoint is WorldObject::GetContactPoint (Object.cpp:3334-3338)

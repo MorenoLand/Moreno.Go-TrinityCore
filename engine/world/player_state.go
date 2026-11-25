@@ -157,6 +157,11 @@ const (
 	unitFlag2AllowCheatSpells              uint32 = 0x00040000 // UNIT_FLAG2_ALLOW_CHEAT_SPELLS (UnitDefines.h:178)
 	unitFlagLooting                        uint32 = 0x00000400 // UNIT_FLAG_LOOTING (UnitDefines.h:134)
 	unitFlagPreparation                    uint32 = 0x00000020 // UNIT_FLAG_PREPARATION (UnitDefines.h:129)
+	unitFlagCannotSwim                     uint32 = 0x00004000 // UNIT_FLAG_CANNOT_SWIM (UnitDefines.h:138)
+	unitFlagPetInCombat                    uint32 = 0x00000800 // UNIT_FLAG_PET_IN_COMBAT (UnitDefines.h:135)
+	unitFlagRename                         uint32 = 0x00000010 // UNIT_FLAG_RENAME (UnitDefines.h:128)
+	unitFlagSwimming                       uint32 = 0x00008000 // UNIT_FLAG_SWIMMING (UnitDefines.h:139)
+	unitFlag2SwimDeny                      uint32 = 0x01000000 // UNIT_FIELD_FLAGS_2 bit read raw by Unit::CanSwim (Unit.cpp:13324)
 )
 
 // questCompleteStateFlag sets the per-slot complete bit the client reads

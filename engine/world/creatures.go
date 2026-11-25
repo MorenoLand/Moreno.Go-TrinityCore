@@ -1619,13 +1619,9 @@ func (s *Server) creatureHoverHeightFold(motion *creatureMotion, enable bool, ma
 			floorZ, ok = s.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
 		}
 		if ok && z-floorZ < hoverHeight {
-			newZ := z + hoverHeight
-			s.motionMu.Lock()
-			motion.Z = newZ
-			s.motionMu.Unlock()
-			// Unit::UpdateHeight relocates vehicle passengers
-			// (Unit.cpp:13442-13447); no kit is a no-op.
-			s.relocatePassengers(mapID, instanceID, guid, x, y, newZ, o)
+			// Unit::UpdateHeight (Unit.cpp:13442-13447): the Z write
+			// plus the vehicle-passenger relocate; no kit is a no-op.
+			s.creatureUpdateHeight(motion, z+hoverHeight)
 		}
 	} else if alive {
 		// Unit::SetHover disable leg (Unit.cpp:13795-13802): drop by
@@ -1644,10 +1640,7 @@ func (s *Server) creatureHoverHeightFold(motion *creatureMotion, enable bool, ma
 			newZ = floorZ
 		}
 		newZ, _ = s.updateAllowedPositionZForMotion(motion, x, y, newZ)
-		s.motionMu.Lock()
-		motion.Z = newZ
-		s.motionMu.Unlock()
-		s.relocatePassengers(mapID, instanceID, guid, x, y, newZ, o)
+		s.creatureUpdateHeight(motion, newZ)
 	}
 }
 

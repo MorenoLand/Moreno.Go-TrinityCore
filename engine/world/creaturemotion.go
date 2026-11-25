@@ -173,6 +173,7 @@ type creatureMotion struct {
 	MovementInfoSet       bool                // a stored packet exists; written under the server motionMu at the ack sites
 	FeatherFalling        bool                // MOVEMENTFLAG_FALLING_SLOW live value: .debug moveflags SetFeatherFall twin (Unit.cpp:13767); zero value = normal fall (the C++ default), broadcast leg only
 	Falling               bool                // MOVEMENTFLAG_FALLING live value: set by launchCreatureFallSpline (MotionMaster::MoveFall twin, MotionMaster.cpp:938), cleared by the UpdateMovementFlags fold when !isInAir (Creature.cpp:2813-2814) and by the fly/gravity-disable enable transitions (Unit.cpp:13720/:13748); the flag leg survives a mid-air supersede/stop, unlike the ScriptMoveFalling spline marker — together they are Unit::IsFalling (Unit.cpp:13313-13316)
+	FallingFar            bool                // MOVEMENTFLAG_FALLING_FAR live value (Unit.cpp:13314): the second flag leg of Unit::IsFalling, folded into creatureIsFalling. No Go setter source exists yet — creatures take no client movement acks, and MoveFall launches set FALLING only — so it reads false until a fall source sets it; the storage and the read are the port, not the trigger.
 	MoveFlagsRaw          uint32              // unhandled movement-flag bits stored by .debug moveflags (cs_debug.cpp:1251): the SetUnitMovementFlags word minus the handled set; folded into the moveflags display, never read by engine gates
 	MoveFlagsExtra        uint32              // MovementFlags2 extra flags stored by .debug moveflags (SetExtraUnitMovementFlags twin); display only
 	DebugAuraStateMask    uint32              // .debug setaurastate override bits (Unit::ModifyAuraState twin): ORed into creatureAuraStateMask except the health-derived bits, which Unit::Update re-derives every tick
@@ -10639,12 +10640,12 @@ func creatureMovementPreventedByCasting(motion *creatureMotion, now time.Time) b
 }
 
 // creatureIsFalling is Unit::IsFalling (Unit.cpp:13313-13316) for a
-// creature motion: the MOVEMENTFLAG_FALLING latch OR the MoveFall spline
-// marker (movespline->isFalling twin). The latch is set at MoveFall launch
+// creature motion: the MOVEMENTFLAG_FALLING latch, the MOVEMENTFLAG_FALLING_FAR
+// latch, OR the MoveFall spline marker (movespline->isFalling twin). The latch is set at MoveFall launch
 // and cleared only when grounded or on a fly/gravity-disable transition,
 // so it stays true across a mid-air supersede/stop that clears the marker.
 func creatureIsFalling(motion *creatureMotion) bool {
-	return motion != nil && (motion.Falling || motion.ScriptMoveFalling)
+	return motion != nil && (motion.Falling || motion.FallingFar || motion.ScriptMoveFalling)
 }
 
 func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time, summoned bool) {
