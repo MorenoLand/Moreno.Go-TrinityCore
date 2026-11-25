@@ -205,11 +205,15 @@ func (s *Server) creatureUpdateHeight(motion *creatureMotion, newZ float32) {
 
 // creatureSetInFront is Unit::SetInFront (Unit.cpp:13663-13667): face the
 // target's absolute angle (atan2, normalized to [0, 2pi)) with a raw
-// orientation-slot write — no packet, no spline, no movement check. The
-// UNIT_STATE_CANNOT_TURN gate has no Go model (no unit-state bits are
-// stored), so it is not gated here; the inline legs note the same gap.
+// orientation-slot write — no packet, no spline, no movement check —
+// gated on HasUnitState(UNIT_STATE_CANNOT_TURN) via creatureCannotTurn.
+// The gate runs before the motionMu take: creatureUnitStateHas locks
+// motionMu internally, so it must not nest under it.
 func (s *Server) creatureSetInFront(motion *creatureMotion, tx, ty float32) {
 	if s == nil || motion == nil {
+		return
+	}
+	if s.creatureCannotTurn(motion) {
 		return
 	}
 	s.motionMu.Lock()

@@ -5450,10 +5450,11 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 	// resolving non-empty combat target that isn't possessed faces it
 	// before SelectSpellTargets. Keys on the pet's combat target
 	// (GetTarget), not the spell target, like the creature path. The
-	// UNIT_STATE_CANNOT_TURN gate has no Go model (standing no-bridge);
-	// the angle mirrors Unit::GetAbsoluteAngle (atan2 normalized to
-	// [0, 2pi), same as the distract bridge).
-	if motion.TargetGUID != 0 && motion.UnitFlags&unitFlagPossessed == 0 {
+	// UNIT_STATE_CANNOT_TURN gate rides creatureCannotTurn (no
+	// motionMu/auraMu held in this arm); the angle mirrors
+	// Unit::GetAbsoluteAngle (atan2 normalized to [0, 2pi), same as the
+	// distract bridge).
+	if motion.TargetGUID != 0 && motion.UnitFlags&unitFlagPossessed == 0 && !s.server.creatureCannotTurn(motion) {
 		if tx, ty, ok := s.server.creatureUnitTargetPos(motion, motion.TargetGUID); ok {
 			angle := float32(math.Atan2(float64(ty-motion.Y), float64(tx-motion.X)))
 			if angle < 0 {

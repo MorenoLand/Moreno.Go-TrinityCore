@@ -201,6 +201,9 @@ func shapeshiftFormDisplayID(data *wotlk.Store, state *playerState, form uint8, 
 	if err != nil || !found {
 		return 0
 	}
+	if shape.CreatureDisplayIDs[0] == 0 {
+		return 0
+	}
 	if isAllianceRace(state.Race) || shape.CreatureDisplayIDs[1] == 0 {
 		return shape.CreatureDisplayIDs[0]
 	}

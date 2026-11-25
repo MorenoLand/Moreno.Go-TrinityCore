@@ -60352,6 +60352,7 @@ func (s *session) handleEffectKnockBack(ctx context.Context, spell wotlk.Spell, 
 			fly.WritePackedGUID(targetGUID)
 			fly.WriteU32(0)
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), fly.Bytes(), true)
+			targetSess.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0x01000000)
 		}
 	}
 	_ = ctx

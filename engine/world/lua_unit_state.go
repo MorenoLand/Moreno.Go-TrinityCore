@@ -52,6 +52,12 @@ const (
 	unitStateFollowMove          = 0x08000000
 	unitStateIgnorePathfinding   = 0x10000000
 	unitStateFollowFormationMove = 0x20000000
+	// unitStateCannotTurn is UNIT_STATE_CANNOT_TURN (Unit.h:255):
+	// LOST_CONTROL | ROTATING | FOCUSING, i.e. CONFUSED | STUNNED |
+	// FLEEING | POSSESSED | JUMPING | CHARGING | ROTATING | FOCUSING.
+	// JUMPING / CHARGING / ROTATING / FOCUSING have no live legs beyond
+	// the script mask, same semantics as the rest of the mask system.
+	unitStateCannotTurn = unitStateConfused | unitStateStunned | unitStateFleeing | unitStatePossessed | unitStateJumping | unitStateCharging | unitStateRotating | unitStateFocusing
 )
 
 // unitStateFacts is the live-model half of the m_state mask, gathered
@@ -188,6 +194,12 @@ func (s *Server) creatureUnitStateHas(m *creatureMotion, requested uint32) bool 
 		FollowFormation: m.FormationActive,
 	}
 	return (unitStateLiveMask(facts)|m.ScriptUnitState)&requested != 0
+}
+
+// creatureCannotTurn is the Unit::SetInFront gate (Unit.cpp:13663-13667):
+// HasUnitState(UNIT_STATE_CANNOT_TURN).
+func (s *Server) creatureCannotTurn(m *creatureMotion) bool {
+	return s.creatureUnitStateHas(m, unitStateCannotTurn)
 }
 
 // creatureUnitStateAdd is the creature half of AddUnitState: a pure

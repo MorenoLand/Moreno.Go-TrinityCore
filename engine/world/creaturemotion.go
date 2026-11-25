@@ -12253,13 +12253,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// resolving non-empty combat target that isn't possessed faces
 					// it before SelectSpellTargets. Keys on the combat target
 					// (motion.TargetGUID), not the spell target; the
-					// UNIT_STATE_CANNOT_TURN gate has no Go model (same standing
-					// no-bridge as the twin). Placed after the CheckCast gates
+					// UNIT_STATE_CANNOT_TURN gate rides creatureCannotTurn
+					// (no motionMu/auraMu held here, stepCreatureMotion
+					// takes neither). Placed after the CheckCast gates
 					// above and ahead of the redirect/selection legs below,
 					// matching C++ relative order (CheckCast precedes _cast's
 					// 3404 facing, which precedes SelectSpellTargets at 3410) —
 					// so the cone legs below read the faced orientation.
-					if motion.TargetGUID != 0 && motion.UnitFlags&unitFlagPossessed == 0 {
+					if motion.TargetGUID != 0 && motion.UnitFlags&unitFlagPossessed == 0 && !s.creatureCannotTurn(motion) {
 						if tx, ty, ok := s.creatureUnitTargetPos(motion, motion.TargetGUID); ok {
 							angle := float32(math.Atan2(float64(ty-motion.Y), float64(tx-motion.X)))
 							if angle < 0 {

@@ -38,9 +38,13 @@
 //     behind the constructor, via the cached server-level disables check
 //     (DISABLE_TYPE_MMAP rows disable on mere presence, DisableMgr.cpp:
 //     397-399).
-//   - Unit::CanSwim (Unit.cpp:13318-13326): players are always swimmers
-//     (UNIT_FLAG_PLAYER_CONTROLLED), creatures follow the movement
-//     template (creatureCanSwimMotion).
+//   - Unit::CanSwim (Unit.cpp:13318-13326) vs Creature::CanSwim
+//     (Creature.h:105): the Unit flag chain (pathUnitCanSwim) gates
+//     UpdateAllowedPositionZ (Object.cpp:1473) and the far-from-poly
+//     underwater shortcut (PathGenerator.cpp:225); the template flag
+//     (pathCanSwim, creatureCanSwimMotion) gates the waterPath leg
+//     (:181) and CreateFilter (:659), which read the creature twin.
+//     Players read the same flag chain (PLAYER_CONTROLLED leg).
 //   - UNIT_STATE_IGNORE_PATHFINDING shortcut arm (PathGenerator.cpp:
 //     102-104): the snapshot carries the live mask bit (creature
 //     ScriptUnitState / session mask), so a flagged source takes the
@@ -170,6 +174,7 @@ type pathGeneratorSource interface {
 	pathIsCreature() bool
 	pathCanWalk() bool
 	pathCanSwim() bool
+	pathUnitCanSwim() bool
 	pathCanFly() bool
 	pathIsInWater() bool
 	pathIsUnderWater() bool
@@ -190,6 +195,7 @@ type pathSourceSnapshot struct {
 	phaseMask                uint32
 	creature                 bool
 	walk, swim, fly          bool
+	unitSwim                 bool
 	inWater, underWater      bool
 	inCombat, evade, falling bool
 	ignorePathfinding        bool
@@ -207,6 +213,7 @@ func (s *pathSourceSnapshot) pathPhaseMask() uint32   { return s.phaseMask }
 func (s *pathSourceSnapshot) pathIsCreature() bool    { return s.creature }
 func (s *pathSourceSnapshot) pathCanWalk() bool       { return s.walk }
 func (s *pathSourceSnapshot) pathCanSwim() bool       { return s.swim }
+func (s *pathSourceSnapshot) pathUnitCanSwim() bool   { return s.unitSwim }
 func (s *pathSourceSnapshot) pathCanFly() bool        { return s.fly }
 func (s *pathSourceSnapshot) pathIsInWater() bool     { return s.inWater }
 func (s *pathSourceSnapshot) pathIsUnderWater() bool  { return s.underWater }
@@ -243,6 +250,7 @@ func newCreaturePathSource(srv *Server, m *creatureMotion) pathGeneratorSource {
 		creature:        true,
 		walk:            creatureCanWalkMotion(m),
 		swim:            creatureCanSwimMotion(m),
+		unitSwim:        unitCanSwimMotion(m),
 		fly:             m.CanFly || m.Flying,
 		inCombat:        m.InCombat,
 		evade:           m.Evading,
@@ -294,11 +302,12 @@ func newCreaturePathSource(srv *Server, m *creatureMotion) pathGeneratorSource {
 	return snap
 }
 
-// newPlayerPathSource snapshots a player session: players always walk
-// and swim (Unit::CanSwim, Unit.cpp:13318-13326, PLAYER_CONTROLLED leg),
-// fly only while the session reports flight, and fall per the session
-// falling flags (lua_player.go:949). Collision height resolves the race
-// display lookup (sendPlayerCollisionHeight) with the default fallback.
+// newPlayerPathSource snapshots a player session: players always walk,
+// swim per the Unit::CanSwim flag chain (Unit.cpp:13318-13326,
+// PLAYER_CONTROLLED leg, CANNOT_SWIM denying first), fly only while
+// the session reports flight, and fall per the session falling flags
+// (lua_player.go:949). Collision height resolves the race display
+// lookup (sendPlayerCollisionHeight) with the default fallback.
 func newPlayerPathSource(sess *session) pathGeneratorSource {
 	if sess == nil || sess.player == nil {
 		return nil
@@ -311,6 +320,7 @@ func newPlayerPathSource(sess *session) pathGeneratorSource {
 		creature:        false,
 		walk:            true,
 		swim:            true,
+		unitSwim:        playerCanSwim(p.UnitFlags),
 		fly:             sess.inFlight,
 		inCombat:        sess.isInCombat(),
 		falling:         sess.isFalling || sess.isFallingFar,
@@ -582,7 +592,7 @@ func (g *PathGenerator) updateAllowedPositionZ(x, y float32, z *float32) {
 		return
 	}
 	var groundZ, maxZ float32
-	if g.source.pathCanSwim() {
+	if g.source.pathUnitCanSwim() {
 		maxZ, groundZ = g.srv.mapWaterOrGroundLevel(mapID, x, y, *z, g.source.pathCollisionHeight())
 	} else {
 		groundZ, ok := g.srv.mapHeight(mapID, x, y, *z, true, terrainDefaultHeightSearch)
@@ -805,7 +815,7 @@ func (g *PathGenerator) buildPolyPath(startPos, endPos pathVec) {
 		buildShortcut := false
 
 		if g.srv.mapIsUnderWater(g.source.pathMapID(), p.X, p.Y, p.Z) {
-			if g.source.pathCanSwim() {
+			if g.source.pathUnitCanSwim() {
 				buildShortcut = true
 			}
 		} else {

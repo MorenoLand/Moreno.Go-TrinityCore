@@ -3368,7 +3368,10 @@ func (s *Server) evadeCreaturesTargeting(ctx context.Context, mapID, instanceID 
 // creature stops attacking it. Creature attackers (motion.TargetGUID ==
 // guid, pets included — pets ride the motion map) drop their victim and
 // get SMSG_ATTACK_STOP for the (attacker, victim) pair plus the visual
-// target clear; player attackers get the session-side attack stop
+// target clear, and the per-engagement assistance latch resets
+// (Unit::AttackStop, Unit.cpp:5783: SetNoCallAssistance(false)); the
+// sticky Lua-Reset latch (motion.NoCallAssistance) survives, per its
+// field comment. Player attackers get the session-side attack stop
 // (sendAttackStop + attackTarget clear, the damage_shield death
 // precedent). Attackers keep their own threat tables and InCombat here
 // — the EndAllPvECombat legs (own-table clear, RemoveMeFromThreatLists)
@@ -3396,6 +3399,7 @@ func (s *Server) removeCreatureAttackers(mapID, instanceID uint32, guid uint64) 
 			continue
 		}
 		m.TargetGUID = 0
+		m.AlreadyCallAssistance = false
 		s.motionMu.Unlock()
 		stopPkt := buildAttackStop(attackerGUID, guid, false)
 		s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, attackerGUID)

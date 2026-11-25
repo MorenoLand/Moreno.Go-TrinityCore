@@ -2475,10 +2475,10 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// resolving non-empty unit target that isn't possessed faces it
 		// before SelectSpellTargets. Keys on the creature's combat target
 		// (GetTarget), not the spell target. The UNIT_STATE_CANNOT_TURN
-		// gate has no Go model (standing no-bridge, same as the other
-		// unit-state arms); the angle mirrors Unit::GetAbsoluteAngle
+		// gate rides creatureCannotTurn (no motionMu held in this arm);
+		// the angle mirrors Unit::GetAbsoluteAngle
 		// (atan2 normalized to [0, 2pi), same as the distract bridge).
-		if m.TargetGUID != 0 && m.UnitFlags&unitFlagPossessed == 0 {
+		if m.TargetGUID != 0 && m.UnitFlags&unitFlagPossessed == 0 && !s.creatureCannotTurn(m) {
 			if tx, ty, ok := s.creatureUnitTargetPos(m, m.TargetGUID); ok {
 				angle := float32(math.Atan2(float64(ty-m.Y), float64(tx-m.X)))
 				if angle < 0 {
@@ -6558,6 +6558,7 @@ func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion,
 			fly.WritePackedGUID(guid)
 			fly.WriteU32(0)
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), fly.Bytes(), true)
+			targetSess.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_UPDATE_CAN_FLY, 0x01000000)
 		}
 	}
 }

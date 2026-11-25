@@ -6458,8 +6458,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// SetInFront is Unit::SetInFront (Unit.cpp:13663-13667): face the
 	// target's absolute angle with a raw orientation-slot write — no
-	// packet, no spline. The UNIT_STATE_CANNOT_TURN gate has no Go model,
-	// so it is not gated here.
+	// packet, no spline — gated on UNIT_STATE_CANNOT_TURN inside
+	// creatureSetInFront.
 	methods["SetInFront"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("SetInFront requires a WorldObject target")
