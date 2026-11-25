@@ -10984,6 +10984,48 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			orderedEffects = append(orderedEffects, i)
 		}
 	}
+	// Unit::IsHighestExclusiveAura (Unit.cpp:13991) judges the WHOLE aura
+	// before any effect is applied (Unit::AddAura -> Aura::TryRefreshStackOrCreate
+	// -> Unit::_AddAura -> _RemoveNoStackAurasDueToAura, Unit.cpp:3648; the
+	// UpdateTargetMap leg, SpellAuras.cpp:696, likewise): a strictly-lower
+	// later effect suppresses the aura, so the per-effect loop below must
+	// not apply the earlier effects first. Collect the surviving effects
+	// with their amounts up front — the gates mirror the loop body below
+	// (the immunity gate takes auraMu itself, so it cannot run under the
+	// verdict lock) — and the first live iteration runs the whole-aura
+	// verdict over them before creating the record. A live same-spell aura
+	// skips the verdict entirely: C++ refreshes it in
+	// _TryStackingOrRefreshingExistingAura with no exclusive check.
+	type wholeAuraSurvivor struct {
+		index  int
+		eff    wotlk.SpellEffect
+		amount int32
+	}
+	survivors := make([]wholeAuraSurvivor, 0, len(spell.Effects))
+	for _, i := range orderedEffects {
+		eff := spell.Effects[i]
+		if eff.Aura == 0 {
+			continue
+		}
+		if !persistentAreaAura && eff.Effect != spellEffectApplyAura {
+			continue
+		}
+		if prevent.defaultPrevented(i) {
+			continue
+		}
+		if allowedMask != 0 && allowedMask&(1<<uint(i)) == 0 {
+			continue
+		}
+		if !persistentAreaAura && !s.checkEffectTargetCharmForMotion(spell, eff, m, target) {
+			continue
+		}
+		if creatureImmuneToSpellEffect(s, targetKey, spell, i, stats, s.isTotemGUID(targetGUID), nil, true, s.creatureFriendlyToTarget(m, targetGUID)) {
+			continue
+		}
+		bp := s.scaledEffectValue(spell, eff, casterLevel(m), creatureIsPlayerControlled(m), eff.CalcValueForLevel(spell, casterLevel(m)))
+		survivors = append(survivors, wholeAuraSurvivor{index: i, eff: eff, amount: int32(uint32(bp))})
+	}
+	preScanned := false
 	for _, i := range orderedEffects {
 		eff := spell.Effects[i]
 		if eff.Aura == 0 {
@@ -11146,7 +11188,42 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			}
 			stopAuraUpkeepTimer(existing)
 		}
-		highest := s.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.activeCreatureAuras[targetKey], persistentAreaAura)
+		// Whole-aura exclusive verdict (Unit.cpp:13991, :3648;
+		// SpellAuras.cpp:696): evaluated once, on the first live iteration,
+		// over every surviving effect in application order — a later effect
+		// strictly lower than an EXCLUSIVE_HIGHEST peer suppresses the whole
+		// aura before the record exists, so earlier effects never apply. A
+		// live same-spell aura takes the merge arm above instead and never
+		// reaches this verdict.
+		if !preScanned {
+			preScanned = true
+			if existing == nil || existing.Stopped {
+				var prePurge []rankPurgeTarget
+				suppressed := false
+				preExcluded := make(map[uint32]struct{})
+				for _, sv := range survivors {
+					verdict := s.exclusiveHighestVerdict(spell, sv.eff, sv.amount, targetGUID, s.activeCreatureAuras[targetKey], persistentAreaAura, preExcluded)
+					prePurge = append(prePurge, verdict.purge...)
+					for _, purgeID := range verdict.purge {
+						preExcluded[purgeID.spellID] = struct{}{}
+					}
+					if verdict.suppressed {
+						suppressed = true
+						break
+					}
+				}
+				if suppressed {
+					s.auraMu.Unlock()
+					if persistentAreaAura {
+						for _, p := range prePurge {
+							s.removeCreatureAura(targetKey, p.spellID)
+						}
+					}
+					return
+				}
+			}
+		}
+		highest := s.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.activeCreatureAuras[targetKey], persistentAreaAura, nil)
 		if highest.suppressed {
 			s.auraMu.Unlock()
 			// Aura::UpdateTargetMap (SpellAuras.cpp:696): the :696 scan

@@ -39174,14 +39174,18 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 	// phantom presence entry or fresh slot behind, but the strictly-lower
 	// peers the :696 scan already removed stay removed.
 	var exclusivePurge []rankPurgeTarget
+	excluded := make(map[uint32]struct{})
 	if s.server != nil && s.server.Data != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
 			for index, effect := range sp.Effects {
 				if effectMask&(1<<uint(index)) == 0 || effect.Aura == 0 {
 					continue
 				}
-				verdict := s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras, persistentAreaAura)
+				verdict := s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras, persistentAreaAura, excluded)
 				exclusivePurge = append(exclusivePurge, verdict.purge...)
+				for _, purgeID := range verdict.purge {
+					excluded[purgeID.spellID] = struct{}{}
+				}
 				if verdict.suppressed {
 					delete(s.auras, spellID)
 					if freshSlot {
@@ -42592,7 +42596,7 @@ type exclusiveHighestVerdict struct {
 	suppressed bool
 }
 
-func (s *Server) exclusiveHighestVerdict(newSpell wotlk.Spell, eff wotlk.SpellEffect, newAmount int32, targetGUID uint64, existing map[uint32]*activeAura, dynobj bool) exclusiveHighestVerdict {
+func (s *Server) exclusiveHighestVerdict(newSpell wotlk.Spell, eff wotlk.SpellEffect, newAmount int32, targetGUID uint64, existing map[uint32]*activeAura, dynobj bool, excluded map[uint32]struct{}) exclusiveHighestVerdict {
 	var out exclusiveHighestVerdict
 	if s == nil || s.Data == nil {
 		return out
@@ -42610,6 +42614,15 @@ func (s *Server) exclusiveHighestVerdict(newSpell wotlk.Spell, eff wotlk.SpellEf
 	newAbs := absAuraAmount(newAmount)
 	for id, aura := range existing {
 		if id == newSpell.ID || aura == nil || aura.Stopped {
+			continue
+		}
+		// Sequential-removal exclusion (Unit.cpp:14026): C++ removes a
+		// strictly-lower peer immediately, inside the per-effect verdict,
+		// so a peer condemned by an earlier effect's verdict is gone before
+		// the next effect is judged. Callers that defer purge application
+		// across effects pass the condemned spell IDs here; single-effect
+		// callers pass nil.
+		if _, skip := excluded[id]; skip {
 			continue
 		}
 		if s.spellGroupStackRule(newFirst, s.spellFirstRank(id)) != spellGroupStackRuleExclusiveHighest {
@@ -43584,7 +43597,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// cast, on their own for a persistent-area application
 		// (SpellAuras.cpp:696 removes them before the addUnit=false leg,
 		// so they stand even when the new aura is suppressed).
-		highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, targetSess.activeAuras, persistentAreaAura)
+		highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, targetSess.activeAuras, persistentAreaAura, nil)
 		if highest.suppressed {
 			targetSess.castMu.Unlock()
 			if persistentAreaAura {
@@ -44724,7 +44737,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// cast, on their own for a persistent-area application
 	// (SpellAuras.cpp:696 removes them before the addUnit=false leg,
 	// so they stand even when the new aura is suppressed).
-	highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.server.activeCreatureAuras[targetKey], persistentAreaAura)
+	highest := s.server.exclusiveHighestVerdict(spell, eff, int32(amount), targetGUID, s.server.activeCreatureAuras[targetKey], persistentAreaAura, nil)
 	if highest.suppressed {
 		s.server.auraMu.Unlock()
 		if persistentAreaAura {

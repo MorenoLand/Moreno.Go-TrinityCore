@@ -134,7 +134,7 @@ func (s *session) castOwnerPetAuraSource(ctx context.Context, key ownerPetAuraKe
 			durationMs = uint32(duration)
 		}
 	}
-	return s.applyPetAuraWithSource(ctx, motion, auraSpell, effect, petGUID, durationMs, amount, key, source.Damage, source.RemoveOnChange, nil)
+	return s.applyPetAuraWithSource(ctx, motion, auraSpell, effect, petGUID, durationMs, amount, key, source.Damage, source.RemoveOnChange, nil, nil)
 }
 
 func (s *session) removeOwnerPetAuraSource(ctx context.Context, key ownerPetAuraKey, petGUID uint64) {

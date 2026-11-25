@@ -1768,7 +1768,7 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 					silenceCasterGUID = dispellerGUID
 				}
 				if petCaster != nil {
-					s.applyPetAura(ctx, petCaster, silenceSpell, silenceEff, dispellerGUID, 5000, 0, nil)
+					s.applyPetAura(ctx, petCaster, silenceSpell, silenceEff, dispellerGUID, 5000, 0, nil, nil)
 				} else {
 					casterSess.applyAuraToTarget(ctx, dispellerGUID, silenceSpell, silenceEff, -1, 5000, 0, 0, 32, nil, false, silenceCasterGUID, false, 0, false, nil)
 				}

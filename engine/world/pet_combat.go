@@ -7592,6 +7592,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 		// shares it across effects so only the first aura effect per
 		// (cast, target) runs the ModStackAmount merge.
 		petCastMerged := make(map[uint64]struct{})
+		petCastFresh := make(map[uint64]struct{})
 		for i, effect := range spell.Effects {
 			if effect.Effect == spellEffectHeal || effect.Effect == spellEffectHealMechanical || effect.Effect == spellEffectHealPct {
 				// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
@@ -8074,7 +8075,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 					// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:505-518):
 					// the periodic done leg bakes at apply for unit auras.
 					amount = s.petPeriodicApplyDoneLegs(effCtx, motion, auraSpell, i, victimGUID, victim, amount)
-					if s.applyPetAura(effCtx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount, petCastMerged) {
+					if s.applyPetAura(effCtx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount, petCastMerged, petCastFresh) {
 						s.server.recordCreatureChannelHitTarget(motion, spell, victimGUID)
 					}
 				}
@@ -8088,7 +8089,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 						}
 						wAmount := uint32(wEffect.CalcValueForLevel(wSpell, uint32(motion.Level)))
 						wAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, wSpell, i, wVictimGUID, wVictim, wAmount)
-						if s.applyPetAura(effCtx, motion, wSpell, wEffect, wVictimGUID, wDurationMs, wAmount, petCastMerged) {
+						if s.applyPetAura(effCtx, motion, wSpell, wEffect, wVictimGUID, wDurationMs, wAmount, petCastMerged, petCastFresh) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, wVictimGUID)
 						}
 					}
@@ -8106,7 +8107,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 						}
 						cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
 						cAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
-						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount, petCastMerged) {
+						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount, petCastMerged, petCastFresh) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
 						}
 					}
@@ -8135,7 +8136,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 						}
 						aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 						aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged) {
+						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged, petCastFresh) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
 						}
 					}
@@ -8161,7 +8162,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 						}
 						aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 						aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged) {
+						if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged, petCastFresh) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
 						}
 					}
@@ -8182,7 +8183,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 					}
 					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 					aAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-					if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged) {
+					if s.applyPetAura(effCtx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount, petCastMerged, petCastFresh) {
 						s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
 					}
 				}
@@ -8252,7 +8253,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 						}
 						cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
 						cAmount = s.petPeriodicApplyDoneLegs(effCtx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
-						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount, petCastMerged) {
+						if s.applyPetAura(effCtx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount, petCastMerged, petCastFresh) {
 							s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
 						}
 					}
@@ -8649,11 +8650,11 @@ func petAuraDuration(s *Server, spell wotlk.Spell, motion *creatureMotion) uint3
 	return durationMs
 }
 
-func (s *session) applyPetAura(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs, amount uint32, castMerged map[uint64]struct{}) bool {
-	return s.applyPetAuraWithSource(ctx, caster, spell, effect, targetGUID, durationMs, int32(amount), ownerPetAuraKey{}, 0, false, castMerged)
+func (s *session) applyPetAura(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs, amount uint32, castMerged map[uint64]struct{}, castFresh map[uint64]struct{}) bool {
+	return s.applyPetAuraWithSource(ctx, caster, spell, effect, targetGUID, durationMs, int32(amount), ownerPetAuraKey{}, 0, false, castMerged, castFresh)
 }
 
-func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs uint32, amount int32, source ownerPetAuraKey, sourceDamage int32, removeOnChange bool, castMerged map[uint64]struct{}) bool {
+func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs uint32, amount int32, source ownerPetAuraKey, sourceDamage int32, removeOnChange bool, castMerged map[uint64]struct{}, castFresh map[uint64]struct{}) bool {
 	if s == nil || s.server == nil || caster == nil || targetGUID == 0 {
 		return false
 	}
@@ -8716,9 +8717,25 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		// removes it before the no-stack purge). Evaluated before the
 		// same-spell replacement below so a suppressed pet cast keeps the
 		// existing aura.
-		highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, targetSess.activeAuras, false)
+		highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, targetSess.activeAuras, false, nil)
 		if highest.suppressed {
 			targetSess.castMu.Unlock()
+			// Whole-aura suppression (Unit.cpp:13991, :3648): a later effect
+			// of this cast is strictly lower than an EXCLUSIVE_HIGHEST peer,
+			// so the aura never applies — an earlier effect of the same cast
+			// already created the record, roll it back. Only a record this
+			// cast created is removed; a pre-existing record stays (its
+			// refresh was already merged). The earlier effect's no-stack
+			// purges and wire packets stand — C++ runs none of them — so
+			// this is a removal of the wrongly-applied aura, not a full
+			// pre-scan; the pre-scan shape (boss_ai.go) is unreachable here
+			// because this funnel takes one effect per call.
+			if castFresh != nil {
+				if _, ok := castFresh[targetGUID]; ok {
+					delete(castFresh, targetGUID)
+					targetSess.removeAura(spell.ID)
+				}
+			}
 			return false
 		}
 		if previous := targetSess.activeAuras[spell.ID]; previous != nil && !previous.Stopped && previous.CasterGUID == caster.GUID {
@@ -8847,6 +8864,11 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		if castMerged != nil {
 			castMerged[targetGUID] = struct{}{}
 		}
+		// The fresh marker lets a later effect's whole-aura suppress
+		// (Unit.cpp:13991) roll this record back; a merge never sets it.
+		if castFresh != nil {
+			castFresh[targetGUID] = struct{}{}
+		}
 		targetSess.auras[spell.ID] = struct{}{}
 		// Unit::_AddAura single-target dance (Unit.cpp:3397-3420).
 		var scPurge []singleCastEntry
@@ -8955,9 +8977,18 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	// effect is strictly lower than an existing EXCLUSIVE_HIGHEST peer
 	// is never applied (SpellAuras.cpp:696, addUnit=false; Unit.cpp:3648
 	// removes it before the no-stack purge).
-	highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, s.server.activeCreatureAuras[targetKey], false)
+	highest := s.server.exclusiveHighestVerdict(spell, effect, amount, targetGUID, s.server.activeCreatureAuras[targetKey], false, nil)
 	if highest.suppressed {
 		s.server.auraMu.Unlock()
+		// Whole-aura suppression (Unit.cpp:13991, :3648): see the
+		// player-target branch above — roll back a record an earlier
+		// effect of this cast created; a pre-existing record stays.
+		if castFresh != nil {
+			if _, ok := castFresh[targetGUID]; ok {
+				delete(castFresh, targetGUID)
+				s.server.removeCreatureAura(targetKey, spell.ID)
+			}
+		}
 		return false
 	}
 	// Unit::_TryStackingOrRefreshingExistingAura (Unit.cpp:3326) -> Aura::ModStackAmount(+1)
@@ -9074,6 +9105,11 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	// (boss_ai.go:10437).
 	if castMerged != nil {
 		castMerged[targetGUID] = struct{}{}
+	}
+	// The fresh marker lets a later effect's whole-aura suppress
+	// (Unit.cpp:13991) roll this record back; a merge never sets it.
+	if castFresh != nil {
+		castFresh[targetGUID] = struct{}{}
 	}
 	s.server.creatureAuras[targetKey][spell.ID] = struct{}{}
 	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420).
