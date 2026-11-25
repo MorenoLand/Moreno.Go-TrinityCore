@@ -11201,8 +11201,19 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 				var prePurge []rankPurgeTarget
 				suppressed := false
 				preExcluded := make(map[uint32]struct{})
+				// Sequential-removal exclusion is the :696 leg only
+				// (SpellAuras.cpp:696, IsHighestExclusiveAura(this, true)
+				// removes strictly-lower peers inside the scan); the
+				// direct leg (Unit.cpp:3648, removeOther=false) judges
+				// every effect against the full peer set, so a peer
+				// condemned by an earlier effect still suppresses a
+				// strictly-lower later effect there.
+				preExcl := preExcluded
+				if !persistentAreaAura {
+					preExcl = nil
+				}
 				for _, sv := range survivors {
-					verdict := s.exclusiveHighestVerdict(spell, sv.eff, sv.amount, targetGUID, s.activeCreatureAuras[targetKey], persistentAreaAura, preExcluded)
+					verdict := s.exclusiveHighestVerdict(spell, sv.eff, sv.amount, targetGUID, s.activeCreatureAuras[targetKey], persistentAreaAura, preExcl)
 					prePurge = append(prePurge, verdict.purge...)
 					for _, purgeID := range verdict.purge {
 						preExcluded[purgeID.spellID] = struct{}{}

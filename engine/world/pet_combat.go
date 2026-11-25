@@ -7592,7 +7592,7 @@ func (s *session) executePetSpellWithOptionsDeferred(ctx context.Context, motion
 		// shares it across effects so only the first aura effect per
 		// (cast, target) runs the ModStackAmount merge.
 		petCastMerged := make(map[uint64]struct{})
-		petCastFresh := make(map[uint64]struct{})
+		petCastFresh := make(map[petCastFreshKey]struct{})
 		for i, effect := range spell.Effects {
 			if effect.Effect == spellEffectHeal || effect.Effect == spellEffectHealMechanical || effect.Effect == spellEffectHealPct {
 				// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE
@@ -8650,11 +8650,21 @@ func petAuraDuration(s *Server, spell wotlk.Spell, motion *creatureMotion) uint3
 	return durationMs
 }
 
-func (s *session) applyPetAura(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs, amount uint32, castMerged map[uint64]struct{}, castFresh map[uint64]struct{}) bool {
+// petCastFreshKey keys the fresh-record marker by spell as well as target:
+// one deferred pet execution can apply several spells (weapon-proc,
+// chain, area legs) to the same target, and a suppressed later effect of
+// one spell must roll back only that spell's record — never a
+// pre-existing record of another spell.
+type petCastFreshKey struct {
+	spellID    uint32
+	targetGUID uint64
+}
+
+func (s *session) applyPetAura(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs, amount uint32, castMerged map[uint64]struct{}, castFresh map[petCastFreshKey]struct{}) bool {
 	return s.applyPetAuraWithSource(ctx, caster, spell, effect, targetGUID, durationMs, int32(amount), ownerPetAuraKey{}, 0, false, castMerged, castFresh)
 }
 
-func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs uint32, amount int32, source ownerPetAuraKey, sourceDamage int32, removeOnChange bool, castMerged map[uint64]struct{}, castFresh map[uint64]struct{}) bool {
+func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, effect wotlk.SpellEffect, targetGUID uint64, durationMs uint32, amount int32, source ownerPetAuraKey, sourceDamage int32, removeOnChange bool, castMerged map[uint64]struct{}, castFresh map[petCastFreshKey]struct{}) bool {
 	if s == nil || s.server == nil || caster == nil || targetGUID == 0 {
 		return false
 	}
@@ -8731,8 +8741,8 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 			// pre-scan; the pre-scan shape (boss_ai.go) is unreachable here
 			// because this funnel takes one effect per call.
 			if castFresh != nil {
-				if _, ok := castFresh[targetGUID]; ok {
-					delete(castFresh, targetGUID)
+				if _, ok := castFresh[petCastFreshKey{spell.ID, targetGUID}]; ok {
+					delete(castFresh, petCastFreshKey{spell.ID, targetGUID})
 					targetSess.removeAura(spell.ID)
 				}
 			}
@@ -8867,7 +8877,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		// The fresh marker lets a later effect's whole-aura suppress
 		// (Unit.cpp:13991) roll this record back; a merge never sets it.
 		if castFresh != nil {
-			castFresh[targetGUID] = struct{}{}
+			castFresh[petCastFreshKey{spell.ID, targetGUID}] = struct{}{}
 		}
 		targetSess.auras[spell.ID] = struct{}{}
 		// Unit::_AddAura single-target dance (Unit.cpp:3397-3420).
@@ -8984,8 +8994,8 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 		// player-target branch above — roll back a record an earlier
 		// effect of this cast created; a pre-existing record stays.
 		if castFresh != nil {
-			if _, ok := castFresh[targetGUID]; ok {
-				delete(castFresh, targetGUID)
+			if _, ok := castFresh[petCastFreshKey{spell.ID, targetGUID}]; ok {
+				delete(castFresh, petCastFreshKey{spell.ID, targetGUID})
 				s.server.removeCreatureAura(targetKey, spell.ID)
 			}
 		}
@@ -9109,7 +9119,7 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	// The fresh marker lets a later effect's whole-aura suppress
 	// (Unit.cpp:13991) roll this record back; a merge never sets it.
 	if castFresh != nil {
-		castFresh[targetGUID] = struct{}{}
+		castFresh[petCastFreshKey{spell.ID, targetGUID}] = struct{}{}
 	}
 	s.server.creatureAuras[targetKey][spell.ID] = struct{}{}
 	// Unit::_AddAura single-target dance (Unit.cpp:3397-3420).

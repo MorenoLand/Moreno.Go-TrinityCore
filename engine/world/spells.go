@@ -39181,7 +39181,15 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 				if effectMask&(1<<uint(index)) == 0 || effect.Aura == 0 {
 					continue
 				}
-				verdict := s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras, persistentAreaAura, excluded)
+				// The exclusion map is the :696 leg only (see the
+				// boss_ai.go pre-scan twin): the direct leg
+				// (Unit.cpp:3648, removeOther=false) judges every
+				// effect against the full peer set.
+				legExcluded := excluded
+				if !persistentAreaAura {
+					legExcluded = nil
+				}
+				verdict := s.server.exclusiveHighestVerdict(sp, effect, amounts[index], s.playerGUID, s.activeAuras, persistentAreaAura, legExcluded)
 				exclusivePurge = append(exclusivePurge, verdict.purge...)
 				for _, purgeID := range verdict.purge {
 					excluded[purgeID.spellID] = struct{}{}
@@ -42618,10 +42626,12 @@ func (s *Server) exclusiveHighestVerdict(newSpell wotlk.Spell, eff wotlk.SpellEf
 		}
 		// Sequential-removal exclusion (Unit.cpp:14026): C++ removes a
 		// strictly-lower peer immediately, inside the per-effect verdict,
-		// so a peer condemned by an earlier effect's verdict is gone before
-		// the next effect is judged. Callers that defer purge application
-		// across effects pass the condemned spell IDs here; single-effect
-		// callers pass nil.
+		// but only on the UpdateTargetMap leg (SpellAuras.cpp:696,
+		// removeOther=true); the direct leg (Unit.cpp:3648,
+		// removeOther=false) judges every effect against the full peer
+		// set. Callers pass the condemned spell IDs here on the :696
+		// leg only, nil on the direct leg; single-effect callers pass
+		// nil.
 		if _, skip := excluded[id]; skip {
 			continue
 		}
